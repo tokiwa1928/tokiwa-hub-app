@@ -6923,21 +6923,44 @@ let currentInboxFilter = 'all';
 
 // 受信BOXアイテム一覧を取得
 async function loadInboxItems() {
-  if(!CLOUD_CONFIG.CLOUD_MODE) {
-    inboxItems = DB.inbox || [];
-    renderInboxList();
-    return;
-  }
-  
+  // まずlocalStorageから読み込み
   try {
-    const result = await callCloudAPI('getInboxItems', { companyId: currentAuth.companyId });
-    if(result && result.success) {
-      inboxItems = result.items || [];
-      DB.inbox = inboxItems;
+    const saved = localStorage.getItem('inboxItems_' + currentAuth.companyId);
+    if(saved) {
+      inboxItems = JSON.parse(saved);
       renderInboxList();
     }
   } catch(e) {
-    console.error('受信BOX取得エラー:', e);
+    console.log('localStorage読み込みエラー:', e);
+  }
+  
+  // クラウドモードならクラウドからも取得を試みる
+  if(CLOUD_CONFIG.CLOUD_MODE) {
+    try {
+      const result = await callCloudAPI('getInboxItems', { companyId: currentAuth.companyId });
+      if(result && result.success && result.items && result.items.length > 0) {
+        // クラウドデータとローカルデータをマージ
+        for(const item of result.items) {
+          const existing = inboxItems.find(i => i.id === item.id);
+          if(!existing) {
+            inboxItems.push(item);
+          }
+        }
+        saveInboxToLocal();
+        renderInboxList();
+      }
+    } catch(e) {
+      console.log('クラウド取得エラー（ローカルデータを使用）:', e);
+    }
+  }
+}
+
+// 受信BOXをlocalStorageに保存
+function saveInboxToLocal() {
+  try {
+    localStorage.setItem('inboxItems_' + currentAuth.companyId, JSON.stringify(inboxItems));
+  } catch(e) {
+    console.log('localStorage保存エラー:', e);
   }
 }
 
@@ -6995,8 +7018,25 @@ function renderInboxList() {
     // 添付ファイルプレビュー
     let previewHtml = '';
     const attachments = item.attachments || [];
-    if(attachments.length > 0 && attachments[0].data && attachments[0].type?.startsWith('image/')) {
-      previewHtml = `<img src="data:${attachments[0].type};base64,${attachments[0].data}" class="inbox-preview" alt="プレビュー">`;
+    if(attachments.length > 0) {
+      const att = attachments[0];
+      if(att.data && att.type?.startsWith('image/')) {
+        // 画像プレビュー
+        previewHtml = `<img src="data:${att.type};base64,${att.data}" class="inbox-preview" alt="プレビュー">`;
+      } else if(att.data && att.type === 'application/pdf') {
+        // PDFプレビュー（iframe使用）
+        previewHtml = `<div style="margin-top:8px">
+          <iframe src="data:application/pdf;base64,${att.data}" width="250" height="180" style="border:1px solid #ddd;border-radius:4px"></iframe>
+          <div style="font-size:10px;color:#888;margin-top:2px">📄 ${att.name || 'PDF'}</div>
+        </div>`;
+      } else if(att.name) {
+        // その他の添付ファイル（アイコン表示）
+        previewHtml = `<div style="margin-top:8px;font-size:11px;color:#666">📎 ${att.name}</div>`;
+      }
+      // 複数添付ファイルがある場合
+      if(attachments.length > 1) {
+        previewHtml += `<div style="font-size:10px;color:#888;margin-top:4px">他${attachments.length - 1}件の添付</div>`;
+      }
     }
     
     return `
@@ -7036,10 +7076,24 @@ async function fetchEmails() {
     const result = await callCloudAPI('getEmails', { maxResults: 20 });
     console.log('メール取得結果:', result);
     if(result && result.success && result.emails) {
+      let addedCount = 0;
       // メールを受信BOXに追加（ローカルに直接追加）
       for(const email of result.emails) {
         const existing = inboxItems.find(i => i.id === email.messageId);
         if(!existing) {
+          // 添付ファイルがある場合は詳細を取得してプレビューデータを取得
+          let attachmentsWithData = email.attachments || [];
+          if(email.hasAttachments) {
+            try {
+              const detail = await callCloudAPI('getEmailDetail', { messageId: email.messageId });
+              if(detail && detail.success && detail.email && detail.email.attachments) {
+                attachmentsWithData = detail.email.attachments;
+              }
+            } catch(e) {
+              console.log('添付ファイル詳細取得スキップ:', e);
+            }
+          }
+          
           const newItem = {
             id: email.messageId,
             companyId: currentAuth.companyId,
@@ -7048,21 +7102,19 @@ async function fetchEmails() {
             from: email.from,
             subject: email.subject,
             body: email.body,
-            attachments: email.attachments || [],
+            attachments: attachmentsWithData,
             createdAt: email.date,
             history: []
           };
           inboxItems.push(newItem);
-          // クラウドにも保存を試みる（失敗しても続行）
-          try {
-            await callCloudAPI('saveInboxItem', newItem, 'POST');
-          } catch(e) {
-            console.log('クラウド保存スキップ:', e);
-          }
+          addedCount++;
+          // 1件追加ごとに画面更新
+          renderInboxList();
         }
       }
-      renderInboxList();
-      alert(`${result.emails.length}件のメールを取得しました`);
+      // localStorageに保存
+      saveInboxToLocal();
+      alert(`${addedCount}件の新規メールを取得しました`);
     } else {
       console.log('メール取得失敗:', result);
       alert('メールの取得に失敗しました');
