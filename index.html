@@ -275,6 +275,16 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 .me-result-bar{display:flex;gap:16px;padding:10px 1rem;background:#1a1a1a;color:#fff;flex-wrap:wrap}
 .me-result-item span{font-size:9px;color:#888;display:block;letter-spacing:.05em}
 .me-result-item strong{font-size:16px;font-weight:700}
+/* ═══ テンプレート ═══ */
+.tpl-card{background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:10px 14px;cursor:pointer;transition:all .12s;position:relative}
+.tpl-card:hover{border-color:#1a1a1a;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.tpl-card .tpl-star{position:absolute;top:8px;right:10px;font-size:14px;color:#fbbf24}
+.tpl-card .tpl-name{font-weight:700;font-size:13px;margin-bottom:3px}
+.tpl-card .tpl-meta{font-size:11px;color:#888;display:flex;gap:10px}
+.tpl-card .tpl-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.tpl-card .tpl-tag{font-size:10px;padding:1px 6px;border-radius:10px;background:#f4f3f0;color:#666}
+.hist-full{background:#eff6ff;border-color:#93c5fd}
+.hist-full:hover{border-color:#3b82f6}
 </style>
 <!-- Excel出力用ライブラリ (SheetJS) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -472,10 +482,28 @@ function loadGoogleMapsAPI() {
 
 <!-- 実績一覧 -->
 <div class="page" id="page-history">
+  <!-- 得意先テンプレート -->
+  <div class="sec" style="background:#fffbeb;border-color:#fbbf24">
+    <div class="st" style="display:flex;justify-content:space-between;align-items:center;color:#92400e">
+      <span>⭐ 得意先テンプレート</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="tpl-q" placeholder="得意先・品名で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderTemplates()">
+        <select id="tpl-cust-f" style="font-size:12px;padding:4px 8px" onchange="renderTemplates()">
+          <option value="">全得意先</option>
+        </select>
+        <span id="tpl-count" style="font-size:11px;color:#aaa"></span>
+      </div>
+    </div>
+    <div id="tpl-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;margin-top:.5rem;max-height:300px;overflow-y:auto"></div>
+  </div>
+
   <div class="sec">
     <div class="st" style="display:flex;justify-content:space-between;align-items:center">
       <span>見積実績一覧</span>
-      <input id="hist-q" placeholder="得意先・品名で検索…" style="width:200px;font-size:12px" oninput="renderHistory()">
+      <div style="display:flex;gap:8px;align-items:center">
+        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px"><input type="checkbox" id="hist-full-only" onchange="renderHistory()"> 明細付きのみ</label>
+        <input id="hist-q" placeholder="得意先・品名で検索…" style="width:200px;font-size:12px" oninput="renderHistory()">
+      </div>
     </div>
     <div style="overflow-x:auto;margin-top:.5rem">
       <table class="h-tbl"><thead><tr>
@@ -2446,7 +2474,8 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   if(!d.drivers) d.drivers=[];
   if(!d.inquirySettings) d.inquirySettings={autoReply:true,autoReplyMessage:'',categories:['見積依頼','納品について','データ入稿','校正確認','クレーム','その他'],assignees:[]};
   if(!d.wikiArticles) d.wikiArticles=[];
-  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
+  if(!d.templates) d.templates=[];
+  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
 }}catch(e){}}
 
 function saveDB(){
@@ -4448,6 +4477,7 @@ function buildPanel(id,initData){
     <button class="btn btn-p" onclick="showPV([${id}])">この見積書をプレビュー</button>
     <button class="btn" onclick="openMergeModal()">合冊印刷（タブ選択）</button>
     <button class="btn" onclick="saveHist(${id})">実績として保存</button>
+    <button class="btn" style="background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(${id})">⭐ テンプレート保存</button>
     <button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="clearTab(${id})" title="この見積書の入力内容をクリア">🗑 クリア</button>
   </div>
   <div class="brow" style="margin-top:4px">
@@ -4539,8 +4569,55 @@ function applyHist(id,histIdx){
   const r=DB.history[histIdx];if(!r)return;
   applyHistData(id,r);
 }
-function applyHistData(id,r){
+function applyHistData(id,r,fullMode){
   const s=ts(id);
+  
+  // 完全流用モード: tabState + DOM + フォーム明細を全て復元
+  if(fullMode && r._tabState && r._domVals){
+    // tabState復元
+    const state = JSON.parse(JSON.stringify(r._tabState));
+    Object.assign(s, state);
+    
+    // DOM基本値復元
+    Object.entries(r._domVals).forEach(([f,v])=>{
+      const el=document.getElementById(`${f}-${id}`);
+      if(el) el.value=v;
+    });
+    
+    // カテゴリ・サブカテゴリ・フォーム復元
+    if(state.cat){
+      s.cat=state.cat; s.sub=state.sub||''; s.type=TYPE_MAP[state.cat]||'other';
+      document.querySelectorAll(`#cat-row-${id} .pill`).forEach(b=>b.classList.toggle('sel',b.textContent===state.cat));
+      if(state.sub){
+        buildSubRow(id,state.cat);
+        setTimeout(()=>{
+          document.querySelectorAll(`#sub-row-${id} .pill`).forEach(b=>b.classList.toggle('sel',b.textContent===state.sub));
+        },0);
+      }
+      renderPast(id);
+    }
+    
+    // 数量グリッド復元
+    renderQtyGrid(id);
+    
+    // フォームエリア構築（costData相当）
+    buildFormArea(id, state.costData||null);
+    
+    // フォーム明細の値を復元
+    if(r._formSnap){
+      setTimeout(()=>{
+        restoreFormSnapshot(id, r._formSnap);
+        calc(id);
+      }, 100);
+    } else {
+      calc(id);
+    }
+    
+    document.getElementById(`cust-${id}`)?.scrollIntoView({behavior:'smooth',block:'center'});
+    return;
+  }
+  
+  // 通常モード（従来互換）
   if(r.cust||r.customer) document.getElementById(`cust-${id}`).value=r.cust||r.customer||'';
   if(r.item) document.getElementById(`prod-${id}`).value=r.item;
   if(r.spec) document.getElementById(`spec-${id}`).value=r.spec;
@@ -4554,7 +4631,18 @@ function applyHistData(id,r){
     renderPast(id);
   }
   if(r.costData)buildFormArea(id,r.costData);
-  syncRateRow(id);calc(id);
+  
+  // スナップショットがあれば明細も復元
+  if(r._formSnap && r._tabState){
+    const state = JSON.parse(JSON.stringify(r._tabState));
+    if(state.costData) buildFormArea(id, state.costData);
+    setTimeout(()=>{
+      restoreFormSnapshot(id, r._formSnap);
+      calc(id);
+    }, 100);
+  } else {
+    syncRateRow(id);calc(id);
+  }
   document.getElementById(`cust-${id}`)?.scrollIntoView({behavior:'smooth',block:'center'});
 }
 
@@ -5683,24 +5771,100 @@ function saveHist(id){
   const jobType=document.getElementById(`job-type-${id}`)?.value||'new';
   const grand=parseInt(document.getElementById(`g-grand-${id}`)?.textContent?.replace(/[^0-9]/g,'')||0);
   const tr2=parseFloat(document.getElementById(`trate-${id}`)?.value)/100||0.75;
+  
+  // ── フォーム全体のスナップショットを取得 ──
+  const formSnap = collectFormSnapshot(id);
+  const tabState = JSON.parse(JSON.stringify(s));
+  // DOM基本値
+  const domVals = {};
+  ['cust','prod','date','spec','memo','estno','unit','valid','erate','trate',
+   'finish-sel','finish-w','finish-h','expand-sel','expand-w','expand-h',
+   'job-type','spec-change','plate-change','delivery-note'].forEach(f=>{
+    const el=document.getElementById(`${f}-${id}`);
+    if(el) domVals[f]=el.value;
+  });
+  
   const newRows=[];
   s.qtyPats.forEach((p,pi)=>{
     const qty=p.v||0;
-    // adopted IDが新形式(li-pi)か旧形式(pi)か両対応
     const adEl=document.getElementById(`adopted-${id}-0-${pi}`)||document.getElementById(`adopted-${id}-${pi}`);
     const adIn=parseFloat(adEl?.value);
     const rec=qty>0&&grand>0?Math.ceil((grand/tr2/qty)*10)/10:0;
     const adopted=isNaN(adIn)?rec:adIn;
     const exTax=Math.round(qty*adopted);const cr=exTax>0&&grand>0?grand/exTax:null;
-    const row={date,cust,cat:s.cat,sub:s.sub,item,spec,qty,unit,unitp:adopted,exTax,cr,jobType,savedAt:new Date().toISOString()};
+    const row={date,cust,cat:s.cat,sub:s.sub,item,spec,qty,unit,unitp:adopted,exTax,cr,jobType,savedAt:new Date().toISOString(),
+      // 完全流用用のスナップショット
+      _formSnap: pi===0 ? formSnap : null,
+      _tabState: pi===0 ? tabState : null,
+      _domVals: pi===0 ? domVals : null
+    };
     DB.history.push(row);
     newRows.push(row);
   });
   saveDB();
-  // クラウドへ自動送信（非同期・失敗してもOK）
   newRows.forEach(row=>cloudAppendHistory(row));
-  alert(`「${item}」を実績として保存しました（${s.qtyPats.length}パターン）`);
+  alert(`「${item}」を実績として保存しました（${s.qtyPats.length}パターン）\n💡 明細データ付きで保存 → 完全流用が可能です`);
   renderPast(id);
+}
+
+// ── フォームスナップショット取得 ──
+function collectFormSnapshot(id){
+  const snap = {};
+  const area = document.getElementById(`form-area-${id}`);
+  if(!area) return snap;
+  
+  // テーブルごとに全input/selectの値を取得
+  const tables = ['ep','epr','epo','pl','dt','bd','fp','fmpr','fpo','bp','bipr','bpo'];
+  tables.forEach(tbl => {
+    const tbody = document.getElementById(`${tbl}-${id}`);
+    if(!tbody) return;
+    const rows = [];
+    tbody.querySelectorAll('tr').forEach(tr => {
+      const rowData = {};
+      // select値
+      tr.querySelectorAll('select').forEach((sel, si) => {
+        rowData['s'+si] = sel.value;
+        // マスター選択名も保存
+        if(sel.selectedIndex >= 0) rowData['s'+si+'_txt'] = sel.options[sel.selectedIndex]?.text || '';
+      });
+      // input値
+      tr.querySelectorAll('input').forEach((inp, ii) => {
+        rowData['i'+ii] = inp.value;
+      });
+      // data属性
+      ['do','nodai','mincharge','partname'].forEach(d => {
+        if(tr.dataset[d]) rowData['d_'+d] = tr.dataset[d];
+      });
+      rows.push(rowData);
+    });
+    if(rows.length > 0) snap[tbl] = rows;
+  });
+  
+  return snap;
+}
+
+// ── フォームスナップショット復元 ──
+function restoreFormSnapshot(id, snap){
+  if(!snap || typeof snap !== 'object') return;
+  
+  Object.entries(snap).forEach(([tbl, rows]) => {
+    const tbody = document.getElementById(`${tbl}-${id}`);
+    if(!tbody) return;
+    const trs = tbody.querySelectorAll('tr');
+    
+    rows.forEach((rowData, ri) => {
+      if(ri >= trs.length) return; // 行が足りなければスキップ
+      const tr = trs[ri];
+      // select復元
+      tr.querySelectorAll('select').forEach((sel, si) => {
+        if(rowData['s'+si] !== undefined) sel.value = rowData['s'+si];
+      });
+      // input復元
+      tr.querySelectorAll('input').forEach((inp, ii) => {
+        if(rowData['i'+ii] !== undefined) inp.value = rowData['i'+ii];
+      });
+    });
+  });
 }
 
 // ═══════════════════ プレビュー ══════════════
@@ -10108,32 +10272,246 @@ function saveProjDetail(){
 
 function renderHistory(){
   const q=(document.getElementById('hist-q')?.value||'').toLowerCase();
-  const rows=DB.history.filter(r=>!q||(r.cust+r.item+r.spec).toLowerCase().includes(q));
+  const fullOnly=document.getElementById('hist-full-only')?.checked;
+  const rows=DB.history.filter(r=>{
+    if(q && !(r.cust+r.item+r.spec).toLowerCase().includes(q)) return false;
+    if(fullOnly && !r._formSnap) return false;
+    return true;
+  });
   const body=document.getElementById('hist-body');if(!body)return;
   if(!rows.length){body.innerHTML='<tr><td colspan="10" style="text-align:center;color:#aaa;padding:1rem">実績がありません。見積作成で「実績として保存」してください</td></tr>';return;}
   body.innerHTML=rows.slice().reverse().map((r,ri)=>{
     const bc=r.cr==null?'bn':r.cr<0.7?'bg':r.cr<0.8?'ba':'br';
     const bl=r.cr==null?'—':(r.cr*100).toFixed(1)+'%';
     const origI=DB.history.length-1-ri;
-    return `<tr>
+    const hasFull=!!r._formSnap;
+    return `<tr${hasFull?' class="hist-full"':''}>
       <td style="white-space:nowrap">${r.date||''}</td><td>${r.cust||''}</td>
-      <td style="font-weight:700">${r.item||''}</td>
+      <td style="font-weight:700">${r.item||''}${hasFull?' <span style="font-size:9px;background:#dbeafe;color:#1d4ed8;padding:1px 4px;border-radius:3px;vertical-align:middle">明細付</span>':''}</td>
       <td style="font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.spec||''}</td>
       <td style="text-align:right">${(r.qty||0).toLocaleString()}</td><td>${r.unit||''}</td>
       <td style="text-align:right">${r.unitp!=null?fmtU(r.unitp):'—'}</td>
       <td style="text-align:right;font-weight:700">${fmt(r.exTax)}</td>
       <td style="text-align:center"><span class="badge ${bc}">${bl}</span></td>
       <td style="white-space:nowrap">
-        <button class="use-btn" onclick="loadHistNew(${origI})">新規参照</button>
-        <button class="use-btn" style="border-color:#991b1b;color:#991b1b;margin-left:4px" onclick="if(confirm('削除？')){DB.history.splice(${origI},1);saveDB();renderHistory()}">削除</button>
+        ${hasFull?`<button class="use-btn" style="background:#1a1a1a;color:#fff;border-color:#1a1a1a" onclick="loadHistFull(${origI})">📋 完全流用</button>`:''}
+        <button class="use-btn" onclick="loadHistNew(${origI})">参照</button>
+        <button class="use-btn" onclick="saveHistAsTemplate(${origI})" title="テンプレートとして保存" style="border-color:#fbbf24;color:#92400e">⭐</button>
+        <button class="use-btn" style="border-color:#991b1b;color:#991b1b" onclick="if(confirm('削除？')){DB.history.splice(${origI},1);saveDB();renderHistory()}">削除</button>
       </td>
     </tr>`;
   }).join('');
+  // テンプレートも更新
+  renderTemplates();
 }
 function loadHistNew(idx){
   const r=DB.history[idx];if(!r)return;
   const newId=addTab();
   setTimeout(()=>{applyHist(newId,idx);},50);
+}
+function loadHistFull(idx){
+  const r=DB.history[idx];if(!r||!r._formSnap)return;
+  const newId=addTab();
+  setTimeout(()=>{
+    applyHistData(newId, r, true);
+  },50);
+  swPage('est',document.querySelector('[data-page="est"]'));
+}
+
+// ═══════════════════ 得意先テンプレート ════════════════════
+
+function saveAsTemplate(id){
+  const cust=document.getElementById(`cust-${id}`)?.value?.trim();
+  const item=document.getElementById(`prod-${id}`)?.value?.trim();
+  if(!cust){alert('得意先名を入力してください');return;}
+  if(!item){alert('品名を入力してください');return;}
+  
+  const tplName = prompt('テンプレート名:', `${cust} - ${item}`);
+  if(!tplName) return;
+  
+  const s=ts(id);
+  const formSnap = collectFormSnapshot(id);
+  const tabState = JSON.parse(JSON.stringify(s));
+  const domVals = {};
+  ['cust','prod','date','spec','memo','estno','unit','valid','erate','trate',
+   'finish-sel','finish-w','finish-h','expand-sel','expand-w','expand-h',
+   'job-type','spec-change','plate-change','delivery-note'].forEach(f=>{
+    const el=document.getElementById(`${f}-${id}`);
+    if(el) domVals[f]=el.value;
+  });
+  
+  const grand=parseInt(document.getElementById(`g-grand-${id}`)?.textContent?.replace(/[^0-9]/g,'')||0);
+  
+  const tpl = {
+    id: 'TPL' + Date.now(),
+    name: tplName,
+    cust: cust,
+    item: item,
+    spec: document.getElementById(`spec-${id}`)?.value||'',
+    cat: s.cat,
+    sub: s.sub,
+    qty: s.qtyPats[0]?.v || 0,
+    unit: document.getElementById(`unit-${id}`)?.value||'枚',
+    costTotal: grand,
+    companyId: currentAuth?.companyId || '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    useCount: 0,
+    _formSnap: formSnap,
+    _tabState: tabState,
+    _domVals: domVals
+  };
+  
+  if(!DB.templates) DB.templates = [];
+  DB.templates.push(tpl);
+  saveDB();
+  alert(`⭐ テンプレート「${tplName}」を保存しました\n実績一覧のテンプレート欄から1クリックで呼び出せます`);
+}
+
+// 実績からテンプレート保存
+function saveHistAsTemplate(histIdx){
+  const r=DB.history[histIdx];
+  if(!r) return;
+  
+  const tplName = prompt('テンプレート名:', `${r.cust||''} - ${r.item||''}`);
+  if(!tplName) return;
+  
+  const tpl = {
+    id: 'TPL' + Date.now(),
+    name: tplName,
+    cust: r.cust||'',
+    item: r.item||'',
+    spec: r.spec||'',
+    cat: r.cat||'',
+    sub: r.sub||'',
+    qty: r.qty||0,
+    unit: r.unit||'枚',
+    costTotal: r.exTax||0,
+    companyId: currentAuth?.companyId || '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    useCount: 0,
+    _formSnap: r._formSnap || null,
+    _tabState: r._tabState || null,
+    _domVals: r._domVals || null
+  };
+  
+  if(!DB.templates) DB.templates = [];
+  DB.templates.push(tpl);
+  saveDB();
+  alert(`⭐ テンプレート「${tplName}」を保存しました`);
+  renderTemplates();
+}
+
+// テンプレート一覧描画
+function renderTemplates(){
+  const container=document.getElementById('tpl-list');
+  if(!container) return;
+  
+  const q=(document.getElementById('tpl-q')?.value||'').toLowerCase();
+  const custF=document.getElementById('tpl-cust-f')?.value||'';
+  
+  let tpls = (DB.templates||[]).filter(t => {
+    if(q && !(t.name+t.cust+t.item+t.spec).toLowerCase().includes(q)) return false;
+    if(custF && t.cust !== custF) return false;
+    return true;
+  });
+  
+  // 使用回数順→更新日順
+  tpls.sort((a,b) => (b.useCount||0)-(a.useCount||0) || new Date(b.updatedAt)-new Date(a.updatedAt));
+  
+  // 得意先フィルタ更新
+  const custSel=document.getElementById('tpl-cust-f');
+  if(custSel){
+    const custs=[...new Set((DB.templates||[]).map(t=>t.cust).filter(Boolean))];
+    const prev=custSel.value;
+    custSel.innerHTML='<option value="">全得意先</option>'+custs.map(c=>`<option${c===prev?' selected':''}>${c}</option>`).join('');
+  }
+  
+  const countEl=document.getElementById('tpl-count');
+  if(countEl) countEl.textContent=tpls.length+'件';
+  
+  if(tpls.length===0){
+    container.innerHTML='<div style="grid-column:1/-1;text-align:center;color:#aaa;padding:1rem;font-size:12px">テンプレートがありません。見積作成画面の「⭐ テンプレート保存」から登録できます。</div>';
+    return;
+  }
+  
+  container.innerHTML=tpls.map((t,i)=>{
+    const hasFull=!!t._formSnap;
+    const origIdx=(DB.templates||[]).indexOf(t);
+    return `<div class="tpl-card" onclick="loadTemplate(${origIdx})">
+      <div class="tpl-star">⭐</div>
+      <div class="tpl-name">${t.name}</div>
+      <div class="tpl-meta">
+        <span>${t.cust||''}</span>
+        <span>${t.qty?t.qty.toLocaleString()+(t.unit||''):''}</span>
+        <span>${t.costTotal?fmt(t.costTotal):''}</span>
+      </div>
+      <div class="tpl-tags">
+        ${t.cat?'<span class="tpl-tag">'+t.cat+'</span>':''}
+        ${t.sub?'<span class="tpl-tag">'+t.sub+'</span>':''}
+        ${hasFull?'<span class="tpl-tag" style="background:#dbeafe;color:#1d4ed8">明細付</span>':''}
+        <span class="tpl-tag">使用${t.useCount||0}回</span>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:4px">
+        <button class="use-btn" style="font-size:10px" onclick="event.stopPropagation();editTemplate(${origIdx})">✏編集</button>
+        <button class="use-btn" style="font-size:10px;border-color:#991b1b;color:#991b1b" onclick="event.stopPropagation();deleteTemplate(${origIdx})">削除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// テンプレート読込
+function loadTemplate(idx){
+  const t=(DB.templates||[])[idx];
+  if(!t) return;
+  
+  // 使用回数カウント
+  t.useCount=(t.useCount||0)+1;
+  t.updatedAt=new Date().toISOString();
+  saveDB();
+  
+  const newId=addTab();
+  
+  // _tabState + _domVals + _formSnapがあれば完全流用
+  if(t._tabState && t._domVals){
+    setTimeout(()=>{
+      // historyレコードと同じ形式にして applyHistData を流用
+      applyHistData(newId, {
+        cust: t.cust, item: t.item, spec: t.spec, cat: t.cat, sub: t.sub,
+        qty: t.qty, unit: t.unit,
+        _formSnap: t._formSnap,
+        _tabState: t._tabState,
+        _domVals: t._domVals
+      }, true);
+    },50);
+  } else {
+    // 基本情報のみ
+    setTimeout(()=>{
+      const r = {cust:t.cust, item:t.item, spec:t.spec, cat:t.cat, sub:t.sub, qty:t.qty, unit:t.unit};
+      applyHistData(newId, r, false);
+    },50);
+  }
+  
+  swPage('est',document.querySelector('[data-page="est"]'));
+}
+
+function editTemplate(idx){
+  const t=(DB.templates||[])[idx];
+  if(!t) return;
+  const name=prompt('テンプレート名:',t.name);
+  if(name===null) return;
+  t.name=name;
+  t.updatedAt=new Date().toISOString();
+  saveDB();
+  renderTemplates();
+}
+
+function deleteTemplate(idx){
+  if(!confirm('このテンプレートを削除しますか？')) return;
+  DB.templates.splice(idx,1);
+  saveDB();
+  renderTemplates();
 }
 
 // ═══════════════════ 用紙検索モーダル初期化 ═════
