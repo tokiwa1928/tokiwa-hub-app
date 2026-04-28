@@ -9432,39 +9432,201 @@ var TASK_TYPES = {
   other:     { label: 'その他',       icon: '📍', color: '#6b7280', bg: '#f3f4f6' }
 };
 
-// 配送アイテムを追加 (タスクタイプ + 案件連動対応)
+// 配送アイテムを追加 — モーダル UI 表示
 function addDeliveryItem(opts){
-  opts = opts || {};
-  const date = opts.date || document.getElementById('delivery-date')?.value || new Date().toISOString().split('T')[0];
+  // opts.skipModal=true で旧来の prompt 方式 (互換用)
+  if(opts && opts.skipModal) return addDeliveryItemDirect(opts);
+  showAddDeliveryModal(opts || {});
+}
 
-  // タスクタイプ
-  let taskType = opts.taskType;
-  if(!taskType){
-    const choice = prompt('タスクの種類を選んでください:\n  1 = 🚚 納品\n  2 = 📐 校正出し\n  3 = 📦 サンプル取得\n  4 = 📚 カタログ・営業資料\n  5 = 🛻 集荷\n  6 = 📍 その他', '1');
-    if(!choice) return;
-    const map = {'1':'delivery','2':'proof','3':'sample','4':'catalog','5':'pickup','6':'other'};
-    taskType = map[choice] || 'delivery';
+// 配送追加モーダル
+function showAddDeliveryModal(opts){
+  opts = opts || {};
+  const today = new Date().toISOString().split('T')[0];
+  const date = opts.date || document.getElementById('delivery-date')?.value || today;
+
+  // 案件オプション (新しい順)
+  const projectOpts = (DB.projects || [])
+    .slice().reverse()
+    .map(p => `<option value="${p.id}">${p.id} | ${p.cust || '—'} | ${p.item || ''}</option>`)
+    .join('');
+
+  const modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+
+  modal.innerHTML = `
+    <div style="background:#fff;width:100%;max-width:560px;max-height:96vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:14px 20px;background:#1e293b;color:#fff;display:flex;justify-content:space-between;align-items:center">
+        <strong style="font-size:14px">＋ 配送・タスク追加</strong>
+        <button onclick="this.closest('.proof-modal').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>
+      </div>
+
+      <div style="overflow-y:auto;padding:18px 20px;flex:1">
+        <!-- 案件選択 (任意・自動入力) -->
+        <div class="f" style="margin-bottom:14px;background:#f0f9ff;padding:10px;border-radius:6px">
+          <label style="font-size:11px;font-weight:700;color:#0369a1">📋 関連案件 (選ぶと自動入力)</label>
+          <select id="add-del-project" onchange="autoFillFromProject(this.value)" style="width:100%;font-size:12px;padding:6px">
+            <option value="">— 案件外のタスク —</option>
+            ${projectOpts}
+          </select>
+          <div style="font-size:10px;color:#64748b;margin-top:4px">※ 取引先マスタから住所も自動取得を試みます</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div class="f">
+            <label style="font-size:11px">タスク種類</label>
+            <select id="add-del-type" style="width:100%;font-size:12px;padding:6px">
+              <option value="delivery">🚚 納品</option>
+              <option value="proof">📐 校正出し</option>
+              <option value="sample">📦 サンプル取得</option>
+              <option value="catalog">📚 カタログ・営業</option>
+              <option value="pickup">🛻 集荷</option>
+              <option value="other">📍 その他</option>
+            </select>
+          </div>
+          <div class="f">
+            <label style="font-size:11px">日付</label>
+            <input id="add-del-date" type="date" value="${date}" style="width:100%;font-size:12px;padding:6px">
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div class="f">
+            <label style="font-size:11px">時刻 (任意)</label>
+            <input id="add-del-time" type="time" style="width:100%;font-size:12px;padding:6px">
+          </div>
+          <div class="f">
+            <label style="font-size:11px">数量 (任意)</label>
+            <input id="add-del-qty" type="text" placeholder="例: 1000部" style="width:100%;font-size:12px;padding:6px">
+          </div>
+        </div>
+
+        <div class="f" style="margin-bottom:10px">
+          <label style="font-size:11px">訪問先・得意先名 *</label>
+          <input id="add-del-cust" type="text" required style="width:100%;font-size:13px;padding:7px">
+        </div>
+
+        <div class="f" style="margin-bottom:10px">
+          <label style="font-size:11px">住所</label>
+          <input id="add-del-address" type="text" placeholder="〒xxx-xxxx 都道府県…" style="width:100%;font-size:13px;padding:7px">
+        </div>
+
+        <div class="f" style="margin-bottom:10px">
+          <label style="font-size:11px">品名・内容</label>
+          <input id="add-del-prod" type="text" placeholder="例: A4チラシ / カタログ持参" style="width:100%;font-size:13px;padding:7px">
+        </div>
+
+        <div class="f" style="margin-bottom:10px">
+          <label style="font-size:11px">備考・メモ</label>
+          <textarea id="add-del-note" rows="2" style="width:100%;font-size:12px;padding:7px;resize:vertical"></textarea>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid #e0ddd6">
+          <button class="btn" onclick="this.closest('.proof-modal').remove()">キャンセル</button>
+          <button class="btn btn-p" onclick="executeAddDelivery()">追加</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  // 事前指定があれば反映
+  if(opts.taskType) document.getElementById('add-del-type').value = opts.taskType;
+  if(opts.projectId){
+    document.getElementById('add-del-project').value = opts.projectId;
+    autoFillFromProject(opts.projectId);
+  }
+  if(opts.custName) document.getElementById('add-del-cust').value = opts.custName;
+  if(opts.address) document.getElementById('add-del-address').value = opts.address;
+  if(opts.prodName) document.getElementById('add-del-prod').value = opts.prodName;
+  if(opts.qty) document.getElementById('add-del-qty').value = opts.qty;
+  if(opts.note) document.getElementById('add-del-note').value = opts.note;
+  if(opts.time) document.getElementById('add-del-time').value = opts.time;
+
+  // 訪問先名にフォーカス (案件未選択時に手入力しやすく)
+  setTimeout(() => {
+    if(!opts.projectId) document.getElementById('add-del-cust')?.focus();
+  }, 100);
+}
+
+// 案件選択時に他フィールドを自動入力
+function autoFillFromProject(projectId){
+  if(!projectId) return;
+  const project = (DB.projects || []).find(p => p.id === projectId);
+  if(!project) return;
+
+  document.getElementById('add-del-cust').value = project.cust || '';
+  document.getElementById('add-del-prod').value = (project.item || '') + (project.spec ? ' / ' + project.spec : '');
+  document.getElementById('add-del-qty').value = (project.qty ? project.qty.toLocaleString() : '') + (project.unit || '');
+
+  // 取引先マスタから住所取得を試みる
+  const cust = (DB.master?.cust || []).find(c =>
+    (typeof c === 'object' ? c.org : c) === project.cust
+  );
+  if(cust && typeof cust === 'object'){
+    const addr = cust.addr || cust.address || cust.住所 || '';
+    if(addr) document.getElementById('add-del-address').value = addr;
   }
 
-  const typeLabel = TASK_TYPES[taskType]?.label || taskType;
+  // 既存の納期日があれば日付に
+  if(project.dueDate){
+    document.getElementById('add-del-date').value = project.dueDate;
+  }
 
-  const custName = opts.custName || prompt(`訪問先名 (${typeLabel}):`);
-  if(!custName) return;
-  const address = opts.address || prompt('住所:') || '';
-  const prodName = opts.prodName || prompt(taskType === 'catalog' ? '持参品 (例: 新カタログ・名刺):' : '品名・内容:') || '';
-  const qty = opts.qty || prompt('数量 (任意):', '') || '';
-  const note = opts.note || prompt('備考・メモ (任意):', '') || '';
-  const time = opts.time || prompt('予定時刻 (任意, 例 10:00):', '') || '';
+  // メモに案件 ID
+  const noteEl = document.getElementById('add-del-note');
+  if(noteEl && !noteEl.value){ noteEl.value = `案件 ${projectId} 連動`; }
+}
+
+// モーダルから「追加」を確定
+function executeAddDelivery(){
+  const projectId = document.getElementById('add-del-project').value || null;
+  const taskType = document.getElementById('add-del-type').value;
+  const date = document.getElementById('add-del-date').value;
+  const time = document.getElementById('add-del-time').value;
+  const custName = document.getElementById('add-del-cust').value.trim();
+  const address = document.getElementById('add-del-address').value.trim();
+  const prodName = document.getElementById('add-del-prod').value.trim();
+  const qty = document.getElementById('add-del-qty').value.trim();
+  const note = document.getElementById('add-del-note').value.trim();
+
+  if(!custName){ alert('訪問先・得意先名は必須です'); return; }
+  if(!date){ alert('日付は必須です'); return; }
 
   if(!DB.deliveryItems) DB.deliveryItems = [];
   const order = DB.deliveryItems.filter(i => i.date === date).length + 1;
 
   const item = {
     id: 'DEL' + Date.now(),
-    date, time,
-    taskType,
+    date, time, taskType,
     custName, address, prodName, qty, note,
-    unit: '部', status: 'pending', driverId: '', order,
+    unit: '', status: 'pending', driverId: '', order,
+    projectId, proofingId: null,
+    createdAt: new Date().toISOString()
+  };
+  DB.deliveryItems.push(item);
+  saveDB();
+
+  document.querySelector('.proof-modal')?.remove();
+  renderDeliverySchedule();
+  if(typeof _toastMsg === 'function') _toastMsg('✅ 配送タスクを追加しました');
+}
+
+// 旧来の prompt 方式 (互換用)
+function addDeliveryItemDirect(opts){
+  opts = opts || {};
+  const date = opts.date || document.getElementById('delivery-date')?.value || new Date().toISOString().split('T')[0];
+  const taskType = opts.taskType || 'delivery';
+  if(!DB.deliveryItems) DB.deliveryItems = [];
+  const order = DB.deliveryItems.filter(i => i.date === date).length + 1;
+  const item = {
+    id: 'DEL' + Date.now(),
+    date, time: opts.time || '', taskType,
+    custName: opts.custName || '', address: opts.address || '',
+    prodName: opts.prodName || '', qty: opts.qty || '', note: opts.note || '',
+    unit: '', status: 'pending', driverId: '', order,
     projectId: opts.projectId || null,
     proofingId: opts.proofingId || null,
     createdAt: new Date().toISOString()
