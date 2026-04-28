@@ -8002,11 +8002,24 @@ function showProofingDetail(proofingId){
 
   const canCompare = (p.versions || []).filter(v => v.driveFileId).length >= 2;
 
+  // 紐付く案件
+  const linkedProject = p.projectId ? (DB.projects||[]).find(pr => pr.id === p.projectId) : null;
+  const projectLinkHtml = linkedProject
+    ? `<div style="margin-bottom:.75rem;padding:8px 10px;background:#dbeafe;border-radius:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="font-size:11px">
+          <strong>📋 紐付く案件:</strong> ${linkedProject.id} ${linkedProject.item || ''}
+          <div style="font-size:10px;color:#1e3a8a;margin-top:2px">ステータス: ${linkedProject.status || '─'}　納期: ${linkedProject.dueDate || '─'}</div>
+        </div>
+        <button class="use-btn" style="white-space:nowrap;background:#1e3a8a;color:#fff;border-color:#1e3a8a" onclick="jumpToProject('${linkedProject.id}')">案件へ →</button>
+      </div>`
+    : '';
+
   container.innerHTML = `
     <div style="margin-bottom:1rem">
       <div style="font-weight:700;font-size:14px">${p.custName || '─'}</div>
       <div style="font-size:12px;color:#555">${p.prodName || ''}</div>
     </div>
+    ${projectLinkHtml}
     <div class="f" style="margin-bottom:.75rem">
       <label>ステータス</label>
       <select style="font-size:12px" onchange="updateProofingStatus('${p.id}',this.value)">
@@ -8144,6 +8157,32 @@ function deleteProofing(proofingId){
 }
 
 // ── 校正BOX プレビュー & 検版機能 ─────────────────────────────
+
+// 案件番号から校正セッション作成 (案件画面ボタンから呼ばれる)
+function createProofingFromProjectId(projectId){
+  const project = (DB.projects||[]).find(p => p.id === projectId);
+  if(!project){ alert('案件が見つかりません'); return; }
+  if(!confirm(`案件 ${project.id} 「${project.item}」の校正セッションを作成しますか?`)) return;
+  createProofingFromProject(project, true);
+}
+
+// 校正セッションへジャンプ (案件画面ボタンから)
+function jumpToProofing(proofingId){
+  const btn = document.querySelector('.tb-btn[onclick*="proofing"]');
+  if(btn) swPage('proofing', btn);
+  setTimeout(() => showProofingDetail(proofingId), 100);
+}
+
+// 校正セッションから紐付く案件へジャンプ
+function jumpToProject(projectId){
+  const btn = document.querySelector('.tb-btn[onclick*="project"]');
+  if(btn) swPage('project', btn);
+  // 検索ボックスに ID を入れて目立たせる
+  setTimeout(() => {
+    const q = document.getElementById('proj-q');
+    if(q){ q.value = projectId; renderProjects(); }
+  }, 100);
+}
 
 // 単体プレビュー (モーダル)
 function previewProofVersion(proofingId, versionId){
@@ -10125,6 +10164,68 @@ function executeOrderConfirm(tabId){
     msg += `\n\nグループ会社への発注 ${groupOrders.length}件 を自動作成しました`;
   }
   alert(msg);
+
+  // データ作成/修正費があれば校正セッション作成を提案
+  const hasData = hasDataWorkInQuote(tabId, selected);
+  if(hasData){
+    setTimeout(() => {
+      if(confirm(`受注した「${proj.item}」に\nデータ作成/修正費が含まれています。\n\n校正セッションを作成しますか?\n(校正BOX で Drive URL を貼って検版できます)`)){
+        createProofingFromProject(proj, true);
+      }
+    }, 300);
+  }
+}
+
+// データ作成/修正費が見積に含まれているか判定
+function hasDataWorkInQuote(tabId, selected){
+  if(selected === 'current'){
+    const dataEl = document.getElementById(`g-data-${tabId}`);
+    if(!dataEl) return false;
+    const amount = parseInt(dataEl.textContent?.replace(/[^0-9]/g, '') || '0');
+    return amount > 0;
+  }
+  // 保存済みパターンは tabSnapshot をチェック
+  if(selected.startsWith('saved-')){
+    const idx = parseInt(selected.replace('saved-', ''));
+    const q = DB.quotations?.[idx];
+    if(!q?.tabSnapshot) return false;
+    try {
+      const snap = JSON.parse(q.tabSnapshot);
+      // dataRows or any row with category 'data' / 'データ作成' 系
+      const rows = snap?.dataRows || snap?.rows?.data || [];
+      return rows.some(r => r && r.amount > 0);
+    } catch(e){ return false; }
+  }
+  return false;
+}
+
+// 案件から校正セッションを作成 (双方向リンク)
+function createProofingFromProject(project, openAfterCreate){
+  const proofing = {
+    id: 'PRF' + Date.now(),
+    custName: project.cust || '',
+    prodName: project.item || '',
+    projectId: project.id,
+    status: 'waiting',
+    versions: [],
+    createdAt: new Date().toISOString(),
+    note: `案件 ${project.id} より自動作成`
+  };
+  if(!DB.proofings) DB.proofings = [];
+  DB.proofings.push(proofing);
+
+  // プロジェクト側にも proofing ID を保持
+  if(!project.proofingIds) project.proofingIds = [];
+  project.proofingIds.push(proofing.id);
+
+  saveDB();
+
+  if(openAfterCreate){
+    const btn = document.querySelector('.tb-btn[onclick*="proofing"]');
+    if(btn) swPage('proofing', btn);
+    setTimeout(() => showProofingDetail(proofing.id), 100);
+  }
+  return proofing;
 }
 
 // 手動追加
@@ -10284,6 +10385,11 @@ function renderProjects(){
 
     // 仕様・備考の展開行（アコーディオン）
     const hasDetail=r.spec||r.memo||r.qty;
+    // 紐付く校正セッション
+    const linkedProofs = (DB.proofings||[]).filter(pr => pr.projectId === r.id);
+    const proofBadge = linkedProofs.length > 0
+      ? `<button class="use-btn" style="background:#dbeafe;border-color:#93c5fd;color:#1e3a8a;white-space:nowrap" onclick="jumpToProofing('${linkedProofs[0].id}')">📐 校正 ${linkedProofs.length}件</button>`
+      : `<button class="use-btn" style="white-space:nowrap" onclick="createProofingFromProjectId('${r.id}')">📐 校正セッション作成</button>`;
     const specRow=`<tr id="proj-acc-${oi}" style="display:none;background:#f9f9f7">
       <td colspan="12" style="padding:.5rem 1rem .75rem 2rem">
         <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start">
@@ -10292,7 +10398,10 @@ function renderProjects(){
             ${r.memo?`<div style="margin-top:6px"><span style="font-size:10px;font-weight:700;color:#aaa;letter-spacing:.08em">備考・メモ</span><div style="font-size:12px;white-space:pre-wrap;margin-top:2px;color:#555">${r.memo}</div></div>`:''}
             ${r.qty?`<div style="margin-top:6px;font-size:11px;color:#888">数量: <strong>${r.qty.toLocaleString()}${r.unit||''}</strong>　原価合計: <strong>${r.grand?fmt(r.grand):''}</strong></div>`:''}
           </div>
-          <button class="use-btn" style="white-space:nowrap" onclick="editProjDetail(${oi})">✏ 編集</button>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+            ${proofBadge}
+            <button class="use-btn" style="white-space:nowrap" onclick="editProjDetail(${oi})">✏ 編集</button>
+          </div>
         </div>
       </td>
     </tr>`;
