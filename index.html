@@ -439,6 +439,8 @@ function loadGoogleMapsAPI() {
     </div>
     <div style="display:flex;gap:6px">
       <button class="btn" onclick="renderProjects()">🔄 更新</button>
+      <button class="btn" style="background:#fef3c7;border-color:#fcd34d" onclick="showAIIngestModal('project')">🤖 AI 取込</button>
+      <button class="btn" style="background:#ede9fe;border-color:#c4b5fd" onclick="showHistoryAnalyzeModal()">📊 履歴 AI 分析</button>
       <button class="btn btn-p" onclick="addProjectManual()">＋ 手動追加</button>
     </div>
   </div>
@@ -870,16 +872,16 @@ function loadGoogleMapsAPI() {
     </div>
   </div>
   
-  <!-- LINE WORKS Drive連携設定 -->
+  <!-- Google Drive 連携設定 -->
   <div class="sec" style="margin-top:1rem;background:#e0f2fe;border:1px solid #7dd3fc">
-    <div class="st" style="color:#0369a1">☁️ LINE WORKS Drive連携</div>
+    <div class="st" style="color:#0369a1">☁️ Google Drive 連携 (校正データ保管用)</div>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
       <div class="f" style="flex:1;min-width:200px">
-        <label>ベースフォルダID</label>
-        <input id="lw-drive-folder" placeholder="LINE WORKS DriveのフォルダID" onchange="saveLWDriveConfig()">
+        <label>ベースフォルダ ID (任意・整理用)</label>
+        <input id="lw-drive-folder" placeholder="Google Drive フォルダ ID" onchange="saveLWDriveConfig()">
       </div>
       <div class="f" style="width:180px">
-        <label>フォルダ構成</label>
+        <label>フォルダ構成 (推奨)</label>
         <select id="lw-drive-structure" onchange="saveLWDriveConfig()">
           <option value="customer/project">得意先/案件名</option>
           <option value="year/customer">年度/得意先</option>
@@ -890,7 +892,8 @@ function loadGoogleMapsAPI() {
       </div>
     </div>
     <div style="font-size:11px;color:#0369a1;margin-top:.5rem">
-      💡 LINE WORKS Driveと連携すると、校正PDFのアップロード・共有リンク発行が自動化されます
+      💡 校正BOX で「校正アップロード」する際に Google Drive の共有 URL を貼り付けると、PDF プレビュー・OCR・並列検版が利用可能になります。<br>
+      共有設定は「リンクを知っている全員」を推奨します。
     </div>
   </div>
 </div>
@@ -8494,6 +8497,313 @@ function runTextDiff(){
 
 function _escDiff(str){
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── AI 取込 (Claude API) ───────────────────────────────────
+
+// 見積/案件用 AI 取込モーダル (お客様メール・指示書・PDF を貼り付け)
+function showAIIngestModal(targetType){
+  // targetType: 'estimate' | 'project'
+  targetType = targetType || 'estimate';
+
+  const modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+
+  const title = targetType === 'project' ? '案件を AI で自動登録' : '見積情報を AI で自動入力';
+  const targetLabel = targetType === 'project' ? '案件' : '見積';
+  const exampleInput = `お世話になっております。
+来月のセミナー用に A4 4ページの両面カラーチラシを 5000部 印刷お願いします。
+納期は 5月15日 までです。コート紙 90kg でお願いします。
+よろしくお願いします。
+
+(株)サンプル商事
+山田 太郎`;
+
+  modal.innerHTML = `
+    <div style="background:#fff;width:100%;max-width:780px;max-height:96vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:14px 20px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center">
+        <strong style="font-size:14px">🤖 ${title}</strong>
+        <button onclick="this.closest('.proof-modal').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>
+      </div>
+
+      <div style="overflow-y:auto;padding:18px 20px;flex:1">
+        <div style="background:#fef3c7;padding:10px;border-radius:6px;margin-bottom:12px;font-size:12px;color:#78350f">
+          💡 お客様からの依頼メール、指示書のテキスト、またはOCRで抽出したPDFテキストを貼り付けてください。<br>
+          AI が ${targetLabel}に必要な情報 (得意先・品名・数量・仕様・納期など) を自動抽出します。
+        </div>
+
+        <div class="f" style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:700">📥 元テキスト</label>
+          <textarea id="ai-ingest-input" rows="10" placeholder="${_escDiff(exampleInput)}" style="width:100%;font-size:13px;padding:8px;font-family:'Yu Gothic',sans-serif;line-height:1.6;resize:vertical"></textarea>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <button class="btn" onclick="loadOcrToIngest()" style="font-size:11px">📋 PDF から OCR 取込</button>
+          <span style="font-size:10px;color:#888">PDF の Drive ファイル ID から OCR で抽出してテキストエリアに入れます</span>
+        </div>
+
+        <div id="ai-ingest-result" style="display:none;background:#f0fdf4;padding:12px;border-radius:6px;border:2px solid #86efac;margin-bottom:10px"></div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid #e0ddd6">
+          <button class="btn" onclick="this.closest('.proof-modal').remove()">キャンセル</button>
+          <button class="btn btn-p" id="ai-ingest-btn" onclick="executeAIIngest('${targetType}')">🤖 AI で抽出</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  setTimeout(() => document.getElementById('ai-ingest-input')?.focus(), 100);
+}
+
+// PDF Drive ファイル ID から OCR してテキストエリアに入れる
+async function loadOcrToIngest(){
+  const fileIdInput = prompt('Google Drive の PDF ファイル ID または 共有 URL:', '');
+  if(!fileIdInput) return;
+  let fileId = fileIdInput;
+  // URL から ID を抽出
+  const m = fileIdInput.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if(m) fileId = m[1];
+
+  const ta = document.getElementById('ai-ingest-input');
+  if(!ta) return;
+  ta.value = '⏳ OCR 中... (10〜30秒)';
+  try {
+    const result = await callCloudAPI('extractPdfText', { fileId });
+    if(result?.success){
+      ta.value = result.text || '';
+      _toastMsg(`✅ ${result.charCount || 0}文字 取得`);
+    } else {
+      ta.value = '';
+      alert('OCR 失敗: ' + (result?.error || ''));
+    }
+  } catch(e){
+    ta.value = '';
+    alert('OCR エラー: ' + e.message);
+  }
+}
+
+async function executeAIIngest(targetType){
+  const text = document.getElementById('ai-ingest-input')?.value.trim();
+  if(!text){ alert('テキストを入力してください'); return; }
+
+  const btn = document.getElementById('ai-ingest-btn');
+  if(btn){ btn.textContent = '⏳ 抽出中…'; btn.disabled = true; }
+
+  try {
+    const result = await callCloudAPI('claudeExtract', {
+      input: text,
+      schema: targetType === 'project' ? 'project' : 'estimate'
+    });
+    if(btn){ btn.textContent = '🤖 AI で抽出'; btn.disabled = false; }
+
+    if(!result?.success){
+      alert('AI 抽出失敗: ' + (result?.error || ''));
+      return;
+    }
+    showIngestConfirm(targetType, result.extracted);
+  } catch(e){
+    if(btn){ btn.textContent = '🤖 AI で抽出'; btn.disabled = false; }
+    alert('エラー: ' + e.message);
+  }
+}
+
+function showIngestConfirm(targetType, extracted){
+  const resultDiv = document.getElementById('ai-ingest-result');
+  if(!resultDiv) return;
+
+  const fields = targetType === 'project'
+    ? ['cust','item','spec','qty','unit','dueDate','exTax','memo','confidence']
+    : ['cust','item','spec','qty','unit','dueDate','memo','proofingNeeded','confidence'];
+
+  const labelMap = {
+    cust: '得意先', item: '品名', spec: '仕様', qty: '数量', unit: '単位',
+    dueDate: '納期', exTax: '税抜金額', memo: '備考',
+    proofingNeeded: '校正必要', confidence: '確信度'
+  };
+
+  let html = `<div style="font-size:13px;font-weight:700;margin-bottom:8px;color:#065f46">✅ AI 抽出結果</div>`;
+  html += '<table style="width:100%;font-size:12px"><tbody>';
+  fields.forEach(f => {
+    const val = extracted[f];
+    const display = val === null || val === undefined || val === '' ? '<span style="color:#999">─</span>' : _escDiff(String(val));
+    html += `<tr><td style="padding:3px 8px;color:#666;width:90px">${labelMap[f] || f}</td><td style="padding:3px 8px;font-weight:700">${display}</td></tr>`;
+  });
+  html += '</tbody></table>';
+  html += `<div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">`;
+  // 両方の選択肢を提示
+  html += `<button class="btn" onclick='applyIngestToEstimate(${JSON.stringify(extracted).replace(/'/g, "&apos;")})'>📝 見積タブに反映</button>`;
+  html += `<button class="btn btn-p" onclick='applyIngestToProject(${JSON.stringify(extracted).replace(/'/g, "&apos;")})' style="background:#1e40af;border-color:#1e40af">📋 案件として直接登録</button>`;
+  html += `</div>`;
+  html += `<div style="font-size:10px;color:#888;margin-top:6px">※ 見積を作成してから受注確定するなら「見積タブに反映」、見積不要のリピート品は「案件として直接登録」</div>`;
+
+  resultDiv.innerHTML = html;
+  resultDiv.style.display = 'block';
+  resultDiv.scrollIntoView({ behavior: 'smooth' });
+}
+
+function applyIngestToProject(extracted){
+  if(!extracted) return;
+  const proj = {
+    id: (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now()),
+    companyId: currentAuth?.companyId || 'COMP001',
+    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : 'MU',
+    orderDate: new Date().toISOString().slice(0,10),
+    dueDate: extracted.dueDate || '',
+    cust: extracted.cust || '',
+    item: extracted.item || '',
+    spec: extracted.spec || '',
+    qty: parseInt(extracted.qty) || 0,
+    unit: extracted.unit || '部',
+    exTax: parseInt(extracted.exTax) || 0,
+    grand: 0,
+    status: '制作中',
+    assignee: '',
+    memo: extracted.memo || '',
+    steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
+    stepDates: {},
+    createdAt: new Date().toISOString(),
+    aiIngested: true
+  };
+  if(!DB.projects) DB.projects = [];
+  DB.projects.push(proj);
+  saveDB();
+  document.querySelector('.proof-modal')?.remove();
+  if(typeof renderProjects === 'function') renderProjects();
+  alert(`案件番号 ${proj.id} で登録しました`);
+}
+
+function applyIngestToEstimate(extracted){
+  if(!extracted) return;
+  // 見積タブに切り替え + フォームに値を入れる
+  const btn = document.querySelector('.tb-btn[onclick*="est"]');
+  if(btn) swPage('est', btn);
+
+  // 現在のアクティブタブ ID を取得 (なければ新規作成)
+  let activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+  if(!activeTabId && typeof addTab === 'function'){
+    addTab();
+    activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+  }
+  if(!activeTabId){ alert('見積タブが見つかりません。手動でタブを作成してから再度お試しください。'); return; }
+
+  setTimeout(() => {
+    const set = (id, val) => { const el = document.getElementById(id); if(el && val) el.value = val; };
+    set(`cust-${activeTabId}`, extracted.cust);
+    set(`prod-${activeTabId}`, extracted.item);
+    set(`spec-${activeTabId}`, extracted.spec);
+    set(`memo-${activeTabId}`, extracted.memo);
+    set(`unit-${activeTabId}`, extracted.unit);
+    // 数量
+    const qtyEl = document.getElementById(`qty-${activeTabId}`);
+    if(qtyEl && extracted.qty){ qtyEl.value = extracted.qty; }
+    // 計算実行
+    if(typeof calc === 'function') calc(activeTabId);
+    document.querySelector('.proof-modal')?.remove();
+    _toastMsg('✅ 見積フォームに反映しました');
+  }, 200);
+}
+
+// 履歴 AI 分析 モーダル
+function showHistoryAnalyzeModal(){
+  const modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+
+  // 既存の見積履歴をテキスト化してプレビュー
+  const history = (DB.history || []).slice(-30).map(h =>
+    `${h.date || ''} / ${h.cust || ''} / ${h.item || ''} / ${h.qty || ''}${h.unit || ''} / ¥${(h.exTax || 0).toLocaleString()}`
+  ).join('\n');
+
+  modal.innerHTML = `
+    <div style="background:#fff;width:100%;max-width:780px;max-height:96vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:14px 20px;background:#5b21b6;color:#fff;display:flex;justify-content:space-between;align-items:center">
+        <strong style="font-size:14px">📊 履歴から AI が単価・テンプレートを分析</strong>
+        <button onclick="this.closest('.proof-modal').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>
+      </div>
+
+      <div style="overflow-y:auto;padding:18px 20px;flex:1">
+        <div style="background:#ede9fe;padding:10px;border-radius:6px;margin-bottom:12px;font-size:12px;color:#5b21b6">
+          💡 既存の見積履歴 (直近30件) を AI が分析し、品目別の単価レンジと製品テンプレート提案を返します。<br>
+          または独自データを下に貼り付けることも可能 (CSV / 自由テキスト)。
+        </div>
+
+        <div class="f" style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:700">分析対象データ (編集可)</label>
+          <textarea id="ai-history-input" rows="10" style="width:100%;font-size:11px;padding:8px;font-family:monospace;line-height:1.4;resize:vertical">${_escDiff(history || '(履歴データなし)')}</textarea>
+        </div>
+
+        <div id="ai-history-result" style="display:none;background:#f0fdf4;padding:12px;border-radius:6px;border:2px solid #86efac;margin-bottom:10px"></div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid #e0ddd6">
+          <button class="btn" onclick="this.closest('.proof-modal').remove()">キャンセル</button>
+          <button class="btn btn-p" id="ai-history-btn" onclick="executeHistoryAnalyze()" style="background:#5b21b6;border-color:#5b21b6">🤖 AI で分析</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+async function executeHistoryAnalyze(){
+  const text = document.getElementById('ai-history-input')?.value.trim();
+  if(!text){ alert('データが空です'); return; }
+
+  const btn = document.getElementById('ai-history-btn');
+  if(btn){ btn.textContent = '⏳ 分析中…'; btn.disabled = true; }
+
+  try {
+    const result = await callCloudAPI('claudeExtract', {
+      input: text,
+      schema: 'templates_from_history',
+      maxTokens: 4096
+    });
+    if(btn){ btn.textContent = '🤖 AI で分析'; btn.disabled = false; }
+
+    if(!result?.success){
+      alert('AI 分析失敗: ' + (result?.error || ''));
+      return;
+    }
+    showHistoryAnalyzeResult(result.extracted);
+  } catch(e){
+    if(btn){ btn.textContent = '🤖 AI で分析'; btn.disabled = false; }
+    alert('エラー: ' + e.message);
+  }
+}
+
+function showHistoryAnalyzeResult(extracted){
+  const resultDiv = document.getElementById('ai-history-result');
+  if(!resultDiv) return;
+
+  let html = `<div style="font-size:13px;font-weight:700;margin-bottom:8px;color:#5b21b6">✅ AI 分析結果</div>`;
+
+  if(extracted.summary){
+    html += `<div style="background:#fff;padding:8px 10px;border-radius:4px;margin-bottom:10px;font-size:12px"><strong>📊 全体傾向:</strong> ${_escDiff(extracted.summary)}</div>`;
+  }
+
+  if(extracted.templates && extracted.templates.length){
+    html += `<div style="margin-bottom:10px"><div style="font-size:12px;font-weight:700;margin-bottom:4px">🧩 製品テンプレート提案 (${extracted.templates.length}件)</div>`;
+    html += '<table style="width:100%;font-size:11px;background:#fff;border-collapse:collapse"><thead><tr style="background:#f9fafb"><th style="padding:4px;border:1px solid #e0ddd6">名前</th><th style="padding:4px;border:1px solid #e0ddd6">カテゴリ</th><th style="padding:4px;border:1px solid #e0ddd6">既定数量</th><th style="padding:4px;border:1px solid #e0ddd6">用紙</th><th style="padding:4px;border:1px solid #e0ddd6">色数</th></tr></thead><tbody>';
+    extracted.templates.forEach(t => {
+      html += `<tr><td style="padding:3px 6px;border:1px solid #e0ddd6">${_escDiff(t.name||'')}</td><td style="padding:3px 6px;border:1px solid #e0ddd6">${_escDiff(t.category||'')}</td><td style="padding:3px 6px;border:1px solid #e0ddd6">${(t.defaultQty||0).toLocaleString()}</td><td style="padding:3px 6px;border:1px solid #e0ddd6">${_escDiff(t.paperType||'')}</td><td style="padding:3px 6px;border:1px solid #e0ddd6">${_escDiff(t.colorPrint||'')}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if(extracted.pricingRanges && extracted.pricingRanges.length){
+    html += `<div><div style="font-size:12px;font-weight:700;margin-bottom:4px">💰 単価レンジ (${extracted.pricingRanges.length}件)</div>`;
+    html += '<table style="width:100%;font-size:11px;background:#fff;border-collapse:collapse"><thead><tr style="background:#f9fafb"><th style="padding:4px;border:1px solid #e0ddd6">品目</th><th style="padding:4px;border:1px solid #e0ddd6">数量帯</th><th style="padding:4px;border:1px solid #e0ddd6">最安</th><th style="padding:4px;border:1px solid #e0ddd6">中央</th><th style="padding:4px;border:1px solid #e0ddd6">最高</th></tr></thead><tbody>';
+    extracted.pricingRanges.forEach(p => {
+      html += `<tr><td style="padding:3px 6px;border:1px solid #e0ddd6">${_escDiff(p.itemName||'')}</td><td style="padding:3px 6px;border:1px solid #e0ddd6">${_escDiff(p.qtyRange||'')}</td><td style="padding:3px 6px;border:1px solid #e0ddd6;text-align:right">¥${(p.priceMin||0).toLocaleString()}</td><td style="padding:3px 6px;border:1px solid #e0ddd6;text-align:right;font-weight:700">¥${(p.priceMedian||0).toLocaleString()}</td><td style="padding:3px 6px;border:1px solid #e0ddd6;text-align:right">¥${(p.priceMax||0).toLocaleString()}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  html += `<div style="margin-top:14px;font-size:11px;color:#666">💡 参考情報として活用してください。実際の master 反映は手動で行います (誤反映防止)。</div>`;
+
+  resultDiv.innerHTML = html;
+  resultDiv.style.display = 'block';
+  resultDiv.scrollIntoView({ behavior: 'smooth' });
 }
 
 // ── OCR テキスト抽出 (作業者がコピペで使う用) ──────────────────
