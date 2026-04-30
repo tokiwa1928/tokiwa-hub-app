@@ -11265,18 +11265,31 @@ function showAIIngestModal(targetType){
 
       <div style="overflow-y:auto;padding:18px 20px;flex:1">
         <div style="background:#fef3c7;padding:10px;border-radius:6px;margin-bottom:12px;font-size:12px;color:#78350f">
-          💡 お客様からの依頼メール、指示書のテキスト、またはOCRで抽出したPDFテキストを貼り付けてください。<br>
+          💡 お客様からの依頼メール、指示書のテキスト、または PDF を貼り付け / D&D してください。<br>
           AI が ${targetLabel}に必要な情報 (得意先・品名・数量・仕様・納期など) を自動抽出します。
         </div>
 
+        <!-- PDF D&D ゾーン -->
+        <div id="ai-ingest-pdf-drop" style="border:2px dashed #c4b5fd;background:#faf5ff;border-radius:8px;padding:20px;text-align:center;margin-bottom:12px;cursor:pointer;transition:all .15s">
+          <div id="ai-ingest-pdf-default" style="font-size:13px;color:#5b21b6">
+            📎 <strong>PDF をここにドラッグ&ドロップ</strong> または <a href="javascript:void(0)" onclick="document.getElementById('ai-ingest-pdf-file').click()" style="color:#7c3aed;font-weight:700">ファイルを選択</a>
+            <div style="font-size:10px;color:#888;margin-top:4px">指示書・依頼書 PDF を直接アップロードして AI 抽出</div>
+          </div>
+          <div id="ai-ingest-pdf-loaded" style="display:none;font-size:13px;color:#16a34a">
+            ✅ <strong id="ai-ingest-pdf-name"></strong> <span id="ai-ingest-pdf-size" style="color:#888;font-size:11px"></span>
+            <button onclick="event.stopPropagation();_clearPdfUpload_()" style="margin-left:8px;background:none;border:1px solid #ddd;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer">クリア</button>
+          </div>
+          <input type="file" id="ai-ingest-pdf-file" accept="application/pdf" style="display:none" onchange="_onPdfFileSelected_(event)">
+        </div>
+
         <div class="f" style="margin-bottom:10px">
-          <label style="font-size:11px;font-weight:700">📥 元テキスト</label>
-          <textarea id="ai-ingest-input" rows="10" placeholder="${_escDiff(exampleInput)}" style="width:100%;font-size:13px;padding:8px;font-family:'Yu Gothic',sans-serif;line-height:1.6;resize:vertical"></textarea>
+          <label style="font-size:11px;font-weight:700">📥 または、テキストを貼り付け</label>
+          <textarea id="ai-ingest-input" rows="8" placeholder="${_escDiff(exampleInput)}" style="width:100%;font-size:13px;padding:8px;font-family:'Yu Gothic',sans-serif;line-height:1.6;resize:vertical"></textarea>
         </div>
 
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-          <button class="btn" onclick="loadOcrToIngest()" style="font-size:11px">📋 PDF から OCR 取込</button>
-          <span style="font-size:10px;color:#888">PDF の Drive ファイル ID から OCR で抽出してテキストエリアに入れます</span>
+          <button class="btn" onclick="loadOcrToIngest()" style="font-size:11px">📋 Drive PDF から OCR 取込</button>
+          <span style="font-size:10px;color:#888">既に Drive 上にある PDF を OCR でテキスト化</span>
         </div>
 
         <div id="ai-ingest-result" style="display:none;background:#f0fdf4;padding:12px;border-radius:6px;border:2px solid #86efac;margin-bottom:10px"></div>
@@ -11319,18 +11332,98 @@ async function loadOcrToIngest(){
   }
 }
 
+// アップロードされた PDF を保持 (base64 文字列)
+var _aiIngestPdf = null;
+
+function _onPdfFileSelected_(event){
+  var f = event.target.files?.[0];
+  if(!f) return;
+  _loadPdfFile_(f);
+}
+
+function _loadPdfFile_(file){
+  if(file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
+    alert('PDF ファイルを選択してください');
+    return;
+  }
+  // 上限 30MB (Claude API は 32MB まで対応)
+  if(file.size > 30 * 1024 * 1024){
+    alert('PDF が大きすぎます (上限 30MB)');
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var dataUrl = e.target.result;
+    var base64 = dataUrl.split(',')[1] || '';
+    _aiIngestPdf = { name: file.name, size: file.size, base64: base64 };
+    document.getElementById('ai-ingest-pdf-default').style.display = 'none';
+    var loaded = document.getElementById('ai-ingest-pdf-loaded');
+    if(loaded){
+      loaded.style.display = 'block';
+      document.getElementById('ai-ingest-pdf-name').textContent = file.name;
+      document.getElementById('ai-ingest-pdf-size').textContent = '(' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function _clearPdfUpload_(){
+  _aiIngestPdf = null;
+  var fileInput = document.getElementById('ai-ingest-pdf-file');
+  if(fileInput) fileInput.value = '';
+  document.getElementById('ai-ingest-pdf-default').style.display = 'block';
+  var loaded = document.getElementById('ai-ingest-pdf-loaded');
+  if(loaded) loaded.style.display = 'none';
+}
+
+// D&D ハンドラを document に1度だけバインド (モーダル開く度に setup されないように)
+(function(){
+  if(window._aiPdfDndBound_) return;
+  window._aiPdfDndBound_ = true;
+  document.addEventListener('dragover', function(e){
+    var dz = e.target.closest && e.target.closest('#ai-ingest-pdf-drop');
+    if(!dz) return;
+    e.preventDefault();
+    dz.style.background = '#f3e8ff';
+    dz.style.borderColor = '#7c3aed';
+  });
+  document.addEventListener('dragleave', function(e){
+    var dz = e.target.closest && e.target.closest('#ai-ingest-pdf-drop');
+    if(!dz) return;
+    dz.style.background = '#faf5ff';
+    dz.style.borderColor = '#c4b5fd';
+  });
+  document.addEventListener('drop', function(e){
+    var dz = e.target.closest && e.target.closest('#ai-ingest-pdf-drop');
+    if(!dz) return;
+    e.preventDefault();
+    dz.style.background = '#faf5ff';
+    dz.style.borderColor = '#c4b5fd';
+    var files = e.dataTransfer.files;
+    if(files && files.length){
+      _loadPdfFile_(files[0]);
+    }
+  });
+})();
+
 async function executeAIIngest(targetType){
   const text = document.getElementById('ai-ingest-input')?.value.trim();
-  if(!text){ alert('テキストを入力してください'); return; }
+  if(!text && !_aiIngestPdf){ alert('PDF をアップロードするか、テキストを入力してください'); return; }
 
   const btn = document.getElementById('ai-ingest-btn');
-  if(btn){ btn.textContent = '⏳ 抽出中…'; btn.disabled = true; }
+  if(btn){ btn.textContent = '⏳ 抽出中… (PDF は20-40秒かかります)'; btn.disabled = true; }
 
   try {
-    const result = await callCloudAPI('claudeExtract', {
-      input: text,
+    var payload = {
       schema: targetType === 'project' ? 'project' : 'estimate'
-    });
+    };
+    if(_aiIngestPdf){
+      payload.pdfBase64 = _aiIngestPdf.base64;
+      payload.input = text || ('この PDF (' + _aiIngestPdf.name + ') を解析して見積/案件情報を抽出してください。');
+    } else {
+      payload.input = text;
+    }
+    const result = await callCloudAPI('claudeExtract', payload);
     if(btn){ btn.textContent = '🤖 AI で抽出'; btn.disabled = false; }
 
     if(!result?.success){
@@ -16878,7 +16971,7 @@ function openInquiryDetail(id) {
   
   const statusLabels = {new:'新規',progress:'対応中',waiting:'返信待ち',done:'完了'};
   const prioLabels = {urgent:'緊急',normal:'通常',low:'低'};
-  const tlIcons = {reply:'💬',note:'📝',status:'🔄',email:'📧'};
+  const tlIcons = {reply:'💬',note:'📝',status:'🔄',email:'📧',ai_draft_reply:'🤖',link:'🔗',auto_extract:'🤖'};
   
   // チャネル/種別メタ
   const sourceMeta = (typeof SOURCE_TYPE_META !== 'undefined' && SOURCE_TYPE_META[inq.source_type])
@@ -16990,6 +17083,9 @@ function openInquiryDetail(id) {
       `).join('')}
     </div>
     
+    <!-- AI 下書きパネル (LINE WORKS で受信した問い合わせのみ) -->
+    ${_renderAiDraftPanel_(inq)}
+
     <!-- 返信・メモ入力 -->
     <div style="margin-top:1rem;border-top:1px solid #e0ddd6;padding-top:1rem">
       <div style="display:flex;gap:4px;margin-bottom:8px">
@@ -16997,10 +17093,11 @@ function openInquiryDetail(id) {
         <button class="pill" id="inq-reply-type-note" onclick="setInqReplyType('note')">📝 社内メモ</button>
       </div>
       <textarea id="inq-reply-text" rows="3" placeholder="返信内容を入力..." style="font-size:12px"></textarea>
-      <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
+      <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#555">
           <input type="checkbox" id="inq-send-email"> メールも送信
         </label>
+        ${inq.source_type === 'linesvc' ? `<button class="btn" style="font-size:11px;background:#10b981;color:#fff;border-color:#10b981" onclick="sendLineworksReplyFromInq('${inq.id}')">📤 LINE WORKS 送信</button>` : ''}
         <button class="btn btn-p" onclick="addInquiryReply('${inq.id}')">送信</button>
       </div>
     </div>`;
@@ -17015,6 +17112,94 @@ function setInqReplyType(type) {
   document.getElementById('inq-reply-type-reply')?.classList.toggle('sel', type==='reply');
   document.getElementById('inq-reply-type-note')?.classList.toggle('sel', type==='note');
   document.getElementById('inq-reply-text').placeholder = type==='reply' ? '返信内容を入力...' : '社内メモを入力...';
+}
+
+// AI 下書きパネル: 直近の ai_draft_reply timeline エントリを表示
+function _renderAiDraftPanel_(inq){
+  if(!inq) return '';
+  // 最新の AI draft (timeline 末尾から探す)
+  var drafts = (inq.timeline || []).filter(function(t){ return t.type === 'ai_draft_reply'; });
+  if(!drafts.length) return '';
+  var latest = drafts[drafts.length - 1];
+
+  // 既にこの draft 後に reply が送信済なら 「採用済」マーク
+  var allTl = inq.timeline || [];
+  var draftIdx = allTl.lastIndexOf(latest);
+  var sentAfter = allTl.slice(draftIdx + 1).some(function(t){ return t.type === 'reply'; });
+
+  return '<div style="margin-top:1rem;background:linear-gradient(to right,#faf5ff,#f3e8ff);border:1px solid #c4b5fd;border-radius:8px;padding:12px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+    '<span style="font-size:12px;font-weight:700;color:#5b21b6">🤖 AI が返信下書きを生成しました' + (sentAfter ? ' <span style="color:#16a34a">✓ 送信済</span>' : '') + '</span>' +
+    '<span style="font-size:10px;color:#888">' + (latest.at ? new Date(latest.at).toLocaleString('ja-JP') : '') + '</span>' +
+    '</div>' +
+    '<div id="_ai_draft_text_box" style="background:#fff;padding:10px 12px;border-radius:6px;font-size:13px;line-height:1.7;white-space:pre-wrap;color:#1e1b4b;margin-bottom:8px">' + _escDiff(latest.text || '') + '</div>' +
+    (sentAfter ? '' :
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' +
+      '<button class="btn" style="font-size:11px" onclick="_useAiDraftAsTemplate_(\'' + inq.id + '\')" title="返信欄に挿入して編集">✏️ 編集して使う</button>' +
+      (inq.source_type === 'linesvc' ? '<button class="btn" style="font-size:11px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="_sendAiDraftDirectly_(\'' + inq.id + '\')" title="この下書きをそのまま LINE WORKS で送信">📤 そのまま送信</button>' : '') +
+      '<button class="btn" style="font-size:11px;background:#fee;color:#dc2626" onclick="_discardAiDraft_(\'' + inq.id + '\')">🗑 破棄</button>' +
+    '</div>'
+    ) +
+    '</div>';
+}
+
+function _useAiDraftAsTemplate_(inqId){
+  var inq = (DB.inquiries || []).find(function(i){ return i.id === inqId; });
+  if(!inq) return;
+  var drafts = (inq.timeline || []).filter(function(t){ return t.type === 'ai_draft_reply'; });
+  if(!drafts.length) return;
+  var latest = drafts[drafts.length - 1];
+  var ta = document.getElementById('inq-reply-text');
+  if(ta){
+    ta.value = latest.text || '';
+    ta.focus();
+    ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+async function _sendAiDraftDirectly_(inqId){
+  var inq = (DB.inquiries || []).find(function(i){ return i.id === inqId; });
+  if(!inq) return;
+  var drafts = (inq.timeline || []).filter(function(t){ return t.type === 'ai_draft_reply'; });
+  if(!drafts.length) return;
+  var latest = drafts[drafts.length - 1];
+  if(!confirm('この AI 下書きを LINE WORKS でお客様に送信します。よろしいですか?\n\n---\n' + (latest.text || ''))) return;
+  await _doSendLineworksReply_(inqId, latest.text || '');
+}
+
+function _discardAiDraft_(inqId){
+  if(!confirm('AI 下書きを破棄しますか?')) return;
+  var inq = (DB.inquiries || []).find(function(i){ return i.id === inqId; });
+  if(!inq) return;
+  inq.timeline = (inq.timeline || []).filter(function(t){ return t.type !== 'ai_draft_reply'; });
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId);
+}
+
+// 返信欄のテキストを LINE WORKS で送信
+async function sendLineworksReplyFromInq(inqId){
+  var ta = document.getElementById('inq-reply-text');
+  var text = (ta?.value || '').trim();
+  if(!text){ alert('送信内容を入力してください'); return; }
+  if(!confirm('LINE WORKS で送信します。よろしいですか?\n\n---\n' + text)) return;
+  await _doSendLineworksReply_(inqId, text);
+  if(ta) ta.value = '';
+}
+
+async function _doSendLineworksReply_(inqId, text){
+  try {
+    var result = await callCloudAPI('sendLineworksReply', {}, { inquiryId: inqId, text: text });
+    if(result?.success){
+      alert('✅ 送信しました');
+      // 同期して timeline を最新に
+      if(typeof loadFromCloud === 'function') await loadFromCloud();
+      if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId);
+    } else {
+      alert('送信失敗: ' + (result?.error || '不明なエラー'));
+    }
+  } catch(e){
+    alert('通信エラー: ' + e.message);
+  }
 }
 
 function closeInquiryDetail() {
