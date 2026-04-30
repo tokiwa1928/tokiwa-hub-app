@@ -1080,6 +1080,25 @@ function loadGoogleMapsAPI() {
         <select id="inq-assign-f" style="font-size:12px;padding:4px 8px" onchange="renderInquiryList()">
           <option value="">すべての担当</option>
         </select>
+        <select id="inq-source-f" style="font-size:12px;padding:4px 8px" onchange="renderInquiryList()">
+          <option value="">すべてのチャネル</option>
+          <option value="gmail">📧 Gmail</option>
+          <option value="linesvc">💬 LINE WORKS</option>
+          <option value="webform">🌐 Web フォーム</option>
+          <option value="manual">✏️ 手動</option>
+          <option value="fax">📠 FAX</option>
+          <option value="phone">📞 電話</option>
+        </select>
+        <select id="inq-kind-f" style="font-size:12px;padding:4px 8px" onchange="renderInquiryList()">
+          <option value="">すべての依頼種別</option>
+          <option value="quote_req">見積依頼</option>
+          <option value="order">発注</option>
+          <option value="proof_return">校正戻し</option>
+          <option value="schedule">納期・日程</option>
+          <option value="spec_change">仕様変更</option>
+          <option value="complaint">クレーム</option>
+          <option value="general">一般</option>
+        </select>
       </div>
       <!-- 問い合わせカード一覧 -->
       <div id="inq-list" style="max-height:600px;overflow-y:auto"></div>
@@ -13789,63 +13808,130 @@ function populateInquiryAssignFilter() {
   sel.innerHTML = '<option value="">すべての担当</option>' + assignees.map(a=>`<option>${a}</option>`).join('');
 }
 
+// チャネル/依頼種別の表示メタデータ
+const SOURCE_TYPE_META = {
+  gmail:    { label: 'Gmail',       icon: '📧', color: '#dc2626', bg: '#fee2e2' },
+  linesvc:  { label: 'LINE WORKS',  icon: '💬', color: '#10b981', bg: '#dcfce7' },
+  linebiz:  { label: 'LINE 公式',   icon: '💚', color: '#16a34a', bg: '#dcfce7' },
+  webform:  { label: 'Web フォーム', icon: '🌐', color: '#3b82f6', bg: '#dbeafe' },
+  fax:      { label: 'FAX',         icon: '📠', color: '#7c3aed', bg: '#ede9fe' },
+  phone:    { label: '電話',        icon: '📞', color: '#0891b2', bg: '#cffafe' },
+  manual:   { label: '手動',        icon: '✏️', color: '#6b7280', bg: '#f3f4f6' }
+};
+const KIND_LABELS = {
+  quote_req:    '見積依頼',
+  order:        '発注',
+  proof_return: '校正戻し',
+  schedule:     '納期・日程',
+  spec_change:  '仕様変更',
+  complaint:    'クレーム',
+  general:      '一般'
+};
+
 function renderInquiryList() {
   const container = document.getElementById('inq-list');
   if(!container) return;
-  
+
   const q = (document.getElementById('inq-search')?.value||'').toLowerCase();
   const statusF = document.getElementById('inq-status-f')?.value||'';
   const catF = document.getElementById('inq-cat-f')?.value||'';
   const prioF = document.getElementById('inq-prio-f')?.value||'';
   const assignF = document.getElementById('inq-assign-f')?.value||'';
-  
+  const sourceF = document.getElementById('inq-source-f')?.value||'';
+  const kindF = document.getElementById('inq-kind-f')?.value||'';
+
   let items = (DB.inquiries||[]).filter(inq => {
     if(statusF && inq.status !== statusF) return false;
     if(catF && inq.category !== catF) return false;
     if(prioF && inq.priority !== prioF) return false;
     if(assignF && inq.assignee !== assignF) return false;
+    if(sourceF && inq.source_type !== sourceF) return false;
+    if(kindF && inq.kind !== kindF) return false;
     if(q) {
-      const searchStr = `${inq.custName} ${inq.subject} ${inq.body} ${inq.email} ${inq.tel}`.toLowerCase();
+      const searchStr = `${inq.custName||inq.from_name||''} ${inq.subject||''} ${inq.body||''} ${inq.email||inq.from_email||''} ${inq.tel||''} ${inq.summary||''}`.toLowerCase();
       if(!searchStr.includes(q)) return false;
     }
     return true;
   });
-  
+
   items.sort((a,b) => {
     const prioOrder = {urgent:0, normal:1, low:2};
     const statusOrder = {new:0, progress:1, waiting:2, done:3};
     if(statusOrder[a.status] !== statusOrder[b.status]) return statusOrder[a.status] - statusOrder[b.status];
     if(prioOrder[a.priority] !== prioOrder[b.priority]) return prioOrder[a.priority] - prioOrder[b.priority];
-    return new Date(b.createdAt) - new Date(a.createdAt);
+    return new Date(b.received_at || b.createdAt || 0) - new Date(a.received_at || a.createdAt || 0);
   });
-  
+
   const countEl = document.getElementById('inq-count');
   if(countEl) countEl.textContent = `${items.length}件`;
-  
+
   if(items.length === 0) {
     container.innerHTML = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">問い合わせがありません</div>';
     return;
   }
-  
+
   const statusLabels = {new:'新規',progress:'対応中',waiting:'返信待ち',done:'完了'};
   const prioLabels = {urgent:'緊急',normal:'通常',low:'低'};
-  
+
   container.innerHTML = items.map(inq => {
-    const elapsed = getElapsedTime(inq.createdAt);
+    const elapsed = getElapsedTime(inq.received_at || inq.createdAt);
     const replyCount = (inq.timeline||[]).filter(t=>t.type==='reply').length;
+
+    // チャネルバッジ
+    const sourceMeta = SOURCE_TYPE_META[inq.source_type] || SOURCE_TYPE_META.manual;
+    const sourceBadge = `<span style="background:${sourceMeta.bg};color:${sourceMeta.color};font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700;white-space:nowrap">${sourceMeta.icon} ${sourceMeta.label}</span>`;
+
+    // 依頼種別
+    const kindBadge = inq.kind && inq.kind !== 'general'
+      ? `<span style="background:#fef3c7;color:#92400e;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700">${KIND_LABELS[inq.kind] || inq.kind}</span>`
+      : '';
+
+    // 添付件数
+    const attCount = (inq.attachments || []).length;
+    const attBadge = attCount > 0 ? `<span style="font-size:10px;color:#666">📎 ${attCount}</span>` : '';
+
+    // チャネル元へのリンクアイコン
+    const sourceLink = inq.source_url
+      ? `<a href="${inq.source_url}" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#3b82f6;text-decoration:none" title="元メッセージを開く">↗</a>`
+      : '';
+
+    // 紐付く案件
+    const projLink = inq.linked_project_id
+      ? `<a href="javascript:jumpToProject('${inq.linked_project_id}')" onclick="event.stopPropagation()" style="font-size:10px;color:#1e40af">📋 ${inq.linked_project_id}</a>`
+      : '';
+
+    // チャネル会社情報 (社内のどの窓口に届いたか)
+    const channel = inq.channel_company ? `<span style="font-size:10px;color:#888">via ${inq.channel_company}</span>` : '';
+
+    // AI 要約 (あれば優先表示、無ければ本文先頭)
+    const previewText = inq.summary || (inq.body || '').substring(0, 80);
+    const showPreview = previewText
+      ? `<div style="font-size:11px;color:#666;margin-top:4px;line-height:1.5;max-height:34px;overflow:hidden;text-overflow:ellipsis">${inq.summary ? '🤖 ' : ''}${previewText}</div>`
+      : '';
+
     return `<div class="inq-card ${inq.priority}" onclick="openInquiryDetail('${inq.id}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <span class="inq-cat">${inq.category||'その他'}</span>
-          <span class="inq-prio ${inq.priority}">${prioLabels[inq.priority]||'通常'}</span>
-          <span class="inq-status ${inq.status}">${statusLabels[inq.status]||'新規'}</span>
+          ${sourceBadge}
+          ${kindBadge}
+          ${inq.category ? `<span class="inq-cat">${inq.category}</span>` : ''}
+          <span class="inq-prio ${inq.priority||'normal'}">${prioLabels[inq.priority]||'通常'}</span>
+          <span class="inq-status ${inq.status||'new'}">${statusLabels[inq.status]||'新規'}</span>
+          ${sourceLink}
         </div>
         <span style="font-size:10px;color:#aaa;white-space:nowrap">${elapsed}</span>
       </div>
-      <div style="font-weight:700;font-size:13px;margin-bottom:4px">${inq.subject||'（件名なし）'}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:12px;color:#555">${inq.custName||''} ${inq.company ? '(' + inq.company + ')' : ''}</div>
-        <div style="display:flex;gap:8px;font-size:11px;color:#888">
+      <div style="font-weight:700;font-size:13px;margin-bottom:2px">${inq.subject||'（件名なし）'}</div>
+      ${showPreview}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;flex-wrap:wrap;gap:6px">
+        <div style="font-size:12px;color:#555">
+          ${inq.custName || inq.from_name || ''}
+          ${(inq.from_company || inq.company) ? '<span style="color:#888"> · ' + (inq.from_company || inq.company) + '</span>' : ''}
+        </div>
+        <div style="display:flex;gap:8px;font-size:11px;color:#888;align-items:center;flex-wrap:wrap">
+          ${channel}
+          ${attBadge}
+          ${projLink}
           ${inq.assignee ? '<span>👤 '+inq.assignee+'</span>' : ''}
           ${replyCount > 0 ? '<span>💬 '+replyCount+'</span>' : ''}
         </div>
@@ -14020,33 +14106,84 @@ function openInquiryDetail(id) {
   const prioLabels = {urgent:'緊急',normal:'通常',low:'低'};
   const tlIcons = {reply:'💬',note:'📝',status:'🔄',email:'📧'};
   
+  // チャネル/種別メタ
+  const sourceMeta = (typeof SOURCE_TYPE_META !== 'undefined' && SOURCE_TYPE_META[inq.source_type])
+    ? SOURCE_TYPE_META[inq.source_type] : { label: '─', icon: '📋', color: '#6b7280', bg: '#f3f4f6' };
+  const sourceBadge = `<span style="background:${sourceMeta.bg};color:${sourceMeta.color};font-size:11px;padding:3px 8px;border-radius:10px;font-weight:700">${sourceMeta.icon} ${sourceMeta.label}</span>`;
+  const kindLabel = (typeof KIND_LABELS !== 'undefined' && KIND_LABELS[inq.kind]) ? KIND_LABELS[inq.kind] : '';
+  const kindBadge = kindLabel ? `<span style="background:#fef3c7;color:#92400e;font-size:11px;padding:3px 8px;border-radius:10px;font-weight:700">${kindLabel}</span>` : '';
+
+  // 紐付き案件
+  const linkedProject = inq.linked_project_id ? (DB.projects||[]).find(p => p.id === inq.linked_project_id) : null;
+  const projectInfo = linkedProject
+    ? `<div style="background:#dbeafe;padding:10px 12px;border-radius:6px;margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div style="font-size:12px"><strong>📋 紐付く案件:</strong> ${linkedProject.id} ${linkedProject.item || ''} <span style="color:#1e3a8a;margin-left:6px">(${linkedProject.status || '─'})</span></div>
+        <button class="btn" style="font-size:11px;background:#1e40af;color:#fff;border-color:#1e40af" onclick="jumpToProject('${linkedProject.id}')">案件へ →</button>
+      </div>`
+    : '';
+
+  // 添付ファイル
+  const attachments = inq.attachments || [];
+  const attachmentsHtml = attachments.length > 0
+    ? `<div style="background:#fef9c3;padding:10px 12px;border-radius:6px;margin-bottom:1rem">
+         <div style="font-size:11px;font-weight:700;color:#78350f;margin-bottom:6px">📎 添付ファイル (${attachments.length}件)</div>
+         ${attachments.map(a => `
+           <div style="display:flex;justify-content:space-between;align-items:center;background:#fff;padding:6px 10px;border-radius:4px;margin-bottom:3px;font-size:11px">
+             <span>${a.filename || a.name || 'ファイル'}</span>
+             <div style="display:flex;gap:6px">
+               ${a.drive_url ? `<a href="${a.drive_url}" target="_blank" style="font-size:10px;color:#0369a1">🔗 開く</a>` : ''}
+             </div>
+           </div>`).join('')}
+       </div>`
+    : '';
+
   panel.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
       <div style="font-size:15px;font-weight:700">問い合わせ詳細</div>
       <button onclick="closeInquiryDetail()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">×</button>
     </div>
-    
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem">
-      <span class="inq-cat">${inq.category||'その他'}</span>
-      <span class="inq-prio ${inq.priority}">${prioLabels[inq.priority]||'通常'}</span>
-      <span class="inq-status ${inq.status}">${statusLabels[inq.status]||'新規'}</span>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;align-items:center">
+      ${sourceBadge}
+      ${kindBadge}
+      ${inq.category ? `<span class="inq-cat">${inq.category}</span>` : ''}
+      <span class="inq-prio ${inq.priority||'normal'}">${prioLabels[inq.priority]||'通常'}</span>
+      <span class="inq-status ${inq.status||'new'}">${statusLabels[inq.status]||'新規'}</span>
+      ${inq.source_url ? `<a href="${inq.source_url}" target="_blank" style="font-size:11px;color:#3b82f6;text-decoration:none">↗ 元メッセージ</a>` : ''}
       <span style="font-size:10px;color:#aaa;margin-left:auto">${inq.id}</span>
     </div>
-    
+
     <div style="font-size:16px;font-weight:700;margin-bottom:.5rem">${inq.subject||''}</div>
-    
+
+    ${projectInfo}
+
     <div style="background:#f9f9f7;border-radius:8px;padding:12px;margin-bottom:1rem;font-size:12px">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div><span style="color:#888">お客様:</span> <strong>${inq.custName||''}</strong></div>
-        <div><span style="color:#888">会社:</span> ${inq.company||'-'}</div>
-        <div><span style="color:#888">メール:</span> ${inq.email ? '<a href="mailto:'+inq.email+'">'+inq.email+'</a>' : '-'}</div>
-        <div><span style="color:#888">電話:</span> ${inq.tel||'-'}</div>
-        <div><span style="color:#888">受付日:</span> ${inq.createdAt ? new Date(inq.createdAt).toLocaleString('ja-JP') : '-'}</div>
+        <div><span style="color:#888">送信元:</span> <strong>${inq.custName||inq.from_name||''}</strong></div>
+        <div><span style="color:#888">会社:</span> ${inq.company||inq.from_company||'-'}</div>
+        <div><span style="color:#888">メール:</span> ${(inq.email||inq.from_email) ? '<a href="mailto:'+(inq.email||inq.from_email)+'">'+(inq.email||inq.from_email)+'</a>' : '-'}</div>
+        <div><span style="color:#888">電話:</span> ${inq.tel||inq.from_tel||'-'}</div>
+        <div><span style="color:#888">受信窓口:</span> ${inq.channel_company||'-'}</div>
+        <div><span style="color:#888">受付日:</span> ${(inq.received_at||inq.createdAt) ? new Date(inq.received_at||inq.createdAt).toLocaleString('ja-JP') : '-'}</div>
         <div><span style="color:#888">担当:</span> ${inq.assignee||'未割当'}</div>
       </div>
     </div>
-    
-    <div style="background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px;margin-bottom:1rem;font-size:13px;line-height:1.7;white-space:pre-wrap">${inq.body||''}</div>
+
+    ${inq.summary ? `<div style="background:#ecfdf5;border:1px solid #86efac;border-radius:8px;padding:10px 12px;margin-bottom:1rem;font-size:12px;line-height:1.6">
+      <strong>🤖 AI 要約:</strong> ${inq.summary}
+    </div>` : ''}
+
+    <div style="background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px;margin-bottom:1rem;font-size:13px;line-height:1.7;white-space:pre-wrap;max-height:300px;overflow-y:auto">${inq.body||''}</div>
+
+    ${attachmentsHtml}
+
+    <!-- 案件・見積化アクション -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;padding:10px;background:#f0f9ff;border-radius:6px">
+      <span style="font-size:11px;color:#0369a1;align-self:center">この問い合わせから:</span>
+      ${!linkedProject ? `<button class="btn btn-p" style="font-size:11px;background:#1e40af;border-color:#1e40af" onclick="convertInquiryToProject('${inq.id}')">📋 案件作成</button>` : ''}
+      <button class="btn" style="font-size:11px;background:#fef3c7;border-color:#fcd34d" onclick="convertInquiryToEstimate('${inq.id}')">📝 見積に反映</button>
+      ${linkedProject ? `<button class="btn" style="font-size:11px" onclick="unlinkInquiryFromProject('${inq.id}')">🔗 案件リンク解除</button>` : `<button class="btn" style="font-size:11px" onclick="linkInquiryToExistingProject('${inq.id}')">🔗 既存案件にリンク</button>`}
+    </div>
     
     <!-- 操作ボタン -->
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem">
@@ -14177,6 +14314,128 @@ function deleteInquiry(id) {
   closeInquiryDetail();
   renderInquiryList();
   renderInquiryStats();
+}
+
+// 問い合わせから案件を作成 (双方向リンク)
+async function convertInquiryToProject(inqId){
+  const inq = (DB.inquiries||[]).find(i => i.id === inqId);
+  if(!inq) return;
+  if(!confirm(`「${inq.subject || '無題'}」から案件を作成しますか?`)) return;
+
+  const proj = {
+    id: (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now()),
+    companyId: currentAuth?.companyId || 'COMP001',
+    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : 'MU',
+    orderDate: new Date().toISOString().slice(0,10),
+    dueDate: '',
+    cust: inq.from_company || inq.company || inq.custName || inq.from_name || '',
+    item: inq.subject || '',
+    spec: '',
+    qty: 0,
+    unit: '部',
+    exTax: 0,
+    grand: 0,
+    status: '制作中',
+    assignee: inq.assignee || '',
+    memo: `問い合わせ ${inq.id} より作成\n\n${inq.body || ''}`.substring(0, 2000),
+    steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
+    stepDates: {},
+    createdAt: new Date().toISOString(),
+    sourceInquiryId: inq.id
+  };
+  if(!DB.projects) DB.projects = [];
+  DB.projects.push(proj);
+
+  // 問い合わせ側にも紐付け
+  inq.linked_project_id = proj.id;
+  saveDB();
+
+  // バックエンドにも反映 (case では linkCommunication 経由)
+  try {
+    if(typeof callCloudAPI === 'function'){
+      await callCloudAPI('linkCommunication', { id: inq.id, links: { project_id: proj.id } });
+    }
+  } catch(e){ console.warn('linkCommunication failed:', e); }
+
+  closeInquiryDetail();
+  alert(`案件 ${proj.id} を作成しました`);
+  jumpToProject(proj.id);
+}
+
+// 問い合わせから見積に反映 (見積タブを開いて値を入れる)
+function convertInquiryToEstimate(inqId){
+  const inq = (DB.inquiries||[]).find(i => i.id === inqId);
+  if(!inq) return;
+
+  closeInquiryDetail();
+
+  const btn = document.querySelector('.tb-btn[onclick*="est"]');
+  if(btn) swPage('est', btn);
+
+  // 見積タブが無ければ新規追加 (addTab)
+  let activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+  if(!activeTabId && typeof addTab === 'function'){
+    addTab();
+    activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+  }
+  if(!activeTabId){ alert('見積タブが見つかりません。手動でタブを作成してから再度お試しください。'); return; }
+
+  setTimeout(() => {
+    const set = (id, val) => { const el = document.getElementById(id); if(el && val) el.value = val; };
+    set(`cust-${activeTabId}`, inq.from_company || inq.company || inq.custName || inq.from_name || '');
+    set(`prod-${activeTabId}`, inq.subject || '');
+    set(`memo-${activeTabId}`, `問い合わせ ${inq.id} より\n\n${inq.body || ''}`.substring(0, 1500));
+    if(typeof calc === 'function') calc(activeTabId);
+    if(typeof _toastMsg === 'function') _toastMsg('✅ 見積タブに反映しました');
+  }, 200);
+}
+
+// 既存案件にリンク
+async function linkInquiryToExistingProject(inqId){
+  const inq = (DB.inquiries||[]).find(i => i.id === inqId);
+  if(!inq) return;
+  const projects = DB.projects || [];
+  if(!projects.length){ alert('案件がありません'); return; }
+
+  const choices = projects.slice().reverse().slice(0, 30).map(p =>
+    `${p.id} | ${p.cust || '─'} | ${p.item || ''}`
+  );
+  const target = prompt('リンクする案件 ID を入力 (最近30件):\n\n' + choices.join('\n') + '\n\n案件 ID:', '');
+  if(!target) return;
+  const project = projects.find(p => p.id === target.trim());
+  if(!project){ alert('案件が見つかりません'); return; }
+
+  inq.linked_project_id = project.id;
+  saveDB();
+
+  try {
+    if(typeof callCloudAPI === 'function'){
+      await callCloudAPI('linkCommunication', { id: inq.id, links: { project_id: project.id } });
+    }
+  } catch(e){}
+
+  closeInquiryDetail();
+  openInquiryDetail(inqId);
+  if(typeof _toastMsg === 'function') _toastMsg('✅ 案件 ' + project.id + ' にリンクしました');
+}
+
+// 案件リンク解除
+async function unlinkInquiryFromProject(inqId){
+  const inq = (DB.inquiries||[]).find(i => i.id === inqId);
+  if(!inq) return;
+  if(!confirm('案件リンクを解除しますか?')) return;
+
+  inq.linked_project_id = '';
+  saveDB();
+
+  try {
+    if(typeof callCloudAPI === 'function'){
+      await callCloudAPI('linkCommunication', { id: inq.id, links: { project_id: '' } });
+    }
+  } catch(e){}
+
+  closeInquiryDetail();
+  openInquiryDetail(inqId);
 }
 
 // 公開フォーム プレビュー
