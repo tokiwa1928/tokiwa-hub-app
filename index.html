@@ -481,6 +481,8 @@ window.addEventListener('load', function(){
   </div>
   <button class="tb-arrow" id="tb-arrow-right" onclick="scrollTabs(1)" title="右にスクロール">›</button>
   <div class="tb-right">
+    <!-- 通知トグル -->
+    <button class="tb-icon-btn" id="notify-toggle-btn" onclick="requestNotificationPermission(true)" title="ブラウザ通知の有効化" style="font-size:14px">🔔</button>
     <!-- クラウド同期ステータス -->
     <span id="cloud-sync-indicator" style="font-size:11px;margin-right:10px"></span>
     <!-- ログイン中のユーザー名表示 -->
@@ -2569,17 +2571,22 @@ async function doLoginByEmail(email, password){
   if(CLOUD_CONFIG.CLOUD_MODE){
     await loadFromCloud();
   }
-  
+
   // 会社設定をconfに反映
   DB.conf.name = company.name;
   DB.conf.appName = 'TOKIWA-HUB';
   saveDB();
-  
+
+  // 通知許可リクエスト (ログイン直後の自然なタイミング)
+  if(typeof requestNotificationPermission === 'function'){
+    setTimeout(function(){ requestNotificationPermission(false); }, 1500);
+  }
+
   // 管理者の場合は会社選択画面へ
   if(role === 'admin'){
     return {success:true, isAdmin:true, company};
   }
-  
+
   return {success:true, isAdmin:false, company};
 }
 
@@ -2926,7 +2933,192 @@ async function loadFromCloud() {
     console.warn('Notify failed:', e);
   }
 
+  // 🔍 顧客マスタ自動マッチ (送信元 email/tel で DB.master.cust と照合 → cust_id 設定)
+  try {
+    await _autoMatchCustomers_();
+  } catch(e) {
+    console.warn('Customer auto-match failed:', e);
+  }
+
+  // 🔔 ブラウザ通知 (新規問い合わせ・納期警告)
+  try {
+    _checkAndNotifyAlerts_();
+  } catch(e) {
+    console.warn('Notification check failed:', e);
+  }
+
   return true;
+}
+
+// ─────────────────────────────────────────────────────
+// 🔔 ブラウザ通知 (Notification API + Service Worker)
+// ─────────────────────────────────────────────────────
+var _NOTIFIED_KEY = 'tokiwa_hub_notified_ids';
+var _swRegistration = null;
+
+// Service Worker 登録 (ページロード時に実行)
+function _registerServiceWorker_(){
+  if(!('serviceWorker' in navigator)) return;
+  // GitHub Pages のサブパス対応
+  var swPath = (location.pathname.indexOf('/tokiwa-hub-app/') === 0)
+    ? '/tokiwa-hub-app/sw.js'
+    : 'sw.js';
+  var scope = (location.pathname.indexOf('/tokiwa-hub-app/') === 0)
+    ? '/tokiwa-hub-app/'
+    : './';
+  navigator.serviceWorker.register(swPath, { scope: scope })
+    .then(function(reg){
+      _swRegistration = reg;
+      console.log('🔔 Service Worker 登録成功:', reg.scope);
+    })
+    .catch(function(err){
+      console.warn('Service Worker 登録失敗:', err);
+    });
+}
+
+// 通知許可をリクエスト (ログイン後に呼ぶ)
+function requestNotificationPermission(showToast){
+  if(!('Notification' in window)) return Promise.resolve('unsupported');
+  if(Notification.permission === 'granted') return Promise.resolve('granted');
+  if(Notification.permission === 'denied') return Promise.resolve('denied');
+  return Notification.requestPermission().then(function(result){
+    if(result === 'granted' && showToast){
+      _showNotification_('🔔 通知 ON', { body: 'TOKIWA-HUB から重要なお知らせを通知します' });
+    }
+    return result;
+  });
+}
+
+// 通知を表示 (SW 経由 or 直接)
+function _showNotification_(title, options){
+  if(!('Notification' in window) || Notification.permission !== 'granted') return;
+  options = options || {};
+  // SW が登録済なら SW 経由で表示 (バックグラウンドでも動く)
+  if(_swRegistration && _swRegistration.active){
+    try {
+      _swRegistration.active.postMessage({ type: 'SHOW_NOTIFICATION', title: title, options: options });
+      return;
+    } catch(e){}
+  }
+  // フォールバック: 通常の Notification
+  try { new Notification(title, options); } catch(e){}
+}
+
+// 通知済 ID 保存/読込
+function _getNotifiedIds_(){
+  try { return new Set(JSON.parse(localStorage.getItem(_NOTIFIED_KEY) || '[]')); }
+  catch(e){ return new Set(); }
+}
+function _saveNotifiedIds_(set){
+  try { localStorage.setItem(_NOTIFIED_KEY, JSON.stringify(Array.from(set).slice(-200))); } catch(e){}
+}
+
+// 同期後にチェック → 新しい通知対象を表示
+function _checkAndNotifyAlerts_(){
+  if(!('Notification' in window) || Notification.permission !== 'granted') return;
+  var notified = _getNotifiedIds_();
+  var newlyNotified = [];
+
+  // 1. 新規問い合わせ (status=new で未通知)
+  (DB.inquiries || []).forEach(function(inq){
+    if(inq.status !== 'new') return;
+    var key = 'inq:' + inq.id;
+    if(notified.has(key)) return;
+    var src = (inq.source_type === 'gmail' ? '📧' : inq.source_type === 'linesvc' ? '💬' : inq.source_type === 'webform' ? '🌐' : '📋');
+    _showNotification_(src + ' 新着問い合わせ', {
+      body: (inq.from_name || '不明') + ': ' + (inq.subject || '(件名なし)').substring(0, 60),
+      tag: key,
+      data: { url: '/tokiwa-hub-app/', inquiryId: inq.id }
+    });
+    notified.add(key);
+    newlyNotified.push(key);
+  });
+
+  // 2. 納期1週間以内の案件 (1日1回)
+  var todayKey = new Date().toISOString().slice(0, 10);
+  var oneWeekLater = new Date(); oneWeekLater.setDate(oneWeekLater.getDate() + 7);
+  (DB.projects || []).forEach(function(p){
+    if(!p.dueDate || p.status === '完了' || p.status === '納品済') return;
+    var due = new Date(p.dueDate);
+    if(due > oneWeekLater) return;
+    var dueKey = 'due:' + p.id + ':' + todayKey;
+    if(notified.has(dueKey)) return;
+    var daysLeft = Math.ceil((due - new Date()) / (1000*60*60*24));
+    var dayLabel = daysLeft <= 0 ? '🚨 納期超過' : daysLeft === 1 ? '⚠️ 明日納期' : '⏰ 納期 ' + daysLeft + '日後';
+    _showNotification_(dayLabel + ': ' + (p.cust || ''), {
+      body: p.item + ' (' + p.id + ')',
+      tag: dueKey,
+      data: { url: '/tokiwa-hub-app/', projectId: p.id }
+    });
+    notified.add(dueKey);
+    newlyNotified.push(dueKey);
+  });
+
+  if(newlyNotified.length){
+    _saveNotifiedIds_(notified);
+  }
+}
+
+// ─────────────────────────────────────────────────────
+
+/**
+ * 受信問い合わせの from_email / from_tel から顧客マスタを検索 → cust_id を自動設定。
+ * 一度紐付け済 (cust_id) のものはスキップ。
+ */
+async function _autoMatchCustomers_(){
+  if(!Array.isArray(DB.inquiries) || !DB.inquiries.length) return;
+  if(!DB.master || !Array.isArray(DB.master.cust) || !DB.master.cust.length) return;
+
+  // emailMap / telMap を構築 (1度作って高速化)
+  var emailMap = {};
+  var telMap = {};
+  DB.master.cust.forEach(function(c){
+    if(typeof c === 'string' || !c) return;
+    var em = (c.email || '').trim().toLowerCase();
+    if(em){ emailMap[em] = c; }
+    var tel = (c.tel || '').replace(/[-\s()]/g, '');
+    if(tel){ telMap[tel] = c; }
+  });
+
+  var matchedCount = 0;
+  for(var i=0; i<DB.inquiries.length; i++){
+    var inq = DB.inquiries[i];
+    if(inq.cust_id) continue; // 既に紐付け済
+
+    var email = (inq.from_email || inq.email || '').trim().toLowerCase();
+    var tel = (inq.from_tel || inq.tel || '').replace(/[-\s()]/g, '');
+    var c = null;
+    if(email && emailMap[email]) c = emailMap[email];
+    else if(tel && telMap[tel]) c = telMap[tel];
+
+    if(!c) continue;
+
+    // ローカルにも反映 (画面に即時反映)
+    inq.cust_id = c.org || c.user || (email || tel);
+    if(!inq.from_company && c.org) inq.from_company = c.org;
+    if(!inq.from_name && c.user) inq.from_name = c.user;
+    matchedCount++;
+
+    // backend に永続化
+    try {
+      await callCloudAPI('updateCommunication', {}, {
+        id: inq.id,
+        patch: {
+          cust_id: inq.cust_id,
+          from_company: inq.from_company,
+          from_name: inq.from_name,
+          _timeline_entry: { type: 'auto_match', at: new Date().toISOString(), by: 'system', text: '🔍 顧客マスタから自動マッチ: ' + (c.org || c.user) }
+        }
+      });
+    } catch(e) {
+      console.warn('updateCommunication failed:', e);
+    }
+  }
+
+  if(matchedCount > 0){
+    console.log('🔍 顧客マスタ自動マッチ:', matchedCount, '件');
+    if(typeof renderInquiryList === 'function') try { renderInquiryList(); } catch(e){}
+  }
 }
 
 // AI 抽出済かつ見積未作成の問い合わせを検出してトースト通知
@@ -3414,10 +3606,15 @@ function _initTopbarArrows_(){
   }
 }
 if(document.readyState === 'loading'){
-  document.addEventListener('DOMContentLoaded', () => { setTimeout(initTabReorder, 100); setTimeout(_initTopbarArrows_, 150); });
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(initTabReorder, 100);
+    setTimeout(_initTopbarArrows_, 150);
+    if(typeof _registerServiceWorker_ === 'function') setTimeout(_registerServiceWorker_, 200);
+  });
 } else {
   setTimeout(initTabReorder, 100);
   setTimeout(_initTopbarArrows_, 150);
+  if(typeof _registerServiceWorker_ === 'function') setTimeout(_registerServiceWorker_, 200);
 }
 
 // ═══════════════════ ページ切替 ════════════════
@@ -9938,6 +10135,183 @@ function jumpToEstimateSource(estId){
 }
 
 // ─────────────────────────────────────────────────────
+// 📜 案件タイムライン (時系列イベントビュー)
+// ─────────────────────────────────────────────────────
+function showProjectTimeline(projectId){
+  var p = (DB.projects || []).find(function(x){ return x.id === projectId; });
+  if(!p){ alert('案件が見つかりません'); return; }
+
+  // 全イベントを集約
+  var events = [];
+
+  // 1. 案件作成
+  if(p.createdAt){
+    events.push({
+      at: p.createdAt,
+      icon: '📋',
+      type: 'project_created',
+      title: '案件登録',
+      detail: p.cust + ' / ' + p.item + ' (' + p.qty + (p.unit||'部') + ')',
+      color: '#1e40af'
+    });
+  }
+  if(p.orderDate && p.orderDate !== (p.createdAt||'').slice(0,10)){
+    events.push({
+      at: p.orderDate + 'T00:00:00',
+      icon: '✅',
+      type: 'order_date',
+      title: '受注日',
+      detail: '注文確定日: ' + p.orderDate,
+      color: '#0891b2'
+    });
+  }
+
+  // 2. ステップ完了 (stepDates)
+  var stepLabels = { '版下':'📐 版下完了', '校了':'✅ 校了', '印刷':'🖨 印刷完了', '加工':'⚙ 加工完了', '納品':'🚚 納品完了' };
+  if(p.stepDates){
+    Object.keys(p.stepDates).forEach(function(step){
+      var d = p.stepDates[step];
+      if(d) events.push({
+        at: typeof d === 'string' ? d : new Date(d).toISOString(),
+        icon: stepLabels[step]?.[0] || '🔧',
+        type: 'step',
+        title: stepLabels[step] || (step + ' 完了'),
+        detail: '担当: ' + (p.assignee || '未割当'),
+        color: '#16a34a'
+      });
+    });
+  }
+
+  // 3. 紐付く問い合わせ
+  var linkedInqs = (DB.inquiries || []).filter(function(i){ return i.linked_project_id === p.id; });
+  linkedInqs.forEach(function(inq){
+    events.push({
+      at: inq.received_at || inq.createdAt,
+      icon: '💬',
+      type: 'inquiry',
+      title: '問い合わせ受信 (' + (inq.source_type || 'manual') + ')',
+      detail: '送信元: ' + (inq.from_name || '?') + ' - ' + (inq.subject || ''),
+      color: '#7c3aed',
+      linkId: inq.id,
+      linkType: 'inquiry'
+    });
+    // この問い合わせの timeline (返信、AI 下書き等)
+    (inq.timeline || []).forEach(function(t){
+      var tIcon = { reply:'💬', note:'📝', ai_draft_reply:'🤖', auto_match:'🔍', auto_extract:'🤖', link:'🔗', email:'📧' }[t.type] || '📌';
+      events.push({
+        at: t.at || t.date,
+        icon: tIcon,
+        type: 'inq_event',
+        title: t.type + (inq.subject ? ' (' + inq.subject + ')' : ''),
+        detail: (t.text || '').substring(0, 100) + ((t.text||'').length > 100 ? '…' : ''),
+        color: '#a855f7',
+        linkId: inq.id,
+        linkType: 'inquiry'
+      });
+    });
+  });
+
+  // 4. 紐付く見積 (DB.estimates - 案件化したもの含む)
+  var linkedEsts = (DB.estimates || []).filter(function(e){ return e.linkedProjectId === p.id; });
+  linkedEsts.forEach(function(e){
+    events.push({
+      at: e.createdAt,
+      icon: '📋',
+      type: 'estimate',
+      title: '見積作成 ' + (e.aiAutoCreated ? '(AI 抽出)' : e.aiCreated ? '(チャット)' : '(手動)'),
+      detail: e.cust + ' / ' + e.item + (e.exTax ? ' ¥' + e.exTax.toLocaleString() : ''),
+      color: '#7c3aed',
+      linkId: e.id,
+      linkType: 'estimate'
+    });
+  });
+
+  // 5. 校正セッション
+  var linkedProofs = (DB.proofings || []).filter(function(pr){ return pr.projectId === p.id; });
+  linkedProofs.forEach(function(pr){
+    events.push({
+      at: pr.createdAt,
+      icon: '📐',
+      type: 'proofing',
+      title: '校正セッション開始',
+      detail: 'バージョン数: ' + ((pr.versions || []).length) + (pr.status === 'approved' ? ' / ✅ 承認済' : ''),
+      color: '#0ea5e9',
+      linkId: pr.id,
+      linkType: 'proofing'
+    });
+    (pr.versions || []).forEach(function(v){
+      if(!v.uploadedAt) return;
+      events.push({
+        at: v.uploadedAt,
+        icon: '🖼',
+        type: 'proof_version',
+        title: '校正版 v' + (v.version || '?') + ' アップ',
+        detail: v.fileName || '',
+        color: '#38bdf8'
+      });
+    });
+  });
+
+  // 6. 配送タスク
+  var linkedDels = (DB.deliveryItems || []).filter(function(d){ return d.projectId === p.id; });
+  linkedDels.forEach(function(d){
+    events.push({
+      at: d.date + (d.time ? 'T' + d.time : 'T00:00'),
+      icon: '🚚',
+      type: 'delivery',
+      title: '配送予定 (' + (d.taskType || '納品') + ')',
+      detail: d.address || d.recipient || '',
+      color: '#16a34a'
+    });
+  });
+
+  // 時系列ソート (新しい順)
+  events.sort(function(a, b){ return new Date(b.at || 0) - new Date(a.at || 0); });
+
+  // モーダル描画
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var html =
+    '<div style="background:#fff;width:100%;max-width:760px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong style="font-size:14px">📜 案件タイムライン</strong>' +
+        '<div style="font-size:11px;opacity:0.85;margin-top:2px">' + p.id + ' - ' + (p.cust||'') + ' / ' + (p.item||'') + '</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;padding:18px 20px;flex:1">' +
+      (events.length === 0
+        ? '<div style="text-align:center;color:#888;padding:2rem">イベントがありません</div>'
+        : '<div style="position:relative;padding-left:20px;border-left:2px solid #e5e7eb">' +
+          events.map(function(ev){
+            var dateStr = ev.at ? new Date(ev.at).toLocaleString('ja-JP') : '';
+            var clickable = ev.linkId ? 'cursor:pointer;' : '';
+            var clickHandler = ev.linkType === 'inquiry'
+              ? 'onclick="document.querySelector(\'.proof-modal\')?.remove();var btn=document.querySelector(\'.tb-btn[data-page=\\\'inquiry\\\']\');if(btn)swPage(\'inquiry\',btn);setTimeout(function(){if(typeof openInquiryDetail===\'function\')openInquiryDetail(\'' + ev.linkId + '\')},200)"'
+              : ev.linkType === 'estimate'
+                ? 'onclick="document.querySelector(\'.proof-modal\')?.remove();var btn=document.querySelector(\'.tb-btn[data-page=\\\'estimates\\\']\');if(btn)swPage(\'estimates\',btn)"'
+                : ev.linkType === 'proofing'
+                  ? 'onclick="document.querySelector(\'.proof-modal\')?.remove();if(typeof jumpToProofing===\'function\')jumpToProofing(\'' + ev.linkId + '\')"'
+                  : '';
+            return '<div style="position:relative;margin-bottom:14px;padding:10px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;border-left:4px solid ' + ev.color + ';' + clickable + '" ' + clickHandler + '>' +
+              '<div style="position:absolute;left:-30px;top:10px;width:20px;height:20px;background:' + ev.color + ';color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px">' + ev.icon + '</div>' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
+                '<span style="font-weight:700;font-size:12px;color:' + ev.color + '">' + _escDiff(ev.title) + '</span>' +
+                '<span style="font-size:10px;color:#888">' + dateStr + '</span>' +
+              '</div>' +
+              (ev.detail ? '<div style="font-size:12px;color:#555;line-height:1.5">' + _escDiff(ev.detail) + '</div>' : '') +
+              (ev.linkId ? '<div style="font-size:10px;color:#7c3aed;margin-top:3px">↗ クリックで開く</div>' : '') +
+            '</div>';
+          }).join('') +
+          '</div>'
+      ) +
+      '</div>' +
+    '</div>';
+  modal.innerHTML = html;
+  document.body.appendChild(modal);
+}
+
+// ─────────────────────────────────────────────────────
 
 var _chatbotHistory = [];
 
@@ -14321,6 +14695,7 @@ function renderProjects(){
       ? `<button class="use-btn" style="background:#dbeafe;border-color:#93c5fd;color:#1e3a8a;white-space:nowrap" onclick="jumpToProofing('${linkedProofs[0].id}')">📐 校正 ${linkedProofs.length}件</button>`
       : `<button class="use-btn" style="white-space:nowrap" onclick="createProofingFromProjectId('${r.id}')">📐 校正セッション作成</button>`;
     const workBtn = `<button class="use-btn" style="background:#1e293b;color:#fff;border-color:#1e293b;white-space:nowrap" onclick="showWorkInstructionView('${r.id}')">🔧 作業指示</button>`;
+    const timelineBtn = `<button class="use-btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;white-space:nowrap" onclick="showProjectTimeline('${r.id}')">📜 タイムライン</button>`;
     // 紐付く配送タスク
     const linkedDeliveries = (DB.deliveryItems||[]).filter(d => d.projectId === r.id);
     const deliveryBtn = linkedDeliveries.length > 0
@@ -14336,6 +14711,7 @@ function renderProjects(){
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
             ${workBtn}
+            ${timelineBtn}
             ${proofBadge}
             ${deliveryBtn}
             <button class="use-btn" style="white-space:nowrap" onclick="editProjDetail(${oi})">✏ 編集</button>
