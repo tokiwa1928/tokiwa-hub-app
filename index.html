@@ -9685,9 +9685,16 @@ function renderEstimates(){
     var dateStr = e.createdAt ? new Date(e.createdAt).toLocaleDateString('ja-JP') : '-';
     var qty = (e.qty || 0) + (e.unit || '部');
     var price = e.exTax ? '¥' + e.exTax.toLocaleString() : '-';
-    var srcBadge = e.aiAutoCreated
-      ? '<span style="background:#7c3aed;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px">🤖 AI</span>'
-      : (e.aiCreated ? '<span style="background:#06b6d4;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px">💬 チャット</span>' : '<span style="color:#888;font-size:11px">手動</span>');
+    var srcBadge;
+    if(e.aiAutoCreated){
+      // 問い合わせから AI が抽出 → 元の問い合わせを開く
+      srcBadge = '<span onclick="event.stopPropagation();jumpToEstimateSource(\'' + e.id + '\')" style="background:#7c3aed;color:#fff;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;text-decoration:underline" title="元の問い合わせを開く">🤖 AI ↗</span>';
+    } else if(e.aiCreated){
+      // チャットボット由来 → チャットパネルを開く
+      srcBadge = '<span onclick="event.stopPropagation();jumpToEstimateSource(\'' + e.id + '\')" style="background:#06b6d4;color:#fff;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;text-decoration:underline" title="チャットボットを開く">💬 チャット ↗</span>';
+    } else {
+      srcBadge = '<span style="color:#888;font-size:11px">手動</span>';
+    }
     var statusColor = e.status === '提出済' ? '#16a34a' : (e.status === '保留' ? '#f59e0b' : '#6b7280');
 
     html += '<tr style="border-bottom:1px solid #f3f4f6">' +
@@ -9709,9 +9716,27 @@ function renderEstimates(){
       '</td>' +
       '</tr>';
 
-    // メモ表示 (折りたたみ)
-    if(e.memo){
-      html += '<tr style="background:#fafafa"><td colspan="10" style="padding:6px 10px 10px 10px;font-size:11px;color:#666">📝 ' + _escDiff(e.memo).replace(/\n/g, '<br>') + '</td></tr>';
+    // 発生源情報行 (元データへのリンク)
+    var sourceInfoHtml = '';
+    if(e.fromInquiryId){
+      var inq = (DB.inquiries || []).find(function(i){ return i.id === e.fromInquiryId; });
+      if(inq){
+        var srcMeta = (typeof SOURCE_TYPE_META !== 'undefined' && SOURCE_TYPE_META[inq.source_type]) || { icon: '📋', label: inq.source_type || 'manual' };
+        sourceInfoHtml = '↗ ' + srcMeta.icon + ' <strong>' + (srcMeta.label || '') + '</strong>: ' + _escDiff(inq.subject || '(件名なし)') + ' <span style="color:#aaa">[' + e.fromInquiryId + ']</span>';
+      } else {
+        sourceInfoHtml = '↗ 元の問い合わせ: ' + _escDiff(e.fromSubject || e.fromInquiryId);
+      }
+    } else if(e.aiCreated){
+      sourceInfoHtml = '↗ 💬 チャットボット経由で作成';
+    }
+
+    if(sourceInfoHtml || e.memo){
+      var combined = sourceInfoHtml ?
+        '<div style="margin-bottom:4px;padding:4px 8px;background:#faf5ff;border-radius:4px;cursor:pointer" onclick="jumpToEstimateSource(\'' + e.id + '\')" title="発生源を開く">' + sourceInfoHtml + '</div>' : '';
+      if(e.memo){
+        combined += '📝 ' + _escDiff(e.memo).replace(/\n/g, '<br>');
+      }
+      html += '<tr style="background:#fafafa"><td colspan="10" style="padding:6px 10px 10px 10px;font-size:11px;color:#666">' + combined + '</td></tr>';
     }
   });
 
@@ -9856,6 +9881,51 @@ function jumpToEstimate(estId){
   var btn = document.querySelector('.tb-btn[data-page="estimates"]');
   if(btn && typeof swPage === 'function') swPage('estimates', btn);
   // フィルタ等で該当行をハイライトする処理は省略 (将来実装可)
+}
+
+// 見積の発生源 (問い合わせ or チャットボット) に飛ぶ
+function jumpToEstimateSource(estId){
+  var est = (DB.estimates || []).find(function(e){ return e.id === estId; });
+  if(!est){ alert('見積が見つかりません'); return; }
+
+  // (1) 問い合わせ由来 (AI 自動抽出) → 元の問い合わせ詳細を開く
+  if(est.fromInquiryId){
+    var inq = (DB.inquiries || []).find(function(i){ return i.id === est.fromInquiryId; });
+    if(!inq){
+      alert('元の問い合わせが見つかりません (' + est.fromInquiryId + ')\n削除されたか、まだ同期されていない可能性があります。');
+      return;
+    }
+    // 問い合わせタブに切り替え
+    var inqBtn = document.querySelector('.tb-btn[data-page="inquiry"]');
+    if(inqBtn && typeof swPage === 'function') swPage('inquiry', inqBtn);
+    // 詳細を開く (少し遅延させてタブ描画を待つ)
+    setTimeout(function(){
+      if(typeof openInquiryDetail === 'function'){
+        openInquiryDetail(est.fromInquiryId);
+      }
+    }, 200);
+    return;
+  }
+
+  // (2) チャットボット由来 → チャットパネルを開く
+  if(est.aiCreated){
+    if(typeof toggleChatbot === 'function'){
+      var panel = document.getElementById('chatbot-panel');
+      if(panel && panel.style.display !== 'flex'){
+        toggleChatbot();
+      }
+      // 該当する作成タイミングのメッセージにハイライトはしないが、開くだけで十分
+      setTimeout(function(){
+        var msgs = document.getElementById('chatbot-messages');
+        if(msgs) msgs.scrollTop = msgs.scrollHeight;
+      }, 200);
+    } else {
+      alert('チャットボット機能が読み込まれていません');
+    }
+    return;
+  }
+
+  alert('この見積は手動で作成されました。発生源情報はありません。');
 }
 
 // ─────────────────────────────────────────────────────
