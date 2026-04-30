@@ -10986,22 +10986,28 @@ function loadTestData(){
     added.proofings++;
   }
 
-  // 6. 配送タスク (DB.deliveryItems) - 4件
+  // 6. 配送タスク (DB.deliveryItems) - 8件 (今日 + 数日後、複数案件を同じ得意先にまとめる)
   if(!DB.deliveryItems) DB.deliveryItems = [];
   var deliveryTypes = ['納品', '校正出し', 'サンプル', '集荷'];
-  for(var n = 0; n < 4; n++){
-    var dueP = DB.projects[n];
+  var deliveryDates = [daysFromNow(0), daysFromNow(0), daysFromNow(0), daysFromNow(2), daysFromNow(2), daysFromNow(5), daysFromNow(5), daysFromNow(7)];
+  // グループ化テスト用: 最初の3件は同じ得意先 (富士食品)、次の2件は同じ得意先 (北山商事)
+  var deliveryRecipients = [customers[0], customers[0], customers[0], customers[1], customers[1], customers[2], customers[3], customers[4]];
+  for(var n = 0; n < 8; n++){
+    var dueP = DB.projects[n % DB.projects.length];
+    var isCompleted = n < 2; // 最初の2件は完了済
     DB.deliveryItems.push({
       id: 'TEST-DEL-' + Date.now() + '-' + n,
       projectId: dueP?.id || '',
-      taskType: deliveryTypes[n],
-      date: daysFromNow(rand(0, 7)),
-      time: ['09:00','10:30','13:00','15:00'][n],
-      address: ['東京都港区南青山1-1-1', '神奈川県横浜市中区2-3-4', '千葉県千葉市美浜区5-6-7', '東京都新宿区西新宿8-9-10'][n],
-      recipient: customers[n],
-      driver: ['田中ドライバー','佐藤ドライバー','鈴木ドライバー','山田ドライバー'][n],
-      memo: deliveryTypes[n] + ' (テストデータ)',
-      status: '予定',
+      taskType: deliveryTypes[n % 4],
+      scheduledDate: deliveryDates[n], // 🆕 新フィールド (配送予定日)
+      date: deliveryDates[n], // 互換のため両方セット
+      completedDate: isCompleted ? daysAgo(0) : null,
+      time: ['09:00','10:30','13:00','15:00','16:00','09:30','11:00','14:30'][n],
+      address: ['東京都港区南青山1-1-1', '神奈川県横浜市中区2-3-4', '千葉県千葉市美浜区5-6-7', '東京都新宿区西新宿8-9-10', '神奈川県川崎市', '東京都渋谷区', '埼玉県さいたま市', '千葉県船橋市'][n],
+      recipient: deliveryRecipients[n],
+      driver: ['田中ドライバー','佐藤ドライバー','鈴木ドライバー','山田ドライバー'][n % 4],
+      memo: deliveryTypes[n % 4] + ' (テストデータ)',
+      status: isCompleted ? '配送完了' : '予定',
       createdAt: daysAgo(rand(0, 3)),
       _testData: true
     });
@@ -11030,27 +11036,155 @@ function loadTestData(){
     });
   }
 
+  // 8. 🆕 請求書 (DB.invoices) - 5件 (都度3 + 締め2)
+  if(!DB.invoices) DB.invoices = [];
+  added.invoices = 0;
+  for(var iv = 0; iv < 5; iv++){
+    var invSubtotal = [80000, 250000, 500000, 750000, 1200000][iv];
+    var invTax = Math.round(invSubtotal * 0.1);
+    var ivStatus = iv < 2 ? 'paid' : (iv < 4 ? 'sent' : 'draft');
+    DB.invoices.push({
+      id: 'TEST-INV-' + Date.now() + '-' + iv,
+      type: iv < 3 ? 'onetime' : 'shime',
+      cust: customers[iv],
+      items: [{ item: items[iv], subtotal: invSubtotal }],
+      subtotal: invSubtotal,
+      tax: invTax,
+      total: invSubtotal + invTax,
+      dueDate: daysFromNow([10, 20, 30, 25, 15][iv]),
+      memo: iv < 3 ? '都度請求テスト' : '締め請求テスト',
+      status: ivStatus,
+      issuedAt: daysAgo(rand(0, 14)),
+      paidAt: ivStatus === 'paid' ? daysAgo(rand(0, 7)) : null,
+      _testData: true
+    });
+    added.invoices++;
+  }
+
+  // 9. 🆕 領収書 (DB.receipts) - 3件
+  if(!DB.receipts) DB.receipts = [];
+  added.receipts = 0;
+  for(var rc = 0; rc < 3; rc++){
+    DB.receipts.push({
+      id: 'TEST-RCT-' + Date.now() + '-' + rc,
+      cust: customers[rc],
+      total: [88000, 275000, 660000][rc],
+      issuedAt: daysAgo(rand(0, 30)),
+      _testData: true
+    });
+    added.receipts++;
+  }
+
+  // 10. 🆕 入金 (DB.payments) - 4件 (うち2件は消込済)
+  if(!DB.payments) DB.payments = [];
+  added.payments = 0;
+  var methods = ['銀行振込', '銀行振込', '現金', '手形'];
+  for(var pm = 0; pm < 4; pm++){
+    DB.payments.push({
+      id: 'TEST-PAY-' + Date.now() + '-' + pm,
+      cust: customers[pm],
+      amount: [88000, 275000, 60000, 1320000][pm],
+      receivedAt: daysAgo(rand(0, 14)),
+      method: methods[pm],
+      memo: pm === 3 ? '90日サイト' : '',
+      matchedInvoiceId: pm < 2 ? DB.invoices[pm].id : null,
+      matchedAt: pm < 2 ? daysAgo(rand(0, 5)) : null,
+      _testData: true
+    });
+    added.payments++;
+  }
+
+  // 11. 🆕 仕入発注 (DB.purchaseOrders) - 4件
+  if(!DB.purchaseOrders) DB.purchaseOrders = [];
+  added.purchaseOrders = 0;
+  var suppliers = ['国際紙業', '日本印刷インキ', '東洋ペーパー', '王子製紙販売'];
+  var purchItems = ['コート紙90K 4/6判 200kg', 'プロセスインキ 4色セット', 'マットコート135K B2 100kg', 'NPI上質70K A判 500kg'];
+  for(var pu = 0; pu < 4; pu++){
+    DB.purchaseOrders.push({
+      id: 'TEST-PUR-' + Date.now() + '-' + pu,
+      vendor: suppliers[pu],
+      item: purchItems[pu],
+      qty: [200, 1, 100, 500][pu],
+      unit: ['kg', 'セット', 'kg', 'kg'][pu],
+      amount: [180000, 65000, 90000, 220000][pu],
+      dueDate: daysFromNow(rand(3, 14)),
+      memo: '',
+      status: pu < 2 ? 'received' : 'ordered',
+      createdAt: daysAgo(rand(1, 10)),
+      _testData: true
+    });
+    added.purchaseOrders++;
+  }
+
+  // 12. 🆕 外注発注 (DB.outsourceOrders) - 3件
+  if(!DB.outsourceOrders) DB.outsourceOrders = [];
+  added.outsourceOrders = 0;
+  var outVendors = ['大和製本', 'カワサキ加工', '東京シール印刷'];
+  var outItems = ['カタログ32P 中綴じ製本 2000部', 'PP加工 A4 5000枚', '特殊シール 角丸抜き 3000枚'];
+  for(var ou = 0; ou < 3; ou++){
+    DB.outsourceOrders.push({
+      id: 'TEST-OUT-' + Date.now() + '-' + ou,
+      vendor: outVendors[ou],
+      item: outItems[ou],
+      amount: [120000, 45000, 78000][ou],
+      dueDate: daysFromNow(rand(5, 14)),
+      memo: '',
+      status: ou < 1 ? 'completed' : 'sent',
+      createdAt: daysAgo(rand(1, 7)),
+      _testData: true
+    });
+    added.outsourceOrders++;
+  }
+
+  // 13. 🆕 支払予定 (DB.payouts) - 5件
+  if(!DB.payouts) DB.payouts = [];
+  added.payouts = 0;
+  var payoutVendors = ['国際紙業', '日本印刷インキ', '大和製本', 'カワサキ加工', '王子製紙販売'];
+  for(var po = 0; po < 5; po++){
+    DB.payouts.push({
+      id: 'TEST-POUT-' + Date.now() + '-' + po,
+      vendor: payoutVendors[po],
+      amount: [180000, 65000, 120000, 45000, 220000][po],
+      dueDate: daysFromNow([5, 10, 15, 20, 30][po]),
+      method: po < 3 ? '銀行振込' : '手形',
+      memo: po === 0 ? '月末締め翌月末払い' : '',
+      status: po < 2 ? 'paid' : 'pending',
+      paidAt: po < 2 ? daysAgo(rand(0, 5)) : null,
+      createdAt: daysAgo(rand(1, 14)),
+      _testData: true
+    });
+    added.payouts++;
+  }
+
   if(typeof saveDB === 'function') saveDB();
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
 
   // 各画面再描画
-  ['renderProjects','renderHistory','renderEstimates','renderInquiryList','renderProofingList','renderRealtimeView','renderIntercoSent']
+  ['renderProjects','renderHistory','renderEstimates','renderInquiryList','renderProofingList','renderRealtimeView','renderIntercoSent',
+   'renderInvoices','renderReceipts','renderPayments','renderPurchases','renderOutsource','renderPayouts','renderDeliveryGroups','renderWorkflowDiagram']
     .forEach(function(fn){ try { if(typeof window[fn] === 'function') window[fn](); } catch(e){} });
 
   alert('✅ テストデータ投入完了\n\n' +
-    '案件: ' + added.projects + '件\n' +
-    '見積依頼: ' + added.estimates + '件\n' +
-    '過去の見積書: ' + added.history + '件\n' +
-    '連絡: ' + added.inquiries + '件 (社外/社内/社間/音声 含む)\n' +
-    '校正セッション: ' + added.proofings + '件\n' +
-    '配送タスク: ' + added.deliveryItems + '件\n\n' +
-    '🎯 リアルタイムやそれぞれのタブで確認してください。');
+    '📁 案件: ' + added.projects + '件\n' +
+    '📋 見積依頼: ' + added.estimates + '件\n' +
+    '📜 過去の見積書: ' + added.history + '件\n' +
+    '📨 連絡: ' + added.inquiries + '件 (社外/社内/社間/音声)\n' +
+    '📸 校正セッション: ' + added.proofings + '件\n' +
+    '🚚 配送タスク: ' + added.deliveryItems + '件 (得意先別グループ含む)\n' +
+    '📄 請求書: ' + added.invoices + '件 (都度3 + 締め2)\n' +
+    '🧾 領収書: ' + added.receipts + '件\n' +
+    '💰 入金: ' + added.payments + '件 (うち2件消込済)\n' +
+    '📦 仕入発注: ' + added.purchaseOrders + '件\n' +
+    '🤝 外注発注: ' + added.outsourceOrders + '件\n' +
+    '💸 支払予定: ' + added.payouts + '件\n\n' +
+    '🏠 ホームの業務フロー図、各タブで確認してください。');
 }
 
 function clearTestData(){
   if(!confirm('⚠️ テストデータをすべて削除します。\n\n_testData: true のフラグが付いているレコードのみ削除。\n本番データは残ります。続行?')) return;
   var removed = 0;
-  ['projects','estimates','history','inquiries','proofings','deliveryItems','intercoRequests'].forEach(function(key){
+  ['projects','estimates','history','inquiries','proofings','deliveryItems','intercoRequests',
+   'invoices','receipts','payments','purchaseOrders','outsourceOrders','payouts'].forEach(function(key){
     if(!Array.isArray(DB[key])) return;
     var before = DB[key].length;
     DB[key] = DB[key].filter(function(r){ return !r._testData; });
@@ -11058,7 +11192,8 @@ function clearTestData(){
   });
   if(typeof saveDB === 'function') saveDB();
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
-  ['renderProjects','renderHistory','renderEstimates','renderInquiryList','renderProofingList','renderRealtimeView','renderIntercoSent']
+  ['renderProjects','renderHistory','renderEstimates','renderInquiryList','renderProofingList','renderRealtimeView','renderIntercoSent',
+   'renderInvoices','renderReceipts','renderPayments','renderPurchases','renderOutsource','renderPayouts','renderDeliveryGroups','renderWorkflowDiagram']
     .forEach(function(fn){ try { if(typeof window[fn] === 'function') window[fn](); } catch(e){} });
   alert('✅ テストデータ ' + removed + '件 を削除しました');
 }
