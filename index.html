@@ -9485,6 +9485,218 @@ function applyFinancialAIIngest(extracted){
 var CHATBOT_HISTORY_KEY = 'tokiwa_hub_chat_history';
 var _chatbotHistory = [];
 
+// ── Chatbot Tool Use 定義 ──────────────────────────────
+// Claude にこれらのツールを使わせ、フロントの DB を直接操作させる
+var _CHATBOT_TOOLS = [
+  {
+    name: 'create_estimate',
+    description: '新しい見積を作成する。受注確定前のお見積もり用。完了したら見積一覧に追加される。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cust: { type: 'string', description: '得意先名' },
+        item: { type: 'string', description: '品名' },
+        spec: { type: 'string', description: '仕様 (例: A4 32P 中綴じ コート90K オフセット4色)' },
+        qty:  { type: 'number', description: '数量' },
+        unit: { type: 'string', description: '単位 (部/セット 等)。省略時は "部"' },
+        dueDate: { type: 'string', description: '納期 YYYY-MM-DD 形式。不明なら省略' },
+        exTax: { type: 'number', description: '税抜想定金額。不明なら省略' },
+        memo: { type: 'string', description: '備考' }
+      },
+      required: ['cust', 'item']
+    }
+  },
+  {
+    name: 'create_project',
+    description: 'リピート品など見積不要で直接案件登録する。完了したら案件一覧に追加される。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cust: { type: 'string', description: '得意先名' },
+        item: { type: 'string', description: '品名' },
+        spec: { type: 'string', description: '仕様' },
+        qty:  { type: 'number', description: '数量' },
+        unit: { type: 'string', description: '単位。省略時は "部"' },
+        dueDate: { type: 'string', description: '納期 YYYY-MM-DD' },
+        exTax: { type: 'number', description: '税抜金額' },
+        memo: { type: 'string', description: '備考' }
+      },
+      required: ['cust', 'item']
+    }
+  },
+  {
+    name: 'list_projects',
+    description: '案件一覧を取得する。ステータスでフィルタ可。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'ステータス絞り込み (例: 制作中/校了/印刷中/完了/納品済)。省略時は全件' },
+        limit: { type: 'number', description: '最大件数。省略時は20' }
+      }
+    }
+  },
+  {
+    name: 'list_estimates',
+    description: '見積一覧を取得する。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: '最大件数。省略時は20' }
+      }
+    }
+  },
+  {
+    name: 'list_inquiries',
+    description: '問い合わせ一覧を取得する (Gmail / LINE WORKS / Web フォーム)。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'ステータス (new/in_progress/done)。省略時は全件' },
+        limit: { type: 'number', description: '最大件数。省略時は20' }
+      }
+    }
+  },
+  {
+    name: 'update_project_status',
+    description: '案件のステータスを変更する。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: '案件ID' },
+        status: { type: 'string', description: '新しいステータス' }
+      },
+      required: ['projectId', 'status']
+    }
+  },
+  {
+    name: 'get_today_summary',
+    description: '今日の業務状況サマリ (進行中件数/今日の納期/問い合わせ等) を取得する。',
+    input_schema: { type: 'object', properties: {} }
+  }
+];
+
+// ── Tool Executor: Claude が呼んだツールを実際に DB に対して実行 ──
+function _executeChatTool_(name, input){
+  input = input || {};
+  try {
+    switch(name){
+      case 'create_estimate': {
+        if(!input.cust || !input.item) return { error: 'missing cust or item' };
+        var est = {
+          id: (typeof generateEstimateId === 'function') ? generateEstimateId() : ('EST' + Date.now()),
+          companyId: currentAuth?.companyId || 'COMP001',
+          companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+          createdAt: new Date().toISOString(),
+          cust: input.cust,
+          item: input.item,
+          spec: input.spec || '',
+          qty: parseInt(input.qty) || 0,
+          unit: input.unit || '部',
+          dueDate: input.dueDate || '',
+          exTax: parseInt(input.exTax) || 0,
+          memo: input.memo || '',
+          status: '見積中',
+          aiCreated: true
+        };
+        if(!DB.estimates) DB.estimates = [];
+        DB.estimates.push(est);
+        if(typeof saveDB === 'function') saveDB();
+        if(typeof renderEstimates === 'function') try { renderEstimates(); } catch(e){}
+        return { success: true, estimateId: est.id, message: '見積 ' + est.id + ' を登録しました' };
+      }
+      case 'create_project': {
+        if(!input.cust || !input.item) return { error: 'missing cust or item' };
+        var proj = {
+          id: (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now()),
+          companyId: currentAuth?.companyId || 'COMP001',
+          companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+          orderDate: new Date().toISOString().slice(0,10),
+          dueDate: input.dueDate || '',
+          cust: input.cust,
+          item: input.item,
+          spec: input.spec || '',
+          qty: parseInt(input.qty) || 0,
+          unit: input.unit || '部',
+          exTax: parseInt(input.exTax) || 0,
+          grand: 0,
+          status: '制作中',
+          assignee: '',
+          memo: input.memo || '',
+          steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
+          stepDates: {},
+          createdAt: new Date().toISOString(),
+          aiCreated: true
+        };
+        if(!DB.projects) DB.projects = [];
+        DB.projects.push(proj);
+        if(typeof saveDB === 'function') saveDB();
+        if(typeof renderProjects === 'function') try { renderProjects(); } catch(e){}
+        return { success: true, projectId: proj.id, message: '案件 ' + proj.id + ' を登録しました' };
+      }
+      case 'list_projects': {
+        var lim = parseInt(input.limit) || 20;
+        var arr = (DB.projects || []).slice();
+        if(input.status) arr = arr.filter(function(p){ return p.status === input.status; });
+        arr = arr.slice(-lim).reverse();
+        return {
+          count: arr.length,
+          projects: arr.map(function(p){
+            return {
+              id: p.id, cust: p.cust, item: p.item, qty: p.qty,
+              status: p.status, dueDate: p.dueDate, exTax: p.exTax
+            };
+          })
+        };
+      }
+      case 'list_estimates': {
+        var lim2 = parseInt(input.limit) || 20;
+        var arr2 = (DB.estimates || []).slice(-lim2).reverse();
+        return {
+          count: arr2.length,
+          estimates: arr2.map(function(e){
+            return {
+              id: e.id, cust: e.cust, item: e.item, qty: e.qty,
+              exTax: e.exTax, status: e.status, createdAt: e.createdAt
+            };
+          })
+        };
+      }
+      case 'list_inquiries': {
+        var lim3 = parseInt(input.limit) || 20;
+        var arr3 = (DB.inquiries || []).slice();
+        if(input.status) arr3 = arr3.filter(function(i){ return i.status === input.status; });
+        arr3 = arr3.slice(-lim3).reverse();
+        return {
+          count: arr3.length,
+          inquiries: arr3.map(function(i){
+            return {
+              id: i.id, source: i.source, sender: i.sender,
+              subject: i.subject, status: i.status, receivedAt: i.receivedAt
+            };
+          })
+        };
+      }
+      case 'update_project_status': {
+        if(!input.projectId || !input.status) return { error: 'missing projectId or status' };
+        var p = (DB.projects || []).find(function(x){ return x.id === input.projectId; });
+        if(!p) return { error: '案件が見つかりません: ' + input.projectId };
+        var oldStatus = p.status;
+        p.status = input.status;
+        if(typeof saveDB === 'function') saveDB();
+        if(typeof renderProjects === 'function') try { renderProjects(); } catch(e){}
+        return { success: true, projectId: p.id, oldStatus: oldStatus, newStatus: input.status };
+      }
+      case 'get_today_summary': {
+        return { summary: _buildContextSummary_() };
+      }
+      default:
+        return { error: 'unknown_tool: ' + name };
+    }
+  } catch(e){
+    return { error: 'tool_exception: ' + e.message };
+  }
+}
+
 function _loadChatHistory_(){
   try {
     var saved = JSON.parse(localStorage.getItem(CHATBOT_HISTORY_KEY) || '[]');
@@ -9517,12 +9729,32 @@ function toggleChatbot(){
   }
 }
 
+// content が配列 (tool_use/tool_result 含む) の場合に表示用テキストを抽出
+function _extractDisplayText_(content){
+  if(typeof content === 'string') return content;
+  if(!Array.isArray(content)) return '';
+  var parts = [];
+  for(var i=0; i<content.length; i++){
+    var b = content[i];
+    if(b.type === 'text' && b.text) parts.push(b.text);
+    else if(b.type === 'tool_use') parts.push('🔧 ' + b.name + ' を実行中…');
+    // tool_result はユーザー側ロールなので表示不要 (内部処理)
+  }
+  return parts.join('\n');
+}
+
 function _renderChatHistory_(){
   var container = document.getElementById('chatbot-messages');
   if(!container) return;
   container.innerHTML = '';
   _chatbotHistory.forEach(function(m){
-    _appendChatBubble_(m.role, m.content);
+    // tool_result 専用ロール (= 直近 user ロールで content が tool_result のみ) は描画スキップ
+    if(m.role === 'user' && Array.isArray(m.content) && m.content.every(function(b){ return b.type === 'tool_result'; })){
+      return;
+    }
+    var disp = _extractDisplayText_(m.content);
+    if(!disp) return;
+    _appendChatBubble_(m.role, disp);
   });
   container.scrollTop = container.scrollHeight;
 }
@@ -9577,17 +9809,73 @@ async function sendChatMessage(presetText){
   var contextSummary = _buildContextSummary_();
 
   try {
-    // POST + JSON body で送る (messages 配列を URL クエリで送ると文字列化されるため)
-    var result = await callCloudAPI('claudeChat', {}, {
-      messages: _chatbotHistory,
-      contextSummary: contextSummary
-    });
-    _removeTypingIndicator_();
-    if(result?.success){
-      _addChatMsg_('assistant', result.reply || '(返答なし)');
-    } else {
-      _addChatMsg_('assistant', '⚠️ エラー: ' + (result?.error || '不明なエラー') + '\n\nバックエンドの CLAUDE_API_KEY 設定を確認してください。');
+    // Tool Use 対応: tool_use レスポンスが返ってきたらツール実行 → tool_result を返して
+    // 最終 text レスポンスが来るまでループ (最大5往復で安全装置)
+    var maxIterations = 5;
+    var finalText = null;
+    var lastError = null;
+
+    for(var iter = 0; iter < maxIterations; iter++){
+      var result = await callCloudAPI('claudeChat', {}, {
+        messages: _chatbotHistory,
+        contextSummary: contextSummary,
+        tools: _CHATBOT_TOOLS
+      });
+
+      if(!result || !result.success){
+        lastError = result?.error || '不明なエラー';
+        break;
+      }
+
+      var content = result.content || [];
+      var stopReason = result.stop_reason;
+
+      // assistant のレスポンスを履歴に追加 (content 配列まるごと)
+      _chatbotHistory.push({ role: 'assistant', content: content });
+
+      // text ブロックがあれば吹き出しに表示
+      var textBlocks = content.filter(function(b){ return b.type === 'text' && b.text; });
+      if(textBlocks.length){
+        textBlocks.forEach(function(b){ _appendChatBubble_('bot', b.text); });
+      }
+
+      _saveChatHistory_();
+
+      // tool_use ブロックを抽出
+      var toolUses = content.filter(function(b){ return b.type === 'tool_use'; });
+      if(stopReason !== 'tool_use' || toolUses.length === 0){
+        // 最終応答 (text のみ)
+        finalText = textBlocks.map(function(b){ return b.text; }).join('\n');
+        break;
+      }
+
+      // ツールを順次実行して tool_result を集約
+      var toolResults = [];
+      for(var t = 0; t < toolUses.length; t++){
+        var tu = toolUses[t];
+        // ツール実行中インジケータ
+        _appendChatBubble_('bot', '🔧 ' + tu.name + ' を実行中…');
+        var execRes = _executeChatTool_(tu.name, tu.input || {});
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: tu.id,
+          content: JSON.stringify(execRes).substring(0, 4000)
+        });
+      }
+
+      // tool_result を user ロールで履歴に追加し、再度 Claude に返す
+      _chatbotHistory.push({ role: 'user', content: toolResults });
+      _saveChatHistory_();
+      // 次のループへ (typing インジケータは継続)
     }
+
+    _removeTypingIndicator_();
+    if(lastError){
+      _addChatMsg_('assistant', '⚠️ エラー: ' + lastError);
+    } else if(finalText === null){
+      _addChatMsg_('assistant', '(ツール呼び出しが上限に達しました。もう一度お試しください)');
+    }
+    // 正常終了の場合は既に textBlocks を表示済みなので追記不要
   } catch(e){
     _removeTypingIndicator_();
     _addChatMsg_('assistant', '⚠️ 通信エラー: ' + e.message);
