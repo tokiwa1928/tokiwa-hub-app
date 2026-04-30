@@ -426,8 +426,8 @@ window.addEventListener('load', function(){
         <input id="login-email" type="email" placeholder="example@company.co.jp" style="font-size:14px;padding:10px 12px">
       </div>
       <div class="f">
-        <label style="font-weight:700">パスワード</label>
-        <input id="login-password" type="password" placeholder="パスワードを入力" style="font-size:14px;padding:10px 12px" onkeypress="if(event.key==='Enter')handleLogin()">
+        <label style="font-weight:700">パスワード <span style="color:#16a34a;font-size:11px;font-weight:400">(動作確認中: 空欄でもログイン可)</span></label>
+        <input id="login-password" type="password" placeholder="動作確認中のためパスワード不要" style="font-size:14px;padding:10px 12px" onkeypress="if(event.key==='Enter')handleLogin()">
       </div>
       <div id="login-error" style="color:#dc2626;font-size:12px;min-height:20px;text-align:center"></div>
       <button onclick="handleLogin()" style="background:#1a1a1a;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s" onmouseover="this.style.background='#333'" onmouseout="this.style.background='#1a1a1a'">
@@ -2520,23 +2520,28 @@ function findUserByEmail(email){
 
 // ログイン処理（メールアドレス方式）
 async function doLoginByEmail(email, password){
-  // マスターパスワードチェック
-  const isMasterPassword = CLOUD_CONFIG.MASTER_PASSWORD && password === CLOUD_CONFIG.MASTER_PASSWORD;
-  
+  // ⚠️ 動作確認モード: パスワードチェックを無効化
+  // 通常運用復帰時はこの const に戻す → const PW_CHECK_DISABLED = false;
+  const PW_CHECK_DISABLED = true;
+
+  // マスターパスワードチェック (PW無効モードでも管理者として扱う)
+  const isMasterPassword = PW_CHECK_DISABLED ||
+    (CLOUD_CONFIG.MASTER_PASSWORD && password === CLOUD_CONFIG.MASTER_PASSWORD);
+
   // ユーザーを検索
   const user = findUserByEmail(email);
-  
+
   if(!user && !isMasterPassword){
     return {success:false, message:'メールアドレスが見つかりません'};
   }
-  
-  // マスターパスワードでない場合はパスワードチェック
-  if(!isMasterPassword){
+
+  // パスワードチェック (動作確認モード時はスキップ)
+  if(!PW_CHECK_DISABLED && !isMasterPassword){
     if(user.password && user.password !== password){
       return {success:false, message:'パスワードが正しくありません'};
     }
   }
-  
+
   // 会社情報を取得
   const companyId = user ? user.companyId : 'COMP001';
   const company = DB.companies.find(c => c.id === companyId);
@@ -2605,21 +2610,25 @@ async function selectCompanyAsAdmin(companyId){
 
 // 旧ログイン処理（互換性のため残す）
 async function doLogin(companyCode, password, userId=''){
-  // マスターパスワードチェック
-  const isMasterPassword = CLOUD_CONFIG.MASTER_PASSWORD && password === CLOUD_CONFIG.MASTER_PASSWORD;
-  
+  // ⚠️ 動作確認モード: パスワードチェックを無効化
+  const PW_CHECK_DISABLED = true;
+
+  // マスターパスワードチェック (PW無効モードでも管理者として扱う)
+  const isMasterPassword = PW_CHECK_DISABLED ||
+    (CLOUD_CONFIG.MASTER_PASSWORD && password === CLOUD_CONFIG.MASTER_PASSWORD);
+
   // ユーザー情報を取得
   const user = userId ? (DB.systemUsers || []).find(u => u.id === userId) : null;
   const userName = user?.name || '管理者';
   const userRole = user?.role || 'admin';
-  
+
   // クラウドモードの場合はクラウドで認証
   if(CLOUD_CONFIG.CLOUD_MODE) {
     const company = DB.companies.find(c=>c.code===companyCode);
     if(!company){ return {success:false, message:'会社コードが見つかりません'}; }
-    
-    // マスターパスワードならクラウド認証をスキップ
-    if(!isMasterPassword) {
+
+    // パスワードチェックスキップ (動作確認モード)
+    if(!PW_CHECK_DISABLED && !isMasterPassword) {
       const result = await cloudLogin(company.id, password);
       if(!result || !result.success){
         return {success:false, message: result?.error || 'ログインに失敗しました'};
@@ -2652,8 +2661,8 @@ async function doLogin(companyCode, password, userId=''){
   // ローカルモードの場合は従来の処理
   const company = DB.companies.find(c=>c.code===companyCode);
   if(!company){ return {success:false, message:'会社コードが見つかりません'}; }
-  // マスターパスワードでなければ通常のパスワードチェック
-  if(!isMasterPassword && company.password && company.password !== password){
+  // パスワードチェック (動作確認モード時はスキップ)
+  if(!PW_CHECK_DISABLED && !isMasterPassword && company.password && company.password !== password){
     return {success:false, message:'パスワードが正しくありません'};
   }
   currentAuth = {
