@@ -2942,8 +2942,102 @@ async function loadFromCloud() {
   try {
     localStorage.setItem(DBKEY, JSON.stringify(DB));
   } catch(e) {}
-  
+
+  // 🤖 自動見積登録: backend が claudeExtract した問い合わせを見積として登録
+  try {
+    await _autoRegisterExtractedEstimates_();
+  } catch(e) {
+    console.warn('Auto-register estimates failed:', e);
+  }
+
   return true;
+}
+
+/**
+ * Backend で 自動抽出された 見積依頼 (extracted_data 持ち) を 見積一覧に自動登録。
+ * 同じ問い合わせから2回登録しないよう linked_quote_id で重複防止。
+ */
+async function _autoRegisterExtractedEstimates_(){
+  if (!Array.isArray(DB.inquiries) || !DB.inquiries.length) return;
+  if (!DB.estimates) DB.estimates = [];
+
+  var registered = 0;
+  var registeredIds = [];
+
+  for (var i = 0; i < DB.inquiries.length; i++){
+    var inq = DB.inquiries[i];
+    var ex = inq && inq.extracted_data;
+    if (!ex) continue;
+    if (inq.linked_quote_id) continue; // 既に紐付け済み = 登録済み
+
+    // フロント側でも重複チェック (同じ inq id から作られた est がないか)
+    var dup = DB.estimates.find(function(e){ return e.fromInquiryId === inq.id; });
+    if (dup) {
+      // 紐付けだけ更新
+      try {
+        await callCloudAPI('linkCommunication', { id: inq.id, links: { quote_id: dup.id } });
+      } catch(e){}
+      continue;
+    }
+
+    if (!ex.cust && !ex.item) continue; // 抽出失敗扱い
+
+    var newEst = {
+      id: 'EST' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+      companyId: currentAuth?.companyId || 'COMP001',
+      companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+      createdAt: new Date().toISOString(),
+      cust: ex.cust || '',
+      item: ex.item || '',
+      spec: ex.spec || '',
+      qty: parseInt(ex.qty) || 0,
+      unit: ex.unit || '部',
+      dueDate: ex.dueDate || '',
+      memo: (ex.memo || '') + (ex.confidence ? '\n[AI confidence: ' + ex.confidence + ']' : ''),
+      status: '見積中',
+      aiAutoCreated: true,
+      fromInquiryId: inq.id,
+      fromSubject: inq.subject || ''
+    };
+    DB.estimates.push(newEst);
+    registered++;
+    registeredIds.push(newEst.id);
+
+    // backend に紐付けを記録 (次回の同期時にスキップされる)
+    try {
+      await callCloudAPI('linkCommunication', { id: inq.id, links: { quote_id: newEst.id } });
+      inq.linked_quote_id = newEst.id;
+    } catch(e) {
+      console.warn('linkCommunication failed for', inq.id, e);
+    }
+  }
+
+  if (registered > 0) {
+    try { localStorage.setItem(DBKEY, JSON.stringify(DB)); } catch(e){}
+    if (typeof saveToCloud === 'function') {
+      try { await saveToCloud(); } catch(e){}
+    }
+    if (typeof renderEstimates === 'function') {
+      try { renderEstimates(); } catch(e){}
+    }
+    console.log('🤖 自動見積登録: ' + registered + '件', registeredIds);
+
+    // 画面通知 (右上トースト)
+    _showAutoEstimateToast_(registered, registeredIds);
+  }
+}
+
+function _showAutoEstimateToast_(count, ids){
+  var t = document.createElement('div');
+  t.style.cssText = 'position:fixed;top:20px;right:20px;background:#7c3aed;color:#fff;padding:14px 20px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);z-index:99999;font-size:14px;font-weight:600;cursor:pointer;max-width:340px;line-height:1.5';
+  t.innerHTML = '🤖 ' + count + '件の見積依頼を<br>AIが自動で見積登録しました<br><span style="font-size:11px;opacity:0.85;font-weight:400">クリックして見積タブで確認</span>';
+  t.onclick = function(){
+    var btn = document.querySelector('.tb-btn[onclick*="est"]');
+    if (btn && typeof swPage === 'function') swPage('est', btn);
+    t.remove();
+  };
+  document.body.appendChild(t);
+  setTimeout(function(){ try { t.remove(); } catch(e){} }, 12000);
 }
 
 // クラウドに保存
