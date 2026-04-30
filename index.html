@@ -8717,19 +8717,56 @@ var DOC_TYPE_COLORS = {
 var _finCharts = {};
 
 function renderFinancePage(){
-  // 会社セレクタを初期化
+  // ログインユーザーの所属会社のみ表示 (管理者のみ全社見られる)
+  var isAdmin = (currentAuth && currentAuth.role === 'admin');
+  var myCompanyId = currentAuth?.companyId;
+  var myCompanyName = currentAuth?.companyName;
+
   var companies = (DB.companies && DB.companies.length) ? DB.companies : [
     {id:'COMP001',name:'村山印刷'},{id:'COMP002',name:'トキワ印刷'},{id:'COMP003',name:'中尾印刷'},
     {id:'COMP004',name:'アート・エス'},{id:'COMP005',name:'ソネ商事'},{id:'COMP006',name:'津島プリント社'},
     {id:'COMP007',name:'北上プリント'}
   ];
+
   var sel = document.getElementById('fin-company');
-  if(sel && !sel.options.length){
-    sel.innerHTML = '<option value="all">全社合算</option>' +
-      companies.map(function(c){ return '<option value="'+c.id+'">'+c.name+'</option>'; }).join('');
+  if(sel){
+    if(isAdmin){
+      // 管理者: 全社 + 個別社が選択可能
+      sel.innerHTML = '<option value="all">全社合算 (管理者)</option>' +
+        companies.map(function(c){ return '<option value="'+c.id+'">'+c.name+'</option>'; }).join('');
+    } else {
+      // 一般ユーザー: 自分の会社のみ
+      var myComp = companies.find(function(c){ return c.id === myCompanyId; }) ||
+                   { id: myCompanyId, name: myCompanyName || '自社' };
+      sel.innerHTML = '<option value="' + myComp.id + '">' + myComp.name + '</option>';
+      sel.disabled = true; // 切替不可
+    }
   }
 
-  switchFinSection('overview');
+  // セクションセレクタからグループ比較を管理者以外で非表示
+  var sectionSel = document.getElementById('fin-section');
+  if(sectionSel){
+    var compareOpt = sectionSel.querySelector('option[value="compare"]');
+    if(compareOpt){
+      if(!isAdmin){
+        compareOpt.remove();
+        // 既に compare が選ばれていたら overview に戻す
+        if(sectionSel.value === 'compare') sectionSel.value = 'overview';
+      }
+    }
+  }
+
+  switchFinSection(sectionSel?.value || 'overview');
+}
+
+// アクセス可能な会社 ID を返す (admin は all、他は自社のみ)
+function _accessibleCompanyId_(){
+  var isAdmin = (currentAuth && currentAuth.role === 'admin');
+  if(isAdmin){
+    var sel = document.getElementById('fin-company');
+    return sel?.value || 'all';
+  }
+  return currentAuth?.companyId || '';
 }
 
 function switchFinSection(section){
@@ -8745,7 +8782,11 @@ function switchFinSection(section){
 }
 
 function _getFinStatements_(companyId){
+  // セキュリティ: 一般ユーザーは自社のみ
+  var isAdmin = (currentAuth && currentAuth.role === 'admin');
+  var allowedId = isAdmin ? companyId : (currentAuth?.companyId || '__none__');
   return (DB.financialStatements || []).filter(function(s){
+    if(!isAdmin) return s.companyId === allowedId;  // 一般: 強制自社のみ
     return companyId === 'all' || s.companyId === companyId;
   }).sort(function(a, b){ return (a.fiscalYear || 0) - (b.fiscalYear || 0); });
 }
@@ -8998,12 +9039,15 @@ function _destroyFinChart_(key){
 
 // 決算データ追加 (シンプルな prompt 形式 — 後でモーダル化推奨)
 function addFinancialStatement(){
-  var compId = document.getElementById('fin-company')?.value;
+  var isAdmin = (currentAuth && currentAuth.role === 'admin');
+  var compId = isAdmin ? document.getElementById('fin-company')?.value : currentAuth?.companyId;
   if(!compId || compId === 'all'){
-    alert('まず会社を選択してください (左上のセレクト)');
+    alert(isAdmin ? 'まず会社を選択してください' : 'ログイン情報から会社を取得できません');
     return;
   }
-  var compName = document.getElementById('fin-company')?.selectedOptions[0]?.textContent || '';
+  var compName = isAdmin
+    ? (document.getElementById('fin-company')?.selectedOptions[0]?.textContent || '')
+    : (currentAuth?.companyName || '');
 
   var fiscalYear = parseInt(prompt('決算期 (例: 50):'), 10);
   if(!fiscalYear) return;
@@ -9047,12 +9091,15 @@ function addFinancialStatement(){
 
 // 文書追加 (Drive URL 貼り付け方式)
 function addFinancialDocument(){
-  var compId = document.getElementById('fin-company')?.value;
+  var isAdmin = (currentAuth && currentAuth.role === 'admin');
+  var compId = isAdmin ? document.getElementById('fin-company')?.value : currentAuth?.companyId;
   if(!compId || compId === 'all'){
-    alert('まず会社を選択してください');
+    alert(isAdmin ? 'まず会社を選択してください' : 'ログイン情報から会社を取得できません');
     return;
   }
-  var compName = document.getElementById('fin-company')?.selectedOptions[0]?.textContent || '';
+  var compName = isAdmin
+    ? (document.getElementById('fin-company')?.selectedOptions[0]?.textContent || '')
+    : (currentAuth?.companyName || '');
 
   var driveUrl = prompt('Google Drive の共有 URL を貼り付け:\n(リンクを知っている全員に閲覧権限で共有しておいてください)');
   if(!driveUrl) return;
@@ -9092,12 +9139,15 @@ function addFinancialDocument(){
 }
 
 function renderFinanceDocs(){
-  var compId = document.getElementById('fin-company')?.value || 'all';
+  var isAdmin = (currentAuth && currentAuth.role === 'admin');
+  var compId = isAdmin ? (document.getElementById('fin-company')?.value || 'all')
+                       : (currentAuth?.companyId || '__none__');
   var q = (document.getElementById('fin-docs-search')?.value || '').toLowerCase();
   var typeF = document.getElementById('fin-docs-type-f')?.value || '';
 
   var docs = (DB.financialDocuments || []).filter(function(d){
-    if(compId !== 'all' && d.companyId !== compId) return false;
+    if(!isAdmin && d.companyId !== compId) return false;        // 一般: 強制自社のみ
+    if(isAdmin && compId !== 'all' && d.companyId !== compId) return false;
     if(typeF && d.docType !== typeF) return false;
     if(q){
       var s = (d.title + ' ' + (d.notes||'') + ' ' + (d.companyName||'')).toLowerCase();
@@ -9217,9 +9267,12 @@ async function executeFinancialAIIngest(){
 }
 
 function applyFinancialAIIngest(extracted){
-  var compId = document.getElementById('fin-company')?.value;
+  var isAdmin = (currentAuth && currentAuth.role === 'admin');
+  var compId = isAdmin ? document.getElementById('fin-company')?.value : currentAuth?.companyId;
   if(!compId || compId === 'all'){ alert('会社を選択してから適用してください'); return; }
-  var compName = document.getElementById('fin-company')?.selectedOptions[0]?.textContent || '';
+  var compName = isAdmin
+    ? (document.getElementById('fin-company')?.selectedOptions[0]?.textContent || '')
+    : (currentAuth?.companyName || '');
 
   var data = Object.assign({
     id: 'FS-' + Date.now(),
