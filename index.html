@@ -466,6 +466,7 @@ window.addEventListener('load', function(){
     <button class="tb-btn" data-page="realtime" onclick="swPage('realtime',this)" draggable="true">🎯 リアルタイム</button>
     <button class="tb-btn" data-page="dashboard" onclick="swPage('dashboard',this)" draggable="true">📈 ダッシュボード</button>
     <button class="tb-btn" data-page="finance" onclick="swPage('finance',this)" draggable="true">📊 決算・文書</button>
+    <button class="tb-btn" data-page="estimates" onclick="swPage('estimates',this)" draggable="true">📋 見積管理</button>
     <button class="tb-btn" data-page="project" onclick="swPage('project',this)" draggable="true">📁 案件管理</button>
     <button class="tb-btn" data-page="master" onclick="swPage('master',this)" draggable="true">📚 マスター</button>
     <button class="tb-btn" data-page="history" onclick="swPage('history',this)" draggable="true">📜 実績一覧</button>
@@ -691,6 +692,29 @@ window.addEventListener('load', function(){
     </div>
   </div>
 </div>
+<!-- 見積管理ページ (未受注の見積一覧) -->
+<div class="page" id="page-estimates">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <input id="est-q" placeholder="得意先・品名で検索…" style="width:220px;font-size:12px;padding:4px 8px" oninput="renderEstimates()">
+      <select id="est-status-f" style="font-size:12px;padding:4px 8px" onchange="renderEstimates()">
+        <option value="">すべて</option>
+        <option value="見積中">見積中</option>
+        <option value="提出済">提出済</option>
+        <option value="保留">保留</option>
+      </select>
+      <select id="est-source-f" style="font-size:12px;padding:4px 8px" onchange="renderEstimates()">
+        <option value="">すべての発生源</option>
+        <option value="ai">🤖 AI 自動抽出</option>
+        <option value="manual">手動</option>
+      </select>
+      <button class="btn" onclick="renderEstimates()">🔄 更新</button>
+    </div>
+    <div style="font-size:11px;color:#666">案件化されていない見積のみ表示</div>
+  </div>
+  <div id="estimates-list-container" style="background:#fff;border-radius:8px;border:1px solid #e5e7eb;overflow:hidden"></div>
+</div>
+
 <!-- 案件管理ページ -->
 <div class="page" id="page-project">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:8px">
@@ -2943,20 +2967,44 @@ async function loadFromCloud() {
     localStorage.setItem(DBKEY, JSON.stringify(DB));
   } catch(e) {}
 
-  // 🤖 自動見積登録: backend が claudeExtract した問い合わせを見積として登録
+  // 🤖 自動抽出された問い合わせの件数をユーザーに通知 (Approach A: ワンクリックで見積化)
   try {
-    await _autoRegisterExtractedEstimates_();
+    _notifyAutoExtractedInquiries_();
   } catch(e) {
-    console.warn('Auto-register estimates failed:', e);
+    console.warn('Notify failed:', e);
   }
 
   return true;
 }
 
-/**
- * Backend で 自動抽出された 見積依頼 (extracted_data 持ち) を 見積一覧に自動登録。
- * 同じ問い合わせから2回登録しないよう linked_quote_id で重複防止。
- */
+// AI 抽出済かつ見積未作成の問い合わせを検出してトースト通知
+function _notifyAutoExtractedInquiries_(){
+  if(!Array.isArray(DB.inquiries)) return;
+  var pending = DB.inquiries.filter(function(inq){
+    return inq.extracted_data && !inq.linked_quote_id;
+  });
+  if(!pending.length) return;
+  console.log('🤖 AI 抽出済の見積依頼:', pending.length, '件');
+  _showAutoEstimateNotice_(pending.length);
+}
+
+function _showAutoEstimateNotice_(count){
+  // 既存のトーストがあれば消す
+  document.getElementById('_ai_extract_toast_')?.remove();
+  var t = document.createElement('div');
+  t.id = '_ai_extract_toast_';
+  t.style.cssText = 'position:fixed;top:20px;right:20px;background:#7c3aed;color:#fff;padding:14px 18px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);z-index:99999;font-size:13px;font-weight:600;cursor:pointer;max-width:340px;line-height:1.5';
+  t.innerHTML = '🤖 ' + count + '件の見積依頼を AI が抽出しました<br><span style="font-size:11px;opacity:0.85;font-weight:400">クリックして問い合わせタブで確認 → ワンクリックで見積化</span>';
+  t.onclick = function(){
+    var btn = document.querySelector('.tb-btn[data-page="inquiry"]');
+    if(btn && typeof swPage === 'function') swPage('inquiry', btn);
+    t.remove();
+  };
+  document.body.appendChild(t);
+  setTimeout(function(){ try { t.remove(); } catch(e){} }, 12000);
+}
+
+// (旧) 完全自動登録は廃止。代替として Approach A で問い合わせカードからワンクリックで作成する。
 async function _autoRegisterExtractedEstimates_(){
   if (!Array.isArray(DB.inquiries) || !DB.inquiries.length) return;
   if (!DB.estimates) DB.estimates = [];
@@ -3377,6 +3425,7 @@ function swPage(id,btn){
   if(id==='master')renderMaster(curMaster);
   if(id==='history')renderHistory();
   if(id==='project')renderProjects();
+  if(id==='estimates')renderEstimates();
   if(id==='dashboard')renderDashboard();
   if(id==='finance')renderFinancePage();
   if(id==='realtime')renderRealtimeView();
@@ -9577,6 +9626,242 @@ function applyFinancialAIIngest(extracted){
 // ── 🤖 Tokiwa Hub Assistant (フローティングチャットボット) ──
 
 var CHATBOT_HISTORY_KEY = 'tokiwa_hub_chat_history';
+// ─────────────────────────────────────────────────────
+// 📋 見積管理 (見積一覧 - 案件化されていないもの)
+// ─────────────────────────────────────────────────────
+function renderEstimates(){
+  var container = document.getElementById('estimates-list-container');
+  if(!container) return;
+  if(!Array.isArray(DB.estimates)) DB.estimates = [];
+
+  var q = (document.getElementById('est-q')?.value || '').trim().toLowerCase();
+  var statusFilter = document.getElementById('est-status-f')?.value || '';
+  var sourceFilter = document.getElementById('est-source-f')?.value || '';
+
+  // 案件化されたものは除外
+  var rows = DB.estimates.filter(function(e){
+    if(e.linkedProjectId) return false;
+    // フィルタ
+    if(q){
+      var hay = ((e.cust||'') + ' ' + (e.item||'') + ' ' + (e.spec||'') + ' ' + (e.id||'')).toLowerCase();
+      if(hay.indexOf(q) < 0) return false;
+    }
+    if(statusFilter && e.status !== statusFilter) return false;
+    if(sourceFilter === 'ai' && !e.aiAutoCreated) return false;
+    if(sourceFilter === 'manual' && e.aiAutoCreated) return false;
+    return true;
+  });
+
+  rows.sort(function(a,b){ return new Date(b.createdAt||0) - new Date(a.createdAt||0); });
+
+  if(!rows.length){
+    container.innerHTML =
+      '<div style="padding:60px 20px;text-align:center;color:#888">' +
+      '<div style="font-size:48px;margin-bottom:8px">📋</div>' +
+      '<div style="font-weight:600;margin-bottom:4px">未受注の見積はありません</div>' +
+      '<div style="font-size:12px">問い合わせから AI が自動抽出した見積、またはチャットボットで作成した見積がここに表示されます</div>' +
+      '</div>';
+    return;
+  }
+
+  var html =
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:12px;color:#555">' +
+    '<span><strong>' + rows.length + '件</strong> の見積（未受注）</span>' +
+    '<span>🤖 AI抽出: ' + rows.filter(function(r){return r.aiAutoCreated}).length + '件</span>' +
+    '</div>';
+  html += '<table style="width:100%;font-size:13px;border-collapse:collapse">';
+  html += '<thead><tr style="background:#f3f4f6;text-align:left">' +
+    '<th style="padding:8px 10px">見積ID</th>' +
+    '<th style="padding:8px 10px">作成日</th>' +
+    '<th style="padding:8px 10px">得意先</th>' +
+    '<th style="padding:8px 10px">品名</th>' +
+    '<th style="padding:8px 10px">数量</th>' +
+    '<th style="padding:8px 10px">納期</th>' +
+    '<th style="padding:8px 10px;text-align:right">税抜金額</th>' +
+    '<th style="padding:8px 10px">発生源</th>' +
+    '<th style="padding:8px 10px">ステータス</th>' +
+    '<th style="padding:8px 10px;text-align:center">操作</th>' +
+    '</tr></thead><tbody>';
+
+  rows.forEach(function(e){
+    var dateStr = e.createdAt ? new Date(e.createdAt).toLocaleDateString('ja-JP') : '-';
+    var qty = (e.qty || 0) + (e.unit || '部');
+    var price = e.exTax ? '¥' + e.exTax.toLocaleString() : '-';
+    var srcBadge = e.aiAutoCreated
+      ? '<span style="background:#7c3aed;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px">🤖 AI</span>'
+      : (e.aiCreated ? '<span style="background:#06b6d4;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px">💬 チャット</span>' : '<span style="color:#888;font-size:11px">手動</span>');
+    var statusColor = e.status === '提出済' ? '#16a34a' : (e.status === '保留' ? '#f59e0b' : '#6b7280');
+
+    html += '<tr style="border-bottom:1px solid #f3f4f6">' +
+      '<td style="padding:8px 10px;font-family:monospace;font-size:12px;color:#666">' + (e.id||'') + '</td>' +
+      '<td style="padding:8px 10px;font-size:12px;color:#666">' + dateStr + '</td>' +
+      '<td style="padding:8px 10px;font-weight:600">' + _escDiff(e.cust||'') + '</td>' +
+      '<td style="padding:8px 10px">' + _escDiff(e.item||'') +
+        (e.spec ? '<div style="font-size:11px;color:#888;margin-top:2px">' + _escDiff(e.spec) + '</div>' : '') +
+      '</td>' +
+      '<td style="padding:8px 10px">' + qty + '</td>' +
+      '<td style="padding:8px 10px;font-size:12px">' + (e.dueDate || '-') + '</td>' +
+      '<td style="padding:8px 10px;text-align:right;font-family:monospace">' + price + '</td>' +
+      '<td style="padding:8px 10px">' + srcBadge + '</td>' +
+      '<td style="padding:8px 10px"><span style="color:' + statusColor + ';font-weight:600">' + (e.status||'見積中') + '</span></td>' +
+      '<td style="padding:8px 10px;text-align:center;white-space:nowrap">' +
+        '<button class="btn" style="padding:4px 8px;font-size:11px" onclick="editEstimateInTab(\'' + e.id + '\')" title="見積タブで編集">📝 編集</button> ' +
+        '<button class="btn" style="padding:4px 8px;font-size:11px;background:#16a34a;color:#fff" onclick="confirmEstimateAsProject(\'' + e.id + '\')" title="受注確定して案件化">✅ 受注確定</button> ' +
+        '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fee;color:#dc2626" onclick="deleteEstimate(\'' + e.id + '\')" title="削除">🗑️</button>' +
+      '</td>' +
+      '</tr>';
+
+    // メモ表示 (折りたたみ)
+    if(e.memo){
+      html += '<tr style="background:#fafafa"><td colspan="10" style="padding:6px 10px 10px 10px;font-size:11px;color:#666">📝 ' + _escDiff(e.memo).replace(/\n/g, '<br>') + '</td></tr>';
+    }
+  });
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function editEstimateInTab(estId){
+  var est = (DB.estimates || []).find(function(e){ return e.id === estId; });
+  if(!est){ alert('見積が見つかりません'); return; }
+  // 見積タブに切り替え
+  var btn = document.querySelector('.tb-btn[data-page="est"]');
+  if(btn && typeof swPage === 'function') swPage('est', btn);
+  // 既存の applyIngestToEstimate でフォームに値をセット
+  if(typeof applyIngestToEstimate === 'function'){
+    applyIngestToEstimate({
+      cust: est.cust, item: est.item, spec: est.spec,
+      qty: est.qty, unit: est.unit, dueDate: est.dueDate,
+      memo: est.memo, exTax: est.exTax
+    });
+    // 編集中の見積 ID を作成タブに紐付け (確定時に元の est を更新できるように)
+    setTimeout(function(){
+      var activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+      if(activeTabId && typeof ts === 'function'){
+        var s = ts(activeTabId);
+        if(s) s._editingEstId = est.id;
+      }
+    }, 200);
+  } else {
+    alert('見積タブの初期化関数が見つかりません');
+  }
+}
+
+function confirmEstimateAsProject(estId){
+  var est = (DB.estimates || []).find(function(e){ return e.id === estId; });
+  if(!est){ alert('見積が見つかりません'); return; }
+  if(!confirm('「' + (est.cust||'?') + ' / ' + (est.item||'?') + '」を案件として受注確定しますか?\n\n見積一覧から案件管理に移動します。')) return;
+
+  if(!DB.projects) DB.projects = [];
+  var proj = {
+    id: (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now()),
+    companyId: currentAuth?.companyId || 'COMP001',
+    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+    orderDate: new Date().toISOString().slice(0,10),
+    dueDate: est.dueDate || '',
+    cust: est.cust || '',
+    item: est.item || '',
+    spec: est.spec || '',
+    qty: parseInt(est.qty) || 0,
+    unit: est.unit || '部',
+    exTax: parseInt(est.exTax) || 0,
+    grand: 0,
+    status: '制作中',
+    assignee: '',
+    memo: est.memo || '',
+    steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
+    stepDates: {},
+    createdAt: new Date().toISOString(),
+    fromEstimateId: est.id
+  };
+  DB.projects.push(proj);
+
+  // 見積に案件IDを紐付け (見積一覧から消える)
+  est.linkedProjectId = proj.id;
+  est.status = '受注確定';
+
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+
+  renderEstimates();
+  if(typeof renderProjects === 'function') try { renderProjects(); } catch(e){}
+
+  alert('✅ 案件 ' + proj.id + ' として登録しました');
+}
+
+function deleteEstimate(estId){
+  var est = (DB.estimates || []).find(function(e){ return e.id === estId; });
+  if(!est) return;
+  if(!confirm('「' + (est.cust||'?') + ' / ' + (est.item||'?') + '」の見積を削除しますか?')) return;
+  DB.estimates = (DB.estimates || []).filter(function(e){ return e.id !== estId; });
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  renderEstimates();
+}
+
+// 問い合わせから見積を作成 (Approach A: ワンクリックで見積登録)
+async function createEstimateFromInquiry(inqId){
+  var inq = (DB.inquiries || []).find(function(i){ return i.id === inqId; });
+  if(!inq){ alert('問い合わせが見つかりません'); return; }
+  var ex = inq.extracted_data;
+  if(!ex){ alert('AI 抽出データがまだありません'); return; }
+
+  if(!DB.estimates) DB.estimates = [];
+  // 既に作成済みかチェック
+  var existing = DB.estimates.find(function(e){ return e.fromInquiryId === inq.id; });
+  if(existing){
+    alert('この問い合わせから見積は既に作成されています: ' + existing.id);
+    // 見積管理タブに移動
+    var btn = document.querySelector('.tb-btn[data-page="estimates"]');
+    if(btn && typeof swPage === 'function') swPage('estimates', btn);
+    return;
+  }
+
+  var newEst = {
+    id: 'EST' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+    companyId: currentAuth?.companyId || 'COMP001',
+    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+    createdAt: new Date().toISOString(),
+    cust: ex.cust || '',
+    item: ex.item || '',
+    spec: ex.spec || '',
+    qty: parseInt(ex.qty) || 0,
+    unit: ex.unit || '部',
+    dueDate: ex.dueDate || '',
+    memo: (ex.memo || '') + (ex.confidence ? '\n[AI confidence: ' + ex.confidence + ']' : ''),
+    exTax: 0,
+    status: '見積中',
+    aiAutoCreated: true,
+    fromInquiryId: inq.id,
+    fromSubject: inq.subject || ''
+  };
+  DB.estimates.push(newEst);
+  inq.linked_quote_id = newEst.id;
+  if(typeof saveDB === 'function') saveDB();
+
+  // backend に紐付け記録
+  try {
+    if(typeof callCloudAPI === 'function') await callCloudAPI('linkCommunication', { id: inq.id, links: { quote_id: newEst.id } });
+  } catch(e){ console.warn('linkCommunication failed', e); }
+
+  if(typeof renderInquiryList === 'function') renderInquiryList();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+
+  // 見積管理タブに移動
+  var btn = document.querySelector('.tb-btn[data-page="estimates"]');
+  if(btn && typeof swPage === 'function') swPage('estimates', btn);
+  alert('✅ 見積 ' + newEst.id + ' を登録しました\n見積管理タブで確認してください');
+}
+
+// 見積管理タブに移動
+function jumpToEstimate(estId){
+  var btn = document.querySelector('.tb-btn[data-page="estimates"]');
+  if(btn && typeof swPage === 'function') swPage('estimates', btn);
+  // フィルタ等で該当行をハイライトする処理は省略 (将来実装可)
+}
+
+// ─────────────────────────────────────────────────────
+
 var _chatbotHistory = [];
 
 // ── Chatbot Tool Use 定義 ──────────────────────────────
@@ -16160,6 +16445,19 @@ function renderInquiryList() {
       ? `<a href="javascript:jumpToProject('${inq.linked_project_id}')" onclick="event.stopPropagation()" style="font-size:10px;color:#1e40af">📋 ${inq.linked_project_id}</a>`
       : '';
 
+    // 紐付く見積 (linked_quote_id) または見積作成ボタン (extracted_data あり、未紐付け)
+    let estimateUI = '';
+    if (inq.linked_quote_id) {
+      estimateUI = `<a href="javascript:jumpToEstimate('${inq.linked_quote_id}')" onclick="event.stopPropagation()" style="font-size:10px;color:#7c3aed;font-weight:600" title="見積管理を開く">📋 ${inq.linked_quote_id}</a>`;
+    } else if (inq.extracted_data) {
+      estimateUI = `<button onclick="event.stopPropagation();createEstimateFromInquiry('${inq.id}')" style="font-size:10px;background:#7c3aed;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;font-weight:600" title="AI 抽出データから見積を作成">📝 見積を作成</button>`;
+    }
+
+    // 自動抽出バッジ (extracted_data がある場合)
+    const aiExtractedBadge = inq.extracted_data
+      ? `<span style="background:#7c3aed;color:#fff;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700;white-space:nowrap" title="AI が見積依頼として抽出済み">🤖 AI抽出済</span>`
+      : '';
+
     // チャネル会社情報 (社内のどの窓口に届いたか)
     const channel = inq.channel_company ? `<span style="font-size:10px;color:#888">via ${inq.channel_company}</span>` : '';
 
@@ -16174,6 +16472,7 @@ function renderInquiryList() {
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           ${sourceBadge}
           ${kindBadge}
+          ${aiExtractedBadge}
           ${inq.category ? `<span class="inq-cat">${inq.category}</span>` : ''}
           <span class="inq-prio ${inq.priority||'normal'}">${prioLabels[inq.priority]||'通常'}</span>
           <span class="inq-status ${inq.status||'new'}">${statusLabels[inq.status]||'新規'}</span>
@@ -16183,6 +16482,7 @@ function renderInquiryList() {
       </div>
       <div style="font-weight:700;font-size:13px;margin-bottom:2px">${inq.subject||'（件名なし）'}</div>
       ${showPreview}
+      ${inq.extracted_data && !inq.linked_quote_id ? `<div style="margin-top:6px;padding:6px 8px;background:#faf5ff;border:1px dashed #c4b5fd;border-radius:6px;font-size:11px;color:#5b21b6">🤖 抽出: ${_escDiff((inq.extracted_data.cust||'?') + ' / ' + (inq.extracted_data.item||'?') + ' ' + (inq.extracted_data.qty||'')+(inq.extracted_data.unit||''))}</div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;flex-wrap:wrap;gap:6px">
         <div style="font-size:12px;color:#555">
           ${inq.custName || inq.from_name || ''}
@@ -16191,6 +16491,7 @@ function renderInquiryList() {
         <div style="display:flex;gap:8px;font-size:11px;color:#888;align-items:center;flex-wrap:wrap">
           ${channel}
           ${attBadge}
+          ${estimateUI}
           ${projLink}
           ${inq.assignee ? '<span>👤 '+inq.assignee+'</span>' : ''}
           ${replyCount > 0 ? '<span>💬 '+replyCount+'</span>' : ''}
