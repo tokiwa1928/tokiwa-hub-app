@@ -13658,6 +13658,289 @@ function _showEstimateSummaryModal_(p){
 }
 
 // ─────────────────────────────────────────────────────
+// 📋 案件仕様詳細ビュー (見積スナップショットから金額抜きで表示)
+// ─────────────────────────────────────────────────────
+// 用紙・印刷・加工・製本などのテーブル名と日本語ラベル
+var SPEC_TABLE_LABELS = {
+  ep: { label: '🟦 用紙', priceCols: ['unitp','price','total','金額','単価'] },
+  epr: { label: '🖨 印刷', priceCols: ['unitp','price','total','金額','単価'] },
+  epo: { label: '🎨 表面加工', priceCols: ['unitp','price','total','金額','単価'] },
+  pl: { label: '📐 製版', priceCols: ['unitp','price','total','金額','単価'] },
+  dt: { label: '💻 データ作成', priceCols: ['unitp','price','total','金額','単価'] },
+  bd: { label: '📚 製本', priceCols: ['unitp','price','total','金額','単価'] },
+  fp: { label: '📄 用紙(製本)', priceCols: ['unitp','price','total','金額','単価'] },
+  fmpr: { label: '🖨 印刷(製本)', priceCols: ['unitp','price','total','金額','単価'] },
+  fpo: { label: '🎨 表面加工(製本)', priceCols: ['unitp','price','total','金額','単価'] },
+  bp: { label: '📑 用紙(冊子)', priceCols: ['unitp','price','total','金額','単価'] },
+  bipr: { label: '🖨 印刷(冊子)', priceCols: ['unitp','price','total','金額','単価'] },
+  bpo: { label: '🎨 表面加工(冊子)', priceCols: ['unitp','price','total','金額','単価'] }
+};
+
+function showProjectSpecDetail(projectId){
+  var p = (DB.projects || []).find(function(x){ return x.id === projectId; });
+  if(!p){ alert('案件が見つかりません'); return; }
+
+  var snap = p._estSnapshot;
+  var hasSnap = !!(snap && snap._formSnap);
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+
+  var grp = (typeof _detectGroupCompany_ === 'function') ? _detectGroupCompany_(p) : null;
+  var chain = (typeof _renderHandoffChain_ === 'function') ? _renderHandoffChain_(p) : '';
+
+  // 基本情報セクション
+  var basicHtml = '<div style="background:#f9fafb;padding:14px;border-radius:8px;margin-bottom:14px">' +
+    '<div style="display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:13px">' +
+    '<div style="font-weight:700;color:#666">案件番号</div><div style="font-family:monospace">' + (p.id||'') + '</div>' +
+    '<div style="font-weight:700;color:#666">受注日</div><div>' + (p.orderDate||'-') + '</div>' +
+    '<div style="font-weight:700;color:#666">納期</div><div style="font-weight:700;color:#dc2626">' + (p.dueDate||'-') + '</div>' +
+    '<div style="font-weight:700;color:#666">得意先</div><div style="font-weight:700">' + _escDiff(p.cust||'') + '</div>' +
+    (p.end_user ? '<div style="font-weight:700;color:#666">エンドユーザー</div><div>👤 ' + _escDiff(p.end_user) + '</div>' : '') +
+    '<div style="font-weight:700;color:#666">品名</div><div style="font-weight:700">' + _escDiff(p.item||'') + '</div>' +
+    '<div style="font-weight:700;color:#666">数量</div><div>' + (p.qty||0).toLocaleString() + ' ' + (p.unit||'部') + '</div>' +
+    '<div style="font-weight:700;color:#666">担当者</div><div>' + _escDiff(p.assignee||'-') + '</div>' +
+    '<div style="font-weight:700;color:#666">ステータス</div><div>' + _escDiff(p.status||'-') + '</div>' +
+    '</div>' +
+    (chain ? '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb">' + chain + '</div>' : '') +
+    '</div>';
+
+  // 仕様テキスト
+  var specTextHtml = p.spec ? '<div style="background:#fff;padding:14px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:14px"><div style="font-weight:700;font-size:12px;color:#666;margin-bottom:6px">📐 仕様 (テキスト)</div><div style="white-space:pre-wrap;font-size:13px;line-height:1.7">' + _escDiff(p.spec) + '</div></div>' : '';
+
+  // メモ
+  var memoHtml = p.memo ? '<div style="background:#fffbeb;padding:14px;border-left:3px solid #f59e0b;border-radius:8px;margin-bottom:14px"><div style="font-weight:700;font-size:12px;color:#78350f;margin-bottom:6px">📝 備考</div><div style="white-space:pre-wrap;font-size:13px;line-height:1.7">' + _escDiff(p.memo) + '</div></div>' : '';
+
+  // 見積スナップショットからの仕様テーブル (金額カラム除外)
+  var detailHtml = '';
+  if(hasSnap && snap._formSnap){
+    var tablesHtml = [];
+    Object.keys(SPEC_TABLE_LABELS).forEach(function(tbl){
+      var data = snap._formSnap[tbl];
+      if(!data || !data.length) return;
+      var meta = SPEC_TABLE_LABELS[tbl];
+      // 1行目から列キーを取得
+      var keys = Object.keys(data[0] || {});
+      var displayKeys = keys.filter(function(k){
+        if(k.indexOf('_') === 0) return false; // 内部用
+        if(meta.priceCols.indexOf(k) >= 0) return false; // 金額系除外
+        if(k === 'cr' || k === 'rate' || k === '率') return false; // 利益率系
+        return true;
+      });
+      if(!displayKeys.length) return;
+
+      var rowsHtml = data.map(function(row){
+        return '<tr>' + displayKeys.map(function(k){
+          var v = row[k] != null ? row[k] : '';
+          return '<td style="padding:4px 8px;border:1px solid #ddd;font-size:11px">' + _escDiff(String(v)) + '</td>';
+        }).join('') + '</tr>';
+      }).join('');
+
+      tablesHtml.push(
+        '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:13px;color:#1a1a1a;margin-bottom:6px">' + meta.label + '</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
+        '<thead><tr style="background:#f3f4f6">' + displayKeys.map(function(k){return '<th style="padding:4px 8px;border:1px solid #ddd;text-align:left;font-size:10px">' + k + '</th>';}).join('') + '</tr></thead>' +
+        '<tbody>' + rowsHtml + '</tbody></table></div>'
+      );
+    });
+
+    if(tablesHtml.length){
+      detailHtml = '<div style="background:#fff;padding:14px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:14px">' +
+        '<div style="font-weight:700;font-size:13px;color:#059669;margin-bottom:10px">📋 詳細仕様 (金額非表示)</div>' +
+        tablesHtml.join('') + '</div>';
+    }
+  } else {
+    detailHtml = '<div style="background:#fef3c7;padding:14px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#78350f">' +
+      '⚠️ この案件には詳細スナップショットが保存されていません。<br>受注確定時 (見積作成タブから) に自動的に保存されます。既存案件の場合、仕様は上記テキストをご覧ください。' +
+      '</div>';
+  }
+
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:900px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#059669;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong style="font-size:14px">📋 案件仕様詳細</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">' + (p.id||'') + ' · 金額情報は表示されていません</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        basicHtml +
+        specTextHtml +
+        memoHtml +
+        detailHtml +
+      '</div>' +
+      '<div style="padding:10px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px">' +
+        '<button class="btn" onclick="window.print()">🖨 印刷</button>' +
+        '<button class="btn" style="background:#7c2d12;color:#fff;border-color:#7c2d12" onclick="this.closest(\'.proof-modal\').remove();showOutsourceSpecSheet(\'' + projectId + '\')">🤝 外注用書き出しへ</button>' +
+        '<button class="btn btn-p" onclick="this.closest(\'.proof-modal\').remove()">閉じる</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+// ─────────────────────────────────────────────────────
+// 🤝 部分外注用書き出し (外注先に渡す用 - 基本情報のみ)
+// ─────────────────────────────────────────────────────
+function showOutsourceSpecSheet(projectId){
+  var p = (DB.projects || []).find(function(x){ return x.id === projectId; });
+  if(!p){ alert('案件が見つかりません'); return; }
+
+  var snap = p._estSnapshot;
+  var hasSnap = !!(snap && snap._formSnap);
+
+  // 外注対象セクションのチェックボックス
+  var sectionsAvailable = [];
+  if(hasSnap && snap._formSnap){
+    Object.keys(SPEC_TABLE_LABELS).forEach(function(tbl){
+      if(snap._formSnap[tbl] && snap._formSnap[tbl].length){
+        sectionsAvailable.push({ key: tbl, label: SPEC_TABLE_LABELS[tbl].label });
+      }
+    });
+  }
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:780px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#7c2d12;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong style="font-size:14px">🤝 外注用 仕様書 書き出し</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">外注先に渡す書類を生成 (得意先名・金額は伏せる)</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        '<div style="background:#fef3c7;padding:10px 12px;border-radius:6px;font-size:12px;color:#78350f;margin-bottom:14px;line-height:1.5">' +
+          '🔒 <strong>外注用に最適化:</strong> 得意先名・エンドユーザー名・金額情報を伏せて、必要最小限の仕様書を生成します。' +
+        '</div>' +
+        // 外注先の入力
+        '<div style="display:grid;grid-template-columns:120px 1fr;gap:10px 12px;margin-bottom:14px;font-size:13px">' +
+          '<label style="font-weight:700;align-self:center">外注先名</label>' +
+          '<input id="out-spec-vendor" placeholder="例: 北上プリント / 大和製本" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px">' +
+          '<label style="font-weight:700;align-self:center">外注内容</label>' +
+          '<input id="out-spec-scope" placeholder="例: 中綴じ製本のみ / 用紙支給で印刷のみ" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px">' +
+          '<label style="font-weight:700;align-self:center">希望納期</label>' +
+          '<input id="out-spec-due" type="date" value="' + (p.dueDate || '') + '" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px">' +
+        '</div>' +
+        // 含めるセクション選択
+        (sectionsAvailable.length ?
+          '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:12px;margin-bottom:6px">含める仕様セクション (チェック):</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+          sectionsAvailable.map(function(s){
+            return '<label style="display:flex;align-items:center;gap:4px;background:#f9fafb;padding:6px 10px;border-radius:4px;cursor:pointer;font-size:11px"><input type="checkbox" class="out-spec-section" value="' + s.key + '" checked> ' + s.label + '</label>';
+          }).join('') +
+          '</div></div>'
+          : ''
+        ) +
+        // 注意書き
+        '<div style="display:grid;grid-template-columns:120px 1fr;gap:10px 12px;font-size:13px">' +
+          '<label style="font-weight:700;align-self:start">特記事項</label>' +
+          '<textarea id="out-spec-note" rows="3" placeholder="外注先への指示・注意点等" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:inherit"></textarea>' +
+        '</div>' +
+        '<div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#7c2d12;border-color:#7c2d12" onclick="_generateOutsourceSheet_(\'' + projectId + '\')">📄 書き出し (印刷プレビュー)</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function _generateOutsourceSheet_(projectId){
+  var p = (DB.projects || []).find(function(x){ return x.id === projectId; });
+  if(!p) return;
+
+  var vendor = document.getElementById('out-spec-vendor')?.value?.trim() || '外注先 様';
+  var scope = document.getElementById('out-spec-scope')?.value?.trim() || '';
+  var due = document.getElementById('out-spec-due')?.value || p.dueDate || '';
+  var note = document.getElementById('out-spec-note')?.value?.trim() || '';
+  var selectedSections = Array.from(document.querySelectorAll('.out-spec-section:checked')).map(function(cb){ return cb.value; });
+
+  var snap = p._estSnapshot;
+  var conf = DB.conf || {};
+  var ourCompany = currentAuth?.companyName || conf.name || 'トキワ印刷株式会社';
+
+  var w = window.open('', '_blank', 'width=900,height=1100');
+  if(!w){ alert('ポップアップがブロックされました。許可してください'); return; }
+
+  var sectionsHtml = '';
+  if(snap && snap._formSnap && selectedSections.length){
+    selectedSections.forEach(function(tbl){
+      var data = snap._formSnap[tbl];
+      if(!data || !data.length) return;
+      var meta = SPEC_TABLE_LABELS[tbl];
+      var keys = Object.keys(data[0] || {}).filter(function(k){
+        if(k.indexOf('_') === 0) return false;
+        if(meta.priceCols.indexOf(k) >= 0) return false;
+        if(k === 'cr' || k === 'rate') return false;
+        return true;
+      });
+      if(!keys.length) return;
+      sectionsHtml += '<div style="margin-bottom:6mm"><h3 style="font-size:11pt;margin:4mm 0 2mm;border-bottom:1pt solid #333;padding-bottom:2mm">' + meta.label + '</h3>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:9.5pt">' +
+        '<thead><tr style="background:#f4f4f4">' + keys.map(function(k){return '<th style="padding:1.5mm 3mm;border:.4pt solid #888;text-align:left;font-size:9pt">' + k + '</th>';}).join('') + '</tr></thead>' +
+        '<tbody>' + data.map(function(row){return '<tr>' + keys.map(function(k){return '<td style="padding:1.5mm 3mm;border:.4pt solid #888">' + _escDiff(String(row[k] != null ? row[k] : '')) + '</td>';}).join('') + '</tr>';}).join('') +
+        '</tbody></table></div>';
+    });
+  }
+
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>外注仕様書 - ' + (p.id||'') + '</title>' +
+    '<style>' +
+    'body{font-family:"Yu Mincho","Hiragino Mincho ProN",serif;padding:0;margin:0;color:#1a1a1a;font-size:10.5pt;background:#eee}' +
+    '.page{width:210mm;min-height:297mm;padding:18mm;margin:8mm auto;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.15)}' +
+    '.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10mm}' +
+    '.title{font-size:24pt;text-align:center;letter-spacing:.4em;border-top:1pt solid #1a1a1a;border-bottom:1pt solid #1a1a1a;padding:4mm;margin:6mm auto;width:100mm;font-weight:700}' +
+    '.vendor{font-size:14pt;border-bottom:.5pt solid #1a1a1a;padding-bottom:3mm;width:100mm}' +
+    '.sender{text-align:right;font-size:9pt;line-height:1.7}' +
+    '.sender .biz{font-size:12pt;font-weight:700}' +
+    'h2{font-size:11pt;background:#f4f4f4;padding:2mm 3mm;border-left:3pt solid #1a1a1a;margin:6mm 0 3mm}' +
+    '.info-table{width:100%;border-collapse:collapse;font-size:10pt;margin:3mm 0}' +
+    '.info-table td{border:.4pt solid #888;padding:2mm 3mm}' +
+    '.info-table td.label{background:#f9f9f7;width:35mm;font-weight:700;font-size:9pt}' +
+    '.note-box{background:#fffbeb;border-left:3pt solid #f59e0b;padding:3mm 4mm;margin:6mm 0;font-size:10pt;line-height:1.7}' +
+    '@media screen{.print-btn{position:fixed;top:10px;right:10px;z-index:9999;padding:10px 24px;font-size:14px;background:#7c2d12;color:#fff;border:none;border-radius:6px;cursor:pointer}}' +
+    '@media print{body{background:#fff}.page{margin:0;box-shadow:none;width:auto;min-height:auto}.print-btn{display:none}}' +
+    '@page{size:A4 portrait;margin:0}' +
+    '</style></head><body>' +
+    '<button class="print-btn" onclick="window.print()">🖨 印刷 / PDF保存</button>' +
+    '<div class="page">' +
+      '<div class="header">' +
+        '<div><div style="font-size:9pt;color:#555">案件番号: ' + (p.id||'') + '</div><div style="font-size:9pt;color:#555;margin-top:1mm">発行日: ' + new Date().toLocaleDateString('ja-JP') + '</div></div>' +
+        '<div class="sender"><div class="biz">' + _escDiff(ourCompany) + '</div>' +
+          (conf.addr ? '<div>' + _escDiff(conf.addr) + '</div>' : '') +
+          (conf.tel ? '<div>' + _escDiff(conf.tel) + '</div>' : '') +
+          '<div style="margin-top:1mm">担当: ' + _escDiff(currentAuth?.userName || '') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="vendor"><strong>' + _escDiff(vendor) + '</strong></div>' +
+      '<div class="title">外注仕様書</div>' +
+      '<h2>📋 基本情報</h2>' +
+      '<table class="info-table">' +
+        '<tr><td class="label">品名</td><td>' + _escDiff(p.item || '') + '</td></tr>' +
+        '<tr><td class="label">数量</td><td>' + (p.qty || 0).toLocaleString() + ' ' + (p.unit || '部') + '</td></tr>' +
+        '<tr><td class="label">仕様 (概要)</td><td style="white-space:pre-wrap">' + _escDiff(p.spec || '-') + '</td></tr>' +
+        (scope ? '<tr><td class="label">外注内容</td><td style="font-weight:700">' + _escDiff(scope) + '</td></tr>' : '') +
+        '<tr><td class="label">希望納期</td><td style="font-weight:700;color:#dc2626">' + (due || '-') + '</td></tr>' +
+      '</table>' +
+      sectionsHtml +
+      (note ? '<div class="note-box"><strong>※ 特記事項</strong><br>' + _escDiff(note).replace(/\n/g,'<br>') + '</div>' : '') +
+      '<div style="margin-top:10mm;font-size:9pt;color:#555;border-top:.5pt solid #999;padding-top:3mm;line-height:1.6">' +
+        '※ 本書類には依頼元の得意先名・金額情報は含まれておりません。<br>' +
+        '※ ご質問・確認事項は上記担当までご連絡ください。<br>' +
+        '※ 守秘義務契約に基づき、内容の外部開示はご遠慮ください。' +
+      '</div>' +
+    '</div></body></html>';
+
+  w.document.write(html);
+  w.document.close();
+  document.querySelector('.proof-modal')?.remove();
+
+  // 監査ログ
+  if(typeof _addAuditLog_ === 'function'){
+    _addAuditLog_('export', 'project:' + p.id, '外注用仕様書を書き出し: ' + vendor + (scope ? ' / ' + scope : ''));
+  }
+}
+
+// ─────────────────────────────────────────────────────
 // 📜 案件タイムライン (時系列イベントビュー)
 // ─────────────────────────────────────────────────────
 function showProjectTimeline(projectId){
@@ -18443,6 +18726,8 @@ function renderProjects(){
     const workBtn = `<button class="use-btn" style="background:#1e293b;color:#fff;border-color:#1e293b;white-space:nowrap" onclick="showWorkInstructionView('${r.id}')">🔧 作業指示</button>`;
     const timelineBtn = `<button class="use-btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;white-space:nowrap" onclick="showProjectTimeline('${r.id}')">📜 タイムライン</button>`;
     const estimateBtn = `<button class="use-btn" style="background:#1e40af;color:#fff;border-color:#1e40af;white-space:nowrap" onclick="showProjectEstimateView('${r.id}')">📋 見積を見る</button>`;
+    const specBtn = `<button class="use-btn" style="background:#059669;color:#fff;border-color:#059669;white-space:nowrap" onclick="showProjectSpecDetail('${r.id}')">📋 仕様詳細</button>`;
+    const outsourceSpecBtn = `<button class="use-btn" style="background:#7c2d12;color:#fff;border-color:#7c2d12;white-space:nowrap" onclick="showOutsourceSpecSheet('${r.id}')">🤝 外注用書き出し</button>`;
     // 紐付く配送タスク
     const linkedDeliveries = (DB.deliveryItems||[]).filter(d => d.projectId === r.id);
     const deliveryBtn = linkedDeliveries.length > 0
@@ -18457,9 +18742,11 @@ function renderProjects(){
             ${r.qty?`<div style="margin-top:6px;font-size:11px;color:#888">数量: <strong>${r.qty.toLocaleString()}${r.unit||''}</strong>　原価合計: <strong>${r.grand?fmt(r.grand):''}</strong></div>`:''}
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+            ${specBtn}
             ${estimateBtn}
             ${workBtn}
             ${timelineBtn}
+            ${outsourceSpecBtn}
             ${proofBadge}
             ${deliveryBtn}
             <button class="use-btn" style="white-space:nowrap" onclick="editProjDetail(${oi})">✏ 編集</button>
