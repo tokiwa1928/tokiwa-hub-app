@@ -11612,6 +11612,157 @@ function loadTestData(){
 }
 
 // ─────────────────────────────────────────────────────
+// 📤 連絡内容を転送 (お客様名・連絡先を匿名化)
+// ─────────────────────────────────────────────────────
+function _anonymizeBody_(text, inq){
+  if(!text) return '';
+  var t = text;
+  // 顧客名・会社名・担当者名を [社外様] / [得意先様] に置換
+  var personalNames = [];
+  if(inq.from_name) personalNames.push(inq.from_name);
+  if(inq.custName && inq.custName !== inq.from_name) personalNames.push(inq.custName);
+  var companyNames = [];
+  if(inq.from_company) companyNames.push(inq.from_company);
+  if(inq.company && inq.company !== inq.from_company) companyNames.push(inq.company);
+  if(inq.cust && inq.cust !== inq.from_company && inq.cust !== inq.company) companyNames.push(inq.cust);
+
+  // 個人名 → [個人名]
+  personalNames.forEach(function(n){
+    if(!n || n.length < 2) return;
+    var esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    t = t.replace(new RegExp(esc, 'g'), '[個人名]');
+  });
+  // 会社名 → [得意先様]
+  companyNames.forEach(function(n){
+    if(!n || n.length < 2) return;
+    var esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    t = t.replace(new RegExp(esc, 'g'), '[得意先様]');
+  });
+
+  // メールアドレス
+  t = t.replace(/[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[メールアドレス]');
+  // 電話番号 (0X-XXXX-XXXX, 0XX-XXX-XXXX, 0XX-XX-XXXX, 080-XXXX-XXXX 等)
+  t = t.replace(/0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}/g, '[電話番号]');
+  // 〒郵便番号 + 住所っぽい行
+  t = t.replace(/〒?\s*\d{3}[-\s]?\d{4}[\s\S]{0,30}/g, '[住所]');
+  // よくある「○○商事」「○○株式会社」パターン (固有名詞検出 - 単純化版)
+  // 既に置換済の会社名は対象外
+  t = t.replace(/[一-龥ァ-ヶ々〆〤A-Za-zＡ-Ｚａ-ｚ・ー]{2,15}(株式会社|有限会社|合同会社|商事|工業|印刷)/g, '[得意先様]');
+  // 様、御中の前の固有名詞 (連続した漢字・カナ)
+  t = t.replace(/[一-龥ァ-ヶ々〆〤A-Za-zＡ-Ｚａ-ｚ・ー]{2,10}\s*(様|御中)/g, '[得意先様]');
+
+  return t;
+}
+
+function showForwardInquiryModal(inqId){
+  var inq = (DB.inquiries||[]).find(function(i){return i.id === inqId;});
+  if(!inq){ alert('問い合わせが見つかりません'); return; }
+
+  var anonymizedBody = _anonymizeBody_(inq.body || '', inq);
+  var anonymizedSubject = _anonymizeBody_(inq.subject || '', inq);
+
+  // 転送用テンプレート
+  var transferText = '【依頼内容の転送】\n' +
+    '──────────────────\n' +
+    '受付日: ' + (inq.received_at ? new Date(inq.received_at).toLocaleString('ja-JP') : new Date().toLocaleString('ja-JP')) + '\n' +
+    'カテゴリ: ' + (inq.category || '-') + '\n' +
+    '優先度: ' + ({urgent:'緊急',normal:'通常',low:'低'}[inq.priority] || '通常') + '\n' +
+    '──────────────────\n' +
+    '件名: ' + anonymizedSubject + '\n\n' +
+    '内容:\n' + anonymizedBody + '\n' +
+    '──────────────────\n' +
+    '※ お客様名・連絡先・会社名は伏せています。';
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#16a34a;color:#fff;display:flex;justify-content:space-between">' +
+        '<div><strong>📤 依頼内容を転送 (匿名化済)</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">お客様名・連絡先は自動的に伏せられています</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;padding:18px 20px;flex:1">' +
+        '<div style="background:#fef3c7;padding:8px 10px;border-radius:6px;font-size:11px;color:#78350f;margin-bottom:12px;line-height:1.5">' +
+          '🔒 <strong>自動匿名化:</strong> 個人名・会社名・メール・電話番号・住所 を [得意先様] [個人名] [メールアドレス] [電話番号] [住所] に置換しました。<br>' +
+          'もし伏せられていない箇所があれば、下のテキストエリアで手動修正してください。' +
+        '</div>' +
+        '<label style="font-size:11px;font-weight:700">転送内容 (編集可)</label>' +
+        '<textarea id="forward-text" rows="14" style="width:100%;font-size:13px;padding:10px;border:1px solid #ccc;border-radius:6px;font-family:inherit;line-height:1.6;resize:vertical">' + _escDiff(transferText) + '</textarea>' +
+        '<div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+          '<button class="btn btn-p" style="background:#16a34a;border-color:#16a34a" onclick="_copyForwardText_()">📋 クリップボードにコピー</button>' +
+          '<button class="btn" style="background:#dbeafe;border-color:#93c5fd;color:#1e3a8a" onclick="_forwardViaEmail_()">📧 メールで送信</button>' +
+          '<button class="btn" style="background:#fef3c7;border-color:#fde047;color:#78350f" onclick="_forwardAsInternal_(\'' + inq.id + '\')">🏢 社内連絡として登録</button>' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+        '</div>' +
+        '<div style="margin-top:10px;font-size:10px;color:#888;line-height:1.5">' +
+          '💡 <strong>使い方:</strong> 制作部・配送部などにこの内容を共有する時、お客様情報を伏せて転送できます。<br>' +
+          '・コピー → Slack や LINE WORKS に貼り付け<br>' +
+          '・メール → 既定のメールアプリで作成<br>' +
+          '・社内連絡 → 連絡管理 内に🏢社内連絡として保存' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function _copyForwardText_(){
+  var ta = document.getElementById('forward-text');
+  if(!ta) return;
+  var text = ta.value;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){
+      alert('✅ クリップボードにコピーしました\nSlack や LINE WORKS、メールに貼り付けて送信してください。');
+    }).catch(function(){ _fallbackCopy_(text); });
+  } else {
+    _fallbackCopy_(text);
+  }
+}
+
+function _forwardViaEmail_(){
+  var ta = document.getElementById('forward-text');
+  if(!ta) return;
+  var text = ta.value;
+  var subject = encodeURIComponent('【依頼内容の転送】');
+  var body = encodeURIComponent(text);
+  window.location.href = 'mailto:?subject=' + subject + '&body=' + body;
+}
+
+function _forwardAsInternal_(originalInqId){
+  var ta = document.getElementById('forward-text');
+  if(!ta) return;
+  var body = ta.value;
+  if(!confirm('この内容を🏢社内連絡として登録しますか?\n\n連絡管理の「🏢社内」タブで確認できます。')) return;
+  var newInq = {
+    id: 'INT-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+    source_type: 'internal_msg',
+    source_id: 'forward-' + originalInqId,
+    channel_company: currentAuth?.companyName || '',
+    from_name: currentAuth?.userName || '',
+    from_company: currentAuth?.companyName || '',
+    subject: '【転送】依頼内容の共有',
+    body: body,
+    kind: 'general',
+    priority: 'normal',
+    status: 'new',
+    summary: '',
+    received_at: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    timeline: [{ type:'note', date:new Date().toISOString(), text:'匿名化された依頼内容を転送 (元: ' + originalInqId + ')', by: currentAuth?.userName||'' }],
+    tags: ['転送', '匿名化済'],
+    forwarded_from_inquiry_id: originalInqId
+  };
+  if(!DB.inquiries) DB.inquiries = [];
+  DB.inquiries.unshift(newInq);
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  if(typeof renderInquiryList === 'function') renderInquiryList();
+  document.querySelector('.proof-modal')?.remove();
+  alert('✅ 社内連絡として登録しました');
+}
+
+// ─────────────────────────────────────────────────────
 // 👥 顧客詳細画面 (取引履歴・売上推移)
 // ─────────────────────────────────────────────────────
 function showCustomerDetail(custName){
@@ -21321,6 +21472,7 @@ function openInquiryDetail(id) {
       <span style="font-size:11px;color:#0369a1;align-self:center">この問い合わせから:</span>
       ${!linkedProject ? `<button class="btn btn-p" style="font-size:11px;background:#1e40af;border-color:#1e40af" onclick="convertInquiryToProject('${inq.id}')">📋 案件作成</button>` : ''}
       <button class="btn" style="font-size:11px;background:#fef3c7;border-color:#fcd34d" onclick="convertInquiryToEstimate('${inq.id}')">📝 見積に反映</button>
+      <button class="btn" style="font-size:11px;background:#dcfce7;border-color:#86efac;color:#14532d;font-weight:700" onclick="showForwardInquiryModal('${inq.id}')">📤 転送 (匿名化)</button>
       ${linkedProject ? `<button class="btn" style="font-size:11px" onclick="unlinkInquiryFromProject('${inq.id}')">🔗 案件リンク解除</button>` : `<button class="btn" style="font-size:11px" onclick="linkInquiryToExistingProject('${inq.id}')">🔗 既存案件にリンク</button>`}
     </div>
     
