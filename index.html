@@ -4108,53 +4108,86 @@ document.addEventListener('keydown', function(e){
 });
 
 function swPage(id,btn){
-  _recordNav_(id);
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('act'));
-  document.querySelectorAll('.tb-btn').forEach(b=>b.classList.remove('act'));
-  var pageEl = document.getElementById('page-'+id);
-  if(pageEl) pageEl.classList.add('act');
-  if(btn) btn.classList.add('act');
-  if(id==='master')renderMaster(curMaster);
-  if(id==='history')renderHistory();
-  if(id==='project')renderProjects();
-  if(id==='estimates')renderEstimates();
-  if(id==='invoices')renderInvoices();
-  if(id==='receipts')renderReceipts();
-  if(id==='payments')renderPayments();
-  if(id==='purchases')renderPurchases();
-  if(id==='outsource')renderOutsource();
-  if(id==='payouts')renderPayouts();
-  // 'dashboard' は realtime に統合済
-  if(id==='dashboard'){
-    var rtBtn = document.querySelector('.tb-btn[data-page="realtime"]');
-    if(rtBtn){ swPage('realtime', rtBtn); return; }
+  // 廃止/統合済タブのリダイレクト (最優先)
+  if(id === 'dashboard'){
+    var rtBtn0 = document.querySelector('.tb-btn[data-page="realtime"]');
+    if(rtBtn0){ return swPage('realtime', rtBtn0); }
   }
-  // 'inbox' は 連絡管理 (inquiry) に統合済
-  if(id==='inbox'){
-    var inqBtn = document.querySelector('.tb-btn[data-page="inquiry"]');
-    if(inqBtn){ swPage('inquiry', inqBtn); return; }
+  if(id === 'inbox'){
+    var inqBtn0 = document.querySelector('.tb-btn[data-page="inquiry"]');
+    if(inqBtn0){ return swPage('inquiry', inqBtn0); }
   }
-  // 'interco' は 連絡管理 (inquiry) に統合済 → 社間依頼 scope を自動選択
-  if(id==='interco'){
-    var inqBtn2 = document.querySelector('.tb-btn[data-page="inquiry"]');
-    if(inqBtn2){
-      swPage('inquiry', inqBtn2);
+  if(id === 'interco'){
+    var inqBtn1 = document.querySelector('.tb-btn[data-page="inquiry"]');
+    if(inqBtn1){
+      var r = swPage('inquiry', inqBtn1);
       setTimeout(function(){ if(typeof setInqScope === 'function') setInqScope('interco'); }, 100);
-      return;
+      return r;
     }
   }
-  if(id==='finance')renderFinancePage();
-  if(id==='realtime')renderRealtimeView();
-  if(id==='settings')initConfPage();
-  if(id==='calendar')renderCalendar();
-  if(id==='companies'){ renderCompanies(); renderSystemUsers(); }
-  if(id==='interco'){ renderIntercoSent(); renderIntercoRecv(); renderIntercoOrders(); }
-  if(id==='schedule'){ initSchedulePage(); }
-  if(id==='proofing'){ initProofingPage(); }
-  if(id==='delivery'){ initDeliveryPage(); }
-  if(id==='inquiry'){ initInquiryPage(); }
-  if(id==='wiki'){ initWikiPage(); }
-  document.getElementById('est-tabbar').style.display=id==='est'?'flex':'none';
+
+  // ページ存在確認
+  var pageEl = document.getElementById('page-'+id);
+  if(!pageEl){
+    console.warn('swPage: page-' + id + ' が存在しません');
+    return;
+  }
+
+  // 履歴記録 (エラーで止まらないよう try)
+  try { _recordNav_(id); } catch(e){ console.warn('nav record failed:', e); }
+
+  // ★ 表示切替 (これは絶対に成功させる)
+  try {
+    document.querySelectorAll('.page').forEach(function(p){ p.classList.remove('act'); });
+    document.querySelectorAll('.tb-btn').forEach(function(b){ b.classList.remove('act'); });
+    pageEl.classList.add('act');
+    if(btn) btn.classList.add('act');
+  } catch(e){
+    console.error('表示切替エラー:', e);
+  }
+
+  // est-tabbar 表示制御
+  try {
+    var estTabbar = document.getElementById('est-tabbar');
+    if(estTabbar) estTabbar.style.display = (id === 'est') ? 'flex' : 'none';
+  } catch(e){}
+
+  // ★ レンダリング呼び出し (1つでも失敗しても他は呼ぶ)
+  var renderers = {
+    master:    function(){ renderMaster(curMaster); },
+    history:   function(){ renderHistory(); },
+    project:   function(){ renderProjects(); },
+    estimates: function(){ renderEstimates(); },
+    invoices:  function(){ renderInvoices(); },
+    receipts:  function(){ renderReceipts(); },
+    payments:  function(){ renderPayments(); },
+    purchases: function(){ renderPurchases(); },
+    outsource: function(){ renderOutsource(); },
+    payouts:   function(){ renderPayouts(); },
+    finance:   function(){ renderFinancePage(); },
+    realtime:  function(){ renderRealtimeView(); },
+    settings:  function(){ initConfPage(); },
+    calendar:  function(){ renderCalendar(); },
+    companies: function(){ renderCompanies(); renderSystemUsers(); },
+    schedule:  function(){ initSchedulePage(); },
+    proofing:  function(){ initProofingPage(); },
+    delivery:  function(){ initDeliveryPage(); },
+    inquiry:   function(){ initInquiryPage(); },
+    wiki:      function(){ initWikiPage(); }
+  };
+  if(renderers[id]){
+    try {
+      renderers[id]();
+    } catch(e){
+      console.error('renderer error for ' + id + ':', e);
+      // エラーが起きても、ユーザーには「動かない」と分かるよう簡易表示
+      var errMsg = '<div style="padding:30px;color:#dc2626;background:#fee;border:1px solid #fca5a5;border-radius:8px;margin:1rem"><strong>⚠️ レンダリングエラー</strong><br><br>このタブの表示中にエラーが発生しました:<br><code style="font-size:11px;background:#fff;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:6px">' + (e && e.message ? e.message : String(e)) + '</code><br><br><button class="btn" onclick="swPage(\'' + id + '\',this)">🔄 再試行</button></div>';
+      // ページ内に既存コンテンツがなければエラーメッセージを表示
+      if(pageEl && pageEl.children.length === 0){
+        pageEl.innerHTML = errMsg;
+      }
+    }
+  }
 }
 
 // ═══════════════════ 見積タブ ══════════════════
