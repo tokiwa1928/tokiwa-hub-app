@@ -1096,6 +1096,7 @@ window.addEventListener('load', function(){
     <button class="pill" id="mc-data" onclick="swMaster('data',this)">データ作成</button>
     <button class="pill" id="mc-bind" onclick="swMaster('bind',this)">製本・加工</button>
     <button class="pill" id="mc-cust" onclick="swMaster('cust',this)">取引先</button>
+    <button class="pill" id="mc-orgcode" onclick="swMaster('orgcode',this)" style="background:linear-gradient(135deg,#1e40af,#3b82f6);color:#fff;font-weight:700" title="🔒 取引先コード管理 (本社管理者専用) — 親子コード・社名揺れ統合・Drive連携">🏢 コード管理 🔒</button>
     <button class="pill" id="mc-prod" onclick="swMaster('prod',this)">製品名</button>
     <button class="pill" id="mc-intercoRates" onclick="swMaster('intercoRates',this)">会社間掛け率</button>
     <button class="pill" id="mc-outsourceVendors" onclick="swMaster('outsourceVendors',this)">外注先</button>
@@ -12226,11 +12227,27 @@ function showCustomerDetail(custName){
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  // GGG-A: コードマスタから情報を解決
+  var orgRec = (typeof _resolveOrgRecord_ === 'function') ? _resolveOrgRecord_(custName) : null;
+  var canonicalName = orgRec ? orgRec.org : custName;
+  var orgCodeBadge = orgRec
+    ? '<span style="background:rgba(255,255,255,0.25);font-family:monospace;font-size:11px;padding:3px 8px;border-radius:4px;margin-right:6px;font-weight:700">' + orgRec.code + '</span>'
+    : '';
+  var aliasInfo = orgRec && orgRec.aliases && orgRec.aliases.length
+    ? '<div style="font-size:10px;opacity:.85;margin-top:3px">別名: ' + orgRec.aliases.join(' / ') + '</div>'
+    : '';
+  var nameDiffInfo = (orgRec && canonicalName !== custName)
+    ? '<div style="background:#fef3c7;color:#78350f;padding:4px 8px;border-radius:4px;font-size:11px;margin-top:6px">⚠ 表示名「' + custName + '」はマスタ正式名「' + canonicalName + '」と異なります</div>'
+    : '';
+
   modal.innerHTML =
     '<div style="background:#fff;width:100%;max-width:900px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
       '<div style="padding:14px 20px;background:#0891b2;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
-        '<div><strong style="font-size:16px">👥 ' + _escDiff(custName) + '</strong>' +
-        '<div style="font-size:11px;opacity:.85;margin-top:2px">取引履歴・売上推移</div></div>' +
+        '<div><strong style="font-size:16px">' + orgCodeBadge + '👥 ' + _escDiff(canonicalName) + '</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">取引履歴・売上推移</div>' +
+        aliasInfo +
+        nameDiffInfo +
+        '</div>' +
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
       '</div>' +
       '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
@@ -14896,6 +14913,575 @@ if(document.readyState === 'loading'){
 } else {
   setTimeout(_updateDevFeedbackCount_, 300);
 }
+
+// ─────────────────────────────────────────────────────
+// 🏢 GGG-A: 取引先マスタ拡張 (親子コード + aliases + HQロール)
+// ─────────────────────────────────────────────────────
+// 設計概要:
+//   - DB.orgMaster = [{ org, code, codeFamily, parentCode, kana, aliases[], driveFolderId, ...}]
+//   - 5桁親子コード制 (C00001 / C00001-01 / C00001-01-A)
+//   - エンティティ別プレフィックス: C(顧客) S(仕入先) O(外注先) G(グループ会社) E(エンドユーザー) P(パートナー)
+//   - HQ ユーザー (honda/fukunaga@tokiwap.co.jp) のみコード編集可能
+//   - aliases で社名揺れを統一 ("富士食品", "(株)富士食品" → C00002 で1社にマージ)
+
+var HQ_USERS = [ 'honda@tokiwap.co.jp', 'fukunaga@tokiwap.co.jp' ];
+
+var ORG_CODE_FAMILIES = {
+  'C': { label: '顧客',           color:'#1e40af', bg:'#eff6ff', digits:5 },
+  'S': { label: '仕入先',         color:'#92400e', bg:'#fffbeb', digits:5 },
+  'O': { label: '外注先',         color:'#5b21b6', bg:'#faf5ff', digits:5 },
+  'G': { label: 'グループ会社',   color:'#0891b2', bg:'#ecfeff', digits:2 },
+  'E': { label: 'エンドユーザー', color:'#16a34a', bg:'#f0fdf4', digits:5 },
+  'P': { label: 'パートナー',     color:'#dc2626', bg:'#fef2f2', digits:5 }
+};
+
+// 現在のユーザーが HQ ロールか
+function _isHQUser_(){
+  try {
+    var email = (currentAuth && currentAuth.email) ? String(currentAuth.email).toLowerCase() : '';
+    return HQ_USERS.indexOf(email) >= 0;
+  } catch(e){ return false; }
+}
+
+// orgMaster を取得 (なければ初期化)
+function _getOrgMaster_(){
+  if(!window.DB) window.DB = {};
+  if(!Array.isArray(DB.orgMaster)) DB.orgMaster = [];
+  return DB.orgMaster;
+}
+
+// org 名から正規化レコードを解決 (aliases 経由含む)
+function _resolveOrgRecord_(orgNameOrCode){
+  if(!orgNameOrCode) return null;
+  var key = String(orgNameOrCode).trim();
+  if(!key) return null;
+  var list = _getOrgMaster_();
+  // 1. コード完全一致
+  var byCode = list.find(function(r){ return r.code === key; });
+  if(byCode) return byCode;
+  // 2. 正式名一致
+  var byName = list.find(function(r){ return r.org === key; });
+  if(byName) return byName;
+  // 3. aliases に含む
+  var byAlias = list.find(function(r){
+    return Array.isArray(r.aliases) && r.aliases.some(function(a){ return a === key; });
+  });
+  if(byAlias) return byAlias;
+  // 4. 部分一致 (大文字小文字無視・空白除去)
+  var norm = key.replace(/[\s　]/g, '').toLowerCase();
+  var byPartial = list.find(function(r){
+    var rNorm = (r.org||'').replace(/[\s　]/g, '').toLowerCase();
+    if(rNorm === norm) return true;
+    if(Array.isArray(r.aliases)){
+      return r.aliases.some(function(a){
+        return (a||'').replace(/[\s　]/g, '').toLowerCase() === norm;
+      });
+    }
+    return false;
+  });
+  return byPartial || null;
+}
+
+// 任意の org 名 (依頼書・連絡などで使われる文字列) → 正式 org 名 を返す
+function _canonicalizeOrgName_(orgNameOrCode){
+  var rec = _resolveOrgRecord_(orgNameOrCode);
+  return rec ? rec.org : (orgNameOrCode || '');
+}
+
+// 任意の org 名 → コードを返す
+function _orgNameToCode_(orgNameOrCode){
+  var rec = _resolveOrgRecord_(orgNameOrCode);
+  return rec ? rec.code : '';
+}
+
+// 次のコードを採番 (family 単位で連番)
+function _nextOrgCode_(family){
+  family = (family || 'C').toUpperCase();
+  var meta = ORG_CODE_FAMILIES[family] || ORG_CODE_FAMILIES.C;
+  var list = _getOrgMaster_();
+  var maxN = 0;
+  list.forEach(function(r){
+    if(!r.code) return;
+    var m = r.code.match(new RegExp('^' + family + '(\\d+)(?:-|$)'));
+    if(m){
+      var n = parseInt(m[1], 10);
+      if(n > maxN) maxN = n;
+    }
+  });
+  var next = maxN + 1;
+  return family + String(next).padStart(meta.digits, '0');
+}
+
+// 親コードに紐づく子コードの次番を採番 (C00001-01 → C00001-02)
+function _nextOrgChildCode_(parentCode){
+  if(!parentCode) return '';
+  var list = _getOrgMaster_();
+  var prefix = parentCode + '-';
+  var maxN = 0;
+  list.forEach(function(r){
+    if(!r.code || r.code.indexOf(prefix) !== 0) return;
+    var rest = r.code.substring(prefix.length);
+    var m = rest.match(/^(\d+)/);
+    if(m){
+      var n = parseInt(m[1], 10);
+      if(n > maxN) maxN = n;
+    }
+  });
+  var next = maxN + 1;
+  return prefix + String(next).padStart(2, '0');
+}
+
+// 取引先マスタに新規登録 (HQ ロール限定)
+function registerOrg(opts){
+  if(!_isHQUser_()){
+    alert('🔒 取引先コードの登録は本社管理者のみ可能です\n\n権限のあるユーザー: ' + HQ_USERS.join(', '));
+    return null;
+  }
+  opts = opts || {};
+  var family = (opts.family || 'C').toUpperCase();
+  var parentCode = opts.parentCode || '';
+  var code = opts.code || (parentCode ? _nextOrgChildCode_(parentCode) : _nextOrgCode_(family));
+  var list = _getOrgMaster_();
+  if(list.some(function(r){ return r.code === code; })){
+    alert('⚠ コード ' + code + ' は既に存在します');
+    return null;
+  }
+  var rec = {
+    code: code,
+    codeFamily: family,
+    parentCode: parentCode,
+    org: opts.org || '',
+    kana: opts.kana || '',
+    aliases: Array.isArray(opts.aliases) ? opts.aliases.slice() : [],
+    type: opts.type || 'customer',
+    orgEmail: opts.orgEmail || '',
+    driveFolderId: opts.driveFolderId || '',
+    driveFolderName: opts.driveFolderName || '',
+    hasDepartments: !!opts.hasDepartments,
+    note: opts.note || '',
+    createdAt: new Date().toISOString(),
+    createdBy: (currentAuth && currentAuth.email) || '',
+    lastSyncAt: null
+  };
+  list.push(rec);
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('create', 'orgMaster:' + code, '取引先マスタ登録: ' + rec.org);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return rec;
+}
+
+// 既存レコードの編集 (HQ ロール限定)
+function updateOrgRecord(code, patch){
+  if(!_isHQUser_()){ alert('🔒 編集は本社管理者のみ可能です'); return false; }
+  var list = _getOrgMaster_();
+  var rec = list.find(function(r){ return r.code === code; });
+  if(!rec){ alert('コードが見つかりません: ' + code); return false; }
+  // 名称変更があれば aliases に旧名を残す
+  if(patch.org && patch.org !== rec.org){
+    if(!Array.isArray(rec.aliases)) rec.aliases = [];
+    if(rec.org && rec.aliases.indexOf(rec.org) < 0) rec.aliases.push(rec.org);
+    if(typeof _addAuditLog_ === 'function') _addAuditLog_('update', 'orgMaster:' + code, '社名変更: ' + rec.org + ' → ' + patch.org);
+  }
+  Object.keys(patch).forEach(function(k){ rec[k] = patch[k]; });
+  rec.updatedAt = new Date().toISOString();
+  rec.updatedBy = (currentAuth && currentAuth.email) || '';
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return true;
+}
+
+// 別名 (alias) を追加
+function addOrgAlias(code, alias){
+  if(!_isHQUser_()){ alert('🔒 編集は本社管理者のみ可能です'); return false; }
+  if(!alias) return false;
+  var list = _getOrgMaster_();
+  var rec = list.find(function(r){ return r.code === code; });
+  if(!rec) return false;
+  if(!Array.isArray(rec.aliases)) rec.aliases = [];
+  if(rec.aliases.indexOf(alias) >= 0){ alert('既に別名として登録されています'); return false; }
+  // 他レコードで使われていないかチェック (重複防止)
+  var conflict = list.find(function(r){
+    if(r.code === code) return false;
+    if(r.org === alias) return true;
+    return Array.isArray(r.aliases) && r.aliases.indexOf(alias) >= 0;
+  });
+  if(conflict){
+    if(!confirm('「' + alias + '」は ' + conflict.code + ' (' + conflict.org + ') でも使われています。上書き登録しますか?')){ return false; }
+    if(conflict.org === alias) conflict.org = '';
+    if(Array.isArray(conflict.aliases)){
+      conflict.aliases = conflict.aliases.filter(function(a){ return a !== alias; });
+    }
+  }
+  rec.aliases.push(alias);
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('update', 'orgMaster:' + code, '別名追加: ' + alias);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return true;
+}
+
+// 別名を削除
+function removeOrgAlias(code, alias){
+  if(!_isHQUser_()){ alert('🔒 編集は本社管理者のみ可能です'); return false; }
+  var list = _getOrgMaster_();
+  var rec = list.find(function(r){ return r.code === code; });
+  if(!rec || !Array.isArray(rec.aliases)) return false;
+  rec.aliases = rec.aliases.filter(function(a){ return a !== alias; });
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('update', 'orgMaster:' + code, '別名削除: ' + alias);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return true;
+}
+
+// 既存の DB.master.cust から orgMaster を一括採番 (移行用)
+function bulkAssignOrgCodes(){
+  if(!_isHQUser_()){ alert('🔒 一括採番は本社管理者のみ可能です'); return; }
+  if(!confirm('既存の取引先データに社名コードを一括採番します。\n\n対象: DB.master.cust 内のすべての取引先\n既存コードは変更しません。\n\n続行しますか?')) return;
+
+  var custs = (DB.master && Array.isArray(DB.master.cust)) ? DB.master.cust : [];
+  // org 名でユニーク化
+  var orgMap = {};
+  custs.forEach(function(r){
+    var org = (typeof r === 'string') ? r : (r.org || '');
+    if(!org) return;
+    if(!orgMap[org]){
+      orgMap[org] = { type: 'customer', email: '' };
+    }
+    if(r.type) orgMap[org].type = r.type;
+    if(r.orgEmail) orgMap[org].email = r.orgEmail;
+  });
+
+  var list = _getOrgMaster_();
+  var added = 0, skipped = 0;
+  Object.keys(orgMap).sort().forEach(function(org){
+    if(_resolveOrgRecord_(org)){ skipped++; return; }
+    var info = orgMap[org];
+    var family = info.type === 'vendor' ? 'O' : (info.type === 'both' ? 'C' : 'C');
+    var code = _nextOrgCode_(family);
+    list.push({
+      code: code,
+      codeFamily: family,
+      parentCode: '',
+      org: org,
+      kana: '',
+      aliases: [],
+      type: info.type,
+      orgEmail: info.email,
+      driveFolderId: '',
+      hasDepartments: false,
+      note: '一括採番により登録',
+      createdAt: new Date().toISOString(),
+      createdBy: (currentAuth && currentAuth.email) || ''
+    });
+    added++;
+  });
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('bulk', 'orgMaster', '一括採番: ' + added + '件追加, ' + skipped + '件スキップ');
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  alert('✅ 一括採番完了\n\n新規登録: ' + added + '件\nスキップ (既登録): ' + skipped + '件');
+  if(typeof renderOrgCodeMaster === 'function') renderOrgCodeMaster();
+}
+
+// 重複候補の検出 (社名揺れ自動検出)
+function detectOrgDuplicates(){
+  var list = _getOrgMaster_();
+  var pairs = [];
+  function normalize(s){
+    return (s||'')
+      .replace(/[\s　]/g, '')
+      .replace(/(株式会社|有限会社|合同会社|（株）|\(株\)|（有）|\(有\))/g, '')
+      .toLowerCase();
+  }
+  for(var i = 0; i < list.length; i++){
+    for(var j = i+1; j < list.length; j++){
+      var a = normalize(list[i].org), b = normalize(list[j].org);
+      if(!a || !b) continue;
+      // 完全一致 or 包含関係
+      if(a === b || (a.length >= 3 && b.indexOf(a) >= 0) || (b.length >= 3 && a.indexOf(b) >= 0)){
+        pairs.push({ a: list[i], b: list[j], reason: a === b ? '完全一致' : '包含関係' });
+      }
+    }
+  }
+  return pairs;
+}
+
+// 2つのレコードを統合 (HQ ロール限定)
+function mergeOrgRecords(keepCode, mergeFromCode){
+  if(!_isHQUser_()){ alert('🔒 統合は本社管理者のみ可能です'); return false; }
+  var list = _getOrgMaster_();
+  var keep = list.find(function(r){ return r.code === keepCode; });
+  var from = list.find(function(r){ return r.code === mergeFromCode; });
+  if(!keep || !from){ alert('レコードが見つかりません'); return false; }
+  if(!confirm('「' + from.org + '」(' + from.code + ') を「' + keep.org + '」(' + keep.code + ') に統合します。\n\n統合元の社名・別名は統合先の aliases に追加されます。\n統合元レコードは削除されます。\n\n続行しますか?')) return false;
+
+  if(!Array.isArray(keep.aliases)) keep.aliases = [];
+  if(from.org && keep.aliases.indexOf(from.org) < 0) keep.aliases.push(from.org);
+  if(Array.isArray(from.aliases)){
+    from.aliases.forEach(function(a){
+      if(keep.aliases.indexOf(a) < 0) keep.aliases.push(a);
+    });
+  }
+  // 統合元を削除
+  var idx = list.indexOf(from);
+  if(idx >= 0) list.splice(idx, 1);
+
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('merge', 'orgMaster:' + keepCode, '統合: ' + from.code + ' (' + from.org + ') → ' + keepCode);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return true;
+}
+
+// コード管理マスタ画面の描画
+function renderOrgCodeMaster(){
+  var mp = document.getElementById('master-panels');
+  if(!mp) return;
+  var list = _getOrgMaster_().slice();
+  var familyFilter = document.getElementById('orgcode-family-f')?.value || '';
+  var q = (document.getElementById('orgcode-q')?.value || '').toLowerCase();
+  var filtered = list.filter(function(r){
+    if(familyFilter && r.codeFamily !== familyFilter) return false;
+    if(q){
+      var hay = ((r.code||'') + ' ' + (r.org||'') + ' ' + (r.kana||'') + ' ' + ((r.aliases||[]).join(' '))).toLowerCase();
+      if(hay.indexOf(q) < 0) return false;
+    }
+    return true;
+  });
+  // コード順
+  filtered.sort(function(a,b){ return (a.code||'').localeCompare(b.code||''); });
+
+  var hq = _isHQUser_();
+  var hqBanner = hq
+    ? '<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:6px;padding:8px 12px;font-size:12px;color:#1e3a8a;margin-bottom:10px">🔓 本社管理者モード — コード採番・編集・統合が可能です</div>'
+    : '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:8px 12px;font-size:12px;color:#78350f;margin-bottom:10px">🔒 閲覧モード — コード編集は本社管理者のみ可能です (現在のユーザー: ' + ((currentAuth && currentAuth.email) || '未ログイン') + ')</div>';
+
+  var html =
+    '<div class="sec">' +
+      '<div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+        '🏢 取引先コード管理 (社名揺れ・親子コード対応)' +
+      '</div>' +
+      hqBanner +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">' +
+        '<select id="orgcode-family-f" onchange="renderOrgCodeMaster()" style="font-size:12px;padding:4px 8px">' +
+          '<option value="">全種別</option>' +
+          Object.keys(ORG_CODE_FAMILIES).map(function(f){
+            return '<option value="' + f + '"' + (familyFilter === f ? ' selected' : '') + '>' + f + ' / ' + ORG_CODE_FAMILIES[f].label + '</option>';
+          }).join('') +
+        '</select>' +
+        '<input id="orgcode-q" placeholder="コード/社名/別名/カナで検索…" oninput="renderOrgCodeMaster()" style="width:220px;font-size:12px;padding:4px 8px">' +
+        '<span style="font-size:11px;color:#888">' + filtered.length + '/' + list.length + '件</span>' +
+        (hq ? '<button class="btn" style="background:#1e40af;color:#fff;border-color:#1e40af;font-size:12px" onclick="showOrgRegisterModal()">＋ 新規登録</button>' : '') +
+        (hq ? '<button class="btn" style="font-size:12px" onclick="bulkAssignOrgCodes()">📥 既存マスタから一括採番</button>' : '') +
+        (hq ? '<button class="btn" style="font-size:12px" onclick="showOrgDuplicatesModal()">🔍 重複候補を検出</button>' : '') +
+      '</div>' +
+      '<div style="overflow-x:auto;max-height:600px;overflow-y:auto">' +
+      '<table class="m-tbl"><thead><tr style="background:#f3f4f6">' +
+        '<th style="width:120px">コード</th>' +
+        '<th style="width:80px">種別</th>' +
+        '<th>正式名</th>' +
+        '<th>カナ</th>' +
+        '<th>別名 (aliases)</th>' +
+        '<th style="width:130px">親コード</th>' +
+        '<th style="width:80px">Drive</th>' +
+        '<th class="dx"></th>' +
+      '</tr></thead><tbody>';
+
+  if(!filtered.length){
+    html += '<tr><td colspan="8" style="padding:30px;text-align:center;color:#888"><div style="font-size:36px;margin-bottom:8px">🏢</div>取引先コードが登録されていません<br><span style="font-size:11px">' + (hq ? '「📥 既存マスタから一括採番」で初期化できます' : '本社管理者にコード採番を依頼してください') + '</span></td></tr>';
+  } else {
+    filtered.forEach(function(r){
+      var fam = ORG_CODE_FAMILIES[r.codeFamily] || ORG_CODE_FAMILIES.C;
+      var aliases = (r.aliases || []).map(function(a){
+        return '<span style="display:inline-block;background:#e5e7eb;border-radius:10px;padding:1px 8px;font-size:10px;margin:1px">' + a +
+          (hq ? ' <a href="javascript:void(0)" onclick="event.stopPropagation();removeOrgAlias(\'' + r.code + '\', \'' + a.replace(/'/g,"\\'") + '\');renderOrgCodeMaster()" style="color:#dc2626;text-decoration:none" title="削除">×</a>' : '') +
+          '</span>';
+      }).join('');
+      var driveCell = r.driveFolderId
+        ? '<a href="https://drive.google.com/drive/folders/' + r.driveFolderId + '" target="_blank" style="font-size:11px;color:#1e40af;text-decoration:underline">📁 開く</a>'
+        : '<span style="font-size:10px;color:#aaa">未設定</span>';
+      html += '<tr style="background:' + fam.bg + '">' +
+        '<td style="font-family:monospace;font-weight:700;color:' + fam.color + '">' + r.code + '</td>' +
+        '<td><span style="background:' + fam.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">' + fam.label + '</span></td>' +
+        '<td>' +
+          (hq
+            ? '<input type="text" value="' + (r.org||'').replace(/"/g,'&quot;') + '" style="width:100%;font-size:13px;font-weight:600" onchange="updateOrgRecord(\'' + r.code + '\', { org: this.value });renderOrgCodeMaster()">'
+            : '<strong>' + (r.org||'') + '</strong>') +
+        '</td>' +
+        '<td>' +
+          (hq
+            ? '<input type="text" value="' + (r.kana||'').replace(/"/g,'&quot;') + '" style="width:100%;font-size:11px" onchange="updateOrgRecord(\'' + r.code + '\', { kana: this.value });renderOrgCodeMaster()">'
+            : (r.kana||'')) +
+        '</td>' +
+        '<td>' +
+          aliases +
+          (hq ? ' <button class="add-btn" style="font-size:10px;padding:1px 6px" onclick="var a=prompt(\'別名を入力\');if(a&&addOrgAlias(\'' + r.code + '\',a))renderOrgCodeMaster()">＋</button>' : '') +
+        '</td>' +
+        '<td><span style="font-size:11px;color:#666">' + (r.parentCode || '-') + '</span></td>' +
+        '<td>' + driveCell + '</td>' +
+        '<td class="dx">' +
+          (hq
+            ? '<button class="btn" style="font-size:10px;padding:2px 6px" onclick="showOrgEditModal(\'' + r.code + '\')" title="詳細編集">編集</button>'
+            : '') +
+        '</td>' +
+      '</tr>';
+    });
+  }
+  html += '</tbody></table></div></div>';
+  mp.innerHTML = html;
+}
+
+// 新規登録モーダル
+function showOrgRegisterModal(parentCode){
+  if(!_isHQUser_()){ alert('🔒 本社管理者のみ登録可能です'); return; }
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var familyOpts = Object.keys(ORG_CODE_FAMILIES).map(function(f){
+    return '<option value="' + f + '">' + f + ' / ' + ORG_CODE_FAMILIES[f].label + '</option>';
+  }).join('');
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:560px;border-radius:10px;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<strong style="font-size:14px">🏢 取引先コード新規登録' + (parentCode ? ' (子: ' + parentCode + ' 配下)' : '') + '</strong>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>' +
+      '</div>' +
+      '<div style="padding:18px 20px;display:grid;gap:10px">' +
+        (parentCode
+          ? '<div style="background:#eff6ff;padding:8px 12px;border-radius:6px;font-size:12px;color:#1e3a8a">親コード: <strong>' + parentCode + '</strong> の部署として登録します</div>'
+          : '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">種別</div><select id="org-reg-family" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + familyOpts + '</select></label>') +
+        '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">正式名 *</div><input id="org-reg-name" placeholder="例: 富士食品株式会社" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
+        '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">カナ</div><input id="org-reg-kana" placeholder="例: フジショクヒン" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
+        '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">別名 (カンマ区切り)</div><input id="org-reg-aliases" placeholder="例: 富士食品, (株)富士食品, フジ食品" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
+        '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">代表メール</div><input id="org-reg-email" type="email" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
+        '<label style="display:flex;align-items:center;gap:8px;font-size:12px;background:#fef3c7;padding:8px 12px;border-radius:6px"><input type="checkbox" id="org-reg-hasdepts"> 部署 (子コード) を持つ法人 (例: 市役所、大学、大病院)</label>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="submitOrgRegister(' + (parentCode ? '\'' + parentCode + '\'' : 'null') + ')">登録</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+  setTimeout(function(){ document.getElementById('org-reg-name')?.focus(); }, 100);
+}
+
+function submitOrgRegister(parentCode){
+  var name = (document.getElementById('org-reg-name')?.value || '').trim();
+  if(!name){ alert('正式名を入力してください'); return; }
+  var family = parentCode ? (_resolveOrgRecord_(parentCode)?.codeFamily || 'C') : (document.getElementById('org-reg-family')?.value || 'C');
+  var kana = (document.getElementById('org-reg-kana')?.value || '').trim();
+  var email = (document.getElementById('org-reg-email')?.value || '').trim();
+  var aliasesStr = (document.getElementById('org-reg-aliases')?.value || '').trim();
+  var aliases = aliasesStr ? aliasesStr.split(',').map(function(a){ return a.trim(); }).filter(Boolean) : [];
+  var hasDepartments = !!document.getElementById('org-reg-hasdepts')?.checked;
+  var rec = registerOrg({
+    family: family,
+    parentCode: parentCode || '',
+    org: name,
+    kana: kana,
+    aliases: aliases,
+    orgEmail: email,
+    hasDepartments: hasDepartments
+  });
+  if(rec){
+    document.querySelector('.proof-modal')?.remove();
+    alert('✅ 登録完了\n\nコード: ' + rec.code + '\n社名: ' + rec.org);
+    renderOrgCodeMaster();
+  }
+}
+
+// 詳細編集モーダル
+function showOrgEditModal(code){
+  if(!_isHQUser_()){ alert('🔒 本社管理者のみ編集可能です'); return; }
+  var rec = _resolveOrgRecord_(code);
+  if(!rec){ alert('レコードが見つかりません'); return; }
+  var children = _getOrgMaster_().filter(function(r){ return r.parentCode === code; });
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:640px;max-height:92vh;border-radius:10px;overflow-y:auto">' +
+      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<strong style="font-size:14px">🏢 ' + rec.code + ' 詳細編集</strong>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="padding:18px 20px;display:grid;gap:10px">' +
+        '<div style="font-size:13px"><strong>正式名:</strong> ' + (rec.org||'') + '</div>' +
+        '<div style="font-size:12px;color:#666"><strong>種別:</strong> ' + (ORG_CODE_FAMILIES[rec.codeFamily]?.label || '') + '</div>' +
+        (rec.parentCode ? '<div style="font-size:12px;color:#666"><strong>親コード:</strong> ' + rec.parentCode + ' (' + (_resolveOrgRecord_(rec.parentCode)?.org || '?') + ')</div>' : '') +
+        '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">Drive フォルダ ID</div><input id="org-edit-drive" value="' + (rec.driveFolderId||'') + '" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>' +
+        '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">備考</div><textarea id="org-edit-note" rows="3" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical">' + (rec.note||'') + '</textarea></label>' +
+        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px">' +
+          '<div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:6px">部署 / 子コード (' + children.length + ')</div>' +
+          (children.length
+            ? children.map(function(c){
+                return '<div style="font-size:11px;padding:4px 0;border-top:1px dashed #e5e7eb"><code style="background:#eff6ff;padding:2px 6px;border-radius:3px;color:#1e40af">' + c.code + '</code> ' + (c.org||'') + '</div>';
+              }).join('')
+            : '<div style="font-size:11px;color:#888">部署はまだ登録されていません</div>') +
+          (rec.hasDepartments
+            ? '<button class="btn" style="margin-top:8px;font-size:11px;background:#1e40af;color:#fff;border-color:#1e40af" onclick="this.closest(\'.proof-modal\').remove();showOrgRegisterModal(\'' + rec.code + '\')">＋ 部署を追加</button>'
+            : '<div style="margin-top:6px;font-size:10px;color:#888">※ 部署を追加するには「部署を持つ法人」にチェックが必要です</div>') +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;margin-top:6px">' +
+          '<button class="btn" style="background:#fee;color:#b91c1c;border-color:#fca5a5" onclick="if(confirm(\'本当に削除? このコードは取り消せません\')){var l=_getOrgMaster_();var i=l.findIndex(function(x){return x.code===\'' + rec.code + '\'});if(i>=0)l.splice(i,1);saveDB();this.closest(\'.proof-modal\').remove();renderOrgCodeMaster();}">🗑 削除</button>' +
+          '<div style="display:flex;gap:8px">' +
+            '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+            '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="submitOrgEdit(\'' + rec.code + '\')">保存</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function submitOrgEdit(code){
+  var driveFolderId = (document.getElementById('org-edit-drive')?.value || '').trim();
+  var note = (document.getElementById('org-edit-note')?.value || '').trim();
+  if(updateOrgRecord(code, { driveFolderId: driveFolderId, note: note })){
+    document.querySelector('.proof-modal')?.remove();
+    alert('✅ 保存しました');
+    renderOrgCodeMaster();
+  }
+}
+
+// 重複候補モーダル
+function showOrgDuplicatesModal(){
+  var pairs = detectOrgDuplicates();
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var listHtml = pairs.length === 0
+    ? '<div style="text-align:center;padding:40px;color:#888"><div style="font-size:36px;margin-bottom:8px">✨</div>重複候補は見つかりませんでした</div>'
+    : pairs.map(function(p, i){
+        return '<div style="border:1px solid #fde047;background:#fffbeb;border-radius:6px;padding:10px;margin-bottom:8px">' +
+          '<div style="font-size:11px;color:#92400e;margin-bottom:6px">⚠ 候補 #' + (i+1) + ' (' + p.reason + ')</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+            '<div style="background:#fff;border-radius:4px;padding:8px"><div style="font-family:monospace;font-weight:700;color:#1e40af">' + p.a.code + '</div><div style="font-size:13px;font-weight:600">' + p.a.org + '</div></div>' +
+            '<div style="background:#fff;border-radius:4px;padding:8px"><div style="font-family:monospace;font-weight:700;color:#1e40af">' + p.b.code + '</div><div style="font-size:13px;font-weight:600">' + p.b.org + '</div></div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">' +
+            '<button class="btn" style="font-size:11px" onclick="if(mergeOrgRecords(\'' + p.a.code + '\',\'' + p.b.code + '\')){this.closest(\'.proof-modal\').remove();renderOrgCodeMaster();showOrgDuplicatesModal();}">' + p.a.code + ' に統合 ←</button>' +
+            '<button class="btn" style="font-size:11px" onclick="if(mergeOrgRecords(\'' + p.b.code + '\',\'' + p.a.code + '\')){this.closest(\'.proof-modal\').remove();renderOrgCodeMaster();showOrgDuplicatesModal();}">→ ' + p.b.code + ' に統合</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#f59e0b;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong style="font-size:14px">🔍 重複候補 (' + pairs.length + '件)</strong>' +
+        '<div style="font-size:11px;opacity:0.9;margin-top:2px">社名揺れの可能性がある取引先を検出。確認の上、統合してください</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:14px 20px">' + listHtml + '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+// 既存の swMaster() に 'orgcode' 種別を追加で対応 (既存ロジックを壊さない)
+(function(){
+  var origRender = window.renderMaster;
+  window.renderMaster = function(id){
+    if(id === 'orgcode'){ renderOrgCodeMaster(); return; }
+    if(typeof origRender === 'function') return origRender.apply(this, arguments);
+  };
+})();
 
 // ── Chatbot Tool Use 定義 ──────────────────────────────
 // Claude にこれらのツールを使わせ、フロントの DB を直接操作させる
