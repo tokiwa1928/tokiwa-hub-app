@@ -698,6 +698,17 @@ window.addEventListener('load', function(){
     </div>
   </div>
 
+  <!-- 📡 ディスパッチキュー通知 (Claude 待ちの開発依頼) -->
+  <div id="rt-dispatch-banner" style="display:none;background:linear-gradient(135deg,#1e40af,#3b82f6);border-radius:10px;padding:14px 18px;margin-bottom:14px;color:#fff;cursor:pointer" onclick="showDevFeedbackList()">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:14px;font-weight:700">📡 <span id="rt-dispatch-count">0</span> 件のディスパッチ済み開発依頼があります</div>
+        <div style="font-size:11px;opacity:0.9;margin-top:3px">Claude (Cowork) でこの画面を見ている場合 → 「📡 ディスパッチ分のみコピー」してチャットに貼り付けると実装が始まります</div>
+      </div>
+      <button class="btn" style="background:rgba(255,255,255,0.25);color:#fff;border:1px solid rgba(255,255,255,0.4);font-weight:700">📋 一覧を開く →</button>
+    </div>
+  </div>
+
   <!-- 🚀 クイックアクション (よく使う操作のショートカット) -->
   <div style="background:linear-gradient(135deg,#1e40af,#7c3aed);border-radius:10px;padding:14px 16px;margin-bottom:14px;color:#fff">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
@@ -14540,18 +14551,56 @@ var _chatbotHistory = [];
 var DEV_FEEDBACK_KEY = 'tokiwa_hub_dev_feedback';
 
 function _loadDevFeedback_(){
-  try { return JSON.parse(localStorage.getItem(DEV_FEEDBACK_KEY) || '[]'); }
-  catch(e){ return []; }
+  // DB.devRequests を優先 (クラウド同期済) + localStorage を後方互換でマージ
+  var fromDB = (window.DB && Array.isArray(DB.devRequests)) ? DB.devRequests.slice() : [];
+  var fromLS = [];
+  try { fromLS = JSON.parse(localStorage.getItem(DEV_FEEDBACK_KEY) || '[]'); } catch(e){}
+  // ID で重複排除 (DB 優先)
+  var seen = {};
+  fromDB.forEach(function(r){ if(r && r.id) seen[r.id] = true; });
+  fromLS.forEach(function(r){
+    if(r && r.id && !seen[r.id]){
+      fromDB.push(r);
+      seen[r.id] = true;
+    }
+  });
+  return fromDB;
 }
 function _saveDevFeedback_(arr){
+  // DB に保存 + クラウド同期 + localStorage バックアップ
+  if(!window.DB) window.DB = {};
+  DB.devRequests = arr;
   try { localStorage.setItem(DEV_FEEDBACK_KEY, JSON.stringify(arr)); } catch(e){}
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
 }
 function _updateDevFeedbackCount_(){
   var arr = _loadDevFeedback_();
+  // ディスパッチ済 + 対応中 を未完了として強調
+  var pending = arr.filter(function(r){
+    return r.status === 'dispatched' || r.status === 'in_progress';
+  });
   var badge = document.getElementById('dev-feedback-count');
   if(badge){
-    badge.textContent = arr.length;
-    badge.style.display = arr.length ? 'inline-block' : 'none';
+    if(pending.length > 0){
+      badge.textContent = '📡 ' + pending.length;
+      badge.style.background = '#1e40af';
+      badge.style.display = 'inline-block';
+      badge.title = pending.length + '件 ディスパッチ済 (Claude待ち)';
+    } else if(arr.length > 0){
+      // ドラフトのみ
+      var drafts = arr.filter(function(r){ return r.status === 'draft' || !r.status; }).length;
+      if(drafts > 0){
+        badge.textContent = drafts;
+        badge.style.background = '#dc2626';
+        badge.style.display = 'inline-block';
+        badge.title = drafts + '件 (下書き)';
+      } else {
+        badge.style.display = 'none';
+      }
+    } else {
+      badge.style.display = 'none';
+    }
   }
 }
 
@@ -14580,6 +14629,13 @@ function promptDevFeedback(){
         '</select>' +
         '<textarea id="dev-fb-text" rows="6" placeholder="気になる点・要望を入力..." style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:13px;font-family:inherit;resize:vertical"></textarea>' +
         '<input id="dev-fb-where" placeholder="該当画面 (任意): 例) 見積依頼タブ" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;margin-top:8px">' +
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;cursor:pointer">' +
+          '<input type="checkbox" id="dev-fb-dispatch" style="width:18px;height:18px">' +
+          '<div style="flex:1">' +
+            '<div style="font-size:13px;font-weight:700;color:#1e40af">📡 Claude にディスパッチ</div>' +
+            '<div style="font-size:11px;color:#475569;margin-top:2px">チェックすると、PC で Cowork を開いた時に Claude が自動で拾って実装を始めます (スマホからの依頼に推奨)</div>' +
+          '</div>' +
+        '</label>' +
         '<div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px">' +
           '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
           '<button class="btn btn-p" style="background:#f59e0b;border-color:#f59e0b" onclick="submitDevFeedback()">📝 記録する</button>' +
@@ -14595,6 +14651,9 @@ function submitDevFeedback(){
   if(!text){ alert('内容を入力してください'); return; }
   var category = document.getElementById('dev-fb-category')?.value || '改善要望';
   var where = (document.getElementById('dev-fb-where')?.value || '').trim();
+  var dispatch = !!document.getElementById('dev-fb-dispatch')?.checked;
+  var deviceUA = (navigator.userAgent || '').slice(0, 100);
+  var fromMobile = /Mobi|Android|iPhone|iPad/i.test(deviceUA);
   var arr = _loadDevFeedback_();
   arr.push({
     id: 'FB-' + Date.now(),
@@ -14603,18 +14662,56 @@ function submitDevFeedback(){
     where: where,
     by: currentAuth?.userName || '匿名',
     company: currentAuth?.companyName || '',
-    at: new Date().toISOString()
+    at: new Date().toISOString(),
+    status: dispatch ? 'dispatched' : 'draft',
+    fromDevice: fromMobile ? 'mobile' : 'pc',
+    history: [{ at: new Date().toISOString(), action: dispatch ? 'dispatched' : 'created', by: currentAuth?.userName || '' }]
   });
   _saveDevFeedback_(arr);
   _updateDevFeedbackCount_();
   document.querySelector('.proof-modal')?.remove();
   // チャットにも反映
   if(typeof _addChatMsg_ === 'function'){
-    _addChatMsg_('user', '🛠 [開発依頼] ' + category + (where ? ' / ' + where : '') + '\n' + text);
-    _addChatMsg_('assistant', '✅ 開発依頼として記録しました。「🛠 開発依頼」ボタンから一覧をコピーして開発担当に渡せます。');
+    _addChatMsg_('user', '🛠 [開発依頼' + (dispatch ? ' / 📡ディスパッチ' : '') + '] ' + category + (where ? ' / ' + where : '') + '\n' + text);
+    _addChatMsg_('assistant', dispatch
+      ? '✅ 開発依頼を記録し、Claude にディスパッチしました。次回 PC で Cowork を開いた時に Claude が拾います。'
+      : '✅ 開発依頼として記録しました。「🛠 開発依頼」ボタンから「📡 ディスパッチ」できます。');
   } else {
-    alert('✅ 開発依頼を記録しました');
+    alert('✅ 開発依頼を' + (dispatch ? 'ディスパッチ' : '記録') + 'しました');
   }
+}
+
+// 単一の依頼を Claude にディスパッチ (= status を dispatched に変更)
+function dispatchDevFeedback(idx){
+  var arr = _loadDevFeedback_();
+  if(!arr[idx]){ return; }
+  arr[idx].status = 'dispatched';
+  if(!arr[idx].history) arr[idx].history = [];
+  arr[idx].history.push({ at: new Date().toISOString(), action: 'dispatched', by: currentAuth?.userName || '' });
+  _saveDevFeedback_(arr);
+  _updateDevFeedbackCount_();
+  document.querySelector('.proof-modal')?.remove();
+  showDevFeedbackList();
+}
+
+// ステータス変更 (Claude / 開発者が処理状況を更新)
+function updateDevFeedbackStatus(idx, newStatus){
+  var arr = _loadDevFeedback_();
+  if(!arr[idx]){ return; }
+  arr[idx].status = newStatus;
+  if(!arr[idx].history) arr[idx].history = [];
+  arr[idx].history.push({ at: new Date().toISOString(), action: 'status:' + newStatus, by: currentAuth?.userName || '' });
+  if(newStatus === 'done') arr[idx].doneAt = new Date().toISOString();
+  _saveDevFeedback_(arr);
+  _updateDevFeedbackCount_();
+  document.querySelector('.proof-modal')?.remove();
+  showDevFeedbackList();
+}
+
+// Claude (PC Cowork) 用: ディスパッチ済みの未処理キューを取得
+function getDispatchedDevQueue(){
+  var arr = _loadDevFeedback_();
+  return arr.filter(function(r){ return r.status === 'dispatched'; });
 }
 
 // 開発依頼一覧モーダル
@@ -14630,37 +14727,113 @@ function showDevFeedbackList(){
         var realIdx = arr.length - 1 - idx;
         var dateStr = new Date(fb.at).toLocaleString('ja-JP');
         var catColor = { '改善要望':'#3b82f6', 'バグ':'#dc2626', '新機能':'#16a34a', 'UIUX':'#7c3aed', '質問':'#0891b2' }[fb.category] || '#6b7280';
-        return '<div style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;border-left:4px solid ' + catColor + '">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-            '<div><span style="background:' + catColor + ';color:#fff;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700">' + fb.category + '</span>' +
-              (fb.where ? ' <span style="font-size:11px;color:#666">' + _escDiff(fb.where) + '</span>' : '') +
+        var status = fb.status || 'draft';
+        var statusBadgeMap = {
+          'draft':       { bg:'#9ca3af', label:'📝 下書き' },
+          'dispatched':  { bg:'#1e40af', label:'📡 ディスパッチ済 (Claude待ち)' },
+          'in_progress': { bg:'#f59e0b', label:'⏳ 対応中' },
+          'done':        { bg:'#16a34a', label:'✅ 完了' }
+        };
+        var sb = statusBadgeMap[status] || statusBadgeMap.draft;
+        var deviceIcon = fb.fromDevice === 'mobile' ? '📱' : '💻';
+
+        // ステータス別アクションボタン
+        var actionBtns = '';
+        if(status === 'draft'){
+          actionBtns = '<button class="btn" style="font-size:11px;background:#1e40af;color:#fff;border-color:#1e40af;padding:4px 10px" onclick="dispatchDevFeedback(' + realIdx + ')" title="Claude に処理を依頼">📡 ディスパッチ</button> ';
+        } else if(status === 'dispatched'){
+          actionBtns = '<button class="btn" style="font-size:11px;background:#f59e0b;color:#fff;border-color:#f59e0b;padding:4px 10px" onclick="updateDevFeedbackStatus(' + realIdx + ', \'in_progress\')" title="対応中にする">⏳ 対応中</button> ';
+        } else if(status === 'in_progress'){
+          actionBtns = '<button class="btn" style="font-size:11px;background:#16a34a;color:#fff;border-color:#16a34a;padding:4px 10px" onclick="updateDevFeedbackStatus(' + realIdx + ', \'done\')" title="完了にする">✅ 完了</button> ';
+        } else if(status === 'done'){
+          actionBtns = '<button class="btn" style="font-size:11px;padding:4px 10px" onclick="updateDevFeedbackStatus(' + realIdx + ', \'draft\')" title="下書きに戻す">↩ 再オープン</button> ';
+        }
+
+        return '<div style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;border-left:4px solid ' + catColor + ';' + (status === 'done' ? 'opacity:0.6' : '') + '">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:4px">' +
+            '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+              '<span style="background:' + catColor + ';color:#fff;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700">' + fb.category + '</span>' +
+              '<span style="background:' + sb.bg + ';color:#fff;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700">' + sb.label + '</span>' +
+              (fb.where ? '<span style="font-size:11px;color:#666">' + _escDiff(fb.where) + '</span>' : '') +
             '</div>' +
-            '<div style="display:flex;gap:6px;align-items:center"><span style="font-size:10px;color:#888">' + dateStr + '</span>' +
+            '<div style="display:flex;gap:6px;align-items:center"><span style="font-size:10px;color:#888">' + deviceIcon + ' ' + dateStr + '</span>' +
               '<button onclick="_deleteDevFeedback_(' + realIdx + ')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px" title="削除">🗑</button>' +
             '</div>' +
           '</div>' +
           '<div style="font-size:12px;color:#1a1a1a;white-space:pre-wrap;line-height:1.5">' + _escDiff(fb.text) + '</div>' +
-          '<div style="font-size:10px;color:#888;margin-top:4px">— ' + (fb.by || '匿名') + (fb.company ? ' (' + fb.company + ')' : '') + '</div>' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:6px">' +
+            '<div style="font-size:10px;color:#888">— ' + (fb.by || '匿名') + (fb.company ? ' (' + fb.company + ')' : '') + '</div>' +
+            '<div>' + actionBtns + '</div>' +
+          '</div>' +
         '</div>';
       }).join('');
 
+  // ステータス別カウント
+  var cntDraft = arr.filter(function(r){ return (r.status||'draft') === 'draft'; }).length;
+  var cntDispatched = arr.filter(function(r){ return r.status === 'dispatched'; }).length;
+  var cntInProgress = arr.filter(function(r){ return r.status === 'in_progress'; }).length;
+  var cntDone = arr.filter(function(r){ return r.status === 'done'; }).length;
+
   modal.innerHTML =
-    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+    '<div style="background:#fff;width:100%;max-width:720px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
       '<div style="padding:14px 20px;background:#f59e0b;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
         '<div><strong style="font-size:14px">🛠 開発依頼一覧 (' + arr.length + '件)</strong>' +
-        '<div style="font-size:11px;opacity:0.85;margin-top:2px">「全コピー」で開発者に渡すテキストをクリップボードにコピーできます</div></div>' +
+        '<div style="font-size:11px;opacity:0.85;margin-top:2px">📡 スマホからは「ディスパッチ」付きで記録 → PC で Cowork 起動時に Claude が拾います</div></div>' +
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>' +
+      '</div>' +
+      '<div style="padding:10px 20px;background:#fafafa;border-bottom:1px solid #e5e7eb;display:flex;gap:6px;flex-wrap:wrap;font-size:11px">' +
+        '<span style="background:#9ca3af;color:#fff;padding:3px 9px;border-radius:10px;font-weight:700">📝 下書き ' + cntDraft + '</span>' +
+        '<span style="background:#1e40af;color:#fff;padding:3px 9px;border-radius:10px;font-weight:700">📡 ディスパッチ済 ' + cntDispatched + '</span>' +
+        '<span style="background:#f59e0b;color:#fff;padding:3px 9px;border-radius:10px;font-weight:700">⏳ 対応中 ' + cntInProgress + '</span>' +
+        '<span style="background:#16a34a;color:#fff;padding:3px 9px;border-radius:10px;font-weight:700">✅ 完了 ' + cntDone + '</span>' +
       '</div>' +
       '<div style="padding:14px 20px;border-bottom:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
           '<button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-size:12px" onclick="copyDevFeedbackToClipboard()">📋 全部コピー (開発者へ送信用)</button>' +
+          '<button class="btn" style="background:#1e40af;color:#fff;border-color:#1e40af;font-size:12px" onclick="copyDispatchedToClipboard()">📡 ディスパッチ分のみコピー</button>' +
           '<button class="btn" style="font-size:12px" onclick="promptDevFeedback()">＋ 新規追加</button>' +
         '</div>' +
-        (arr.length ? '<button class="btn" style="background:#fee;color:#b91c1c;border-color:#fca5a5;font-size:12px" onclick="if(confirm(\'すべての開発依頼を削除しますか?\')){_clearDevFeedback_()}">🗑 全削除</button>' : '') +
+        (arr.length ? '<button class="btn" style="background:#fee;color:#b91c1c;border-color:#fca5a5;font-size:12px" onclick="if(confirm(\'完了済みのみ削除しますか?\')){_clearDoneDevFeedback_()}">🗑 完了分削除</button>' : '') +
       '</div>' +
       '<div style="overflow-y:auto;flex:1;padding:14px 20px">' + listHtml + '</div>' +
     '</div>';
   document.body.appendChild(modal);
+}
+
+// 完了済みのみ削除
+function _clearDoneDevFeedback_(){
+  var arr = _loadDevFeedback_();
+  var remaining = arr.filter(function(r){ return r.status !== 'done'; });
+  _saveDevFeedback_(remaining);
+  _updateDevFeedbackCount_();
+  document.querySelector('.proof-modal')?.remove();
+  showDevFeedbackList();
+}
+
+// ディスパッチ済 + 対応中 のみコピー (Claude に渡す用)
+function copyDispatchedToClipboard(){
+  var arr = _loadDevFeedback_();
+  var dispatched = arr.filter(function(r){ return r.status === 'dispatched' || r.status === 'in_progress'; });
+  if(!dispatched.length){ alert('ディスパッチ済の依頼がありません'); return; }
+
+  var text = '# 📡 TOKIWA-HUB Claude ディスパッチキュー (' + dispatched.length + '件)\n';
+  text += '# エクスポート: ' + new Date().toLocaleString('ja-JP') + '\n\n';
+  text += '以下の開発依頼を順に処理してください。\n\n---\n\n';
+  dispatched.forEach(function(fb, i){
+    var st = fb.status === 'in_progress' ? '⏳対応中' : '📡ディスパッチ済';
+    text += '## ' + (i + 1) + '. [' + fb.category + '] ' + st + (fb.where ? ' / ' + fb.where : '') + '\n';
+    text += '**ID**: `' + fb.id + '`\n';
+    text += '**依頼内容**:\n' + fb.text + '\n\n';
+    text += '*— ' + (fb.by || '匿名') + (fb.company ? ' (' + fb.company + ')' : '') + ' / ' + (fb.fromDevice === 'mobile' ? '📱スマホ' : '💻PC') + ' / ' + new Date(fb.at).toLocaleString('ja-JP') + '*\n\n---\n\n';
+  });
+
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){
+      alert('✅ ' + dispatched.length + '件のディスパッチ済依頼をクリップボードにコピーしました!\n\nClaude (Cowork) のチャットに貼り付けて実装を依頼してください。');
+    }).catch(function(){ _fallbackCopy_(text); });
+  } else {
+    _fallbackCopy_(text);
+  }
 }
 
 function _deleteDevFeedback_(idx){
@@ -15214,10 +15387,24 @@ function _saveEnabledWidgets_(list){
   try { localStorage.setItem('rt_widgets', JSON.stringify(list)); } catch(e){}
 }
 
+function _updateDispatchBanner_(){
+  var banner = document.getElementById('rt-dispatch-banner');
+  var countEl = document.getElementById('rt-dispatch-count');
+  if(!banner) return;
+  var queue = (typeof getDispatchedDevQueue === 'function') ? getDispatchedDevQueue() : [];
+  if(queue.length > 0){
+    if(countEl) countEl.textContent = queue.length;
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
 function renderRealtimeView(){
   var enabled = _getEnabledWidgets_();
   var grid = document.getElementById('rt-grid');
   if(!grid) return;
+  _updateDispatchBanner_();
 
   // 既存チャートを破棄
   Object.keys(_rtCharts).forEach(function(k){
