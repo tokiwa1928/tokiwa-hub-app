@@ -15271,6 +15271,9 @@ function renderOrgCodeMaster(){
         (hq ? '<button class="btn" style="background:#1e40af;color:#fff;border-color:#1e40af;font-size:12px" onclick="showOrgRegisterModal()">＋ 新規登録</button>' : '') +
         (hq ? '<button class="btn" style="font-size:12px" onclick="bulkAssignOrgCodes()">📥 既存マスタから一括採番</button>' : '') +
         (hq ? '<button class="btn" style="font-size:12px" onclick="showOrgDuplicatesModal()">🔍 重複候補を検出</button>' : '') +
+        (hq ? '<button class="btn" style="font-size:12px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="detectOrgDuplicatesWithAI()">🤖 AI で詳細マージ提案</button>' : '') +
+        (hq ? '<button class="btn" style="font-size:12px;background:#0891b2;color:#fff;border-color:#0891b2" onclick="showDriveSettingModal()">📁 Drive 設定</button>' : '') +
+        (hq ? '<button class="btn" style="font-size:12px" onclick="showDriveConsistencyChecker()">🔍 Drive 整合性チェック</button>' : '') +
       '</div>' +
       '<div style="overflow-x:auto;max-height:600px;overflow-y:auto">' +
       '<table class="m-tbl"><thead><tr style="background:#f3f4f6">' +
@@ -15296,7 +15299,7 @@ function renderOrgCodeMaster(){
       }).join('');
       var driveCell = r.driveFolderId
         ? '<a href="https://drive.google.com/drive/folders/' + r.driveFolderId + '" target="_blank" style="font-size:11px;color:#1e40af;text-decoration:underline">📁 開く</a>'
-        : '<span style="font-size:10px;color:#aaa">未設定</span>';
+        : (hq ? '<button class="btn" style="font-size:10px;padding:2px 6px;background:#0891b2;color:#fff;border-color:#0891b2" onclick="createOrgDriveFolder(\'' + r.code + '\')" title="Drive にフォルダ自動作成">📁 作成</button>' : '<span style="font-size:10px;color:#aaa">未設定</span>');
       html += '<tr style="background:' + fam.bg + '">' +
         '<td style="font-family:monospace;font-weight:700;color:' + fam.color + '">' + r.code + '</td>' +
         '<td><span style="background:' + fam.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">' + fam.label + '</span></td>' +
@@ -15482,6 +15485,452 @@ function showOrgDuplicatesModal(){
     if(typeof origRender === 'function') return origRender.apply(this, arguments);
   };
 })();
+
+// ─────────────────────────────────────────────────────
+// 🤖 GGG-B: AI による高度な重複検出 + マージ提案
+// ─────────────────────────────────────────────────────
+async function detectOrgDuplicatesWithAI(){
+  if(!_isHQUser_()){ alert('🔒 本社管理者のみ実行可能です'); return; }
+  var list = _getOrgMaster_();
+  if(list.length < 2){ alert('比較対象が2件以上必要です'); return; }
+  if(!confirm('AI で重複候補を分析します (' + list.length + '件)。\n\n※ Claude API を使用するため少額のコストが発生します (数百円程度)。\n続行しますか?')) return;
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<strong style="font-size:14px">🤖 AI 重複検出 (実行中)</strong>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div id="ai-dup-body" style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        '<div style="text-align:center;padding:30px"><div style="font-size:32px;margin-bottom:10px">⏳</div>Claude が ' + list.length + ' 件を分析しています...</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+
+  // 各レコードの取引コンテキスト (関連案件数・最終取引日) を集約
+  var context = list.map(function(r){
+    var projects = (DB.projects || []).filter(function(p){
+      return p.cust === r.org || (Array.isArray(r.aliases) && r.aliases.indexOf(p.cust) >= 0);
+    });
+    var lastDate = projects.reduce(function(a, p){
+      var d = p.orderDate || '';
+      return d > a ? d : a;
+    }, '');
+    return {
+      code: r.code,
+      org: r.org,
+      kana: r.kana || '',
+      aliases: (r.aliases || []).slice(0, 5),
+      projectCount: projects.length,
+      lastOrder: lastDate
+    };
+  });
+
+  var prompt = '以下は印刷会社の取引先マスタです。社名揺れ・別表記・部署違い等で同一とみなせる候補を抽出してください。\n\n' +
+    '## 判定ガイド\n' +
+    '- 株式会社/有限会社/(株)/(有) などの法人格表記の差は同一とみなす\n' +
+    '- カナ違い (例: フジ食品 vs 富士食品) は同一候補\n' +
+    '- 旧社名・略称・愛称は同一候補\n' +
+    '- 「〇〇市役所 総務課」と「〇〇市役所 教育委員会」のような部署違いは「親子関係の候補」として別出力\n' +
+    '- 完全に別法人 (例: 富士食品 vs 富士工業) は同一としない\n\n' +
+    '## 出力フォーマット (JSON のみ、それ以外は出力しない)\n' +
+    '```json\n' +
+    '{\n' +
+    '  "duplicates": [{ "codeA": "C00001", "codeB": "C00005", "confidence": "high|medium|low", "reason": "理由" }],\n' +
+    '  "parent_child_candidates": [{ "parentCode": "C00010", "childCode": "C00012", "reason": "理由" }]\n' +
+    '}\n' +
+    '```\n\n' +
+    '## マスタ\n' +
+    JSON.stringify(context, null, 2);
+
+  try {
+    var resp = await callCloudAPI('claudeChat', {}, {
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2000
+    });
+    if(!resp || !resp.success){
+      document.getElementById('ai-dup-body').innerHTML =
+        '<div style="color:#dc2626;padding:20px">⚠ AI 呼び出しに失敗: ' + (resp?.error || '不明') + '</div>';
+      return;
+    }
+    // Claude のレスポンスから JSON 部分を抽出
+    var text = resp.text || (resp.content && resp.content[0]?.text) || '';
+    var jsonMatch = text.match(/\{[\s\S]*\}/);
+    var parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { duplicates: [], parent_child_candidates: [] };
+
+    var dupHtml = (parsed.duplicates || []).length === 0
+      ? '<div style="color:#888;padding:10px">重複候補は見つかりませんでした</div>'
+      : '<div style="margin-bottom:14px"><strong style="font-size:13px">🔄 重複候補 (' + parsed.duplicates.length + ')</strong></div>' +
+        parsed.duplicates.map(function(d){
+          var a = list.find(function(r){ return r.code === d.codeA; });
+          var b = list.find(function(r){ return r.code === d.codeB; });
+          if(!a || !b) return '';
+          var conf = { 'high':'#dc2626', 'medium':'#f59e0b', 'low':'#6b7280' }[d.confidence] || '#6b7280';
+          return '<div style="border:1px solid #e5e7eb;border-left:4px solid ' + conf + ';border-radius:6px;padding:10px;margin-bottom:8px">' +
+            '<div style="font-size:10px;color:' + conf + ';font-weight:700;margin-bottom:4px">信頼度: ' + (d.confidence||'?').toUpperCase() + '</div>' +
+            '<div style="font-size:11px;color:#666;margin-bottom:8px">理由: ' + (d.reason||'') + '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+              '<div style="background:#f9fafb;padding:8px;border-radius:4px"><div style="font-family:monospace;font-weight:700;color:#1e40af;font-size:11px">' + a.code + '</div><div style="font-size:13px;font-weight:600">' + a.org + '</div></div>' +
+              '<div style="background:#f9fafb;padding:8px;border-radius:4px"><div style="font-family:monospace;font-weight:700;color:#1e40af;font-size:11px">' + b.code + '</div><div style="font-size:13px;font-weight:600">' + b.org + '</div></div>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">' +
+              '<button class="btn" style="font-size:11px" onclick="if(mergeOrgRecords(\'' + a.code + '\',\'' + b.code + '\')){this.closest(\'.proof-modal\').remove();renderOrgCodeMaster();}">' + a.code + ' に統合 ←</button>' +
+              '<button class="btn" style="font-size:11px" onclick="if(mergeOrgRecords(\'' + b.code + '\',\'' + a.code + '\')){this.closest(\'.proof-modal\').remove();renderOrgCodeMaster();}">→ ' + b.code + ' に統合</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+    var pcHtml = (parsed.parent_child_candidates || []).length === 0
+      ? ''
+      : '<div style="margin-top:16px;margin-bottom:10px"><strong style="font-size:13px">🌳 親子関係候補 (' + parsed.parent_child_candidates.length + ')</strong>' +
+        '<div style="font-size:10px;color:#888;margin-top:2px">部署違いの可能性あり。親子コード化を推奨</div></div>' +
+        parsed.parent_child_candidates.map(function(pc){
+          var p = list.find(function(r){ return r.code === pc.parentCode; });
+          var c = list.find(function(r){ return r.code === pc.childCode; });
+          if(!p || !c) return '';
+          return '<div style="border:1px solid #c4b5fd;background:#faf5ff;border-radius:6px;padding:10px;margin-bottom:8px">' +
+            '<div style="font-size:11px;color:#5b21b6;margin-bottom:4px">理由: ' + (pc.reason||'') + '</div>' +
+            '<div style="font-size:13px"><strong>親:</strong> <code style="background:#fff;padding:2px 6px;border-radius:3px">' + p.code + '</code> ' + p.org + '</div>' +
+            '<div style="font-size:13px;margin-top:4px"><strong>子候補:</strong> <code style="background:#fff;padding:2px 6px;border-radius:3px">' + c.code + '</code> ' + c.org + '</div>' +
+            '<div style="font-size:10px;color:#888;margin-top:6px">※ 親子化は手動でコード採番し直す必要があります (将来の自動化対象)</div>' +
+          '</div>';
+        }).join('');
+
+    document.getElementById('ai-dup-body').innerHTML =
+      '<div style="background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:14px">✅ 分析完了: ' + (parsed.duplicates||[]).length + ' 件の重複候補, ' + (parsed.parent_child_candidates||[]).length + ' 件の親子候補</div>' +
+      dupHtml + pcHtml;
+  } catch(e){
+    document.getElementById('ai-dup-body').innerHTML =
+      '<div style="color:#dc2626;padding:20px">⚠ エラー: ' + e.message + '</div>';
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// 📁 GGG-C: Drive フォルダ自動生成 (フロントエンド)
+// ─────────────────────────────────────────────────────
+
+// 取引先のフォルダを Drive に自動生成
+async function createOrgDriveFolder(code){
+  if(!_isHQUser_()){ alert('🔒 本社管理者のみ実行可能です'); return; }
+  var rec = _resolveOrgRecord_(code);
+  if(!rec){ alert('レコードが見つかりません'); return; }
+  if(rec.driveFolderId){
+    if(!confirm('既に Drive フォルダが設定されています (' + rec.driveFolderId + ')\n上書き作成しますか?')) return;
+  }
+  try {
+    var resp = await callCloudAPI('createOrgFolder', {}, {
+      code: rec.code,
+      org: rec.org,
+      family: rec.codeFamily || 'C',
+      parentCode: rec.parentCode || ''
+    });
+    if(!resp || !resp.success){
+      alert('⚠ フォルダ作成失敗: ' + (resp?.error || '不明'));
+      return;
+    }
+    updateOrgRecord(rec.code, { driveFolderId: resp.folderId, driveFolderName: resp.folderName });
+    alert('✅ Drive フォルダを作成しました\n\n名称: ' + resp.folderName + '\n\nブラウザで開きますか?');
+    if(resp.url && confirm('フォルダを開きますか?')) window.open(resp.url, '_blank');
+    if(typeof renderOrgCodeMaster === 'function') renderOrgCodeMaster();
+  } catch(e){
+    alert('⚠ エラー: ' + e.message);
+  }
+}
+
+// 案件のフォルダ + 7サブフォルダを Drive に自動生成
+async function createProjectDriveFolder(projId){
+  var proj = (DB.projects || []).find(function(p){ return p.id === projId; });
+  if(!proj){ alert('案件が見つかりません'); return; }
+  var orgRec = _resolveOrgRecord_(proj.cust);
+  if(!orgRec){
+    alert('⚠ 取引先「' + proj.cust + '」がコードマスタにありません。\n先に取引先コード管理で登録してください。');
+    return;
+  }
+  if(!orgRec.driveFolderId){
+    if(!confirm('取引先「' + orgRec.org + '」の Drive フォルダがまだ作られていません。\n先に作成しますか?')) return;
+    await createOrgDriveFolder(orgRec.code);
+    orgRec = _resolveOrgRecord_(orgRec.code); // 再取得
+  }
+  try {
+    var resp = await callCloudAPI('createProjectFolder', {}, {
+      orgCode: orgRec.code,
+      projectNo: proj.id,
+      productionNo: proj.productionNo || proj.id,
+      item: proj.item || '',
+      year: (proj.orderDate || new Date().toISOString()).substring(0, 4)
+    });
+    if(!resp || !resp.success){
+      alert('⚠ 案件フォルダ作成失敗: ' + (resp?.error || '不明'));
+      return;
+    }
+    proj.driveFolderId = resp.projectFolderId;
+    proj.driveFolderUrl = resp.url;
+    proj.driveSubFolders = resp.subFolders;
+    if(typeof saveDB === 'function') saveDB();
+    if(typeof saveToCloud === 'function') saveToCloud();
+    alert('✅ 案件フォルダを作成しました\n\n7 サブフォルダを自動生成済 (00_前回データ / 01_入稿 / 02_初校 / 03_2校 / 04_3校 / 05_校了 / 99_old / _共有用)');
+    if(resp.url && confirm('Drive で開きますか?')) window.open(resp.url, '_blank');
+    if(typeof renderProjects === 'function') try { renderProjects(); } catch(e){}
+  } catch(e){
+    alert('⚠ エラー: ' + e.message);
+  }
+}
+
+// リピート案件: 前回の校了データを新案件の 00_前回データ にコピー
+async function repeatProjectFromPrevious(prevProjId){
+  var prev = (DB.projects || []).find(function(p){ return p.id === prevProjId; });
+  if(!prev){ alert('前回案件が見つかりません'); return; }
+  var orgRec = _resolveOrgRecord_(prev.cust);
+  if(!orgRec){ alert('取引先がコード未登録です'); return; }
+
+  var newProjNo = prompt('新しい案件番号を入力 (例: P26050020):', 'P' + new Date().toISOString().slice(2,10).replace(/-/g,'') + '-001');
+  if(!newProjNo) return;
+  var newProductionNo = prompt('新しい製造番号 (空欄なら案件番号と同じ):', newProjNo + '-R' + ((prev.repeatCount || 0) + 1).toString().padStart(2, '0'));
+
+  try {
+    var resp = await callCloudAPI('repeatProjectFromPrevious', {}, {
+      orgCode: orgRec.code,
+      prevProjectNo: prev.id,
+      newProjectNo: newProjNo,
+      newProductionNo: newProductionNo || newProjNo,
+      item: prev.item || ''
+    });
+    if(!resp || !resp.success){
+      alert('⚠ リピート作成失敗: ' + (resp?.error || '不明'));
+      return;
+    }
+    // 新案件レコードを DB に追加
+    var newProj = JSON.parse(JSON.stringify(prev));
+    newProj.id = newProjNo;
+    newProj.productionNo = newProductionNo || newProjNo;
+    newProj.orderDate = new Date().toISOString().slice(0,10);
+    newProj.dueDate = '';
+    newProj.status = '制作中';
+    newProj.steps = { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' };
+    newProj.stepDates = {};
+    newProj.createdAt = new Date().toISOString();
+    newProj.fromRepeatProjectId = prev.id;
+    newProj.repeatCount = (prev.repeatCount || 0) + 1;
+    newProj.driveFolderId = resp.newFolderId;
+    newProj.driveFolderUrl = resp.newFolderUrl;
+    if(!DB.projects) DB.projects = [];
+    DB.projects.push(newProj);
+    if(typeof _addAuditLog_ === 'function') _addAuditLog_('create', 'project:' + newProjNo, 'リピート: ' + prev.id + ' から作成 (' + resp.copiedCount + ' 件コピー)');
+    if(typeof saveDB === 'function') saveDB();
+    if(typeof saveToCloud === 'function') saveToCloud();
+    alert('✅ リピート案件作成完了\n\n新案件番号: ' + newProjNo + '\n前回データコピー: ' + resp.copiedCount + ' 件');
+    if(resp.newFolderUrl && confirm('新案件フォルダを Drive で開きますか?')) window.open(resp.newFolderUrl, '_blank');
+    if(typeof renderProjects === 'function') try { renderProjects(); } catch(e){}
+  } catch(e){
+    alert('⚠ エラー: ' + e.message);
+  }
+}
+
+// 案件詳細用: フォルダ内容プレビュー (新版/旧版判別 + サムネ)
+async function showProjectDriveFolderPreview(projId){
+  var proj = (DB.projects || []).find(function(p){ return p.id === projId; });
+  if(!proj){ alert('案件が見つかりません'); return; }
+  if(!proj.driveFolderId){
+    if(confirm('Drive フォルダがまだ作られていません。今すぐ作成しますか?')){
+      await createProjectDriveFolder(projId);
+    }
+    return;
+  }
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:920px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong style="font-size:14px">📁 ' + proj.id + ' / ' + (proj.cust||'') + ' / ' + (proj.item||'') + '</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">Drive フォルダプレビュー (校了/進行中の見分けが可能)</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div id="drive-preview-body" style="overflow-y:auto;flex:1;padding:18px 20px"><div style="text-align:center;padding:40px"><div style="font-size:32px;margin-bottom:10px">⏳</div>Drive から読み込み中...</div></div>' +
+    '</div>';
+  document.body.appendChild(modal);
+
+  try {
+    var resp = await callCloudAPI('getProjectFolderPreview', {}, { folderId: proj.driveFolderId });
+    if(!resp || !resp.success){
+      document.getElementById('drive-preview-body').innerHTML = '<div style="color:#dc2626;padding:20px">⚠ ' + (resp?.error || '取得失敗') + '</div>';
+      return;
+    }
+    var sub = resp.subFolders || {};
+    var subOrder = ['05_校了', '04_3校', '03_2校', '02_初校', '01_入稿データ', '00_前回データ', '_共有用', '99_old'];
+    var subStyles = {
+      '05_校了':       { color:'#16a34a', bg:'#f0fdf4', label:'✅ 校了 (最新版)' },
+      '04_3校':        { color:'#f59e0b', bg:'#fffbeb', label:'⏳ 3校' },
+      '03_2校':        { color:'#f59e0b', bg:'#fffbeb', label:'⏳ 2校' },
+      '02_初校':       { color:'#f59e0b', bg:'#fffbeb', label:'⏳ 初校' },
+      '01_入稿データ': { color:'#0891b2', bg:'#ecfeff', label:'📥 入稿' },
+      '00_前回データ': { color:'#7c3aed', bg:'#faf5ff', label:'📋 前回データ' },
+      '_共有用':       { color:'#1e40af', bg:'#eff6ff', label:'🔗 共有用' },
+      '99_old':        { color:'#9ca3af', bg:'#f3f4f6', label:'🗄 旧版' }
+    };
+
+    var html = '<div style="display:flex;justify-content:space-between;margin-bottom:12px;align-items:center">' +
+      '<a href="' + resp.url + '" target="_blank" style="font-size:12px;color:#1e40af">📁 Drive で開く →</a>' +
+      '<button class="btn" style="font-size:11px" onclick="callCloudAPI(\'getProjectFolderPreview\', {}, { folderId: \'' + proj.driveFolderId + '\' }).then(function(){ document.querySelector(\'.proof-modal\')?.remove(); showProjectDriveFolderPreview(\'' + proj.id + '\'); })">🔄 再読込</button>' +
+      '</div>';
+
+    subOrder.forEach(function(name){
+      var data = sub[name] || { count: 0, files: [] };
+      var st = subStyles[name];
+      html += '<div style="background:' + st.bg + ';border-left:4px solid ' + st.color + ';border-radius:6px;padding:10px;margin-bottom:8px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<div style="font-weight:700;color:' + st.color + ';font-size:13px">' + st.label + ' <span style="background:' + st.color + ';color:#fff;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:4px">' + data.count + '</span></div>' +
+          (data.folderUrl ? '<a href="' + data.folderUrl + '" target="_blank" style="font-size:11px;color:' + st.color + '">📁 開く</a>' : '') +
+        '</div>';
+      if(data.count > 0){
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px">';
+        data.files.forEach(function(f){
+          html += '<a href="' + f.url + '" target="_blank" style="display:block;background:#fff;border:1px solid #e5e7eb;border-radius:4px;padding:4px;text-decoration:none;color:#1a1a1a;text-align:center" title="' + f.name + '">' +
+            '<img src="' + f.thumbnail + '" style="width:100%;height:80px;object-fit:cover;border-radius:3px;background:#f3f4f6" onerror="this.style.display=\'none\'">' +
+            '<div style="font-size:10px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + f.name + '</div>' +
+          '</a>';
+        });
+        html += '</div>';
+      } else {
+        html += '<div style="font-size:11px;color:#888;padding:6px 0">(空)</div>';
+      }
+      html += '</div>';
+    });
+
+    document.getElementById('drive-preview-body').innerHTML = html;
+  } catch(e){
+    document.getElementById('drive-preview-body').innerHTML = '<div style="color:#dc2626;padding:20px">⚠ ' + e.message + '</div>';
+  }
+}
+
+// 校正フローボタン: 「初校アップ」「校了」等
+async function moveProjectFilesUI(projId, fromSub, toSub){
+  var proj = (DB.projects || []).find(function(p){ return p.id === projId; });
+  if(!proj || !proj.driveFolderId){ alert('Drive フォルダがありません'); return; }
+  if(!confirm(fromSub + ' の全ファイルを ' + toSub + ' にコピーしますか?\n\n(元のファイルは ' + fromSub + ' に残ります)')) return;
+  try {
+    var resp = await callCloudAPI('moveProjectFiles', {}, {
+      projectFolderId: proj.driveFolderId,
+      fromSubfolder: fromSub,
+      toSubfolder: toSub
+    });
+    if(!resp || !resp.success){ alert('⚠ ' + (resp?.error || '失敗')); return; }
+    if(typeof _addAuditLog_ === 'function') _addAuditLog_('drive', 'project:' + projId, fromSub + ' → ' + toSub + ' (' + resp.copiedCount + '件)');
+    alert('✅ ' + resp.copiedCount + ' 件コピーしました');
+  } catch(e){
+    alert('⚠ エラー: ' + e.message);
+  }
+}
+
+// 整合性チェッカー: orgMaster と Drive フォルダ名の差分検出 + 一括修正
+async function showDriveConsistencyChecker(){
+  if(!_isHQUser_()){ alert('🔒 本社管理者のみ実行可能です'); return; }
+  var list = _getOrgMaster_().filter(function(r){ return r.driveFolderId; });
+  if(!list.length){ alert('Drive フォルダ ID が登録された取引先がありません'); return; }
+  if(!confirm(list.length + '件の取引先について Drive フォルダ名の整合性を確認します。続行しますか?')) return;
+
+  try {
+    var resp = await callCloudAPI('checkOrgFolderConsistency', {}, {
+      orgList: list.map(function(r){ return { code: r.code, org: r.org, codeFamily: r.codeFamily, parentCode: r.parentCode }; })
+    });
+    if(!resp || !resp.success){ alert('⚠ ' + (resp?.error || '失敗')); return; }
+
+    var diffs = resp.diffs || [];
+    var modal = document.createElement('div');
+    modal.className = 'proof-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+    var listHtml = diffs.length === 0
+      ? '<div style="text-align:center;padding:40px;color:#888"><div style="font-size:36px;margin-bottom:8px">✨</div>すべて整合性が取れています</div>'
+      : diffs.map(function(d){
+          return '<div style="border:1px solid #fde047;background:#fffbeb;border-radius:6px;padding:10px;margin-bottom:8px">' +
+            '<div style="font-family:monospace;font-weight:700;color:#78350f;margin-bottom:4px">' + d.code + ' (' + d.org + ')</div>' +
+            '<div style="font-size:12px;color:#92400e"><strong>現在:</strong> <code style="background:#fff;padding:2px 6px;border-radius:3px">' + d.actual + '</code></div>' +
+            '<div style="font-size:12px;color:#16a34a;margin-top:2px"><strong>期待:</strong> <code style="background:#fff;padding:2px 6px;border-radius:3px">' + d.expected + '</code></div>' +
+            '<div style="text-align:right;margin-top:6px"><button class="btn" style="font-size:11px" onclick="renameOrgFolderUI(\'' + d.folderId + '\',\'' + d.expected + '\',\'' + d.code + '\')">✏ リネーム</button></div>' +
+          '</div>';
+        }).join('');
+    modal.innerHTML =
+      '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+        '<div style="padding:14px 20px;background:#0891b2;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+          '<div><strong>🔍 Drive 整合性チェック</strong>' +
+          '<div style="font-size:11px;opacity:.85;margin-top:2px">整合: ' + resp.okCount + '件 / 不整合: ' + diffs.length + '件 / 未存在: ' + (resp.notFound||[]).length + '件</div></div>' +
+          '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer">×</button>' +
+        '</div>' +
+        '<div style="overflow-y:auto;flex:1;padding:14px 20px">' + listHtml + '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+  } catch(e){
+    alert('⚠ エラー: ' + e.message);
+  }
+}
+
+async function renameOrgFolderUI(folderId, newName, code){
+  if(!confirm('「' + newName + '」にリネームしますか?')) return;
+  try {
+    var resp = await callCloudAPI('renameOrgFolder', {}, { folderId: folderId, newName: newName });
+    if(resp && resp.success){
+      if(typeof _addAuditLog_ === 'function') _addAuditLog_('drive', 'orgMaster:' + code, 'Drive リネーム: ' + resp.oldName + ' → ' + newName);
+      alert('✅ リネーム完了');
+      document.querySelector('.proof-modal')?.remove();
+      showDriveConsistencyChecker();
+    } else {
+      alert('⚠ ' + (resp?.error || '失敗'));
+    }
+  } catch(e){
+    alert('⚠ エラー: ' + e.message);
+  }
+}
+
+// Drive 設定モーダル (ルートフォルダ ID 設定)
+async function showDriveSettingModal(){
+  if(!_isHQUser_()){ alert('🔒 本社管理者のみ設定可能です'); return; }
+  var current = '';
+  try {
+    var resp = await callCloudAPI('getDriveRootFolderId');
+    if(resp && resp.success) current = resp.folderId || '';
+  } catch(e){}
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:520px;border-radius:10px;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between"><strong>📁 Drive ルートフォルダ設定</strong><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+      '<div style="padding:18px 20px">' +
+        '<div style="background:#eff6ff;padding:10px 12px;border-radius:6px;font-size:12px;color:#1e3a8a;margin-bottom:14px;line-height:1.6">' +
+          '1. Google Drive で TOKIWA-HUB 用の親フォルダを作成 (例: 「TOKIWA-HUB-DATA」)<br>' +
+          '2. そのフォルダを開いて URL の <code>folders/</code> 以降の ID をコピー<br>' +
+          '3. 下に貼り付けて保存<br><br>' +
+          '※ このフォルダ配下に 01_顧客 / 02_仕入先 等のサブが自動生成されます' +
+        '</div>' +
+        '<input id="drive-root-input" placeholder="例: 1A2B3C4d5E6f7..." value="' + current + '" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace">' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="submitDriveRoot()">保存</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+async function submitDriveRoot(){
+  var folderId = (document.getElementById('drive-root-input')?.value || '').trim();
+  if(!folderId){ alert('フォルダ ID を入力してください'); return; }
+  try {
+    var resp = await callCloudAPI('setDriveRootFolderId', {}, { folderId: folderId });
+    if(resp && resp.success){
+      alert('✅ 設定保存完了\n\nフォルダ名: ' + resp.folderName);
+      document.querySelector('.proof-modal')?.remove();
+    } else {
+      alert('⚠ ' + (resp?.error || '失敗'));
+    }
+  } catch(e){
+    alert('⚠ エラー: ' + e.message);
+  }
+}
 
 // ── Chatbot Tool Use 定義 ──────────────────────────────
 // Claude にこれらのツールを使わせ、フロントの DB を直接操作させる
@@ -19930,6 +20379,11 @@ function renderProjects(){
     const deliveryBtn = linkedDeliveries.length > 0
       ? `<button class="use-btn" style="background:#dcfce7;border-color:#86efac;color:#065f46;white-space:nowrap" onclick="jumpToDeliveryDate('${linkedDeliveries[0].date}')">🚚 配送 ${linkedDeliveries.length}件</button>`
       : `<button class="use-btn" style="white-space:nowrap" onclick="createDeliveryFromProject('${r.id}','delivery')">🚚 配送タスク追加</button>`;
+    // 📁 Drive フォルダ連携ボタン
+    const driveBtn = r.driveFolderId
+      ? `<button class="use-btn" style="background:#0891b2;color:#fff;border-color:#0891b2;white-space:nowrap" onclick="showProjectDriveFolderPreview('${r.id}')">📁 Drive プレビュー</button>`
+      : `<button class="use-btn" style="background:#ecfeff;border-color:#67e8f9;color:#0e7490;white-space:nowrap" onclick="createProjectDriveFolder('${r.id}')">📁 Drive フォルダ作成</button>`;
+    const repeatBtn = `<button class="use-btn" style="background:#fef3c7;border-color:#fbbf24;color:#78350f;white-space:nowrap" onclick="repeatProjectFromPrevious('${r.id}')" title="この案件をリピート (新案件作成 + 校了データを 00_前回データ にコピー)">🔁 リピート発注</button>`;
     const specRow=`<tr id="proj-acc-${oi}" style="display:none;background:#f9f9f7">
       <td colspan="12" style="padding:.5rem 1rem .75rem 2rem">
         <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start">
@@ -19937,8 +20391,11 @@ function renderProjects(){
             ${r.spec?`<div style="margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:#aaa;letter-spacing:.08em">仕様・規格</span><div style="font-size:12px;white-space:pre-wrap;margin-top:2px;color:#1a1a1a">${r.spec}</div></div>`:''}
             ${r.memo?`<div style="margin-top:6px"><span style="font-size:10px;font-weight:700;color:#aaa;letter-spacing:.08em">備考・メモ</span><div style="font-size:12px;white-space:pre-wrap;margin-top:2px;color:#555">${r.memo}</div></div>`:''}
             ${r.qty?`<div style="margin-top:6px;font-size:11px;color:#888">数量: <strong>${r.qty.toLocaleString()}${r.unit||''}</strong>　原価合計: <strong>${r.grand?fmt(r.grand):''}</strong></div>`:''}
+            ${r.fromRepeatProjectId?`<div style="margin-top:6px;font-size:11px;color:#92400e;background:#fef3c7;padding:4px 8px;border-radius:4px;display:inline-block">🔁 リピート: ${r.fromRepeatProjectId} の R${r.repeatCount||1} 版</div>`:''}
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+            ${driveBtn}
+            ${repeatBtn}
             ${specBtn}
             ${estimateBtn}
             ${workBtn}
@@ -23005,6 +23462,15 @@ function openInquiryDetail(id) {
       <button class="btn" style="font-size:11px;background:#dcfce7;border-color:#86efac;color:#14532d;font-weight:700" onclick="showForwardInquiryModal('${inq.id}')">📤 転送 (匿名化)</button>
       ${linkedProject ? `<button class="btn" style="font-size:11px" onclick="unlinkInquiryFromProject('${inq.id}')">🔗 案件リンク解除</button>` : `<button class="btn" style="font-size:11px" onclick="linkInquiryToExistingProject('${inq.id}')">🔗 既存案件にリンク</button>`}
     </div>
+
+    <!-- III-1: ワンストップ転送 + AI 返信下書き -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;padding:10px;background:linear-gradient(135deg,#faf5ff,#ede9fe);border:1px solid #c4b5fd;border-radius:6px">
+      <span style="font-size:11px;color:#5b21b6;align-self:center;font-weight:700">📡 ワンストップ:</span>
+      <button class="btn" style="font-size:11px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="showAiDraftReplyModal('${inq.id}')" title="任意トーンで AI 返信下書きを生成">🤖 AI 返信下書き</button>
+      <button class="btn" style="font-size:11px;background:#10b981;color:#fff;border-color:#10b981" onclick="showLineworksForwardModal('${inq.id}')" title="LINE WORKS のユーザー / トークルームに転送">📲 LINE WORKS 転送</button>
+      <button class="btn" style="font-size:11px;background:#06c755;color:#fff;border-color:#06c755" onclick="showLineForwardModal('${inq.id}')" title="LINE Notify 経由で LINE グループに転送">💚 LINE 転送</button>
+      ${(inq.from_email || inq.email) ? `<button class="btn" style="font-size:11px;background:#dc2626;color:#fff;border-color:#dc2626" onclick="showEmailReplyModal('${inq.id}')" title="送信元メールアドレスに直接返信">📧 メール返信</button>` : ''}
+    </div>
     
     <!-- 操作ボタン -->
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem">
@@ -23153,6 +23619,324 @@ async function _doSendLineworksReply_(inqId, text){
     }
   } catch(e){
     alert('通信エラー: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// 🤖 III-1: AI 返信下書き生成モーダル (任意ソース対応)
+// ─────────────────────────────────────────────────────
+function showAiDraftReplyModal(inqId){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; });
+  if(!inq){ alert('問い合わせが見つかりません'); return; }
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong>🤖 AI 返信下書き生成</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">トーンと追加指示を選んで生成</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        '<div style="background:#f3f4f6;padding:8px 12px;border-radius:6px;font-size:11px;color:#374151;margin-bottom:14px;line-height:1.5">' +
+          '<strong>元のメッセージ:</strong> ' + _escDiff(inq.subject || '(件名なし)') + '<br>' +
+          '<span style="color:#888">' + _escDiff((inq.body || '').substring(0, 120)) + (inq.body && inq.body.length > 120 ? '…' : '') + '</span>' +
+        '</div>' +
+        '<label style="font-size:12px;font-weight:700;color:#555">トーン</label>' +
+        '<div style="display:flex;gap:6px;margin:6px 0 14px">' +
+          '<label style="flex:1;cursor:pointer"><input type="radio" name="ai-tone" value="polite" checked style="display:none"><div class="tone-opt" data-tone="polite" style="padding:10px;border:2px solid #7c3aed;background:#faf5ff;border-radius:6px;text-align:center;font-size:12px;font-weight:700;color:#5b21b6">📝 丁寧 (敬語)</div></label>' +
+          '<label style="flex:1;cursor:pointer"><input type="radio" name="ai-tone" value="friendly" style="display:none"><div class="tone-opt" data-tone="friendly" style="padding:10px;border:2px solid #e5e7eb;border-radius:6px;text-align:center;font-size:12px;font-weight:700;color:#888">😊 親しみ</div></label>' +
+          '<label style="flex:1;cursor:pointer"><input type="radio" name="ai-tone" value="concise" style="display:none"><div class="tone-opt" data-tone="concise" style="padding:10px;border:2px solid #e5e7eb;border-radius:6px;text-align:center;font-size:12px;font-weight:700;color:#888">⚡ 簡潔</div></label>' +
+        '</div>' +
+        '<label style="font-size:12px;font-weight:700;color:#555">追加指示 (任意)</label>' +
+        '<textarea id="ai-draft-instruction" rows="3" placeholder="例: 納期を5月末に調整できる旨を含めてください / 価格は別途見積を送る旨を伝えて" style="width:100%;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:6px;font-family:inherit;margin:6px 0 14px"></textarea>' +
+        '<div id="ai-draft-result" style="display:none;background:#fff;border:2px solid #c4b5fd;border-radius:8px;padding:14px;margin-bottom:14px"></div>' +
+        '<div style="display:flex;justify-content:space-between;gap:8px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<div style="display:flex;gap:6px">' +
+            '<button id="ai-draft-gen-btn" class="btn btn-p" style="background:#7c3aed;border-color:#7c3aed" onclick="_runAiDraftReply_(\'' + inq.id + '\')">🤖 生成</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+
+  // トーン選択 UI
+  modal.querySelectorAll('.tone-opt').forEach(function(el){
+    el.addEventListener('click', function(){
+      modal.querySelectorAll('.tone-opt').forEach(function(e){
+        e.style.border = '2px solid #e5e7eb'; e.style.background = '#fff'; e.style.color = '#888';
+      });
+      el.style.border = '2px solid #7c3aed'; el.style.background = '#faf5ff'; el.style.color = '#5b21b6';
+      modal.querySelector('input[value="' + el.dataset.tone + '"]').checked = true;
+    });
+  });
+}
+
+async function _runAiDraftReply_(inqId){
+  var btn = document.getElementById('ai-draft-gen-btn');
+  var resultBox = document.getElementById('ai-draft-result');
+  var tone = document.querySelector('input[name="ai-tone"]:checked')?.value || 'polite';
+  var instruction = (document.getElementById('ai-draft-instruction')?.value || '').trim();
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ 生成中...'; }
+  try {
+    var resp = await callCloudAPI('generateAiDraftReply', {}, { inquiryId: inqId, tone: tone, instruction: instruction });
+    if(!resp || !resp.success){
+      alert('⚠ ' + (resp?.error || '生成失敗'));
+      if(btn){ btn.disabled = false; btn.textContent = '🤖 再生成'; }
+      return;
+    }
+    if(resultBox){
+      resultBox.style.display = 'block';
+      resultBox.innerHTML =
+        '<div style="font-size:11px;font-weight:700;color:#5b21b6;margin-bottom:6px">✨ 生成結果 (トーン: ' + tone + ')</div>' +
+        '<textarea id="ai-draft-edit" style="width:100%;min-height:200px;font-size:13px;padding:10px;border:1px solid #c4b5fd;border-radius:6px;font-family:inherit;line-height:1.6;resize:vertical">' + _escDiff(resp.draft) + '</textarea>' +
+        '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;justify-content:flex-end">' +
+          '<button class="btn" style="font-size:11px" onclick="_copyDraftToReply_(\'' + inqId + '\')">✏️ 返信欄に挿入</button>' +
+          '<button class="btn" style="font-size:11px;background:#10b981;color:#fff;border-color:#10b981" onclick="_dispatchDraftToLineworks_(\'' + inqId + '\')">📲 LINE WORKS で送信</button>' +
+          '<button class="btn" style="font-size:11px;background:#dc2626;color:#fff;border-color:#dc2626" onclick="_dispatchDraftToEmail_(\'' + inqId + '\')">📧 メールで送信</button>' +
+          '<button class="btn" style="font-size:11px" onclick="navigator.clipboard.writeText(document.getElementById(\'ai-draft-edit\').value).then(function(){alert(\'✅ コピー完了\')})">📋 コピー</button>' +
+        '</div>';
+    }
+    if(btn){ btn.disabled = false; btn.textContent = '🔄 再生成'; }
+  } catch(e){
+    alert('⚠ ' + e.message);
+    if(btn){ btn.disabled = false; btn.textContent = '🤖 再生成'; }
+  }
+}
+
+function _copyDraftToReply_(inqId){
+  var draft = document.getElementById('ai-draft-edit')?.value || '';
+  var ta = document.getElementById('inq-reply-text');
+  if(ta){
+    ta.value = draft;
+    document.querySelector('.proof-modal')?.remove();
+    ta.focus();
+    ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+async function _dispatchDraftToLineworks_(inqId){
+  var draft = document.getElementById('ai-draft-edit')?.value || '';
+  if(!draft.trim()) return;
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; });
+  if(inq && inq.source_type === 'linesvc'){
+    if(!confirm('LINE WORKS の元のお客様に直接返信します。よろしいですか?')) return;
+    document.querySelector('.proof-modal')?.remove();
+    await _doSendLineworksReply_(inqId, draft);
+  } else {
+    // 元が LW でない場合 → ユーザー/トークルーム選択モーダルへ
+    document.querySelector('.proof-modal')?.remove();
+    showLineworksForwardModal(inqId, draft);
+  }
+}
+
+async function _dispatchDraftToEmail_(inqId){
+  var draft = document.getElementById('ai-draft-edit')?.value || '';
+  if(!draft.trim()) return;
+  document.querySelector('.proof-modal')?.remove();
+  showEmailReplyModal(inqId, draft);
+}
+
+// ─────────────────────────────────────────────────────
+// 📲 III-1: LINE WORKS 転送モーダル
+// ─────────────────────────────────────────────────────
+function showLineworksForwardModal(inqId, prefilledText){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; });
+  if(!inq){ alert('問い合わせが見つかりません'); return; }
+
+  var defaultMsg = prefilledText || ('【連絡管理から転送】\n' +
+    '──────────\n' +
+    '受付: ' + (inq.received_at ? new Date(inq.received_at).toLocaleString('ja-JP') : '-') + '\n' +
+    '送信元: ' + (inq.from_name || '') + (inq.from_company ? ' (' + inq.from_company + ')' : '') + '\n' +
+    (inq.subject ? '件名: ' + inq.subject + '\n' : '') +
+    '──────────\n' +
+    (inq.body || ''));
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:600px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#10b981;color:#fff;display:flex;justify-content:space-between"><strong>📲 LINE WORKS 転送</strong><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        '<div style="display:flex;gap:6px;margin-bottom:12px">' +
+          '<label style="flex:1;cursor:pointer"><input type="radio" name="lw-target" value="user" checked style="display:none"><div class="lwtg-opt" data-target="user" style="padding:10px;border:2px solid #10b981;background:#ecfdf5;border-radius:6px;text-align:center;font-size:12px;font-weight:700;color:#065f46">👤 ユーザー</div></label>' +
+          '<label style="flex:1;cursor:pointer"><input type="radio" name="lw-target" value="channel" style="display:none"><div class="lwtg-opt" data-target="channel" style="padding:10px;border:2px solid #e5e7eb;border-radius:6px;text-align:center;font-size:12px;font-weight:700;color:#888">💬 トークルーム</div></label>' +
+        '</div>' +
+        '<label style="font-size:12px;font-weight:700;color:#555">送信先 ID <span id="lw-target-hint" style="font-weight:400;color:#888">(LINE WORKS Bot 管理画面でコピー)</span></label>' +
+        '<input id="lw-target-id" placeholder="例: user-uuid または channel-id" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace;margin:6px 0 14px">' +
+        '<label style="font-size:12px;font-weight:700;color:#555">メッセージ (編集可)</label>' +
+        '<textarea id="lw-forward-text" rows="10" style="width:100%;font-size:12px;padding:10px;border:1px solid #ccc;border-radius:6px;font-family:inherit;line-height:1.6;resize:vertical;margin-top:6px">' + _escDiff(defaultMsg) + '</textarea>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#10b981;border-color:#10b981" onclick="_submitLineworksForward_(\'' + inqId + '\')">📤 送信</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+
+  modal.querySelectorAll('.lwtg-opt').forEach(function(el){
+    el.addEventListener('click', function(){
+      modal.querySelectorAll('.lwtg-opt').forEach(function(e){
+        e.style.border = '2px solid #e5e7eb'; e.style.background = '#fff'; e.style.color = '#888';
+      });
+      el.style.border = '2px solid #10b981'; el.style.background = '#ecfdf5'; el.style.color = '#065f46';
+      modal.querySelector('input[value="' + el.dataset.target + '"]').checked = true;
+    });
+  });
+}
+
+async function _submitLineworksForward_(inqId){
+  var target = document.querySelector('input[name="lw-target"]:checked')?.value || 'user';
+  var targetId = (document.getElementById('lw-target-id')?.value || '').trim();
+  var text = (document.getElementById('lw-forward-text')?.value || '').trim();
+  if(!targetId){ alert('送信先 ID を入力してください'); return; }
+  if(!text){ alert('メッセージを入力してください'); return; }
+  if(!confirm('LINE WORKS で送信します。\n\n送信先: ' + target + ' / ' + targetId)) return;
+
+  try {
+    var resp = await callCloudAPI('forwardInquiryToLineworks', {}, {
+      inquiryId: inqId, target: target, targetId: targetId, message: text,
+      by: currentAuth?.userName || ''
+    });
+    if(resp && resp.success){
+      if(typeof _addAuditLog_ === 'function') _addAuditLog_('forward', 'inquiry:' + inqId, 'LINE WORKS 転送 (' + target + ': ' + targetId + ')');
+      alert('✅ LINE WORKS に送信しました');
+      document.querySelector('.proof-modal')?.remove();
+      if(typeof loadFromCloud === 'function') await loadFromCloud();
+      if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId);
+    } else {
+      alert('⚠ ' + (resp?.error || '送信失敗'));
+    }
+  } catch(e){
+    alert('⚠ ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// 💚 III-1: LINE Notify 転送モーダル
+// ─────────────────────────────────────────────────────
+async function showLineForwardModal(inqId, prefilledText){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; });
+  if(!inq){ alert('問い合わせが見つかりません'); return; }
+
+  // 利用可能なトークン一覧を取得
+  var tokenInfo = { keys: [], configured: false };
+  try {
+    var resp = await callCloudAPI('listLineNotifyTokens');
+    if(resp && resp.success) tokenInfo = resp;
+  } catch(e){}
+
+  if(!tokenInfo.configured){
+    alert('⚠ LINE Notify トークンが未設定です。\n\nGAS の Script Properties に LINE_NOTIFY_TOKEN を設定してください。\n複数の宛先を使い分ける場合: 「default=xxx,sales=yyy,production=zzz」のようにカンマ区切りで設定');
+    return;
+  }
+
+  var defaultMsg = prefilledText || ('【連絡管理から転送】\n' +
+    '受付: ' + (inq.received_at ? new Date(inq.received_at).toLocaleString('ja-JP') : '-') + '\n' +
+    '送信元: ' + (inq.from_name || '') + (inq.from_company ? ' (' + inq.from_company + ')' : '') + '\n' +
+    (inq.subject ? '件名: ' + inq.subject + '\n' : '') +
+    '────────\n' + (inq.body || ''));
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:600px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#06c755;color:#fff;display:flex;justify-content:space-between"><strong>💚 LINE 転送 (LINE Notify)</strong><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        '<label style="font-size:12px;font-weight:700;color:#555">送信先トークン</label>' +
+        '<select id="line-token-key" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px;margin:6px 0 14px">' +
+          tokenInfo.keys.map(function(k){ return '<option value="' + k + '">' + k + '</option>'; }).join('') +
+        '</select>' +
+        '<label style="font-size:12px;font-weight:700;color:#555">メッセージ (編集可)</label>' +
+        '<textarea id="line-forward-text" rows="10" style="width:100%;font-size:12px;padding:10px;border:1px solid #ccc;border-radius:6px;font-family:inherit;line-height:1.6;resize:vertical;margin-top:6px">' + _escDiff(defaultMsg) + '</textarea>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#06c755;border-color:#06c755" onclick="_submitLineForward_(\'' + inqId + '\')">📤 送信</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+async function _submitLineForward_(inqId){
+  var tokenKey = document.getElementById('line-token-key')?.value || 'default';
+  var text = (document.getElementById('line-forward-text')?.value || '').trim();
+  if(!text){ alert('メッセージを入力してください'); return; }
+  try {
+    var resp = await callCloudAPI('forwardInquiryToLine', {}, {
+      inquiryId: inqId, message: text, tokenKey: tokenKey, by: currentAuth?.userName || ''
+    });
+    if(resp && resp.success){
+      if(typeof _addAuditLog_ === 'function') _addAuditLog_('forward', 'inquiry:' + inqId, 'LINE 転送 (' + tokenKey + ')');
+      alert('✅ LINE に送信しました');
+      document.querySelector('.proof-modal')?.remove();
+      if(typeof loadFromCloud === 'function') await loadFromCloud();
+      if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId);
+    } else {
+      alert('⚠ ' + (resp?.error || '送信失敗'));
+    }
+  } catch(e){
+    alert('⚠ ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// 📧 III-1: メール返信モーダル (Gmail 経由直接送信)
+// ─────────────────────────────────────────────────────
+function showEmailReplyModal(inqId, prefilledText){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; });
+  if(!inq){ alert('問い合わせが見つかりません'); return; }
+  var to = inq.from_email || inq.email || '';
+  if(!to){ alert('送信元メールアドレスがありません'); return; }
+  var subject = (inq.subject || '').indexOf('Re: ') === 0 ? inq.subject : ('Re: ' + (inq.subject || ''));
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#dc2626;color:#fff;display:flex;justify-content:space-between"><strong>📧 メール返信 (Gmail 経由)</strong><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        '<label style="font-size:12px;font-weight:700;color:#555">宛先</label>' +
+        '<input id="email-to" value="' + to + '" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px;font-family:monospace;margin:6px 0 10px">' +
+        '<label style="font-size:12px;font-weight:700;color:#555">件名</label>' +
+        '<input id="email-subject" value="' + _escDiff(subject) + '" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px;margin:6px 0 10px">' +
+        '<label style="font-size:12px;font-weight:700;color:#555">本文</label>' +
+        '<textarea id="email-body" rows="12" style="width:100%;font-size:13px;padding:10px;border:1px solid #ccc;border-radius:6px;font-family:inherit;line-height:1.6;resize:vertical;margin-top:6px">' + _escDiff(prefilledText || '') + '</textarea>' +
+        '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#7f1d1d;line-height:1.5">⚠ 送信ボタンを押すと、トキワ印刷グループの Gmail アカウントから直接送信されます。よく確認してください。</div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#dc2626;border-color:#dc2626" onclick="_submitEmailReply_(\'' + inqId + '\')">📤 送信</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+async function _submitEmailReply_(inqId){
+  var to = (document.getElementById('email-to')?.value || '').trim();
+  var subject = (document.getElementById('email-subject')?.value || '').trim();
+  var body = (document.getElementById('email-body')?.value || '').trim();
+  if(!to || !body){ alert('宛先と本文を入力してください'); return; }
+  if(!confirm('Gmail で送信します。\n\n宛先: ' + to + '\n件名: ' + subject + '\n\n送信しますか?')) return;
+  try {
+    var resp = await callCloudAPI('forwardInquiryToEmail', {}, {
+      inquiryId: inqId, replyTo: to, subject: subject, body: body, by: currentAuth?.userName || ''
+    });
+    if(resp && resp.success){
+      if(typeof _addAuditLog_ === 'function') _addAuditLog_('reply', 'inquiry:' + inqId, 'メール返信送信 (' + to + ')');
+      alert('✅ メール送信完了');
+      document.querySelector('.proof-modal')?.remove();
+      if(typeof loadFromCloud === 'function') await loadFromCloud();
+      if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId);
+    } else {
+      alert('⚠ ' + (resp?.error || '送信失敗'));
+    }
+  } catch(e){
+    alert('⚠ ' + e.message);
   }
 }
 
