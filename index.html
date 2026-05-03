@@ -1777,6 +1777,7 @@ window.addEventListener('load', function(){
         <label style="margin-left:auto;font-size:11px;color:#666;display:flex;align-items:center;gap:4px;padding:0 8px;cursor:pointer">
           <input type="checkbox" id="inq-show-submitted" onchange="renderInquiryList()"> 提出済も表示
         </label>
+        <button class="btn" style="font-size:11px;padding:3px 10px" onclick="showContactTargetMaster()" title="LW/LINE 転送先のマスタ管理">📞 宛先マスタ</button>
       </div>
       <!-- フィルタ -->
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:.65rem;align-items:center">
@@ -9937,17 +9938,26 @@ function createProofing(){
 }
 
 // 校正ステータスを更新
-function updateProofingStatus(proofingId, status){
+async function updateProofingStatus(proofingId, status){
   const p = (DB.proofings || []).find(x => x.id === proofingId);
   if(p){
     p.status = status;
     saveDB();
     renderProofingList();
+    // 🆕 GGG-E: 校了になったら最新校正データを自動で 05_校了 に格納
+    if(status === 'approved' && p.versions && p.versions.length > 0){
+      var linkedProj = (DB.projects || []).find(function(prj){ return prj.id === p.projectId; });
+      if(linkedProj && linkedProj.driveFolderId && linkedProj.driveSubFolders){
+        if(confirm('校了されました。\n\nこの最新校正データを Drive の 05_校了 フォルダに自動格納しますか?')){
+          await _routeProofToDriveSubfolder_(p, linkedProj, '05_校了');
+        }
+      }
+    }
   }
 }
 
-// 校正をアップロード (Drive URL 貼り付け方式)
-function uploadProofVersion(proofingId){
+// 校正をアップロード (Drive URL 貼り付け方式) — GGG-E で Drive サブフォルダ自動振り分け対応
+async function uploadProofVersion(proofingId){
   const p = (DB.proofings || []).find(x => x.id === proofingId);
   if(!p) return;
 
@@ -9981,8 +9991,64 @@ function uploadProofVersion(proofingId){
   p.status = 'waiting';
   saveDB();
 
+  // 🆕 GGG-E: バージョン番号 / 種類に応じて Drive サブフォルダに自動振り分け
+  var linkedProj = (DB.projects || []).find(function(prj){ return prj.id === p.projectId; });
+  if(linkedProj && linkedProj.driveFolderId && linkedProj.driveSubFolders){
+    var targetSubfolder = '';
+    if(versionKind === 'final'){
+      targetSubfolder = '05_校了';
+    } else if(versionKind === 'manuscript'){
+      targetSubfolder = '01_入稿データ';
+    } else {
+      // proof — バージョン番号で 02_初校 / 03_2校 / 04_3校 を判定
+      var proofCount = p.versions.filter(function(v){ return v.kind === 'proof'; }).length;
+      if(proofCount === 1) targetSubfolder = '02_初校';
+      else if(proofCount === 2) targetSubfolder = '03_2校';
+      else if(proofCount === 3) targetSubfolder = '04_3校';
+      else targetSubfolder = '04_3校'; // 4校以降も 3校 フォルダに集約 (将来 04_3校以降 として拡張可)
+    }
+    if(targetSubfolder && confirm('Drive の ' + targetSubfolder + ' フォルダに自動格納しますか?')){
+      await _routeProofToDriveSubfolderById_(version.driveFileId, version.fileName, linkedProj, targetSubfolder);
+      version.driveStoredIn = targetSubfolder;
+      version.driveStoredAt = new Date().toISOString();
+      saveDB();
+    }
+  }
+
   showProofingDetail(proofingId);
   renderProofingList();
+}
+
+// 校正データ (バージョン全体) を Drive サブフォルダに格納
+async function _routeProofToDriveSubfolder_(proofing, project, subfolderName){
+  if(!proofing.versions || !proofing.versions.length) return;
+  var latest = proofing.versions[proofing.versions.length - 1];
+  await _routeProofToDriveSubfolderById_(latest.driveFileId, latest.fileName, project, subfolderName);
+}
+
+// 個別 Drive ファイルを案件のサブフォルダにコピー
+async function _routeProofToDriveSubfolderById_(fileId, fileName, project, subfolderName){
+  if(!project.driveSubFolders || !project.driveSubFolders[subfolderName]){
+    alert('案件の Drive サブフォルダ情報が不完全です');
+    return;
+  }
+  try {
+    // 既存の moveProjectFiles を fileIds 指定で利用
+    var resp = await callCloudAPI('moveProjectFiles', {}, {
+      projectFolderId: project.driveFolderId,
+      fromSubfolder: '_共有用', // ダミー (fileIds 指定時は使われない)
+      toSubfolder: subfolderName,
+      fileIds: [fileId]
+    });
+    if(resp && resp.success){
+      if(typeof _addAuditLog_ === 'function') _addAuditLog_('drive', 'project:' + project.id, '校正データを ' + subfolderName + ' に格納: ' + fileName);
+      alert('✅ ' + subfolderName + ' に格納完了');
+    } else {
+      alert('⚠ ' + (resp?.error || '失敗'));
+    }
+  } catch(e){
+    alert('⚠ ' + e.message);
+  }
 }
 
 // Drive URL からファイル ID を抽出
@@ -15274,6 +15340,7 @@ function renderOrgCodeMaster(){
         (hq ? '<button class="btn" style="font-size:12px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="detectOrgDuplicatesWithAI()">🤖 AI で詳細マージ提案</button>' : '') +
         (hq ? '<button class="btn" style="font-size:12px;background:#0891b2;color:#fff;border-color:#0891b2" onclick="showDriveSettingModal()">📁 Drive 設定</button>' : '') +
         (hq ? '<button class="btn" style="font-size:12px" onclick="showDriveConsistencyChecker()">🔍 Drive 整合性チェック</button>' : '') +
+        (hq ? '<button class="btn" style="font-size:12px;background:#fef3c7;border-color:#fbbf24;color:#78350f" onclick="showMigrationWizard()" title="既存 Drive データを新コード規約に段階的に移行">🔄 移行ウィザード</button>' : '') +
       '</div>' +
       '<div style="overflow-x:auto;max-height:600px;overflow-y:auto">' +
       '<table class="m-tbl"><thead><tr style="background:#f3f4f6">' +
@@ -15868,6 +15935,107 @@ async function showDriveConsistencyChecker(){
   }
 }
 
+// ─────────────────────────────────────────────────────
+// 🔄 GGG-D: 既存 Drive データ段階的移行ウィザード
+// ─────────────────────────────────────────────────────
+async function showMigrationWizard(){
+  if(!_isHQUser_()){ alert('🔒 本社管理者のみ実行可能です'); return; }
+  if(!confirm('Drive ルートをスキャンして、新コード規約に未準拠の旧フォルダ一覧を取得します。\n大量のフォルダがある場合、数秒かかることがあります。続行しますか?')) return;
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:920px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#0891b2;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong>🔄 Drive 移行ウィザード</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">旧フォルダを 1社ずつ確認しながら新コード規約に移行</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div id="mig-wizard-body" style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        '<div style="text-align:center;padding:40px"><div style="font-size:32px;margin-bottom:10px">⏳</div>Drive をスキャンしています...</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+
+  try {
+    var resp = await callCloudAPI('scanLegacyFolders', {}, { maxDepth: 3 });
+    if(!resp || !resp.success){
+      document.getElementById('mig-wizard-body').innerHTML = '<div style="color:#dc2626;padding:20px">⚠ ' + (resp?.error || 'スキャン失敗') + '</div>';
+      return;
+    }
+    var orgList = _getOrgMaster_();
+    var candidates = resp.candidates || [];
+
+    if(candidates.length === 0){
+      document.getElementById('mig-wizard-body').innerHTML = '<div style="text-align:center;padding:40px;color:#16a34a"><div style="font-size:36px;margin-bottom:8px">✨</div>移行が必要な旧フォルダはありません</div>';
+      return;
+    }
+
+    var html = '<div style="background:#dbeafe;color:#1e3a8a;padding:10px 14px;border-radius:6px;font-size:12px;margin-bottom:14px">' +
+      '🔍 ' + candidates.length + ' 件の旧フォルダ候補を検出しました。各行で 「マッチする取引先コード」 を選択し、「移行実行」 ボタンで新構造に移動します。' +
+      '</div>';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html += '<thead><tr style="background:#f3f4f6"><th style="padding:6px;text-align:left">旧フォルダ名</th><th style="padding:6px">パス</th><th style="padding:6px">📁</th><th style="padding:6px">📄</th><th style="padding:6px;min-width:200px">マッチする取引先</th><th style="padding:6px">操作</th></tr></thead><tbody>';
+    candidates.forEach(function(c, idx){
+      // 自動マッチ候補
+      var bestMatch = orgList.find(function(o){
+        if(o.org === c.name) return true;
+        if(Array.isArray(o.aliases) && o.aliases.indexOf(c.name) >= 0) return true;
+        var n1 = (o.org||'').replace(/[\s　]/g, '').toLowerCase();
+        var n2 = c.name.replace(/[\s　]/g, '').toLowerCase();
+        return n1 === n2;
+      });
+      var orgOpts = '<option value="">— 選択 —</option>' + orgList.map(function(o){
+        return '<option value="' + o.code + '"' + (bestMatch && bestMatch.code === o.code ? ' selected' : '') + '>' + o.code + ' ' + o.org + '</option>';
+      }).join('');
+      html += '<tr id="mig-row-' + idx + '" style="border-bottom:1px solid #e5e7eb">' +
+        '<td style="padding:6px"><strong>' + _escDiff(c.name) + '</strong></td>' +
+        '<td style="padding:6px;color:#888;font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + _escDiff(c.path) + '">' + _escDiff(c.path) + '</td>' +
+        '<td style="padding:6px;text-align:center">' + c.subFolderCount + '</td>' +
+        '<td style="padding:6px;text-align:center">' + c.fileCount + '</td>' +
+        '<td style="padding:6px"><select id="mig-code-' + idx + '" style="width:100%;font-size:11px;padding:3px">' + orgOpts + '</select></td>' +
+        '<td style="padding:6px;text-align:center"><button class="btn" style="font-size:10px;padding:3px 8px;background:#0891b2;color:#fff;border-color:#0891b2" onclick="executeMigration(' + idx + ',\'' + c.folderId + '\',\'' + c.name.replace(/'/g,"\\'") + '\')">▶ 移行</button></td>' +
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('mig-wizard-body').innerHTML = html;
+  } catch(e){
+    document.getElementById('mig-wizard-body').innerHTML = '<div style="color:#dc2626;padding:20px">⚠ ' + e.message + '</div>';
+  }
+}
+
+async function executeMigration(rowIdx, folderId, oldName){
+  var code = document.getElementById('mig-code-' + rowIdx)?.value;
+  if(!code){ alert('移行先のコードを選択してください'); return; }
+  var rec = _resolveOrgRecord_(code);
+  if(!rec){ alert('コードが見つかりません'); return; }
+  if(!confirm('「' + oldName + '」を「' + rec.code + '_' + rec.org + '」にリネーム + 適切な親フォルダに移動します。\n続行しますか?')) return;
+  var btn = document.querySelector('#mig-row-' + rowIdx + ' button');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    var resp = await callCloudAPI('migrateLegacyFolder', {}, {
+      folderId: folderId, code: rec.code, org: rec.org, family: rec.codeFamily, parentCode: rec.parentCode || ''
+    });
+    if(resp && resp.success){
+      // orgMaster の driveFolderId も更新
+      updateOrgRecord(rec.code, { driveFolderId: folderId, driveFolderName: resp.newName });
+      if(typeof _addAuditLog_ === 'function') _addAuditLog_('migrate', 'orgMaster:' + rec.code, 'Drive 移行: ' + resp.oldName + ' → ' + resp.newName);
+      var row = document.getElementById('mig-row-' + rowIdx);
+      if(row){
+        row.style.background = '#dcfce7';
+        row.innerHTML = '<td colspan="6" style="padding:10px;color:#14532d;font-size:12px;text-align:center">✅ 移行完了: ' + resp.oldName + ' → ' + resp.newName + ' <a href="' + resp.url + '" target="_blank" style="color:#0891b2;margin-left:8px">📁 開く</a></td>';
+      }
+    } else {
+      alert('⚠ ' + (resp?.error || '失敗'));
+      if(btn){ btn.disabled = false; btn.textContent = '▶ 移行'; }
+    }
+  } catch(e){
+    alert('⚠ ' + e.message);
+    if(btn){ btn.disabled = false; btn.textContent = '▶ 移行'; }
+  }
+}
+
 async function renameOrgFolderUI(folderId, newName, code){
   if(!confirm('「' + newName + '」にリネームしますか?')) return;
   try {
@@ -15930,6 +16098,142 @@ async function submitDriveRoot(){
   } catch(e){
     alert('⚠ エラー: ' + e.message);
   }
+}
+
+// ─────────────────────────────────────────────────────
+// 📞 III-2: 連絡宛先マスタ (LINE WORKS / LINE Notify)
+// ─────────────────────────────────────────────────────
+// DB.contactTargets[] = [{ id, name, type, targetId, group, note, createdAt, createdBy }]
+//   type: 'lw_user' | 'lw_channel' | 'line_notify'
+
+var CONTACT_TARGET_TYPES = {
+  'lw_user':     { label:'📲 LW ユーザー',    color:'#10b981' },
+  'lw_channel':  { label:'💬 LW トークルーム', color:'#06b6d4' },
+  'line_notify': { label:'💚 LINE Notify',    color:'#06c755' }
+};
+
+function _getContactTargets_(){
+  if(!window.DB) window.DB = {};
+  if(!Array.isArray(DB.contactTargets)) DB.contactTargets = [];
+  return DB.contactTargets;
+}
+
+function _filterContactTargets_(typeFilter){
+  return _getContactTargets_().filter(function(t){
+    return !typeFilter || t.type === typeFilter;
+  });
+}
+
+function addContactTarget(opts){
+  var list = _getContactTargets_();
+  var rec = {
+    id: 'CT-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+    name: opts.name || '',
+    type: opts.type || 'lw_user',
+    targetId: opts.targetId || '',
+    group: opts.group || '',
+    note: opts.note || '',
+    createdAt: new Date().toISOString(),
+    createdBy: (currentAuth && currentAuth.email) || ''
+  };
+  list.push(rec);
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('create', 'contactTarget:' + rec.id, '宛先登録: ' + rec.name);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return rec;
+}
+
+function deleteContactTarget(id){
+  if(!confirm('この宛先を削除しますか?')) return false;
+  var list = _getContactTargets_();
+  var idx = list.findIndex(function(t){ return t.id === id; });
+  if(idx < 0) return false;
+  list.splice(idx, 1);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return true;
+}
+
+// 宛先マスタ管理モーダル
+function showContactTargetMaster(){
+  var list = _getContactTargets_();
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var groups = {};
+  list.forEach(function(t){
+    var g = t.group || '(未分類)';
+    if(!groups[g]) groups[g] = [];
+    groups[g].push(t);
+  });
+  var groupHtml = Object.keys(groups).sort().map(function(g){
+    return '<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px;border-bottom:1px solid #c7d2fe;padding-bottom:3px">📂 ' + g + ' (' + groups[g].length + ')</div>' +
+      groups[g].map(function(t){
+        var meta = CONTACT_TARGET_TYPES[t.type] || { label:t.type, color:'#888' };
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:#f9fafb;border-radius:4px;margin-bottom:4px">' +
+          '<div style="flex:1">' +
+            '<div style="display:flex;gap:6px;align-items:center"><span style="background:' + meta.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700">' + meta.label + '</span><strong style="font-size:13px">' + _escDiff(t.name) + '</strong></div>' +
+            '<div style="font-size:10px;color:#888;font-family:monospace;margin-top:2px">' + _escDiff(t.targetId) + '</div>' +
+            (t.note ? '<div style="font-size:10px;color:#666;margin-top:2px">' + _escDiff(t.note) + '</div>' : '') +
+          '</div>' +
+          '<button class="btn" style="font-size:10px;padding:2px 6px;background:#fee;color:#dc2626;border-color:#fca5a5" onclick="if(deleteContactTarget(\'' + t.id + '\')){this.closest(\'.proof-modal\').remove();showContactTargetMaster();}">🗑</button>' +
+        '</div>';
+      }).join('') + '</div>';
+  }).join('') || '<div style="text-align:center;color:#888;padding:30px">宛先がまだ登録されていません</div>';
+
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong>📞 連絡宛先マスタ</strong>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">LINE WORKS ユーザー/トークルーム / LINE Notify を一元管理 (転送モーダルでプルダウン選択可)</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="padding:14px 20px;background:#f9fafb;border-bottom:1px solid #e5e7eb">' +
+        '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="showContactTargetAddModal()">＋ 宛先を追加</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:14px 20px">' + groupHtml + '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function showContactTargetAddModal(){
+  var typeOpts = Object.keys(CONTACT_TARGET_TYPES).map(function(k){
+    return '<option value="' + k + '">' + CONTACT_TARGET_TYPES[k].label + '</option>';
+  }).join('');
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:520px;border-radius:10px;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between"><strong>＋ 宛先を追加</strong><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+      '<div style="padding:18px 20px;display:grid;gap:10px">' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">種別</div><select id="ct-type" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + typeOpts + '</select></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">表示名 *</div><input id="ct-name" placeholder="例: 田中製造部長 / 制作部チャット" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">ID / トークンキー *</div><input id="ct-targetId" placeholder="LW: user-uuid または channel-id / LINE: トークンキー名 (default 等)" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">グループ (任意)</div><input id="ct-group" placeholder="例: 制作部 / 営業部 / 配送部" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px" list="ct-group-list"><datalist id="ct-group-list">' + Array.from(new Set(_getContactTargets_().map(function(t){ return t.group || ''; }).filter(Boolean))).map(function(g){ return '<option value="' + g + '">'; }).join('') + '</datalist></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">備考</div><textarea id="ct-note" rows="2" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical"></textarea></label>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="submitContactTargetAdd()">登録</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function submitContactTargetAdd(){
+  var name = (document.getElementById('ct-name')?.value || '').trim();
+  var targetId = (document.getElementById('ct-targetId')?.value || '').trim();
+  if(!name || !targetId){ alert('表示名と ID を入力してください'); return; }
+  addContactTarget({
+    name: name,
+    type: document.getElementById('ct-type')?.value || 'lw_user',
+    targetId: targetId,
+    group: (document.getElementById('ct-group')?.value || '').trim(),
+    note: (document.getElementById('ct-note')?.value || '').trim()
+  });
+  document.querySelector('.proof-modal')?.remove();
+  showContactTargetMaster();
 }
 
 // ── Chatbot Tool Use 定義 ──────────────────────────────
@@ -23765,8 +24069,27 @@ function showLineworksForwardModal(inqId, prefilledText){
           '<label style="flex:1;cursor:pointer"><input type="radio" name="lw-target" value="user" checked style="display:none"><div class="lwtg-opt" data-target="user" style="padding:10px;border:2px solid #10b981;background:#ecfdf5;border-radius:6px;text-align:center;font-size:12px;font-weight:700;color:#065f46">👤 ユーザー</div></label>' +
           '<label style="flex:1;cursor:pointer"><input type="radio" name="lw-target" value="channel" style="display:none"><div class="lwtg-opt" data-target="channel" style="padding:10px;border:2px solid #e5e7eb;border-radius:6px;text-align:center;font-size:12px;font-weight:700;color:#888">💬 トークルーム</div></label>' +
         '</div>' +
-        '<label style="font-size:12px;font-weight:700;color:#555">送信先 ID <span id="lw-target-hint" style="font-weight:400;color:#888">(LINE WORKS Bot 管理画面でコピー)</span></label>' +
-        '<input id="lw-target-id" placeholder="例: user-uuid または channel-id" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace;margin:6px 0 14px">' +
+        '<label style="font-size:12px;font-weight:700;color:#555">送信先 (マスタから選択 or 直接入力)</label>' +
+        '<div style="display:flex;gap:6px;margin:6px 0 14px">' +
+          '<select id="lw-target-saved" onchange="if(this.value){document.getElementById(\'lw-target-id\').value=this.value;var t=_getContactTargets_().find(function(x){return x.targetId===this.value}.bind(this));if(t)document.querySelector(\'input[value=\\\'\'+ (t.type===\'lw_channel\'?\'channel\':\'user\') +\'\\\']\')?.click();}" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">' +
+            '<option value="">— マスタから選ぶ —</option>' +
+            (function(){
+              var groups = {};
+              _getContactTargets_().filter(function(t){ return t.type === 'lw_user' || t.type === 'lw_channel'; }).forEach(function(t){
+                var g = t.group || '(未分類)';
+                if(!groups[g]) groups[g] = [];
+                groups[g].push(t);
+              });
+              return Object.keys(groups).sort().map(function(g){
+                return '<optgroup label="' + g + '">' + groups[g].map(function(t){
+                  return '<option value="' + t.targetId + '">' + (CONTACT_TARGET_TYPES[t.type]?.label || '') + ' ' + t.name + '</option>';
+                }).join('') + '</optgroup>';
+              }).join('');
+            })() +
+          '</select>' +
+          '<button class="btn" style="font-size:11px" onclick="document.querySelector(\'.proof-modal\')?.remove();showContactTargetMaster()" title="宛先マスタを管理">⚙</button>' +
+        '</div>' +
+        '<input id="lw-target-id" placeholder="例: user-uuid または channel-id (直接入力可)" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace;margin-bottom:14px">' +
         '<label style="font-size:12px;font-weight:700;color:#555">メッセージ (編集可)</label>' +
         '<textarea id="lw-forward-text" rows="10" style="width:100%;font-size:12px;padding:10px;border:1px solid #ccc;border-radius:6px;font-family:inherit;line-height:1.6;resize:vertical;margin-top:6px">' + _escDiff(defaultMsg) + '</textarea>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">' +
