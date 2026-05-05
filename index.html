@@ -11505,35 +11505,47 @@ async function createEstimateFromInquiry(inqId){
   // 2. 見積作成タブに遷移 + 新規タブ + プリフィル
   var estBtn = document.querySelector('.tb-btn[data-page="est"]');
   if(estBtn && typeof swPage === 'function') swPage('est', estBtn);
-  setTimeout(function(){
-    if(typeof addTab === 'function'){
-      addTab();
-      setTimeout(function(){
-        if(typeof applyIngestToEstimate === 'function'){
-          applyIngestToEstimate({
-            cust: ex.cust || inq.from_company || inq.custName || '',
-            item: ex.item || '',
-            spec: ex.spec || '',
-            qty: parseInt(ex.qty) || 0,
-            unit: ex.unit || '部',
-            dueDate: ex.dueDate || '',
-            memo: detailMemo
-          });
-          // タブ状態に紐付け情報を保存
-          setTimeout(function(){
-            var activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
-            if(activeTabId && typeof ts === 'function'){
-              var s = ts(activeTabId);
-              if(s){
-                s._fromInquiryId = inq.id;
-                s._editingEstId = newEstId;
-              }
-            }
-          }, 100);
-        }
-      }, 200);
+
+  // est-tabbar が表示されるまで待ってから addTab (描画タイミング吸収)
+  function _ensureEstTabbarReady_(retries){
+    retries = retries || 0;
+    var bar = document.getElementById('est-tabbar');
+    if(!bar || bar.style.display === 'none'){
+      if(retries > 30){ alert('見積タブの初期化に失敗しました。もう一度お試しください。'); return; }
+      setTimeout(function(){ _ensureEstTabbarReady_(retries + 1); }, 50);
+      return;
     }
-  }, 250);
+    // addTab() の戻り値 = 新規タブの ID を直接使う
+    if(typeof addTab !== 'function'){ alert('見積タブ機能が読み込まれていません'); return; }
+    var newTabId = addTab();  // 戻り値: 新規 tabCnt
+    if(newTabId == null){
+      alert('見積タブの作成に失敗しました');
+      return;
+    }
+    // パネルが描画されるのを待ってからプリフィル
+    setTimeout(function(){
+      if(typeof applyIngestToEstimate === 'function'){
+        applyIngestToEstimate({
+          cust: ex.cust || inq.from_company || inq.custName || '',
+          item: ex.item || '',
+          spec: ex.spec || '',
+          qty: parseInt(ex.qty) || 0,
+          unit: ex.unit || '部',
+          dueDate: ex.dueDate || '',
+          memo: detailMemo
+        });
+      }
+      // タブ状態に紐付け情報を保存 (戻り値の tabId を使用)
+      if(typeof ts === 'function'){
+        var s = ts(newTabId);
+        if(s){
+          s._fromInquiryId = inq.id;
+          s._editingEstId = newEstId;
+        }
+      }
+    }, 150);
+  }
+  setTimeout(function(){ _ensureEstTabbarReady_(0); }, 100);
 
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
   if(typeof renderInquiryList === 'function') renderInquiryList();
@@ -11561,30 +11573,31 @@ function _openLinkedEstimate_(inqId){
   // 見積中 / 提出済 → 見積作成タブで編集
   var estBtn = document.querySelector('.tb-btn[data-page="est"]');
   if(estBtn && typeof swPage === 'function') swPage('est', estBtn);
-  setTimeout(function(){
-    if(typeof addTab === 'function'){
-      addTab();
-      setTimeout(function(){
-        if(typeof applyIngestToEstimate === 'function'){
-          applyIngestToEstimate({
-            cust: est.cust, item: est.item, spec: est.spec,
-            qty: est.qty, unit: est.unit, dueDate: est.dueDate,
-            memo: est.memo, exTax: est.exTax
-          });
-          setTimeout(function(){
-            var activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
-            if(activeTabId && typeof ts === 'function'){
-              var s = ts(activeTabId);
-              if(s){
-                s._fromInquiryId = inq.id;
-                s._editingEstId = est.id;
-              }
-            }
-          }, 100);
-        }
-      }, 200);
+  function _waitForTabbar_(retries){
+    retries = retries || 0;
+    var bar = document.getElementById('est-tabbar');
+    if(!bar || bar.style.display === 'none'){
+      if(retries > 30){ alert('見積タブの初期化に失敗しました'); return; }
+      setTimeout(function(){ _waitForTabbar_(retries + 1); }, 50);
+      return;
     }
-  }, 250);
+    if(typeof addTab !== 'function'){ alert('見積タブ機能が読み込まれていません'); return; }
+    var newTabId = addTab();
+    setTimeout(function(){
+      if(typeof applyIngestToEstimate === 'function'){
+        applyIngestToEstimate({
+          cust: est.cust, item: est.item, spec: est.spec,
+          qty: est.qty, unit: est.unit, dueDate: est.dueDate,
+          memo: est.memo, exTax: est.exTax
+        });
+      }
+      if(typeof ts === 'function'){
+        var s = ts(newTabId);
+        if(s){ s._fromInquiryId = inq.id; s._editingEstId = est.id; }
+      }
+    }, 150);
+  }
+  setTimeout(function(){ _waitForTabbar_(0); }, 100);
 }
 
 // 見積を「提出済」にマーク (連絡管理から非表示になる)
@@ -19168,10 +19181,9 @@ function applyIngestToEstimate(extracted){
   if(btn) swPage('est', btn);
 
   // 現在のアクティブタブ ID を取得 (なければ新規作成)
-  let activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+  let activeTabId = (typeof activeTab !== 'undefined' && activeTab > 0) ? activeTab : null;
   if(!activeTabId && typeof addTab === 'function'){
-    addTab();
-    activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+    activeTabId = addTab();  // 戻り値で確実に取得
   }
   if(!activeTabId){ alert('見積タブが見つかりません。手動でタブを作成してから再度お試しください。'); return; }
 
@@ -25786,11 +25798,10 @@ function convertInquiryToEstimate(inqId){
   const btn = document.querySelector('.tb-btn[onclick*="est"]');
   if(btn) swPage('est', btn);
 
-  // 見積タブが無ければ新規追加 (addTab)
-  let activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+  // 見積タブが無ければ新規追加 (addTab の戻り値で確実に id を取得)
+  let activeTabId = (typeof activeTab !== 'undefined' && activeTab > 0) ? activeTab : null;
   if(!activeTabId && typeof addTab === 'function'){
-    addTab();
-    activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
+    activeTabId = addTab();
   }
   if(!activeTabId){ alert('見積タブが見つかりません。手動でタブを作成してから再度お試しください。'); return; }
 
