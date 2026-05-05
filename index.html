@@ -26072,6 +26072,7 @@ let wikiEditMode = false;
 const WIKI_INIT_ARTICLES = [
   { id:'WIKI_TOOL_MENTU', category:'🔧 ツール', title:'面付計算ツール', type:'tool-mentu', pinned:true, body:'', createdAt:'2024-01-01', updatedAt:'2024-01-01', author:'system' },
   { id:'WIKI_TOOL_CALC', category:'🔧 ツール', title:'電卓', type:'tool-calc', pinned:true, body:'', createdAt:'2024-01-01', updatedAt:'2024-01-01', author:'system' },
+  { id:'WIKI_TOOL_HIRAGANA', category:'🔧 ツール', title:'ひらがな変換ツール (Excel)', type:'tool-hiragana', pinned:true, body:'', createdAt:'2026-05-03', updatedAt:'2026-05-03', author:'system' },
   { id:'WIKI001', category:'📄 用紙', title:'主要用紙サイズ一覧', type:'article', pinned:false, body:
 `# 主要用紙サイズ一覧
 
@@ -26253,7 +26254,7 @@ function renderWikiSidebar() {
   sortedCats.forEach(cat => {
     html += `<div class="wiki-cat">${cat}</div>`;
     cats[cat].forEach(a => {
-      const icon = a.type==='tool-mentu' ? '🖨' : a.type==='tool-calc' ? '🔢' : '📄';
+      const icon = a.type==='tool-mentu' ? '🖨' : a.type==='tool-calc' ? '🔢' : a.type==='tool-hiragana' ? '📝' : '📄';
       const isAct = wikiCurrentId === a.id;
       html += `<div class="wiki-item${isAct?' act':''}" onclick="wikiOpenArticle('${a.id}')">
         <span class="wi-icon">${icon}</span>${a.title}
@@ -26276,6 +26277,7 @@ function showWikiHome() {
       <div style="margin-top:1.5rem;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
         <button class="btn" onclick="wikiOpenTool('mentu')">🖨 面付計算ツール</button>
         <button class="btn" onclick="wikiOpenTool('calc')">🔢 電卓</button>
+        <button class="btn" onclick="wikiOpenTool('hiragana')">📝 ひらがな変換ツール</button>
       </div>
       <div style="margin-top:2rem;text-align:left;max-width:500px;margin-left:auto;margin-right:auto">
         <div style="font-size:12px;font-weight:700;color:#aaa;margin-bottom:8px">📊 Wiki統計</div>
@@ -26293,7 +26295,8 @@ function wikiOpenArticle(id) {
   
   if(article.type === 'tool-mentu') { renderMentuTool(); renderWikiSidebar(); return; }
   if(article.type === 'tool-calc') { renderCalcTool(); renderWikiSidebar(); return; }
-  
+  if(article.type === 'tool-hiragana') { renderHiraganaTool(); renderWikiSidebar(); return; }
+
   renderWikiArticle(article);
   renderWikiSidebar();
 }
@@ -26301,6 +26304,7 @@ function wikiOpenArticle(id) {
 function wikiOpenTool(tool) {
   if(tool === 'mentu') wikiOpenArticle('WIKI_TOOL_MENTU');
   if(tool === 'calc') wikiOpenArticle('WIKI_TOOL_CALC');
+  if(tool === 'hiragana') wikiOpenArticle('WIKI_TOOL_HIRAGANA');
 }
 
 function renderWikiArticle(article) {
@@ -26471,6 +26475,19 @@ function renderMentuTool() {
           <div class="me-field"><label>ドブ天地</label><input type="number" id="me-dv" value="3" oninput="meCalc()"><input type="number" id="me-dh" value="3" oninput="meCalc()" placeholder="ドブ左右"></div>
           <div style="margin-top:4px"><label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px"><input type="checkbox" id="me-rot" onchange="meCalc()"> 回転配置も試す</label></div>
           <button class="btn btn-p" style="margin-top:8px;width:100%" onclick="meCalc()">▶ 計算する</button>
+          <!-- 実 PDF 面付出力 -->
+          <div style="margin-top:12px;padding:10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px">
+            <div style="font-size:11px;font-weight:700;color:#1e3a8a;margin-bottom:6px">📄 実 PDF 面付出力</div>
+            <input type="file" id="me-pdf-file" accept="application/pdf" style="font-size:11px;width:100%">
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#374151;margin-top:6px;cursor:pointer">
+              <input type="checkbox" id="me-trim-marks" checked> トンボ (トリムマーク) を入れる
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#374151;margin-top:4px;cursor:pointer">
+              <input type="checkbox" id="me-page-numbers"> ページ番号を入れる
+            </label>
+            <button class="btn btn-p" id="me-impose-btn" style="margin-top:8px;width:100%;background:#1e40af;border-color:#1e40af" onclick="meExecuteImposition()">📄 面付した PDF をダウンロード</button>
+            <div id="me-impose-status" style="font-size:10px;color:#666;margin-top:4px;text-align:center"></div>
+          </div>
         </div>
         <div class="me-preview" id="me-canvas-area">
           <canvas id="me-canvas"></canvas>
@@ -26616,6 +26633,193 @@ function meDrawPreview(p){
   ctx.fillStyle='#999';ctx.font='10px monospace';ctx.textAlign='center';ctx.textBaseline='top';
   ctx.fillText(p.pw+'mm',ox+spw/2,oy+sph+4);
   ctx.strokeStyle='#e0ddd6';ctx.lineWidth=1.5;ctx.strokeRect(ox,oy,spw,sph);
+}
+
+// ═══════════════════ ひらがな変換ツール (Wiki埋込版) ═══════════════════
+function renderHiraganaTool() {
+  const content = document.getElementById('wiki-content');
+  // iframe で完全分離 (JSZip + kuromoji + 自前 localStorage を別 origin context で隔離)
+  // tools/hiragana_v10.html を埋込
+  content.innerHTML = `
+    <div class="wiki-toolbar" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f9fafb;border-bottom:1px solid #e5e7eb">
+      <button class="btn" onclick="showWikiHome()">← 一覧</button>
+      <span style="font-size:14px;font-weight:700">📝 ひらがな変換ツール (Excel)</span>
+      <span style="margin-left:auto;font-size:11px;color:#888">Excel(.xlsx) の漢字を一括ひらがな化 (書式保持)</span>
+      <a href="tools/hiragana_v10.html" target="_blank" class="btn" style="font-size:11px;padding:3px 10px" title="新しいタブで開く">↗ 別タブで開く</a>
+    </div>
+    <iframe src="tools/hiragana_v10.html"
+            style="width:100%;height:calc(100vh - 220px);min-height:600px;border:none;display:block"
+            title="ひらがな変換ツール v10"></iframe>`;
+}
+
+// ═══════════════════ 実 PDF 面付出力 (pdf-lib) ═══════════════════
+// pdf-lib を遅延ロード
+async function _loadPdfLib_(){
+  if(window.PDFLib) return window.PDFLib;
+  return new Promise(function(resolve, reject){
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+    s.onload = function(){ resolve(window.PDFLib); };
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function meExecuteImposition(){
+  var status = document.getElementById('me-impose-status');
+  var btn = document.getElementById('me-impose-btn');
+  var fileInput = document.getElementById('me-pdf-file');
+  if(!fileInput || !fileInput.files || !fileInput.files[0]){
+    alert('面付する PDF ファイルを選択してください');
+    return;
+  }
+  var file = fileInput.files[0];
+
+  // 計算結果を取得
+  var pw = parseFloat(document.getElementById('me-pw')?.value) || 0;
+  var ph = parseFloat(document.getElementById('me-ph')?.value) || 0;
+  var pgw = parseFloat(document.getElementById('me-pgw')?.value) || 0;
+  var pgh = parseFloat(document.getElementById('me-pgh')?.value) || 0;
+  var kw = parseFloat(document.getElementById('me-kw')?.value) || 0;
+  var sh = parseFloat(document.getElementById('me-sh')?.value) || 0;
+  var ml = parseFloat(document.getElementById('me-ml')?.value) || 0;
+  var mr = parseFloat(document.getElementById('me-mr')?.value) || 0;
+  var dv = parseFloat(document.getElementById('me-dv')?.value) || 0;
+  var dh = parseFloat(document.getElementById('me-dh')?.value) || 0;
+  var tryRot = document.getElementById('me-rot')?.checked;
+  var trimMarks = document.getElementById('me-trim-marks')?.checked;
+  var pageNumbers = document.getElementById('me-page-numbers')?.checked;
+
+  if(!pw || !ph || !pgw || !pgh){ alert('用紙・仕上がりサイズを入力してください'); return; }
+
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ 処理中...'; }
+  if(status) status.textContent = 'pdf-lib を読込中...';
+
+  try {
+    var PDFLib = await _loadPdfLib_();
+    if(status) status.textContent = '入力 PDF を解析中...';
+    var inputBytes = await file.arrayBuffer();
+    var srcDoc = await PDFLib.PDFDocument.load(inputBytes);
+    var srcPages = srcDoc.getPages();
+
+    // 面付グリッド計算 (mm → pt 変換: 1mm ≈ 2.83465pt)
+    var MM = 2.83465;
+    var aW = pw - ml - mr, aH = ph - kw - sh;
+
+    function fit(aw, ah, w, h, dbh, dbv){
+      var cols = Math.max(0, Math.floor((aw + dbh) / (w + dbh)));
+      var rows = Math.max(0, Math.floor((ah + dbv) / (h + dbv)));
+      return { cols: cols, rows: rows, total: cols * rows };
+    }
+    var normal = fit(aW, aH, pgw, pgh, dh, dv); normal.rotated = false;
+    var best = normal;
+    if(tryRot){
+      var rotated = fit(aW, aH, pgh, pgw, dv, dh); rotated.rotated = true;
+      if(rotated.total > normal.total) best = rotated;
+    }
+    if(best.total === 0){
+      alert('面付できません (用紙に対して仕上がりサイズが大きすぎる可能性)');
+      throw new Error('no_fit');
+    }
+    if(status) status.textContent = best.total + ' 面を配置中...';
+
+    // 出力 PDF: ソース PDF の各ページを 1 シート分の面付として出力
+    var outDoc = await PDFLib.PDFDocument.create();
+    var sheetW = pw * MM, sheetH = ph * MM;
+    var pgUsedW = (best.rotated ? pgh : pgw) * MM;
+    var pgUsedH = (best.rotated ? pgw : pgh) * MM;
+    var dhUsed = (best.rotated ? dv : dh) * MM;
+    var dvUsed = (best.rotated ? dh : dv) * MM;
+    var marginL = ml * MM, marginT = kw * MM;
+
+    // ソース PDF をコピー
+    var copiedPages = await outDoc.copyPages(srcDoc, srcPages.map(function(_, i){ return i; }));
+
+    // 各ソースページを 1 シートに面付 (= 入力1ページ → 出力1シート)
+    for(var pageIdx = 0; pageIdx < copiedPages.length; pageIdx++){
+      var sheet = outDoc.addPage([sheetW, sheetH]);
+      var srcPage = copiedPages[pageIdx];
+      var srcW = srcPage.getWidth(), srcH = srcPage.getHeight();
+      var embedded = await outDoc.embedPage(srcPage);
+
+      // スケール: ソースを pgUsedW × pgUsedH に収める
+      var scale = Math.min(pgUsedW / srcW, pgUsedH / srcH);
+      var drawW = srcW * scale, drawH = srcH * scale;
+
+      // 面ごとに配置 (PDF は左下原点なので Y を反転)
+      for(var r = 0; r < best.rows; r++){
+        for(var c = 0; c < best.cols; c++){
+          var x = marginL + c * (pgUsedW + dhUsed);
+          // Y は PDF 座標系 (左下原点) — 上から r 行目を計算
+          var yTop = sheetH - marginT - r * (pgUsedH + dvUsed);
+          var y = yTop - pgUsedH;
+          // 中央配置
+          var ox = x + (pgUsedW - drawW) / 2;
+          var oy = y + (pgUsedH - drawH) / 2;
+          if(best.rotated){
+            sheet.drawPage(embedded, {
+              x: ox + drawW, y: oy,
+              xScale: scale, yScale: scale,
+              rotate: PDFLib.degrees(90)
+            });
+          } else {
+            sheet.drawPage(embedded, { x: ox, y: oy, xScale: scale, yScale: scale });
+          }
+
+          // ページ番号
+          if(pageNumbers){
+            var num = (r * best.cols + c + 1).toString();
+            sheet.drawText(num, {
+              x: x + pgUsedW / 2 - 4,
+              y: y + pgUsedH / 2,
+              size: 10,
+              opacity: 0.4
+            });
+          }
+
+          // トンボ (各面の四隅に短い線)
+          if(trimMarks){
+            var ml_ = 8; // トンボ長 (pt)
+            var off = 3; // 仕上がりからの距離 (pt)
+            // 面の四隅
+            [
+              { x1: x - off - ml_, y1: y, x2: x - off, y2: y },         // 左下水平
+              { x1: x, y1: y - off - ml_, x2: x, y2: y - off },         // 左下垂直
+              { x1: x + pgUsedW + off, y1: y, x2: x + pgUsedW + off + ml_, y2: y }, // 右下水平
+              { x1: x + pgUsedW, y1: y - off - ml_, x2: x + pgUsedW, y2: y - off }, // 右下垂直
+              { x1: x - off - ml_, y1: y + pgUsedH, x2: x - off, y2: y + pgUsedH }, // 左上水平
+              { x1: x, y1: y + pgUsedH + off, x2: x, y2: y + pgUsedH + off + ml_ }, // 左上垂直
+              { x1: x + pgUsedW + off, y1: y + pgUsedH, x2: x + pgUsedW + off + ml_, y2: y + pgUsedH }, // 右上水平
+              { x1: x + pgUsedW, y1: y + pgUsedH + off, x2: x + pgUsedW, y2: y + pgUsedH + off + ml_ }  // 右上垂直
+            ].forEach(function(L){
+              sheet.drawLine({
+                start: { x: L.x1, y: L.y1 }, end: { x: L.x2, y: L.y2 },
+                thickness: 0.3, color: PDFLib.rgb(0,0,0)
+              });
+            });
+          }
+        }
+      }
+    }
+
+    if(status) status.textContent = 'PDF を生成中...';
+    var outBytes = await outDoc.save();
+    var blob = new Blob([outBytes], { type: 'application/pdf' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = file.name.replace(/\.pdf$/i, '') + '_面付_' + best.cols + 'x' + best.rows + '_' + best.total + '面.pdf';
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+
+    if(status) status.textContent = '✅ 完了 (' + copiedPages.length + ' ページ × ' + best.total + ' 面)';
+  } catch(e){
+    console.error(e);
+    if(status) status.textContent = '⚠ エラー: ' + e.message;
+    alert('面付に失敗しました: ' + e.message);
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '📄 面付した PDF をダウンロード'; }
+  }
 }
 
 // ═══════════════════ 電卓（Wiki埋込版）═══════════════════
