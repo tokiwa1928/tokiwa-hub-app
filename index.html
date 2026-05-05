@@ -15134,6 +15134,10 @@ function registerOrg(opts){
     driveFolderId: opts.driveFolderId || '',
     driveFolderName: opts.driveFolderName || '',
     hasDepartments: !!opts.hasDepartments,
+    // 💰 請求設定 (NNN-2)
+    billingType: opts.billingType || 'spot',     // 'shime' | 'spot' | 'mixed'
+    closingDay: opts.closingDay || 31,           // 5/10/15/20/25/31
+    paymentTerm: opts.paymentTerm == null ? 30 : opts.paymentTerm,  // 0/30/60/90 days
     note: opts.note || '',
     createdAt: new Date().toISOString(),
     createdBy: (currentAuth && currentAuth.email) || '',
@@ -15359,8 +15363,8 @@ function renderOrgCodeMaster(){
         '<th style="width:80px">種別</th>' +
         '<th>正式名</th>' +
         '<th>カナ</th>' +
+        '<th style="width:140px">請求形式 / 締日</th>' +
         '<th>別名 (aliases)</th>' +
-        '<th style="width:130px">親コード</th>' +
         '<th style="width:80px">Drive</th>' +
         '<th class="dx"></th>' +
       '</tr></thead><tbody>';
@@ -15378,6 +15382,14 @@ function renderOrgCodeMaster(){
       var driveCell = r.driveFolderId
         ? '<a href="https://drive.google.com/drive/folders/' + r.driveFolderId + '" target="_blank" style="font-size:11px;color:#1e40af;text-decoration:underline">📁 開く</a>'
         : (hq ? '<button class="btn" style="font-size:10px;padding:2px 6px;background:#0891b2;color:#fff;border-color:#0891b2" onclick="createOrgDriveFolder(\'' + r.code + '\')" title="Drive にフォルダ自動作成">📁 作成</button>' : '<span style="font-size:10px;color:#aaa">未設定</span>');
+      // 💰 請求形式バッジ
+      var bt = r.billingType || 'spot';
+      var btMeta = (typeof BILLING_TYPES !== 'undefined' && BILLING_TYPES[bt]) || { label: '⚡ 都度', color: '#1e40af' };
+      var closingDayLabel = (r.closingDay === 31 || !r.closingDay) ? '末' : (r.closingDay + '日');
+      var billingCell = '<div style="display:flex;flex-direction:column;gap:2px">' +
+        '<span style="background:' + btMeta.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700;white-space:nowrap;text-align:center">' + btMeta.label + '</span>' +
+        (bt !== 'spot' ? '<span style="font-size:10px;color:#666;text-align:center">📅 ' + closingDayLabel + '締め</span>' : '') +
+        '</div>';
       html += '<tr style="background:' + fam.bg + '">' +
         '<td style="font-family:monospace;font-weight:700;color:' + fam.color + '">' + r.code + '</td>' +
         '<td><span style="background:' + fam.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">' + fam.label + '</span></td>' +
@@ -15391,11 +15403,11 @@ function renderOrgCodeMaster(){
             ? '<input type="text" value="' + (r.kana||'').replace(/"/g,'&quot;') + '" style="width:100%;font-size:11px" onchange="updateOrgRecord(\'' + r.code + '\', { kana: this.value });renderOrgCodeMaster()">'
             : (r.kana||'')) +
         '</td>' +
+        '<td>' + billingCell + '</td>' +
         '<td>' +
           aliases +
           (hq ? ' <button class="add-btn" style="font-size:10px;padding:1px 6px" onclick="var a=prompt(\'別名を入力\');if(a&&addOrgAlias(\'' + r.code + '\',a))renderOrgCodeMaster()">＋</button>' : '') +
         '</td>' +
-        '<td><span style="font-size:11px;color:#666">' + (r.parentCode || '-') + '</span></td>' +
         '<td>' + driveCell + '</td>' +
         '<td class="dx">' +
           (hq
@@ -15410,6 +15422,28 @@ function renderOrgCodeMaster(){
 }
 
 // 新規登録モーダル
+var BILLING_TYPES = {
+  'shime':  { label: '📅 締請求 (月次まとめ)', color: '#dc2626' },
+  'spot':   { label: '⚡ 都度請求 (案件ごと)',  color: '#1e40af' },
+  'mixed':  { label: '🔀 混合 (案件ごとに選択)', color: '#7c3aed' }
+};
+
+var CLOSING_DAYS = [
+  { value: 5,  label: '5日締め' },
+  { value: 10, label: '10日締め' },
+  { value: 15, label: '15日締め' },
+  { value: 20, label: '20日締め' },
+  { value: 25, label: '25日締め' },
+  { value: 31, label: '末締め' }
+];
+
+var PAYMENT_TERMS = [
+  { value: 0,  label: '当月末払い' },
+  { value: 30, label: '翌月末払い (締日 + 30日)' },
+  { value: 60, label: '翌々月末払い (締日 + 60日)' },
+  { value: 90, label: '90日後払い' }
+];
+
 function showOrgRegisterModal(parentCode){
   if(!_isHQUser_()){ alert('🔒 本社管理者のみ登録可能です'); return; }
   var modal = document.createElement('div');
@@ -15418,13 +15452,22 @@ function showOrgRegisterModal(parentCode){
   var familyOpts = Object.keys(ORG_CODE_FAMILIES).map(function(f){
     return '<option value="' + f + '">' + f + ' / ' + ORG_CODE_FAMILIES[f].label + '</option>';
   }).join('');
+  var billingOpts = Object.keys(BILLING_TYPES).map(function(b){
+    return '<option value="' + b + '"' + (b === 'spot' ? ' selected' : '') + '>' + BILLING_TYPES[b].label + '</option>';
+  }).join('');
+  var closingOpts = CLOSING_DAYS.map(function(c){
+    return '<option value="' + c.value + '"' + (c.value === 31 ? ' selected' : '') + '>' + c.label + '</option>';
+  }).join('');
+  var paymentOpts = PAYMENT_TERMS.map(function(p){
+    return '<option value="' + p.value + '"' + (p.value === 30 ? ' selected' : '') + '>' + p.label + '</option>';
+  }).join('');
   modal.innerHTML =
-    '<div style="background:#fff;width:100%;max-width:560px;border-radius:10px;overflow:hidden">' +
+    '<div style="background:#fff;width:100%;max-width:600px;max-height:92vh;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">' +
       '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
         '<strong style="font-size:14px">🏢 取引先コード新規登録' + (parentCode ? ' (子: ' + parentCode + ' 配下)' : '') + '</strong>' +
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>' +
       '</div>' +
-      '<div style="padding:18px 20px;display:grid;gap:10px">' +
+      '<div style="padding:18px 20px;display:grid;gap:10px;overflow-y:auto;flex:1">' +
         (parentCode
           ? '<div style="background:#eff6ff;padding:8px 12px;border-radius:6px;font-size:12px;color:#1e3a8a">親コード: <strong>' + parentCode + '</strong> の部署として登録します</div>'
           : '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">種別</div><select id="org-reg-family" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + familyOpts + '</select></label>') +
@@ -15432,6 +15475,15 @@ function showOrgRegisterModal(parentCode){
         '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">カナ</div><input id="org-reg-kana" placeholder="例: フジショクヒン" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
         '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">別名 (カンマ区切り)</div><input id="org-reg-aliases" placeholder="例: 富士食品, (株)富士食品, フジ食品" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
         '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">代表メール</div><input id="org-reg-email" type="email" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
+        // 💰 請求設定セクション
+        '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:12px;margin-top:6px">' +
+          '<div style="font-size:12px;font-weight:700;color:#78350f;margin-bottom:8px">💰 請求設定</div>' +
+          '<div style="display:grid;gap:8px">' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">請求形式</div><select id="org-reg-billing-type" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + billingOpts + '</select></label>' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">締め日 (締請求のみ)</div><select id="org-reg-closing-day" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + closingOpts + '</select></label>' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">支払サイト</div><select id="org-reg-payment-term" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + paymentOpts + '</select></label>' +
+          '</div>' +
+        '</div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:12px;background:#fef3c7;padding:8px 12px;border-radius:6px"><input type="checkbox" id="org-reg-hasdepts"> 部署 (子コード) を持つ法人 (例: 市役所、大学、大病院)</label>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">' +
           '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
@@ -15452,6 +15504,10 @@ function submitOrgRegister(parentCode){
   var aliasesStr = (document.getElementById('org-reg-aliases')?.value || '').trim();
   var aliases = aliasesStr ? aliasesStr.split(',').map(function(a){ return a.trim(); }).filter(Boolean) : [];
   var hasDepartments = !!document.getElementById('org-reg-hasdepts')?.checked;
+  // 💰 請求設定
+  var billingType = document.getElementById('org-reg-billing-type')?.value || 'spot';
+  var closingDay = parseInt(document.getElementById('org-reg-closing-day')?.value || '31', 10);
+  var paymentTerm = parseInt(document.getElementById('org-reg-payment-term')?.value || '30', 10);
   var rec = registerOrg({
     family: family,
     parentCode: parentCode || '',
@@ -15459,11 +15515,14 @@ function submitOrgRegister(parentCode){
     kana: kana,
     aliases: aliases,
     orgEmail: email,
-    hasDepartments: hasDepartments
+    hasDepartments: hasDepartments,
+    billingType: billingType,
+    closingDay: closingDay,
+    paymentTerm: paymentTerm
   });
   if(rec){
     document.querySelector('.proof-modal')?.remove();
-    alert('✅ 登録完了\n\nコード: ' + rec.code + '\n社名: ' + rec.org);
+    alert('✅ 登録完了\n\nコード: ' + rec.code + '\n社名: ' + rec.org + '\n請求: ' + (BILLING_TYPES[billingType]?.label || '') + (billingType !== 'spot' ? ' / ' + closingDay + '日締め' : ''));
     renderOrgCodeMaster();
   }
 }
@@ -15477,6 +15536,15 @@ function showOrgEditModal(code){
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var billingOptsE = Object.keys(BILLING_TYPES).map(function(b){
+    return '<option value="' + b + '"' + ((rec.billingType||'spot') === b ? ' selected' : '') + '>' + BILLING_TYPES[b].label + '</option>';
+  }).join('');
+  var closingOptsE = CLOSING_DAYS.map(function(c){
+    return '<option value="' + c.value + '"' + ((rec.closingDay||31) === c.value ? ' selected' : '') + '>' + c.label + '</option>';
+  }).join('');
+  var paymentOptsE = PAYMENT_TERMS.map(function(p){
+    return '<option value="' + p.value + '"' + ((rec.paymentTerm||30) === p.value ? ' selected' : '') + '>' + p.label + '</option>';
+  }).join('');
   modal.innerHTML =
     '<div style="background:#fff;width:100%;max-width:640px;max-height:92vh;border-radius:10px;overflow-y:auto">' +
       '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
@@ -15487,6 +15555,15 @@ function showOrgEditModal(code){
         '<div style="font-size:13px"><strong>正式名:</strong> ' + (rec.org||'') + '</div>' +
         '<div style="font-size:12px;color:#666"><strong>種別:</strong> ' + (ORG_CODE_FAMILIES[rec.codeFamily]?.label || '') + '</div>' +
         (rec.parentCode ? '<div style="font-size:12px;color:#666"><strong>親コード:</strong> ' + rec.parentCode + ' (' + (_resolveOrgRecord_(rec.parentCode)?.org || '?') + ')</div>' : '') +
+        // 💰 請求設定
+        '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:12px;margin-top:6px">' +
+          '<div style="font-size:12px;font-weight:700;color:#78350f;margin-bottom:8px">💰 請求設定</div>' +
+          '<div style="display:grid;gap:8px">' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">請求形式</div><select id="org-edit-billing-type" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + billingOptsE + '</select></label>' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">締め日 (締請求のみ)</div><select id="org-edit-closing-day" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + closingOptsE + '</select></label>' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">支払サイト</div><select id="org-edit-payment-term" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + paymentOptsE + '</select></label>' +
+          '</div>' +
+        '</div>' +
         '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">Drive フォルダ ID</div><input id="org-edit-drive" value="' + (rec.driveFolderId||'') + '" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>' +
         '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">備考</div><textarea id="org-edit-note" rows="3" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical">' + (rec.note||'') + '</textarea></label>' +
         '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px">' +
@@ -15515,7 +15592,13 @@ function showOrgEditModal(code){
 function submitOrgEdit(code){
   var driveFolderId = (document.getElementById('org-edit-drive')?.value || '').trim();
   var note = (document.getElementById('org-edit-note')?.value || '').trim();
-  if(updateOrgRecord(code, { driveFolderId: driveFolderId, note: note })){
+  var billingType = document.getElementById('org-edit-billing-type')?.value || 'spot';
+  var closingDay = parseInt(document.getElementById('org-edit-closing-day')?.value || '31', 10);
+  var paymentTerm = parseInt(document.getElementById('org-edit-payment-term')?.value || '30', 10);
+  if(updateOrgRecord(code, {
+    driveFolderId: driveFolderId, note: note,
+    billingType: billingType, closingDay: closingDay, paymentTerm: paymentTerm
+  })){
     document.querySelector('.proof-modal')?.remove();
     alert('✅ 保存しました');
     renderOrgCodeMaster();
@@ -16879,8 +16962,13 @@ function showBulkInvoiceModal(){
     '<div style="background:#fff;width:100%;max-width:1100px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
       '<div style="padding:14px 20px;background:#dc2626;color:#fff;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">' +
         '<div><strong>💰 締め日請求一括発行</strong>' +
-        '<div style="font-size:11px;opacity:.85;margin-top:2px">月末締め顧客の未請求案件をまとめて請求書発行</div></div>' +
+        '<div style="font-size:11px;opacity:.85;margin-top:2px">顧客マスタの締め日 (5/10/15/20/25/末) に従って自動振り分け</div></div>' +
         '<div style="display:flex;gap:6px;align-items:center">' +
+          '<select id="bulk-invoice-mode" onchange="renderBulkInvoicePreview()" style="padding:4px 8px;border-radius:4px;border:none;font-size:12px">' +
+            '<option value="shime" selected>📅 締請求のみ</option>' +
+            '<option value="spot">⚡ 都度請求のみ</option>' +
+            '<option value="all">すべて</option>' +
+          '</select>' +
           '<input type="month" id="bulk-invoice-month" value="' + defaultMonth + '" onchange="renderBulkInvoicePreview()" style="padding:4px 8px;border-radius:4px;border:none;font-size:12px">' +
           '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
         '</div>' +
@@ -16892,21 +16980,51 @@ function showBulkInvoiceModal(){
   setTimeout(renderBulkInvoicePreview, 50);
 }
 
+// 顧客の締め日に基づいて、対象月の「締日範囲」を計算
+// 例: 20日締め, 2026-05 → 2026-04-21 〜 2026-05-20
+function _calcClosingPeriod_(month, closingDay){
+  var p = month.split('-');
+  var year = parseInt(p[0], 10);
+  var mon = parseInt(p[1], 10);
+  // 末締めの場合 (31)
+  if(closingDay === 31 || !closingDay){
+    var lastDay = new Date(year, mon, 0).getDate();
+    return {
+      start: month + '-01',
+      end: month + '-' + String(lastDay).padStart(2,'0')
+    };
+  }
+  // 20日締めなど: 前月締日翌日 〜 当月締日
+  var prevMon = mon - 1;
+  var prevYear = year;
+  if(prevMon === 0){ prevMon = 12; prevYear--; }
+  var prevLastDay = new Date(prevYear, prevMon, 0).getDate();
+  var prevClosing = Math.min(closingDay, prevLastDay);
+  var startDay = prevClosing + 1;
+  var startMon = prevMon, startYear = prevYear;
+  if(startDay > prevLastDay){ startDay = 1; startMon = mon; startYear = year; }
+  return {
+    start: startYear + '-' + String(startMon).padStart(2,'0') + '-' + String(startDay).padStart(2,'0'),
+    end: year + '-' + String(mon).padStart(2,'0') + '-' + String(closingDay).padStart(2,'0')
+  };
+}
+
+// 顧客の支払期限を計算
+function _calcPaymentDueDate_(closingPeriodEnd, paymentTerm){
+  var d = new Date(closingPeriodEnd);
+  d.setDate(d.getDate() + (paymentTerm || 30));
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
 function renderBulkInvoicePreview(){
   var body = document.getElementById('bulk-invoice-body');
   var footer = document.getElementById('bulk-invoice-footer');
   if(!body) return;
   var month = document.getElementById('bulk-invoice-month')?.value || '';
   if(!month) return;
+  var modeFilter = document.getElementById('bulk-invoice-mode')?.value || 'shime'; // 'shime' | 'spot' | 'all'
 
-  var monthStart = month + '-01';
-  var monthEnd = (function(){
-    var p = month.split('-');
-    var d = new Date(parseInt(p[0]), parseInt(p[1]), 0);
-    return p[0] + '-' + p[1] + '-' + String(d.getDate()).padStart(2,'0');
-  })();
-
-  // 当月内に「納品済」になった、まだ請求書が発行されていない案件を抽出
+  // 既に請求済みの案件 ID
   var alreadyInvoicedProjectIds = new Set();
   (DB.invoices || []).forEach(function(inv){
     if(Array.isArray(inv.lineItems)){
@@ -16915,70 +17033,105 @@ function renderBulkInvoicePreview(){
     if(inv.projectId) alreadyInvoicedProjectIds.add(inv.projectId);
   });
 
-  var targets = (DB.projects || []).filter(function(p){
-    if(alreadyInvoicedProjectIds.has(p.id)) return false;
-    if(!p.exTax || p.exTax <= 0) return false;
-    // 当月内の納品案件 (stepDates.納品 もしくは dueDate)
+  // 顧客別に締め日を考慮した期間で抽出
+  var byCust = {}; // { cust: { rec, projects[], total, billingType, closingDay, period } }
+  (DB.projects || []).forEach(function(p){
+    if(alreadyInvoicedProjectIds.has(p.id)) return;
+    if(!p.exTax || p.exTax <= 0) return;
+    if(p.status === 'キャンセル' || p.status === '失注') return;
     var deliveredDate = (p.stepDates && p.stepDates['納品']) || p.dueDate || '';
-    if(!deliveredDate) return false;
-    if(deliveredDate < monthStart || deliveredDate > monthEnd) return false;
-    if(p.status === 'キャンセル' || p.status === '失注') return false;
-    return true;
+    if(!deliveredDate) return;
+    var custName = p.cust || '(顧客未設定)';
+    var rec = _resolveOrgRecord_(custName);
+    var billingType = rec ? (rec.billingType || 'spot') : 'spot';
+    var closingDay = rec ? (rec.closingDay || 31) : 31;
+    // モードフィルタ
+    if(modeFilter === 'shime' && billingType !== 'shime' && billingType !== 'mixed') return;
+    if(modeFilter === 'spot' && billingType !== 'spot' && billingType !== 'mixed') return;
+    // 期間チェック
+    var period = _calcClosingPeriod_(month, closingDay);
+    if(deliveredDate < period.start || deliveredDate > period.end) return;
+    if(!byCust[custName]){
+      byCust[custName] = {
+        rec: rec, projects: [], total: 0,
+        billingType: billingType, closingDay: closingDay,
+        paymentTerm: rec ? (rec.paymentTerm == null ? 30 : rec.paymentTerm) : 30,
+        period: period
+      };
+    }
+    byCust[custName].projects.push(p);
+    byCust[custName].total += (p.exTax || 0);
   });
 
-  // 顧客別グループ化
-  var byCust = {};
-  targets.forEach(function(p){
-    var key = p.cust || '(顧客未設定)';
-    if(!byCust[key]) byCust[key] = { projects: [], total: 0 };
-    byCust[key].projects.push(p);
-    byCust[key].total += (p.exTax || 0);
+  var custKeys = Object.keys(byCust).sort(function(a,b){
+    // 締め日順 → 顧客名順
+    var ca = byCust[a].closingDay, cb = byCust[b].closingDay;
+    if(ca !== cb) return ca - cb;
+    return a.localeCompare(b);
   });
-
-  var custKeys = Object.keys(byCust).sort();
   var grandTotal = custKeys.reduce(function(s, k){ return s + byCust[k].total; }, 0);
   var grandCount = custKeys.reduce(function(s, k){ return s + byCust[k].projects.length; }, 0);
 
   if(custKeys.length === 0){
-    body.innerHTML = '<div style="text-align:center;padding:60px;color:#888"><div style="font-size:36px;margin-bottom:8px">📭</div>' + month + ' に発行対象の案件はありません<br><span style="font-size:11px">(納品済かつ未請求の案件のみ抽出)</span></div>';
+    body.innerHTML = '<div style="text-align:center;padding:60px;color:#888"><div style="font-size:36px;margin-bottom:8px">📭</div>' + month + ' に発行対象の案件はありません<br><span style="font-size:11px">(納品済 + 顧客の締め日範囲内 + 未請求のみ抽出)</span></div>';
     footer.innerHTML = '';
     return;
   }
 
-  var html = '<div style="background:#fef3c7;border:1px solid #fbbf24;color:#78350f;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:12px">📅 <strong>' + month + ' 締め分</strong>: 顧客 ' + custKeys.length + '社 / 案件 ' + grandCount + '件 / 合計 ¥' + grandTotal.toLocaleString() + ' (税抜)</div>';
-  html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
-  html += '<thead><tr style="background:#f3f4f6"><th style="padding:8px;text-align:left"><input type="checkbox" id="bulk-inv-all" checked onchange="document.querySelectorAll(\'.bulk-inv-cb\').forEach(function(c){c.checked=this.checked}.bind(this))"></th><th style="padding:8px;text-align:left">顧客</th><th style="padding:8px;text-align:right">案件数</th><th style="padding:8px;text-align:right">合計 (税抜)</th><th style="padding:8px">案件内訳</th></tr></thead><tbody>';
-  custKeys.forEach(function(cust){
-    var g = byCust[cust];
-    html += '<tr style="border-bottom:1px solid #e5e7eb">' +
-      '<td style="padding:8px"><input type="checkbox" class="bulk-inv-cb" data-cust="' + cust.replace(/"/g,'&quot;') + '" checked></td>' +
-      '<td style="padding:8px;font-weight:700">' + _escDiff(cust) + '</td>' +
-      '<td style="padding:8px;text-align:right">' + g.projects.length + '</td>' +
-      '<td style="padding:8px;text-align:right;font-family:monospace;font-weight:700">¥' + g.total.toLocaleString() + '</td>' +
-      '<td style="padding:8px;font-size:11px;color:#666">' +
-        g.projects.map(function(p){ return p.id + ' ' + (p.item||'').substring(0,15) + ' ¥' + (p.exTax||0).toLocaleString(); }).join('<br>') +
-      '</td>' +
-    '</tr>';
+  // 締め日別にグループ化して表示
+  var byClosing = {};
+  custKeys.forEach(function(c){
+    var cd = byCust[c].closingDay;
+    if(!byClosing[cd]) byClosing[cd] = [];
+    byClosing[cd].push(c);
   });
-  html += '</tbody></table>';
+
+  var html = '<div style="background:#fef3c7;border:1px solid #fbbf24;color:#78350f;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:12px">📅 <strong>' + month + ' 締め分</strong>: 顧客 ' + custKeys.length + '社 / 案件 ' + grandCount + '件 / 合計 ¥' + grandTotal.toLocaleString() + ' (税抜)</div>';
+
+  Object.keys(byClosing).sort(function(a,b){ return parseInt(a)-parseInt(b); }).forEach(function(cd){
+    var label = (parseInt(cd) === 31) ? '末締め' : (cd + '日締め');
+    var custList = byClosing[cd];
+    var sectionTotal = custList.reduce(function(s,c){ return s + byCust[c].total; }, 0);
+    var period = _calcClosingPeriod_(month, parseInt(cd));
+    html += '<div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">' +
+      '<div style="background:#1e40af;color:#fff;padding:8px 14px;display:flex;justify-content:space-between;align-items:center">' +
+        '<strong>📅 ' + label + ' (' + custList.length + '社)</strong>' +
+        '<span style="font-size:11px;opacity:.9">対象期間: ' + period.start + ' 〜 ' + period.end + ' / 合計 ¥' + sectionTotal.toLocaleString() + '</span>' +
+      '</div>' +
+      '<table style="width:100%;font-size:12px;border-collapse:collapse">' +
+      '<thead><tr style="background:#f3f4f6"><th style="padding:6px"><input type="checkbox" class="bulk-inv-section-cb" data-cd="' + cd + '" checked onchange="document.querySelectorAll(\'.bulk-inv-cb[data-cd=\\\'\'+\'' + cd + '\'+\'\\\']\').forEach(function(c){c.checked=this.checked}.bind(this))"></th><th style="padding:6px;text-align:left">顧客 (コード)</th><th style="padding:6px;text-align:right">案件数</th><th style="padding:6px;text-align:right">合計 (税抜)</th><th style="padding:6px;text-align:left">支払期限</th><th style="padding:6px;text-align:left">案件内訳</th></tr></thead><tbody>';
+    custList.forEach(function(cust){
+      var g = byCust[cust];
+      var paymentDue = _calcPaymentDueDate_(g.period.end, g.paymentTerm);
+      html += '<tr style="border-bottom:1px solid #e5e7eb">' +
+        '<td style="padding:6px"><input type="checkbox" class="bulk-inv-cb" data-cust="' + cust.replace(/"/g,'&quot;') + '" data-cd="' + cd + '" checked></td>' +
+        '<td style="padding:6px;font-weight:700">' + (g.rec ? '<span style="font-family:monospace;color:#1e40af;font-size:10px">' + g.rec.code + '</span> ' : '') + _escDiff(cust) + '</td>' +
+        '<td style="padding:6px;text-align:right">' + g.projects.length + '</td>' +
+        '<td style="padding:6px;text-align:right;font-family:monospace;font-weight:700">¥' + g.total.toLocaleString() + '</td>' +
+        '<td style="padding:6px;color:#666">' + paymentDue + '</td>' +
+        '<td style="padding:6px;font-size:11px;color:#666">' +
+          g.projects.map(function(p){
+            var issuedBadge = (p.invoiceCount && p.invoiceCount > 0)
+              ? '<span style="background:#fbbf24;color:#78350f;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">⚠ 過去' + p.invoiceCount + '回発行済</span>' : '';
+            return p.id + ' ' + (p.item||'').substring(0,15) + ' ¥' + (p.exTax||0).toLocaleString() + issuedBadge;
+          }).join('<br>') +
+        '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  });
+
   body.innerHTML = html;
 
   footer.innerHTML =
-    '<div style="font-size:11px;color:#666;align-self:center">⚠ 発行された請求書は 💴売上 → 請求書 タブで確認・編集できます</div>' +
+    '<div style="font-size:11px;color:#666;align-self:center">⚠ 発行された請求書は 💴売上 → 請求書 タブで確認可。発行回数は案件側にも記録されます</div>' +
     '<button class="btn btn-p" style="background:#dc2626;border-color:#dc2626" onclick="executeBulkInvoiceIssue(\'' + month + '\')">📤 選択した顧客に一括発行</button>';
 }
 
 function executeBulkInvoiceIssue(month){
   var checked = Array.from(document.querySelectorAll('.bulk-inv-cb')).filter(function(c){ return c.checked; });
   if(!checked.length){ alert('1社以上選択してください'); return; }
-  if(!confirm(checked.length + ' 社に対して請求書を一括発行します。\n\n月: ' + month + '\n\n続行しますか?')) return;
-
-  var monthStart = month + '-01';
-  var monthEnd = (function(){
-    var p = month.split('-');
-    var d = new Date(parseInt(p[0]), parseInt(p[1]), 0);
-    return p[0] + '-' + p[1] + '-' + String(d.getDate()).padStart(2,'0');
-  })();
+  if(!confirm(checked.length + ' 社に対して請求書を一括発行します。\n\n月: ' + month + '\n\n顧客の締め日に従って期間を自動計算します。続行しますか?')) return;
 
   var alreadyInvoicedProjectIds = new Set();
   (DB.invoices || []).forEach(function(inv){
@@ -16990,42 +17143,54 @@ function executeBulkInvoiceIssue(month){
 
   if(!DB.invoices) DB.invoices = [];
   var issuedCount = 0;
+  var reissuedCount = 0;
   var totalAmount = 0;
 
   checked.forEach(function(cb){
     var cust = cb.dataset.cust;
+    var rec = _resolveOrgRecord_(cust);
+    var closingDay = rec ? (rec.closingDay || 31) : 31;
+    var paymentTerm = rec ? (rec.paymentTerm == null ? 30 : rec.paymentTerm) : 30;
+    var period = _calcClosingPeriod_(month, closingDay);
+    var paymentDue = _calcPaymentDueDate_(period.end, paymentTerm);
+
     var projects = (DB.projects || []).filter(function(p){
       if(p.cust !== cust) return false;
       if(alreadyInvoicedProjectIds.has(p.id)) return false;
       var deliveredDate = (p.stepDates && p.stepDates['納品']) || p.dueDate || '';
-      if(!deliveredDate || deliveredDate < monthStart || deliveredDate > monthEnd) return false;
+      if(!deliveredDate || deliveredDate < period.start || deliveredDate > period.end) return false;
       if(p.status === 'キャンセル' || p.status === '失注') return false;
       return true;
     });
     if(!projects.length) return;
 
+    // 過去発行回数 (プロジェクト単位の最大値) を確認 → 再発行扱いか判定
+    var maxPrevCount = projects.reduce(function(m, p){ return Math.max(m, (p.invoiceCount||0)); }, 0);
+    var isReissue = maxPrevCount > 0;
+
     var subtotal = projects.reduce(function(s, p){ return s + (p.exTax || 0); }, 0);
     var tax = Math.floor(subtotal * 0.10);
     var total = subtotal + tax;
-
-    // 支払期限 = 翌月末日 (デフォルト)
-    var dueDateObj = new Date(parseInt(month.split('-')[0]), parseInt(month.split('-')[1]), 0);
-    dueDateObj.setMonth(dueDateObj.getMonth() + 1);
-    var dueDateStr = dueDateObj.getFullYear() + '-' + String(dueDateObj.getMonth()+1).padStart(2,'0') + '-' + String(dueDateObj.getDate()).padStart(2,'0');
 
     var invoice = {
       id: 'INV' + new Date().getTime() + '-' + Math.floor(Math.random() * 1000),
       companyId: currentAuth?.companyId || 'COMP001',
       cust: cust,
-      type: 'shime',                  // ← 既存 renderInvoices が type='shime' フィルタを使う
-      issuedAt: new Date().toISOString(),  // ← 既存は issuedAt (issueDate ではない)
+      custCode: rec ? rec.code : '',
+      type: 'shime',
+      issuedAt: new Date().toISOString(),
       issueDate: new Date().toISOString().slice(0, 10),
-      dueDate: dueDateStr,
+      dueDate: paymentDue,
       closingMonth: month,
-      // 既存形式の品名/数量/単価を最上位にも持たせる (renderInvoices の総計計算用にも)
+      closingDay: closingDay,
+      closingPeriodStart: period.start,
+      closingPeriodEnd: period.end,
+      paymentTerm: paymentTerm,
+      issueRound: maxPrevCount + 1,        // 何回目の発行か
+      isReissue: isReissue,
       item: projects.length === 1
         ? (projects[0].item || '')
-        : ('【' + month + ' 締め】' + projects.length + '件まとめ請求'),
+        : ('【' + month + ' / ' + (closingDay === 31 ? '末' : closingDay + '日') + '締め】' + projects.length + '件まとめ請求' + (isReissue ? ' (再発行 ' + (maxPrevCount+1) + '回目)' : '')),
       lineItems: projects.map(function(p){
         return {
           projectId: p.id,
@@ -17039,30 +17204,70 @@ function executeBulkInvoiceIssue(month){
       subtotal: subtotal,
       tax: tax,
       total: total,
-      status: 'sent',                 // ← 発行 = 送付済として登録 (draft/sent/paid/overdue)
-      memo: '【' + month + ' 締め一括請求】\n対象案件 ' + projects.length + '件:\n' + projects.map(function(p){ return '・' + p.id + ' ' + (p.item||'') + ' ¥' + (p.exTax||0).toLocaleString(); }).join('\n'),
+      status: 'sent',
+      memo: '【' + month + ' 締め一括請求】\n対象期間: ' + period.start + ' 〜 ' + period.end + '\n支払期限: ' + paymentDue + ' (' + paymentTerm + '日サイト)\n対象案件 ' + projects.length + '件:\n' + projects.map(function(p){ return '・' + p.id + ' ' + (p.item||'') + ' ¥' + (p.exTax||0).toLocaleString() + ((p.invoiceCount||0)>0 ? ' [再発行]' : ''); }).join('\n'),
       createdAt: new Date().toISOString(),
       createdBy: (currentAuth && currentAuth.userName) || '',
       bulkIssued: true
     };
     DB.invoices.push(invoice);
 
-    // プロジェクトに請求済みマークをつける
+    // プロジェクトに発行履歴を記録
     projects.forEach(function(p){
       p.invoicedAt = new Date().toISOString();
       p.invoiceId = invoice.id;
+      p.invoiceCount = (p.invoiceCount || 0) + 1;
+      if(!Array.isArray(p.invoiceHistory)) p.invoiceHistory = [];
+      p.invoiceHistory.push({
+        invoiceId: invoice.id,
+        issuedAt: new Date().toISOString(),
+        round: p.invoiceCount,
+        amount: p.exTax || 0,
+        by: (currentAuth && currentAuth.userName) || ''
+      });
     });
 
     issuedCount++;
+    if(isReissue) reissuedCount++;
     totalAmount += total;
   });
 
-  if(typeof _addAuditLog_ === 'function') _addAuditLog_('bulk_invoice', 'system', month + '締め: ' + issuedCount + '件発行 / 合計 ¥' + totalAmount.toLocaleString());
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('bulk_invoice', 'system', month + '締め: ' + issuedCount + '件発行 (再発行 ' + reissuedCount + '件) / 合計 ¥' + totalAmount.toLocaleString());
   if(typeof saveDB === 'function') saveDB();
   if(typeof saveToCloud === 'function') saveToCloud();
-  alert('✅ 一括発行完了\n\n発行件数: ' + issuedCount + ' 件\n合計金額: ¥' + totalAmount.toLocaleString() + ' (税込)\n\n💴売上 → 請求書 タブで確認・編集できます');
+  alert('✅ 一括発行完了\n\n発行件数: ' + issuedCount + ' 件 (うち再発行 ' + reissuedCount + ' 件)\n合計金額: ¥' + totalAmount.toLocaleString() + ' (税込)\n\n💴売上 → 請求書 タブで確認・編集できます');
   document.querySelector('.proof-modal')?.remove();
   if(typeof renderInvoices === 'function') try { renderInvoices(); } catch(e){}
+  if(typeof renderProjects === 'function') try { renderProjects(); } catch(e){}
+}
+
+// NNN-2: 案件の請求発行履歴モーダル
+function showInvoiceHistoryModal(projId){
+  var p = (DB.projects || []).find(function(x){ return x.id === projId; });
+  if(!p){ alert('案件が見つかりません'); return; }
+  var history = p.invoiceHistory || [];
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var listHtml = history.length === 0
+    ? '<div style="text-align:center;color:#888;padding:30px">発行履歴はありません</div>'
+    : '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="background:#f3f4f6"><th style="padding:8px;text-align:left">回</th><th style="padding:8px;text-align:left">請求書 ID</th><th style="padding:8px;text-align:left">発行日時</th><th style="padding:8px;text-align:right">金額</th><th style="padding:8px;text-align:left">担当</th></tr></thead><tbody>' +
+      history.slice().reverse().map(function(h){
+        var inv = (DB.invoices||[]).find(function(i){ return i.id === h.invoiceId; });
+        return '<tr style="border-bottom:1px solid #e5e7eb">' +
+          '<td style="padding:8px"><strong>' + h.round + '回目</strong></td>' +
+          '<td style="padding:8px;font-family:monospace;color:#1e40af">' + h.invoiceId + (inv && inv.status === 'paid' ? ' <span style="background:#16a34a;color:#fff;font-size:9px;padding:1px 5px;border-radius:3px">入金済</span>' : '') + '</td>' +
+          '<td style="padding:8px;color:#666">' + new Date(h.issuedAt).toLocaleString('ja-JP') + '</td>' +
+          '<td style="padding:8px;text-align:right;font-family:monospace">¥' + (h.amount||0).toLocaleString() + '</td>' +
+          '<td style="padding:8px">' + (h.by||'') + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table>';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:80vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#dc2626;color:#fff;display:flex;justify-content:space-between"><div><strong>📜 請求発行履歴</strong><div style="font-size:11px;opacity:.85;margin-top:2px">案件: ' + p.id + ' / ' + (p.cust||'') + ' / ' + (p.item||'') + '</div></div><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+      '<div style="overflow-y:auto;flex:1;padding:14px 20px">' + listHtml + '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
 }
 
 function showProjectGantt(){
@@ -21723,6 +21928,16 @@ function renderProjects(){
               <div style="background:#dcfce7;padding:8px;border-radius:6px"><div style="font-size:10px;color:#14532d">原価合計</div><div style="font-size:14px;font-weight:700">${r.grand?fmt(r.grand):'-'}</div></div>
               <div style="background:#fef3c7;padding:8px;border-radius:6px"><div style="font-size:10px;color:#78350f">税抜売価</div><div style="font-size:14px;font-weight:700">¥${(r.exTax||0).toLocaleString()}</div></div>
               <div style="background:#f3e8ff;padding:8px;border-radius:6px"><div style="font-size:10px;color:#5b21b6">納期</div><div style="font-size:14px;font-weight:700">${r.dueDate||'-'}</div></div>
+            </div>
+            <!-- 💰 NNN-2: 請求発行状況 -->
+            <div style="margin-bottom:8px">
+              ${(r.invoiceCount||0) === 0
+                ? '<span style="display:inline-block;background:#9ca3af;color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:700">📭 未請求</span>'
+                : (r.invoiceCount === 1
+                  ? '<span style="display:inline-block;background:#16a34a;color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:700" title="' + (r.invoicedAt ? new Date(r.invoicedAt).toLocaleString('ja-JP') : '') + '">📄 発行済 (' + r.invoiceId + ')</span>'
+                  : '<span style="display:inline-block;background:#f59e0b;color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:700" title="' + (r.invoicedAt ? new Date(r.invoicedAt).toLocaleString('ja-JP') : '') + '">⚠ ' + r.invoiceCount + '回発行済 (再発行あり)</span>')
+              }
+              ${r.invoiceHistory && r.invoiceHistory.length > 0 ? `<button class="btn" style="font-size:10px;padding:2px 8px;margin-left:6px" onclick="showInvoiceHistoryModal('${r.id}')">📜 履歴</button>` : ''}
             </div>
             ${r.fromRepeatProjectId?`<div style="margin-bottom:8px;font-size:11px;color:#92400e;background:#fef3c7;padding:6px 10px;border-radius:4px;display:inline-block">🔁 リピート: ${r.fromRepeatProjectId} の R${r.repeatCount||1} 版</div>`:''}
             ${r.memo?`<div style="background:#f9fafb;padding:8px 12px;border-radius:6px;font-size:12px;line-height:1.6;white-space:pre-wrap;color:#555"><strong style="font-size:10px;color:#888">📝 備考:</strong><br>${_escDiff(r.memo)}</div>`:''}
