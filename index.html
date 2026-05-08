@@ -377,6 +377,23 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 #page-inquiry button.btn{font-size:13px;padding:6px 12px}
 .inq-detail-panel{display:none;position:fixed;top:0;right:0;bottom:0;width:min(1200px,75vw);background:#fff;box-shadow:-4px 0 24px rgba(0,0,0,.15);z-index:250;overflow-y:auto;padding:1.5rem}
 .inq-detail-panel.show{display:block}
+/* ─── チャット風タイムライン ─── */
+.inq-chat{margin-top:1rem;display:flex;flex-direction:column;gap:14px;padding:10px 4px}
+.chat-row{display:flex;gap:10px;align-items:flex-end}
+.chat-row.incoming{justify-content:flex-start}
+.chat-row.outgoing{justify-content:flex-end}
+.chat-row.system{justify-content:center}
+.chat-avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.chat-avatar.recv{background:#fef3c7;color:#92400e}
+.chat-avatar.send{background:#dbeafe;color:#1e40af}
+.chat-bubble{max-width:75%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.6;word-break:break-word;white-space:pre-wrap;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.chat-row.incoming .chat-bubble{background:#fff;border:1px solid #e0ddd6;border-top-left-radius:4px}
+.chat-row.outgoing .chat-bubble{background:#dbeafe;border:1px solid #93c5fd;color:#0f172a;border-top-right-radius:4px}
+.chat-row.outgoing .chat-bubble.draft{background:#faf5ff;border-color:#c4b5fd;color:#5b21b6;font-style:italic}
+.chat-meta{font-size:10px;color:#888;margin-bottom:3px;font-weight:600}
+.chat-row.outgoing .chat-meta{text-align:right}
+.chat-system{font-size:11px;color:#888;background:#f3f4f6;padding:4px 12px;border-radius:12px;font-weight:600}
+/* 旧クラス互換 (まだ参照されている場合用) */
 .inq-timeline{margin-top:1rem;border-left:2px solid #e0ddd6;padding-left:1rem}
 .inq-tl-item{position:relative;padding-bottom:1rem}
 .inq-tl-item::before{content:'';position:absolute;left:-1.35rem;top:4px;width:10px;height:10px;border-radius:50%;background:#d0cec8;border:2px solid #fff}
@@ -26663,8 +26680,6 @@ function openInquiryDetail(id) {
       <strong>🤖 AI 要約:</strong> ${inq.summary}
     </div>` : ''}
 
-    <div style="background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px;margin-bottom:1rem;font-size:13px;line-height:1.7;white-space:pre-wrap;max-height:300px;overflow-y:auto">${inq.body||''}</div>
-
     ${attachmentsHtml}
 
     <!-- 案件・見積化アクション -->
@@ -26704,18 +26719,10 @@ function openInquiryDetail(id) {
       <button class="btn" style="font-size:11px" onclick="deleteInquiry('${inq.id}')">🗑 削除</button>
     </div>
     
-    <!-- タイムライン -->
-    <div style="font-size:12px;font-weight:700;margin-bottom:.5rem">📋 対応履歴</div>
-    <div class="inq-timeline" id="inq-timeline">
-      ${(inq.timeline||[]).map(t => `
-        <div class="inq-tl-item ${t.type}">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:11px;font-weight:700">${tlIcons[t.type]||'📌'} ${t.by||''}</span>
-            <span style="font-size:10px;color:#aaa">${t.date ? new Date(t.date).toLocaleString('ja-JP') : ''}</span>
-          </div>
-          <div style="font-size:12px;margin-top:4px;white-space:pre-wrap;color:#333">${t.text||''}</div>
-        </div>
-      `).join('')}
+    <!-- チャット風タイムライン (受信=左 / 送信=右 / システム=中央) -->
+    <div style="font-size:13px;font-weight:700;margin-bottom:.5rem">💬 やりとり履歴</div>
+    <div class="inq-chat" id="inq-chat">
+      ${_renderInqChatBubbles_(inq, tlIcons)}
     </div>
     
     <!-- AI 下書きパネル (LINE WORKS で受信した問い合わせのみ) -->
@@ -26804,6 +26811,79 @@ function setInqReplyType(type) {
 }
 
 // AI 下書きパネル: 直近の ai_draft_reply timeline エントリを表示
+// WWW-1: チャット風タイムライン描画 (受信=左 / 送信=右 / システム=中央)
+function _renderInqChatBubbles_(inq, tlIcons){
+  if(!inq) return '';
+  tlIcons = tlIcons || {reply:'💬',note:'📝',status:'🔄',email:'📧',ai_draft_reply:'🤖',link:'🔗',auto_extract:'🤖',forward:'📤'};
+
+  // 元メッセージ (お客様からの受信) を最初の incoming bubble として表示
+  var rows = [];
+  if(inq.body){
+    var fromName = inq.from_name || inq.custName || 'お客様';
+    var fromCompany = inq.from_company || inq.company || '';
+    var srcEmoji = ({gmail:'📧',linesvc:'💬',web_form:'📝',phone:'📞',voice_memo:'🎤',internal_msg:'🏢',interco:'🔄',manual:'📝'})[inq.source_type] || '📨';
+    var receivedAt = inq.received_at || inq.createdAt || '';
+    rows.push(
+      '<div class="chat-row incoming">' +
+        '<div class="chat-avatar recv" title="' + (fromName||'') + '">' + srcEmoji + '</div>' +
+        '<div>' +
+          '<div class="chat-meta">' + _escDiff(fromName) + (fromCompany ? ' (' + _escDiff(fromCompany) + ')' : '') + ' · ' + (receivedAt ? new Date(receivedAt).toLocaleString('ja-JP') : '') + '</div>' +
+          '<div class="chat-bubble">' + _escDiff(inq.body || '') + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // タイムラインの各エントリ
+  (inq.timeline || []).forEach(function(t){
+    var icon = tlIcons[t.type] || '📌';
+    var by = t.by || '';
+    var dateStr = t.date ? new Date(t.date).toLocaleString('ja-JP') : '';
+
+    // 送信系: reply / email / ai_draft_reply (下書きはセミ送信)
+    var isSent = (t.type === 'reply' || t.type === 'email' || t.type === 'forward');
+    var isDraft = (t.type === 'ai_draft_reply');
+    // 中央: status / note / link / auto_extract / その他
+    var isSystem = (t.type === 'status' || t.type === 'link' || t.type === 'auto_extract');
+
+    if(isSystem){
+      rows.push(
+        '<div class="chat-row system">' +
+          '<div class="chat-system">' + icon + ' ' + _escDiff(t.text || '') + (dateStr ? ' · ' + dateStr : '') + '</div>' +
+        '</div>'
+      );
+    } else if(isSent || isDraft){
+      var bubbleClass = isDraft ? 'chat-bubble draft' : 'chat-bubble';
+      var label = isDraft ? '🤖 AI下書き' : (icon + ' ' + (by || '担当者'));
+      rows.push(
+        '<div class="chat-row outgoing">' +
+          '<div>' +
+            '<div class="chat-meta">' + _escDiff(label) + (dateStr ? ' · ' + dateStr : '') + '</div>' +
+            '<div class="' + bubbleClass + '">' + _escDiff(t.text || '') + '</div>' +
+          '</div>' +
+          '<div class="chat-avatar send" title="' + (by||'') + '">' + icon + '</div>' +
+        '</div>'
+      );
+    } else {
+      // note (社内メモ) / その他: incoming 風のグレー背景
+      rows.push(
+        '<div class="chat-row incoming">' +
+          '<div class="chat-avatar recv">' + icon + '</div>' +
+          '<div>' +
+            '<div class="chat-meta">' + _escDiff(by || '社内メモ') + (dateStr ? ' · ' + dateStr : '') + '</div>' +
+            '<div class="chat-bubble" style="background:#fef9c3;border-color:#fde047">' + _escDiff(t.text || '') + '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+  });
+
+  if(rows.length === 0){
+    return '<div style="text-align:center;color:#888;padding:1.5rem;font-size:12px;background:#fafaf9;border:1px dashed #ddd;border-radius:8px">まだやり取りはありません</div>';
+  }
+  return rows.join('');
+}
+
 function _renderAiDraftPanel_(inq){
   if(!inq) return '';
   // 最新の AI draft (timeline 末尾から探す)
