@@ -359,7 +359,7 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 .inq-status.waiting{background:#f3e8ff;color:#7c3aed}
 .inq-status.done{background:#dcfce7;color:#065f46}
 .inq-cat{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;background:#f4f3f0;color:#555;font-weight:700}
-.inq-detail-panel{display:none;position:fixed;top:0;right:0;bottom:0;width:min(520px,90vw);background:#fff;box-shadow:-4px 0 24px rgba(0,0,0,.15);z-index:250;overflow-y:auto;padding:1.5rem}
+.inq-detail-panel{display:none;position:fixed;top:0;right:0;bottom:0;width:min(820px,95vw);background:#fff;box-shadow:-4px 0 24px rgba(0,0,0,.15);z-index:250;overflow-y:auto;padding:1.5rem}
 .inq-detail-panel.show{display:block}
 .inq-timeline{margin-top:1rem;border-left:2px solid #e0ddd6;padding-left:1rem}
 .inq-tl-item{position:relative;padding-bottom:1rem}
@@ -702,7 +702,7 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
 </div>
 <div class="main">
-<div class="page act" id="page-est"><div id="tab-panels"></div></div>
+<div class="page" id="page-est"><div id="tab-panels"></div></div>
 
 <!-- リアルタイム全体ビュー (カスタマイズ可能ダッシュボード) -->
 <div class="page" id="page-realtime">
@@ -10060,21 +10060,98 @@ function toggleProofingNotify(proofingId, on){
   saveDB();
 }
 
-// 新規校正を作成
+// 新規校正を作成 (SSS-3: モーダル化 - 案件から選択 or 手動入力)
 function createProofing(){
-  const custName = prompt('得意先名:');
+  // 既存案件 (制作中・直近) を抽出
+  var projects = (DB.projects || [])
+    .filter(function(p){ return p.status !== 'キャンセル' && p.status !== '失注'; })
+    .sort(function(a,b){ return (b.orderDate || b.createdAt || '').localeCompare(a.orderDate || a.createdAt || ''); })
+    .slice(0, 50);
+
+  var existing = document.getElementById('create-proofing-modal');
+  if(existing) existing.remove();
+
+  var modal = document.createElement('div');
+  modal.id = 'create-proofing-modal';
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+
+  var projectListHtml = projects.length === 0
+    ? '<div style="padding:14px;text-align:center;color:#888;font-size:12px;background:#fafaf9;border:1px dashed #ddd;border-radius:6px">既存案件はありません。下の「案件無しで作成」をご利用ください。</div>'
+    : '<input id="proof-create-search" placeholder="🔍 案件番号・得意先・品名で絞り込み..." style="width:100%;padding:8px 12px;font-size:12px;border:1px solid #ccc;border-radius:6px;margin-bottom:8px" oninput="_filterProofCreateList_(this.value)">' +
+      '<div id="proof-create-list" style="max-height:340px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px">' +
+      projects.map(function(p){
+        var dataText = ((p.id||'') + ' ' + (p.cust||'') + ' ' + (p.item||'') + ' ' + (p.spec||'')).toLowerCase();
+        return '<div class="proof-create-item" data-text="' + dataText + '" style="padding:10px 14px;border-bottom:1px solid #f3f4f6;cursor:pointer;transition:background .15s" ' +
+          'onmouseover="this.style.background=\'#eff6ff\'" onmouseout="this.style.background=\'\'" ' +
+          'onclick="_doCreateProofingFromProject_(\'' + p.id + '\')">' +
+          '<div style="display:flex;justify-content:space-between;align-items:start;gap:8px">' +
+            '<div style="flex:1;min-width:0">' +
+              '<div style="font-weight:700;font-size:12px">' + (p.id||'') + ' · ' + (p.cust||'-') + '</div>' +
+              '<div style="font-size:11px;color:#555;margin-top:2px">' + (p.item||'-') + (p.spec ? ' / ' + p.spec : '') + '</div>' +
+            '</div>' +
+            '<div style="text-align:right;font-size:10px;color:#888;white-space:nowrap">' +
+              '<div>📅 ' + (p.orderDate||'-') + '</div>' +
+              '<div style="margin-top:2px">' + (p.status||'制作中') + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('') +
+      '</div>';
+
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong>📐 新規校正セッション作成</strong><div style="font-size:11px;opacity:0.85;margin-top:2px">案件から作るとファイル名・得意先・グループ共有が自動でつながります</div></div>' +
+        '<button onclick="document.getElementById(\'create-proofing-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:14px 20px">' +
+        '<div style="font-size:12px;font-weight:700;margin-bottom:8px">📋 案件から作成 (推奨)</div>' +
+        projectListHtml +
+        '<div style="margin:18px 0 8px;border-top:1px solid #e5e7eb;padding-top:14px;font-size:12px;font-weight:700;color:#888">— または —</div>' +
+        '<div style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;font-size:11px;color:#78350f">' +
+          '案件無しで作成すると、ファイル名は手入力になり、得意先別の集計にも乗りません。' +
+        '</div>' +
+        '<button class="btn" style="margin-top:8px;width:100%;font-size:12px" onclick="_doCreateProofingManual_()">📝 案件無しで手動作成</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function _filterProofCreateList_(q){
+  q = (q || '').toLowerCase();
+  document.querySelectorAll('.proof-create-item').forEach(function(el){
+    el.style.display = (!q || el.dataset.text.indexOf(q) >= 0) ? '' : 'none';
+  });
+}
+
+function _doCreateProofingFromProject_(projectId){
+  var modal = document.getElementById('create-proofing-modal');
+  if(modal) modal.remove();
+  if(typeof createProofingFromProjectId === 'function'){
+    createProofingFromProjectId(projectId);
+  } else {
+    var p = (DB.projects || []).find(function(x){ return x.id === projectId; });
+    if(p && typeof createProofingFromProject === 'function') createProofingFromProject(p, true);
+  }
+}
+
+function _doCreateProofingManual_(){
+  var modal = document.getElementById('create-proofing-modal');
+  if(modal) modal.remove();
+
+  var custName = prompt('得意先名 (案件未紐付け):');
   if(!custName) return;
-  const prodName = prompt('品名:');
+  var prodName = prompt('品名:');
   if(!prodName) return;
-  
-  const proofing = {
+
+  var proofing = {
     id: 'PRF' + Date.now(),
     custName: custName,
     prodName: prodName,
     projectId: null,
     status: 'waiting',
     versions: [],
-    // PPP-2/3: グループ会社共有 + 通知
     companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
     sharedWithCompanies: [],
     notifyOnUpdate: true,
@@ -23656,19 +23733,18 @@ function showMainScreen(){
   // 会社名・ユーザー名を表示
   updateUserDisplay();
 
-  // 🔧 QQQ-1: ページが1つもアクティブでなければ home (realtime) を強制 active 化
+  // 🔧 SSS-1: 起動時 (リロード/ログイン後) は必ずホームを表示
   setTimeout(function(){
     try {
-      if(!document.querySelector('.page.act')){
-        var rtBtn = document.querySelector('.tb-btn[data-page="realtime"]');
-        if(rtBtn && typeof swPage === 'function'){
-          swPage('realtime', rtBtn);
-        } else {
-          // swPage がまだ無い時は CSS だけ手動で
-          var pageEl = document.getElementById('page-realtime');
-          if(pageEl) pageEl.classList.add('act');
-          if(rtBtn) rtBtn.classList.add('act');
-        }
+      var rtBtn = document.querySelector('.tb-btn[data-page="realtime"]');
+      if(rtBtn && typeof swPage === 'function'){
+        swPage('realtime', rtBtn);
+      } else {
+        // swPage がまだ無い時は CSS だけ手動で
+        document.querySelectorAll('.page').forEach(function(p){ p.classList.remove('act'); });
+        var pageEl = document.getElementById('page-realtime');
+        if(pageEl) pageEl.classList.add('act');
+        if(rtBtn) rtBtn.classList.add('act');
       }
     } catch(e){ console.warn('initial page activation failed:', e); }
   }, 100);
@@ -25615,11 +25691,11 @@ if(currentAuth.loggedIn && currentAuth.companyId){
   loadInboxItems();
   // 自動メール取得開始（1分ごと）
   startAutoFetchEmails();
-  // 🔧 QQQ-1: 初期表示で home (realtime) を必ず active 化 (白画面対策)
+  // 🔧 SSS-1: 起動時は必ず home (realtime) を表示
   setTimeout(function(){
     try {
       var rtBtn = document.querySelector('.tb-btn[data-page="realtime"]');
-      if(rtBtn && typeof swPage === 'function' && !document.querySelector('.page.act')){
+      if(rtBtn && typeof swPage === 'function'){
         swPage('realtime', rtBtn);
       }
     } catch(e){ console.warn('initial swPage failed:', e); }
@@ -26412,7 +26488,7 @@ function openInquiryDetail(id) {
         <button class="pill sel" id="inq-reply-type-reply" onclick="setInqReplyType('reply')">💬 返信</button>
         <button class="pill" id="inq-reply-type-note" onclick="setInqReplyType('note')">📝 社内メモ</button>
       </div>
-      <textarea id="inq-reply-text" rows="3" placeholder="返信内容を入力..." style="font-size:12px"></textarea>
+      <textarea id="inq-reply-text" rows="12" placeholder="返信内容を入力... (AI下書きを自動生成中…)" style="font-size:13px;min-height:240px;line-height:1.6;padding:10px;font-family:inherit"></textarea>
       <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;flex-wrap:wrap">
         <button class="btn" style="font-size:11px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="showReplyTemplatePicker('${inq.id}')" title="保存済テンプレートから挿入 (プレースホルダ自動展開)">📝 テンプレ</button>
         <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#555">
@@ -26426,21 +26502,58 @@ function openInquiryDetail(id) {
   panel.classList.add('show');
   overlay.style.display = 'block';
 
-  // 🆕 返信窓に AI 下書き (+ 署名) を自動挿入
-  setTimeout(function(){
+  // 🆕 SSS-2: 返信窓に AI 下書き自動生成 → 自動挿入
+  setTimeout(async function(){
     var ta = document.getElementById('inq-reply-text');
     if(!ta || ta.value) return;  // 既に何か入力されていればスキップ
+
+    // 既に保存済の AI 下書きがあればそれを使う
     var drafts = (inq.timeline || []).filter(function(t){ return t.type === 'ai_draft_reply'; });
     if(drafts.length > 0){
       var latest = drafts[drafts.length - 1];
       var draftText = (typeof _appendSignature_ === 'function') ? _appendSignature_(latest.text || '') : (latest.text || '');
       ta.value = draftText;
-    } else if(typeof _appendSignature_ === 'function'){
-      // AI 下書きが無くても署名のみは入れておく
+      return;
+    }
+
+    // 既存ドラフト無し → 署名だけ先に出して、その後 AI 自動生成
+    if(typeof _appendSignature_ === 'function'){
       var sig = _appendSignature_('');
       if(sig) ta.value = sig;
     }
-  }, 100);
+
+    // 社内連絡 (internal_msg / interco / voice_memo / phone) は AI 下書き対象外
+    var skipKinds = ['internal_msg','interco','voice_memo','phone'];
+    if(skipKinds.indexOf(inq.source_type) >= 0) return;
+    if(!inq.body || inq.body.length < 10) return; // 本文が短すぎる場合はスキップ
+
+    // ローディング表示
+    var origPlaceholder = ta.placeholder;
+    ta.placeholder = '🤖 AI が返信下書きを生成中… (10〜30秒)';
+    try {
+      var resp = await callCloudAPI('generateAiDraftReply', {}, {
+        inquiryId: inq.id,
+        tone: 'polite',
+        instruction: ''
+      });
+      // 既にユーザーが入力していたら上書きしない
+      var taNow = document.getElementById('inq-reply-text');
+      if(!taNow) return;
+      if(taNow.value && taNow.value !== sig) {
+        ta.placeholder = origPlaceholder;
+        return;
+      }
+      if(resp && resp.success && resp.draft){
+        var withSig = (typeof _appendSignature_ === 'function') ? _appendSignature_(resp.draft) : resp.draft;
+        taNow.value = withSig;
+      }
+      taNow.placeholder = origPlaceholder;
+    } catch(e){
+      console.warn('AI draft auto-gen failed:', e);
+      var t2 = document.getElementById('inq-reply-text');
+      if(t2) t2.placeholder = origPlaceholder;
+    }
+  }, 200);
 }
 
 let inqReplyType = 'reply';
@@ -28300,78 +28413,6 @@ function calcRoundUp(){
   renderCalcDisplay();
 }
 function calcMemory(){
-  calcHistory.unshift({expr:'M+', result:calcDisplay, time:new Date().toLocaleTimeString('ja-JP')});
-  renderCalcHistory();
-}
-function renderCalcHistory(){
-  const el=document.getElementById('calc-history');
-  if(!el) return;
-  if(calcHistory.length===0){ el.innerHTML='<div style="color:#aaa;padding:8px">履歴なし</div>'; return; }
-  el.innerHTML=calcHistory.map((h,i)=>`
-    <div style="display:flex;justify-content:space-between;padding:4px 8px;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="calcUseHistory(${i})">
-      <div><span style="color:#888">${h.expr}</span> = <strong>${h.result}</strong></div>
-      <span style="color:#ccc;font-size:10px">${h.time}</span>
-    </div>
-  `).join('');
-}
-function calcUseHistory(idx){
-  const h=calcHistory[idx];
-  if(!h) return;
-  const num=h.result.replace(/[^0-9.\-]/g,'');
-  if(num) { calcDisplay=num; renderCalcDisplay(); }
-}
-function quickCalcSheets(){
-  const copies=parseInt(document.getElementById('qc-copies')?.value)||0;
-  const faces=parseInt(document.getElementById('qc-faces')?.value)||1;
-  const sheets=Math.ceil(copies/faces);
-  document.getElementById('qc-result').textContent=`→ ${sheets.toLocaleString()}枚（予備なし）/ ${(sheets+Math.ceil(sheets*0.05)).toLocaleString()}枚（予備5%込）`;
-}
-function quickCalcTax(){
-  const amt=parseFloat(document.getElementById('qc-amount')?.value)||0;
-  const t10=Math.ceil(amt*1.10);
-  const t8=Math.ceil(amt*1.08);
-  document.getElementById('qc-tax-result').textContent=`→ 10%税込: ¥${t10.toLocaleString()} / 8%税込: ¥${t8.toLocaleString()}`;
-}
-</script>
-</body>
-</html>
-ry(){
-  calcHistory.unshift({expr:'M+', result:calcDisplay, time:new Date().toLocaleTimeString('ja-JP')});
-  renderCalcHistory();
-}
-function renderCalcHistory(){
-  const el=document.getElementById('calc-history');
-  if(!el) return;
-  if(calcHistory.length===0){ el.innerHTML='<div style="color:#aaa;padding:8px">履歴なし</div>'; return; }
-  el.innerHTML=calcHistory.map((h,i)=>`
-    <div style="display:flex;justify-content:space-between;padding:4px 8px;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="calcUseHistory(${i})">
-      <div><span style="color:#888">${h.expr}</span> = <strong>${h.result}</strong></div>
-      <span style="color:#ccc;font-size:10px">${h.time}</span>
-    </div>
-  `).join('');
-}
-function calcUseHistory(idx){
-  const h=calcHistory[idx];
-  if(!h) return;
-  const num=h.result.replace(/[^0-9.\-]/g,'');
-  if(num) { calcDisplay=num; renderCalcDisplay(); }
-}
-function quickCalcSheets(){
-  const copies=parseInt(document.getElementById('qc-copies')?.value)||0;
-  const faces=parseInt(document.getElementById('qc-faces')?.value)||1;
-  const sheets=Math.ceil(copies/faces);
-  document.getElementById('qc-result').textContent=`→ ${sheets.toLocaleString()}枚（予備なし）/ ${(sheets+Math.ceil(sheets*0.05)).toLocaleString()}枚（予備5%込）`;
-}
-function quickCalcTax(){
-  const amt=parseFloat(document.getElementById('qc-amount')?.value)||0;
-  const t10=Math.ceil(amt*1.10);
-  const t8=Math.ceil(amt*1.08);
-  document.getElementById('qc-tax-result').textContent=`→ 10%税込: ¥${t10.toLocaleString()} / 8%税込: ¥${t8.toLocaleString()}`;
-}
-</script>
-</body>
-</html>
-ry(){
   calcHistory.unshift({expr:'M+', result:calcDisplay, time:new Date().toLocaleTimeString('ja-JP')});
   renderCalcHistory();
 }
