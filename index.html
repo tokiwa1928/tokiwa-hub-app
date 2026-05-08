@@ -17198,23 +17198,86 @@ function submitContactTargetAdd(){
 // ✉ メール設定 (署名 + 自動下書き ON/OFF)
 // ─────────────────────────────────────────────────────
 function _getMailSettings_(){
+  var s = {};
   try {
-    var s = localStorage.getItem('tokiwa_mail_settings_v1');
-    if(s){ return JSON.parse(s); }
+    var raw = localStorage.getItem('tokiwa_mail_settings_v1');
+    if(raw){ s = JSON.parse(raw) || {}; }
   } catch(e){}
-  // デフォルト
-  return {
-    signature: '\n\n--\n' +
+
+  // デフォルト署名 (現在のユーザー基準)
+  function _defaultSig_(){
+    return '--\n' +
       ((currentAuth && currentAuth.userName) || 'トキワ印刷グループ') + '\n' +
       ((currentAuth && currentAuth.companyName) || 'トキワ印刷グループ') + '\n' +
-      'TEL: \nMAIL: ' + ((currentAuth && currentAuth.email) || '') + '\n',
-    autoDraftEnabled: true,
-    autoDraftTone: 'polite'
-  };
+      'TEL: \nMAIL: ' + ((currentAuth && currentAuth.userEmail) || '') + '\n';
+  }
+
+  // UUU-1: マイグレーション — 単一 signature を signatures[] に変換
+  if(!Array.isArray(s.signatures)){
+    s.signatures = [];
+  }
+  if(s.signatures.length === 0){
+    var legacy = (s.signature || '').trim();
+    s.signatures.push({
+      id: 'sig_' + Date.now(),
+      label: (currentAuth && currentAuth.userName) || 'デフォルト',
+      email: (currentAuth && currentAuth.userEmail) || '',
+      lwUserId: '',
+      signature: legacy || _defaultSig_(),
+      lwSignature: '',
+      isDefault: true
+    });
+  }
+  // 旧 signature フィールドはもう使わないが残す (互換)
+  if(s.signature === undefined){
+    var def = (s.signatures.find(function(x){ return x.isDefault; }) || s.signatures[0]);
+    s.signature = (def && def.signature) || '';
+  }
+  if(s.autoDraftEnabled === undefined) s.autoDraftEnabled = true;
+  if(!s.autoDraftTone) s.autoDraftTone = 'polite';
+  return s;
 }
 
 function _saveMailSettings_(s){
   try { localStorage.setItem('tokiwa_mail_settings_v1', JSON.stringify(s)); } catch(e){}
+}
+
+// UUU-1: 状況に応じて適切な署名プロファイルを選ぶ
+//   channel: 'email' | 'lw' | undefined (auto-detect)
+function _pickSignatureProfile_(inq, channel){
+  var s = _getMailSettings_();
+  var sigs = s.signatures || [];
+  if(sigs.length === 0) return null;
+
+  // channel auto-detect
+  if(!channel && inq){
+    if(inq.source_type === 'linesvc') channel = 'lw';
+    else channel = 'email';
+  }
+
+  // 1. inq から to_email / assignee_email で照合
+  var hits = [];
+  if(inq){
+    var toEmail = (inq.to_email || inq.delivered_to || inq.received_to || '').toLowerCase();
+    var lwReceiver = inq.lw_receiver_id || inq.lw_user_id || '';
+    sigs.forEach(function(p){
+      if(channel === 'lw' && p.lwUserId && lwReceiver && p.lwUserId === lwReceiver) hits.push(p);
+      else if(channel === 'email' && p.email && toEmail && p.email.toLowerCase() === toEmail) hits.push(p);
+    });
+  }
+  // 2. currentAuth.userEmail で照合
+  if(hits.length === 0){
+    var myEmail = (currentAuth && currentAuth.userEmail || '').toLowerCase();
+    if(myEmail){
+      sigs.forEach(function(p){ if(p.email && p.email.toLowerCase() === myEmail) hits.push(p); });
+    }
+  }
+  // 3. デフォルト or 最初
+  if(hits.length === 0){
+    var def = sigs.find(function(x){ return x.isDefault; });
+    return def || sigs[0];
+  }
+  return hits[0];
 }
 
 function showMailSignatureSettings(){
@@ -17223,28 +17286,43 @@ function showMailSignatureSettings(){
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
   modal.innerHTML =
-    '<div style="background:#fff;width:100%;max-width:600px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
-      '<div style="padding:14px 20px;background:#dc2626;color:#fff;display:flex;justify-content:space-between"><div><strong>✉ メール設定</strong><div style="font-size:11px;opacity:.85;margin-top:2px">署名と AI 自動下書きの動作を設定</div></div><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+    '<div style="background:#fff;width:100%;max-width:820px;max-height:94vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#dc2626;color:#fff;display:flex;justify-content:space-between">' +
+        '<div><strong>✉ メール / LW 設定</strong><div style="font-size:11px;opacity:.85;margin-top:2px">受注アドレス・LWユーザー別に署名を自動切替 + AI下書き設定</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
       '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
         // 自動下書き設定
         '<div style="background:#faf5ff;border:1px solid #c4b5fd;border-radius:6px;padding:12px;margin-bottom:14px">' +
           '<div style="font-size:13px;font-weight:700;color:#5b21b6;margin-bottom:8px">🤖 AI 自動下書き</div>' +
-          '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px"><input type="checkbox" id="mail-auto-draft" ' + (settings.autoDraftEnabled ? 'checked' : '') + ' style="width:18px;height:18px"> <span><strong>自動で返信下書きを生成</strong> — 新着メールに自動で AI 下書きを作成 (連絡カード開いた時にすぐ確認可)</span></label>' +
+          '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px"><input type="checkbox" id="mail-auto-draft" ' + (settings.autoDraftEnabled ? 'checked' : '') + ' style="width:18px;height:18px"> <span><strong>自動で返信下書きを生成</strong> — 連絡カードを開いた時に AI が自動下書き</span></label>' +
           '<label style="font-size:12px;display:block;margin-top:8px"><div style="margin-bottom:3px;color:#555;font-weight:600">トーン</div><select id="mail-auto-tone" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' +
             '<option value="polite"' + (settings.autoDraftTone==='polite' ? ' selected' : '') + '>📝 丁寧 (敬語)</option>' +
             '<option value="friendly"' + (settings.autoDraftTone==='friendly' ? ' selected' : '') + '>😊 親しみ</option>' +
             '<option value="concise"' + (settings.autoDraftTone==='concise' ? ' selected' : '') + '>⚡ 簡潔</option>' +
           '</select></label>' +
         '</div>' +
-        // 署名設定
-        '<label style="font-size:13px;font-weight:700;color:#374151">📝 メール署名</label>' +
-        '<div style="font-size:11px;color:#888;margin:3px 0 6px">下書き末尾と「📧 メール返信」モーダルに自動で挿入されます。Gmail と同じ署名を貼り付けてください。</div>' +
-        '<textarea id="mail-signature" rows="10" placeholder="例:&#10;--&#10;山田太郎&#10;トキワ印刷株式会社 営業部&#10;TEL: 042-XXX-XXXX&#10;MAIL: yamada@tokiwap.co.jp" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace;line-height:1.6;resize:vertical">' + _escDiff(settings.signature || '') + '</textarea>' +
-        '<div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px">' +
-          '<button class="btn" style="background:#fee;color:#b91c1c;border-color:#fca5a5;font-size:11px" onclick="if(confirm(\'設定を初期値に戻しますか?\')){localStorage.removeItem(\'tokiwa_mail_settings_v1\');this.closest(\'.proof-modal\').remove();showMailSignatureSettings();}">↺ 初期値に戻す</button>' +
+
+        // 署名プロファイル一覧
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<label style="font-size:13px;font-weight:700;color:#374151">📝 署名プロファイル (受注アドレス・LWユーザーで自動選択)</label>' +
+          '<button class="btn btn-p" style="font-size:11px;background:#dc2626;border-color:#dc2626" onclick="_addSignatureProfile_()">＋ プロファイル追加</button>' +
+        '</div>' +
+        '<div style="font-size:11px;color:#888;margin-bottom:10px;background:#f9fafb;padding:8px;border-radius:4px;border:1px solid #e5e7eb">' +
+          '🎯 <strong>自動選択ルール:</strong><br>' +
+          '① メール返信時 → 受注アドレス (To) に一致するプロファイル<br>' +
+          '② LW返信時 → 受注LWユーザーIDに一致するプロファイル<br>' +
+          '③ ログイン中ユーザーの メール / LWアドレス と一致するプロファイル<br>' +
+          '④ デフォルト指定 (★) のプロファイル<br>' +
+          '※ LW 用署名が空の場合は メール用署名を流用' +
+        '</div>' +
+        '<div id="sig-profiles-list">' + _renderSignatureProfilesHtml_(settings.signatures) + '</div>' +
+
+        '<div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">' +
+          '<button class="btn" style="background:#fee;color:#b91c1c;border-color:#fca5a5;font-size:11px" onclick="if(confirm(\'設定を初期値に戻しますか? (全プロファイル削除)\')){localStorage.removeItem(\'tokiwa_mail_settings_v1\');this.closest(\'.proof-modal\').remove();showMailSignatureSettings();}">↺ 初期値に戻す</button>' +
           '<div style="display:flex;gap:8px">' +
             '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
-            '<button class="btn btn-p" style="background:#dc2626;border-color:#dc2626" onclick="submitMailSignatureSettings()">保存</button>' +
+            '<button class="btn btn-p" style="background:#dc2626;border-color:#dc2626" onclick="submitMailSignatureSettings()">💾 保存</button>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -17252,25 +17330,117 @@ function showMailSignatureSettings(){
   document.body.appendChild(modal);
 }
 
-function submitMailSignatureSettings(){
-  var settings = _getMailSettings_();
-  settings.signature = (document.getElementById('mail-signature')?.value || '');
-  settings.autoDraftEnabled = !!document.getElementById('mail-auto-draft')?.checked;
-  settings.autoDraftTone = document.getElementById('mail-auto-tone')?.value || 'polite';
-  _saveMailSettings_(settings);
-  document.querySelector('.proof-modal')?.remove();
-  alert('✅ メール設定を保存しました\n\n' + (settings.autoDraftEnabled ? '🤖 自動下書き: ON\n' : '🤖 自動下書き: OFF\n') + '📝 署名: ' + (settings.signature ? settings.signature.split('\n')[0].substring(0, 30) + '...' : '(未設定)'));
+function _renderSignatureProfilesHtml_(sigs){
+  sigs = sigs || [];
+  if(sigs.length === 0){
+    return '<div style="padding:20px;text-align:center;color:#888;background:#fafaf9;border:1px dashed #ddd;border-radius:6px;font-size:12px">' +
+      'プロファイルがありません。「＋ プロファイル追加」で作成してください。</div>';
+  }
+  return sigs.map(function(p, i){
+    return '<div class="sig-profile" data-idx="' + i + '" style="border:' + (p.isDefault ? '2px solid #dc2626' : '1px solid #e5e7eb') + ';border-radius:8px;padding:14px;margin-bottom:10px;background:' + (p.isDefault ? '#fef2f2' : '#fff') + '">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex:1">' +
+          (p.isDefault ? '<span style="background:#dc2626;color:#fff;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700">★ デフォルト</span>' : '') +
+          '<input class="sp-label" placeholder="ラベル (例: 本田 / 営業共通)" value="' + _escDiff(p.label||'') + '" style="font-weight:700;font-size:13px;border:1px solid #e5e7eb;padding:4px 8px;border-radius:4px;flex:1">' +
+        '</div>' +
+        '<div style="display:flex;gap:4px">' +
+          (p.isDefault ? '' : '<button class="btn" style="font-size:10px;padding:3px 8px" onclick="_setDefaultSignatureProfile_(' + i + ')">★ デフォルトに</button>') +
+          '<button class="btn" style="font-size:10px;padding:3px 8px;color:#b91c1c;border-color:#fca5a5" onclick="_removeSignatureProfile_(' + i + ')">🗑 削除</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">' +
+        '<label style="font-size:11px;color:#555">受注メールアドレス (To)<input class="sp-email" type="email" placeholder="info@tokiwap.co.jp" value="' + _escDiff(p.email||'') + '" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+        '<label style="font-size:11px;color:#555">LINE WORKS ユーザーID<input class="sp-lwid" placeholder="honda_lw" value="' + _escDiff(p.lwUserId||'') + '" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+      '</div>' +
+      '<label style="font-size:11px;color:#555">📧 メール用署名<textarea class="sp-sig" rows="6" placeholder="--&#10;本田 太郎&#10;トキワ印刷株式会社 営業部&#10;TEL: 042-XXX-XXXX&#10;MAIL: honda@tokiwap.co.jp" style="width:100%;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:4px;margin-top:2px;font-family:monospace;line-height:1.5;resize:vertical">' + _escDiff(p.signature||'') + '</textarea></label>' +
+      '<label style="font-size:11px;color:#555;margin-top:6px;display:block">💼 LW用署名 (空欄ならメール署名を流用)<textarea class="sp-lwsig" rows="3" placeholder="本田/トキワ印刷&#10;LW: honda_lw" style="width:100%;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:4px;margin-top:2px;font-family:monospace;line-height:1.5;resize:vertical">' + _escDiff(p.lwSignature||'') + '</textarea></label>' +
+    '</div>';
+  }).join('');
 }
 
-// 署名を本文末尾に追加 (重複防止)
-function _appendSignature_(body){
+function _readSignatureProfilesFromUI_(){
+  var nodes = document.querySelectorAll('.sig-profile');
+  var sigs = [];
+  nodes.forEach(function(node){
+    var idx = parseInt(node.dataset.idx, 10);
+    var prev = (_getMailSettings_().signatures || [])[idx] || {};
+    sigs.push({
+      id: prev.id || ('sig_' + Date.now() + '_' + idx),
+      label: node.querySelector('.sp-label')?.value || '',
+      email: (node.querySelector('.sp-email')?.value || '').trim(),
+      lwUserId: (node.querySelector('.sp-lwid')?.value || '').trim(),
+      signature: node.querySelector('.sp-sig')?.value || '',
+      lwSignature: node.querySelector('.sp-lwsig')?.value || '',
+      isDefault: !!prev.isDefault
+    });
+  });
+  // デフォルトが0件ならは最初の1つをデフォルトに
+  if(sigs.length > 0 && !sigs.some(function(x){ return x.isDefault; })){
+    sigs[0].isDefault = true;
+  }
+  return sigs;
+}
+
+function _addSignatureProfile_(){
+  // 一旦現状を読み取り → 新規追加 → 再描画
+  var s = _getMailSettings_();
+  s.signatures = _readSignatureProfilesFromUI_();
+  s.signatures.push({
+    id: 'sig_' + Date.now(),
+    label: '',
+    email: (currentAuth && currentAuth.userEmail) || '',
+    lwUserId: '',
+    signature: '',
+    lwSignature: '',
+    isDefault: s.signatures.length === 0
+  });
+  document.getElementById('sig-profiles-list').innerHTML = _renderSignatureProfilesHtml_(s.signatures);
+}
+
+function _removeSignatureProfile_(idx){
+  if(!confirm('このプロファイルを削除しますか?')) return;
+  var s = _getMailSettings_();
+  s.signatures = _readSignatureProfilesFromUI_();
+  var wasDefault = s.signatures[idx]?.isDefault;
+  s.signatures.splice(idx, 1);
+  if(wasDefault && s.signatures.length > 0) s.signatures[0].isDefault = true;
+  document.getElementById('sig-profiles-list').innerHTML = _renderSignatureProfilesHtml_(s.signatures);
+}
+
+function _setDefaultSignatureProfile_(idx){
+  var s = _getMailSettings_();
+  s.signatures = _readSignatureProfilesFromUI_();
+  s.signatures.forEach(function(p, i){ p.isDefault = (i === idx); });
+  document.getElementById('sig-profiles-list').innerHTML = _renderSignatureProfilesHtml_(s.signatures);
+}
+
+function submitMailSignatureSettings(){
   var settings = _getMailSettings_();
-  var sig = settings.signature || '';
-  if(!sig) return body;
-  if(!body) return sig;
+  settings.signatures = _readSignatureProfilesFromUI_();
+  settings.autoDraftEnabled = !!document.getElementById('mail-auto-draft')?.checked;
+  settings.autoDraftTone = document.getElementById('mail-auto-tone')?.value || 'polite';
+  // 旧 signature フィールドはデフォルトプロファイルから自動更新
+  var def = settings.signatures.find(function(x){ return x.isDefault; }) || settings.signatures[0];
+  settings.signature = (def && def.signature) || '';
+  _saveMailSettings_(settings);
+  document.querySelector('.proof-modal')?.remove();
+  alert('✅ メール設定を保存しました\n\nプロファイル: ' + settings.signatures.length + '件\n' +
+    (settings.autoDraftEnabled ? '🤖 自動下書き: ON' : '🤖 自動下書き: OFF'));
+}
+
+// 署名を本文末尾に追加 (重複防止) — UUU-1: inq/channel から自動選択
+function _appendSignature_(body, inq, channel){
+  var profile = _pickSignatureProfile_(inq, channel);
+  if(!profile) return body || '';
+  // channel: lw なら lwSignature 優先 (空なら signature)
+  var ch = channel;
+  if(!ch && inq){ ch = (inq.source_type === 'linesvc') ? 'lw' : 'email'; }
+  var sig = (ch === 'lw' && profile.lwSignature) ? profile.lwSignature : (profile.signature || '');
+  if(!sig) return body || '';
+  if(!body) return '\n\n' + sig;
   // 既に署名が含まれていたら追加しない
   if(body.indexOf(sig.trim()) >= 0) return body;
-  return body + '\n' + sig;
+  return body + '\n\n' + sig;
 }
 
 // 自動下書き対象判定 (メール系のみ + まだ下書きが無い)
@@ -26548,7 +26718,7 @@ function openInquiryDetail(id) {
 
     // 既存ドラフト無し → 署名だけ先に出して、その後 AI 自動生成
     if(typeof _appendSignature_ === 'function'){
-      var sig = _appendSignature_('');
+      var sig = _appendSignature_('', inq);
       if(sig) ta.value = sig;
     }
 
@@ -26574,7 +26744,7 @@ function openInquiryDetail(id) {
         return;
       }
       if(resp && resp.success && resp.draft){
-        var withSig = (typeof _appendSignature_ === 'function') ? _appendSignature_(resp.draft) : resp.draft;
+        var withSig = (typeof _appendSignature_ === 'function') ? _appendSignature_(resp.draft, inq) : resp.draft;
         taNow.value = withSig;
       }
       taNow.placeholder = origPlaceholder;
@@ -26664,6 +26834,11 @@ async function sendLineworksReplyFromInq(inqId){
   var ta = document.getElementById('inq-reply-text');
   var text = (ta?.value || '').trim();
   if(!text){ alert('送信内容を入力してください'); return; }
+  // UUU-1: LW 送信時にも自動で署名を付与 (重複は _appendSignature_ 側でガード)
+  var inqObj = (DB.inquiries||[]).find(function(x){ return x.id === inqId; });
+  if(typeof _appendSignature_ === 'function'){
+    text = _appendSignature_(text, inqObj, 'lw');
+  }
   if(!confirm('LINE WORKS で送信します。よろしいですか?\n\n---\n' + text)) return;
   await _doSendLineworksReply_(inqId, text);
   if(ta) ta.value = '';
