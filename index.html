@@ -17244,10 +17244,15 @@ function _getMailSettings_(){
 
   // デフォルト署名 (現在のユーザー基準)
   function _defaultSig_(){
-    return '--\n' +
-      ((currentAuth && currentAuth.userName) || 'トキワ印刷グループ') + '\n' +
-      ((currentAuth && currentAuth.companyName) || 'トキワ印刷グループ') + '\n' +
-      'TEL: \nMAIL: ' + ((currentAuth && currentAuth.userEmail) || '') + '\n';
+    var lines = ['--'];
+    if(currentAuth && currentAuth.userName) lines.push(currentAuth.userName);
+    if(currentAuth && currentAuth.companyName) lines.push(currentAuth.companyName);
+    if(currentAuth && currentAuth.userEmail) lines.push('MAIL: ' + currentAuth.userEmail);
+    if(lines.length <= 1){
+      // ログイン情報なし → 設定への誘導
+      return '\n--\n[⚙管理 → メール設定 で署名を登録してください]';
+    }
+    return '\n' + lines.join('\n');
   }
 
   // UUU-1: マイグレーション — 単一 signature を signatures[] に変換
@@ -26772,7 +26777,7 @@ function openInquiryDetail(id) {
   panel.classList.add('show');
   overlay.style.display = 'block';
 
-  // 🆕 SSS-2 / XXX-1: 返信窓に AI 下書き自動生成 → 自動挿入
+  // 🆕 SSS-2 / XXX-1 / ZZZ-1: 返信窓に AI 下書き自動生成 → 自動挿入
   setTimeout(async function(){
     var ta = document.getElementById('inq-reply-text');
     var st = document.getElementById('inq-draft-status');
@@ -26813,31 +26818,101 @@ function openInquiryDetail(id) {
     // ローディング表示
     if(st) st.textContent = '🤖 AI が下書きを生成中… (10〜30秒)';
     try {
-      var resp = await callCloudAPI('generateAiDraftReply', {}, {
-        inquiryId: inq.id,
-        tone: 'polite',
-        instruction: ''
-      });
-      // 既にユーザーが入力していたら上書きしない
+      var draftBody = await _generateInquiryDraft_(inq, 'polite', '');
       var taNow = document.getElementById('inq-reply-text');
       if(!taNow) return;
       if(taNow.value && taNow.value !== sig) {
         if(st) st.textContent = '(ユーザー入力あり: スキップ)';
         return;
       }
-      if(resp && resp.success && resp.draft){
-        var withSig = (typeof _appendSignature_ === 'function') ? _appendSignature_(resp.draft, inq) : resp.draft;
+      if(draftBody){
+        var withSig = (typeof _appendSignature_ === 'function') ? _appendSignature_(draftBody, inq) : draftBody;
         taNow.value = withSig;
         if(st) st.textContent = '✅ AI 下書き生成完了';
         setTimeout(function(){ if(st) st.textContent = ''; }, 3000);
       } else {
-        if(st) st.textContent = '⚠ ' + (resp?.error || '生成失敗');
+        if(st){
+          st.innerHTML = '<span style="color:#dc2626">⚠ AI下書き失敗</span> <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px" onclick="_regenerateAiDraft_(\'' + inq.id + '\')">🔄 再試行</button>';
+        }
       }
     } catch(e){
       console.warn('AI draft auto-gen failed:', e);
-      if(st) st.textContent = '⚠ ' + e.message;
+      if(st){
+        st.innerHTML = '<span style="color:#dc2626" title="' + (e.message||'') + '">⚠ AI下書き失敗</span> <button class="btn" style="font-size:10px;padding:2px 6px;margin-left:4px" onclick="_regenerateAiDraft_(\'' + inq.id + '\')">🔄 再試行</button>';
+      }
     }
   }, 200);
+}
+
+// ZZZ-1: 共通の AI 下書き生成ヘルパー (generateAiDraftReply → claudeChat フォールバック)
+async function _generateInquiryDraft_(inq, tone, instruction){
+  if(!inq) return '';
+  tone = tone || 'polite';
+  instruction = instruction || '';
+
+  // 1. 専用 API を試す
+  try {
+    var resp = await callCloudAPI('generateAiDraftReply', {}, {
+      inquiryId: inq.id,
+      tone: tone,
+      instruction: instruction
+    });
+    if(resp && resp.success && resp.draft) return resp.draft;
+    // unknown_action や error は次のフォールバックへ
+    if(resp && resp.error && /unknown_action|exception/i.test(resp.error)){
+      console.warn('generateAiDraftReply unavailable, falling back to claudeChat:', resp.error);
+    }
+  } catch(e){
+    console.warn('generateAiDraftReply fetch failed:', e);
+  }
+
+  // 2. claudeChat 直叩きフォールバック (バックエンドが古くてもこれは動く)
+  try {
+    var toneInstruction = ({
+      'polite':   '丁寧で礼儀正しい敬語、「いつもお世話になっております」「何卒よろしくお願い申し上げます」等を含む正式なビジネス文書',
+      'friendly': '親しみやすく丁寧、「お世話になります」「ご検討よろしくお願いいたします」等のカジュアル寄りビジネス文書',
+      'concise':  '簡潔で要点のみ、社内向けの短い連絡文'
+    })[tone] || '丁寧なビジネス文書';
+
+    var sourceLabel = ({
+      'gmail':    'お客様からのメール',
+      'linesvc':  'LINE WORKS のお客様メッセージ',
+      'web_form': 'ウェブフォーム経由の問合せ',
+      'manual':   '手動入力された連絡',
+      'phone':    '電話メモ'
+    })[inq.source_type] || '問合せ';
+
+    var customerInfo = '';
+    if(inq.from_name || inq.from_company){
+      customerInfo = '宛先: ' + (inq.from_name || '') + (inq.from_company ? ' (' + inq.from_company + ')' : '');
+    }
+
+    var prompt = 'あなたは印刷会社「トキワ印刷グループ」のカスタマーサポート担当です。\n' +
+      '以下の' + sourceLabel + 'に対する返信下書きを作成してください。\n\n' +
+      '## トーン指示\n' + toneInstruction + '\n\n' +
+      (customerInfo ? '## 宛先\n' + customerInfo + '\n\n' : '') +
+      (instruction ? '## 担当者からの追加指示\n' + instruction + '\n\n' : '') +
+      '## 元のメッセージ\n' +
+      '件名: ' + (inq.subject || '(件名なし)') + '\n' +
+      '本文:\n' + (inq.body || '') + '\n\n' +
+      '## 出力フォーマット\n' +
+      '- 返信本文のみを出力 (前置きや「以下が返信です:」のような説明は不要)\n' +
+      '- 改行で適切に段落分け\n' +
+      '- 末尾に署名行は不要 (システムが自動付与)\n' +
+      '- 不明な点 (納期・数量・仕様等) があれば、推測せず質問形式で確認文を入れる';
+
+    var resp = await callCloudAPI('claudeChat', {}, {
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1500
+    });
+    if(resp && resp.success){
+      var text = resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '';
+      return text.trim();
+    }
+  } catch(e){
+    console.warn('claudeChat fallback failed:', e);
+  }
+  return '';
 }
 
 let inqReplyType = 'reply';
@@ -26964,7 +27039,7 @@ async function _doLinkParentInquiry_(childId, parentId){
   if(typeof openInquiryDetail === 'function') openInquiryDetail(childId);
 }
 
-// XXX-1: AI 下書き再生成 (返信窓のテキストを上書き)
+// XXX-1 / ZZZ-1: AI 下書き再生成 (返信窓のテキストを上書き)
 async function _regenerateAiDraft_(inqId){
   var ta = document.getElementById('inq-reply-text');
   var st = document.getElementById('inq-draft-status');
@@ -26973,15 +27048,15 @@ async function _regenerateAiDraft_(inqId){
   if(st) st.textContent = '🤖 AI 再生成中…';
   ta.placeholder = '🤖 AI が再生成中…';
   try {
-    var resp = await callCloudAPI('generateAiDraftReply', {}, { inquiryId: inqId, tone: 'polite', instruction: '' });
     var inqObj = (DB.inquiries||[]).find(function(x){ return x.id === inqId; });
-    if(resp && resp.success && resp.draft){
-      var withSig = (typeof _appendSignature_ === 'function') ? _appendSignature_(resp.draft, inqObj) : resp.draft;
+    var draftBody = await _generateInquiryDraft_(inqObj, 'polite', '');
+    if(draftBody){
+      var withSig = (typeof _appendSignature_ === 'function') ? _appendSignature_(draftBody, inqObj) : draftBody;
       ta.value = withSig;
       if(st) st.textContent = '✅ 生成完了';
       setTimeout(function(){ if(st) st.textContent = ''; }, 3000);
     } else {
-      if(st) st.textContent = '⚠ ' + (resp?.error || '失敗');
+      if(st) st.innerHTML = '<span style="color:#dc2626">⚠ AI 生成失敗 (バックエンド未対応の可能性)</span>';
     }
   } catch(e){
     if(st) st.textContent = '⚠ ' + e.message;
