@@ -1657,6 +1657,7 @@ setTimeout(_removeBootLoader_, 5000);
         <button class="btn" style="background:#dbeafe;border-color:#93c5fd" onclick="addAllToCalendar()">📅 一括カレンダー追加</button>
         <button class="btn btn-p" onclick="showDeliverySlipInputModal()">📄 納品書（3連）</button>
         <button class="btn btn-p" onclick="showReceiptInputModal()">🧾 領収書</button>
+        <button class="btn btn-p" style="background:#f59e0b;border-color:#f59e0b" onclick="showBoxLabelModal()">📦 箱ラベル</button>
       </div>
     </div>
     
@@ -9262,6 +9263,195 @@ function printSlip(){
 // ═══════════════════ 領収書 ══════════════════
 
 // 領収書入力モーダル
+// ═══════════════════════════════════════════════════
+// FFFF-1: 箱ラベル発行 (1/N 箱番号付き)
+// ═══════════════════════════════════════════════════
+function showBoxLabelModal(){
+  // 案件候補 (制作中・納品予定の直近)
+  var projects = (DB.projects || [])
+    .filter(function(p){ return p.status !== 'キャンセル' && p.status !== '失注'; })
+    .sort(function(a,b){ return (b.orderDate || b.createdAt || '').localeCompare(a.orderDate || a.createdAt || ''); })
+    .slice(0, 50);
+
+  var existing = document.getElementById('box-label-modal');
+  if(existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'box-label-modal';
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#f59e0b;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong>📦 箱ラベル発行</strong><div style="font-size:11px;opacity:.85;margin-top:2px">合計数量と1箱の数量から箱数を自動計算 → 箱番号付きラベルを印刷</div></div>' +
+        '<button onclick="document.getElementById(\'box-label-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        // 案件選択 or 手動
+        '<label style="font-size:12px;font-weight:700;color:#374151">📁 案件を選択 (任意)</label>' +
+        '<select id="bl-project" onchange="_fillBoxLabelFromProject_()" style="width:100%;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:6px;margin-top:4px;margin-bottom:12px">' +
+          '<option value="">-- 手動入力 --</option>' +
+          projects.map(function(p){
+            var lbl = (p.id||'') + ' / ' + (p.cust||'') + ' / ' + (p.item||'') + (p.qty ? ' (' + p.qty + p.unit + ')' : '');
+            return '<option value="' + p.id + '" data-cust="' + _escDiff(p.cust||'') + '" data-item="' + _escDiff(p.item||'') + '" data-qty="' + (p.qty||0) + '" data-unit="' + _escDiff(p.unit||'枚') + '" data-mno="' + (p.master_no||'') + '">' + _escDiff(lbl) + '</option>';
+          }).join('') +
+        '</select>' +
+        // 顧客情報
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">' +
+          '<label style="font-size:11px;color:#555">得意先<input id="bl-cust" placeholder="○○株式会社" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+          '<label style="font-size:11px;color:#555">品名<input id="bl-item" placeholder="チラシ A4" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+        '</div>' +
+        // 数量計算
+        '<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:12px">' +
+          '<div style="font-size:12px;font-weight:700;color:#78350f;margin-bottom:8px">📦 梱包情報</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:6px">' +
+            '<label style="font-size:11px;color:#555">合計数量 *<input id="bl-total" type="number" placeholder="3000" oninput="_recalcBoxCount_()" style="width:100%;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px;font-weight:700"></label>' +
+            '<label style="font-size:11px;color:#555">単位<input id="bl-unit" placeholder="枚" value="枚" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+            '<label style="font-size:11px;color:#555">1箱の数量 *<input id="bl-perbox" type="number" placeholder="1000" oninput="_recalcBoxCount_()" style="width:100%;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px;font-weight:700"></label>' +
+          '</div>' +
+          '<div id="bl-result" style="margin-top:6px;font-size:13px;color:#78350f;font-weight:700">' +
+            '→ 合計と1箱の数量を入力してください' +
+          '</div>' +
+        '</div>' +
+        // 追加情報
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">' +
+          '<label style="font-size:11px;color:#555">案件番号 / マスター番号<input id="bl-projno" placeholder="P0042" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+          '<label style="font-size:11px;color:#555">納品先 (任意)<input id="bl-deliver-to" placeholder="○○工場" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+        '</div>' +
+        '<label style="font-size:11px;color:#555;display:block;margin-bottom:10px">備考 (任意)<input id="bl-memo" placeholder="例: 取扱注意" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px"></label>' +
+        // ラベルサイズ
+        '<label style="font-size:11px;color:#555;display:block;margin-bottom:10px">ラベルサイズ<select id="bl-size" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:2px">' +
+          '<option value="A4-1">A4 (1枚に1ラベル / 大)</option>' +
+          '<option value="A4-2">A4 (1枚に2ラベル)</option>' +
+          '<option value="A4-4">A4 (1枚に4ラベル)</option>' +
+        '</select></label>' +
+      '</div>' +
+      '<div style="padding:14px 20px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:flex-end;gap:8px">' +
+        '<button class="btn" onclick="document.getElementById(\'box-label-modal\').remove()">キャンセル</button>' +
+        '<button class="btn btn-p" style="background:#f59e0b;border-color:#f59e0b" onclick="generateBoxLabels()">🖨 ラベル生成・印刷</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function _fillBoxLabelFromProject_(){
+  var sel = document.getElementById('bl-project');
+  if(!sel || !sel.value) return;
+  var opt = sel.options[sel.selectedIndex];
+  document.getElementById('bl-cust').value = opt.dataset.cust || '';
+  document.getElementById('bl-item').value = opt.dataset.item || '';
+  document.getElementById('bl-total').value = opt.dataset.qty || '';
+  document.getElementById('bl-unit').value = opt.dataset.unit || '枚';
+  var mno = opt.dataset.mno || '';
+  document.getElementById('bl-projno').value = sel.value + (mno ? ' / P' + mno : '');
+  _recalcBoxCount_();
+}
+
+function _recalcBoxCount_(){
+  var total = parseInt(document.getElementById('bl-total')?.value, 10) || 0;
+  var perbox = parseInt(document.getElementById('bl-perbox')?.value, 10) || 0;
+  var unit = document.getElementById('bl-unit')?.value || '枚';
+  var result = document.getElementById('bl-result');
+  if(!result) return;
+  if(!total || !perbox){ result.textContent = '→ 合計と1箱の数量を入力してください'; return; }
+  var boxes = Math.ceil(total / perbox);
+  var lastBox = total - perbox * (boxes - 1);
+  result.innerHTML = '✅ <strong style="font-size:16px">' + boxes + ' 箱</strong> 必要です' +
+    ' (' + (boxes-1) + ' 箱 × ' + perbox.toLocaleString() + unit +
+    (lastBox !== perbox ? ' + 最終箱 ' + lastBox.toLocaleString() + unit : ' × ' + boxes + ' 箱') + ')';
+}
+
+function generateBoxLabels(){
+  var cust   = document.getElementById('bl-cust')?.value || '';
+  var item   = document.getElementById('bl-item')?.value || '';
+  var total  = parseInt(document.getElementById('bl-total')?.value, 10) || 0;
+  var unit   = document.getElementById('bl-unit')?.value || '枚';
+  var perbox = parseInt(document.getElementById('bl-perbox')?.value, 10) || 0;
+  var projNo = document.getElementById('bl-projno')?.value || '';
+  var deliverTo = document.getElementById('bl-deliver-to')?.value || '';
+  var memo   = document.getElementById('bl-memo')?.value || '';
+  var size   = document.getElementById('bl-size')?.value || 'A4-1';
+
+  if(!cust || !item){ alert('得意先と品名は必須です'); return; }
+  if(!total || !perbox){ alert('合計数量と1箱の数量を入力してください'); return; }
+
+  var boxes = Math.ceil(total / perbox);
+  if(boxes > 200){
+    if(!confirm(boxes + ' 箱分のラベルを生成します。よろしいですか?')) return;
+  }
+
+  // ラベル1枚分の HTML
+  function _labelCard_(n){
+    var thisQty = (n === boxes) ? (total - perbox * (boxes - 1)) : perbox;
+    var sizeStyle = {
+      'A4-1': 'width:190mm;height:277mm;font-size:20pt;page-break-after:always',
+      'A4-2': 'width:190mm;height:135mm;font-size:16pt;page-break-after:auto',
+      'A4-4': 'width:90mm;height:135mm;font-size:14pt;page-break-after:auto'
+    }[size];
+    return '<div class="bl-label" style="' + sizeStyle + ';border:3px solid #000;margin:5mm;padding:8mm;display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;background:#fff;font-family:\'Hiragino Kaku Gothic ProN\',\'メイリオ\',sans-serif">' +
+      // ヘッダー: 案件番号 + 納品先
+      '<div style="border-bottom:2px solid #000;padding-bottom:6px;display:flex;justify-content:space-between;font-size:.6em">' +
+        '<span><strong>案件:</strong> ' + _escDiff(projNo) + '</span>' +
+        (deliverTo ? '<span><strong>納品先:</strong> ' + _escDiff(deliverTo) + '</span>' : '<span></span>') +
+      '</div>' +
+      // 中央: 得意先 + 品名 + 数量 + 箱番号
+      '<div style="flex:1;display:flex;flex-direction:column;justify-content:center;text-align:center;padding:8px">' +
+        '<div style="font-size:.8em;color:#444;margin-bottom:4px">' + _escDiff(cust) + ' 様</div>' +
+        '<div style="font-size:1.4em;font-weight:700;margin-bottom:16px">' + _escDiff(item) + '</div>' +
+        '<div style="font-size:1em;color:#444;margin-bottom:8px">数量: <strong style="font-size:1.4em;color:#000">' + thisQty.toLocaleString() + ' ' + _escDiff(unit) + '</strong></div>' +
+        '<div style="font-size:2em;font-weight:900;color:#dc2626;margin-top:12px;border:2px solid #dc2626;padding:8px;border-radius:8px;display:inline-block;align-self:center;background:#fee2e2">' +
+          n + ' / ' + boxes +
+        '</div>' +
+      '</div>' +
+      // フッター
+      '<div style="border-top:1px solid #aaa;padding-top:6px;font-size:.45em;color:#666;display:flex;justify-content:space-between">' +
+        '<span>合計: ' + total.toLocaleString() + ' ' + _escDiff(unit) + ' / 1箱: ' + perbox.toLocaleString() + ' ' + _escDiff(unit) + '</span>' +
+        '<span>' + new Date().toLocaleDateString('ja-JP') + '</span>' +
+      '</div>' +
+      (memo ? '<div style="font-size:.5em;color:#dc2626;margin-top:4px;text-align:center;border:1px solid #dc2626;padding:4px;border-radius:4px;background:#fee2e2"><strong>⚠ ' + _escDiff(memo) + '</strong></div>' : '') +
+    '</div>';
+  }
+
+  var labelsHtml = '';
+  for(var i = 1; i <= boxes; i++) labelsHtml += _labelCard_(i);
+
+  // 印刷用ウィンドウ
+  var w = window.open('', '_blank', 'width=900,height=700');
+  if(!w){ alert('ポップアップがブロックされています。許可してください。'); return; }
+  w.document.write(
+    '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>箱ラベル ' + projNo + '</title>' +
+    '<style>' +
+      'body{margin:0;padding:0;background:#f3f4f6;font-family:\'Hiragino Kaku Gothic ProN\',\'メイリオ\',sans-serif}' +
+      '.bl-label{display:inline-block;vertical-align:top;background:#fff}' +
+      (size === 'A4-1' ? '' : '@media print{.bl-label{margin:0 !important}}') +
+      '@media print{body{background:#fff}.print-bar{display:none !important}}' +
+      '.print-bar{position:fixed;top:0;left:0;right:0;background:#1a1a1a;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center;z-index:9999}' +
+      '.print-bar button{background:#f59e0b;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700}' +
+      '.content{margin-top:50px;padding:10px;text-align:center}' +
+      '@page{size:A4;margin:5mm}' +
+    '</style></head><body>' +
+    '<div class="print-bar"><strong>📦 箱ラベル: ' + _escDiff(item) + ' (全 ' + boxes + ' 箱)</strong>' +
+    '<button onclick="window.print()">🖨 印刷</button></div>' +
+    '<div class="content">' + labelsHtml + '</div>' +
+    '</body></html>'
+  );
+  w.document.close();
+
+  // ラベル発行履歴を残す (任意)
+  if(!DB.boxLabels) DB.boxLabels = [];
+  DB.boxLabels.push({
+    id: 'BL-' + Date.now(),
+    cust: cust, item: item, total: total, perbox: perbox, boxes: boxes,
+    unit: unit, projNo: projNo, deliverTo: deliverTo, memo: memo,
+    issuedAt: new Date().toISOString(),
+    issuedBy: (currentAuth && currentAuth.userName) || ''
+  });
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+
+  // モーダルを閉じる
+  document.getElementById('box-label-modal')?.remove();
+}
+
 function showReceiptInputModal(){
   let modal = document.getElementById('receipt-input-modal');
   if(!modal){
