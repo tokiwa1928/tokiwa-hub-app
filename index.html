@@ -9322,9 +9322,12 @@ function showBoxLabelModal(){
         '</div>' +
         // 梱包グループ (分割梱包)
         '<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:12px">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">' +
             '<div style="font-size:12px;font-weight:700;color:#78350f">📦 梱包構成 <span style="font-weight:400;color:#888;font-size:10px">複数の納品先がある場合は + で追加</span></div>' +
-            '<button class="btn" style="font-size:11px;padding:3px 10px;background:#f59e0b;color:#fff;border-color:#f59e0b" onclick="_addBoxLabelGroup_()">＋ 梱包先を追加</button>' +
+            '<div style="display:flex;gap:6px">' +
+              '<button class="btn" style="font-size:11px;padding:3px 10px;background:#0e7490;color:#fff;border-color:#0e7490" onclick="showBoxLabelImportModal()" title="Excel/CSV/PDF/画像から梱包先リストを一括読み込み">📋 一括取込</button>' +
+              '<button class="btn" style="font-size:11px;padding:3px 10px;background:#f59e0b;color:#fff;border-color:#f59e0b" onclick="_addBoxLabelGroup_()">＋ 梱包先を追加</button>' +
+            '</div>' +
           '</div>' +
           '<div id="bl-groups-list"></div>' +
           '<div id="bl-total-summary" style="margin-top:8px;padding:6px 10px;background:#fff;border:1px dashed #fbbf24;border-radius:4px;font-size:12px;color:#78350f;font-weight:700">' +
@@ -9425,6 +9428,305 @@ function _renderBoxLabelGroupsSummaryOnly_(){
         (groups.length > 1 ? ' (' + groups.length + ' 梱包先)' : '');
     }
   }
+}
+
+// FFFF-3: 梱包先一括取込モーダル
+function showBoxLabelImportModal(){
+  var existing = document.getElementById('bl-import-modal');
+  if(existing) existing.remove();
+  var modal = document.createElement('div');
+  modal.id = 'bl-import-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999999;display:flex;align-items:center;justify-content:center;padding:1rem';
+
+  // 直前の入力から perbox を継承 (一括設定用デフォルト)
+  var defaultPerbox = '';
+  if(window._blGroups && window._blGroups.length > 0){
+    var last = window._blGroups[window._blGroups.length - 1];
+    defaultPerbox = last.perbox || '';
+  }
+
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:680px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong>📋 梱包先 一括取込</strong><div style="font-size:11px;opacity:.85;margin-top:2px">Excel/CSV 貼付・CSV ファイル・PDF/画像 (AI OCR) から読み込み</div></div>' +
+        '<button onclick="document.getElementById(\'bl-import-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
+        // 方法切替タブ
+        '<div style="display:flex;gap:4px;margin-bottom:12px;border-bottom:2px solid #e5e7eb">' +
+          '<button class="bl-import-tab act" data-tab="paste" onclick="_swBlImportTab_(\'paste\')" style="padding:6px 14px;font-size:12px;background:#0e7490;color:#fff;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-weight:700">📝 貼り付け</button>' +
+          '<button class="bl-import-tab" data-tab="file" onclick="_swBlImportTab_(\'file\')" style="padding:6px 14px;font-size:12px;background:#fff;color:#0e7490;border:1px solid #e5e7eb;border-radius:6px 6px 0 0;cursor:pointer">📁 CSV ファイル</button>' +
+          '<button class="bl-import-tab" data-tab="ocr" onclick="_swBlImportTab_(\'ocr\')" style="padding:6px 14px;font-size:12px;background:#fff;color:#0e7490;border:1px solid #e5e7eb;border-radius:6px 6px 0 0;cursor:pointer">🤖 PDF/画像 OCR</button>' +
+        '</div>' +
+
+        // 共通: 1箱あたり数量 (一括設定)
+        '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;padding:8px 10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">' +
+          '<label style="font-size:11px;color:#0369a1;font-weight:700">📦 1箱の数量 (全梱包先共通):</label>' +
+          '<input id="bl-import-perbox" type="number" value="' + defaultPerbox + '" placeholder="例: 1000" style="font-size:13px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;width:120px;font-weight:700">' +
+          '<span style="font-size:10px;color:#666">取込後、行ごとに変更可</span>' +
+        '</div>' +
+
+        // タブ1: テキスト貼付
+        '<div id="bl-import-paste" class="bl-import-pane">' +
+          '<div style="font-size:11px;color:#555;margin-bottom:6px">Excel/CSV の内容をそのまま貼付できます。<br>' +
+            '<strong>対応形式</strong>: タブ・カンマ・スペース区切り。1行 = 1梱包先。<br>' +
+            '<strong>列の順序</strong>: 「梱包先名 [タブ] 数量」 (1箱あたり数量は3列目に書くと優先)' +
+          '</div>' +
+          '<textarea id="bl-import-text" rows="8" placeholder="例 (タブ or カンマ区切り):&#10;A小学校&#9;1500&#10;B小学校&#9;800&#10;C中学校&#9;1200&#10;&#10;または1箱数量も指定:&#10;A小学校, 1500, 500&#10;B小学校, 800, 500" style="width:100%;font-size:13px;padding:8px;border:1px solid #ccc;border-radius:4px;font-family:monospace;resize:vertical"></textarea>' +
+          '<div style="display:flex;justify-content:flex-end;margin-top:8px">' +
+            '<button class="btn btn-p" style="font-size:12px;background:#0e7490;border-color:#0e7490" onclick="_parseBoxLabelText_()">→ 解析</button>' +
+          '</div>' +
+        '</div>' +
+
+        // タブ2: CSV ファイル
+        '<div id="bl-import-file" class="bl-import-pane" style="display:none">' +
+          '<div style="font-size:11px;color:#555;margin-bottom:6px">CSV ファイルを選択 (UTF-8 / Shift_JIS 自動判定)</div>' +
+          '<input type="file" id="bl-import-csv-file" accept=".csv,.tsv,.txt" onchange="_loadBoxLabelCsv_(event)" style="margin-bottom:8px">' +
+          '<div id="bl-import-csv-info" style="font-size:11px;color:#888"></div>' +
+        '</div>' +
+
+        // タブ3: PDF/画像 OCR
+        '<div id="bl-import-ocr" class="bl-import-pane" style="display:none">' +
+          '<div style="font-size:11px;color:#555;margin-bottom:6px">PDF または 画像 (JPG/PNG) を選択 → AI で梱包先リストを抽出します<br>' +
+            '<strong>※ Claude AI を呼び出すため数秒〜十数秒かかります</strong>' +
+          '</div>' +
+          '<input type="file" id="bl-import-ocr-file" accept=".pdf,.jpg,.jpeg,.png" style="margin-bottom:8px">' +
+          '<div style="display:flex;gap:8px;align-items:center">' +
+            '<button class="btn btn-p" style="font-size:12px;background:#7c3aed;border-color:#7c3aed" onclick="_runBoxLabelOcr_()">🤖 AI で抽出</button>' +
+            '<span id="bl-import-ocr-status" style="font-size:11px;color:#888"></span>' +
+          '</div>' +
+        '</div>' +
+
+        // 解析結果プレビュー
+        '<div id="bl-import-preview" style="margin-top:14px;display:none">' +
+          '<div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:6px">✅ 解析結果 (確認・編集してから反映)</div>' +
+          '<div id="bl-import-preview-list"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="padding:14px 20px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:space-between;gap:8px">' +
+        '<button class="btn" onclick="document.getElementById(\'bl-import-modal\').remove()">キャンセル</button>' +
+        '<button id="bl-import-apply-btn" class="btn btn-p" style="background:#0e7490;border-color:#0e7490;display:none" onclick="_applyBoxLabelImport_()">→ 梱包構成に反映</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function _swBlImportTab_(tab){
+  document.querySelectorAll('.bl-import-tab').forEach(function(b){
+    var on = b.dataset.tab === tab;
+    b.style.background = on ? '#0e7490' : '#fff';
+    b.style.color = on ? '#fff' : '#0e7490';
+    b.classList.toggle('act', on);
+  });
+  document.querySelectorAll('.bl-import-pane').forEach(function(p){ p.style.display = 'none'; });
+  document.getElementById('bl-import-' + tab).style.display = '';
+}
+
+// 解析結果保存用
+window._blImportParsed = [];
+
+function _parseBoxLabelText_(){
+  var txt = document.getElementById('bl-import-text')?.value || '';
+  var perboxCommon = parseInt(document.getElementById('bl-import-perbox')?.value, 10) || 0;
+  if(!txt.trim()){ alert('テキストを貼り付けてください'); return; }
+  var lines = txt.split(/\r?\n/).map(function(l){ return l.trim(); }).filter(function(l){ return l; });
+  var parsed = [];
+  lines.forEach(function(line){
+    // 区切り: タブ・カンマ・複数スペース
+    var cols = line.split(/[\t,;]|\s{2,}/).map(function(c){ return c.trim(); }).filter(function(c){ return c; });
+    if(cols.length < 2){
+      // 単独カラム → 末尾の数字を抽出
+      var m = line.match(/^(.*?)[\s　]+(\d{1,7})(?:[\s　]+(\d{1,7}))?$/);
+      if(m){ cols = [m[1].trim(), m[2], m[3] || '']; }
+      else return;
+    }
+    var dest = cols[0];
+    var total = parseInt(cols[1].replace(/[^\d]/g, ''), 10) || 0;
+    var perbox = (cols[2] && parseInt(cols[2].replace(/[^\d]/g, ''), 10)) || perboxCommon || 0;
+    if(!total) return;
+    parsed.push({ destLabel: dest, total: String(total), perbox: String(perbox) });
+  });
+  window._blImportParsed = parsed;
+  _renderBoxLabelImportPreview_();
+}
+
+function _loadBoxLabelCsv_(e){
+  var file = e.target.files && e.target.files[0];
+  if(!file) return;
+  var info = document.getElementById('bl-import-csv-info');
+  if(info) info.textContent = '読込中: ' + file.name;
+  var reader = new FileReader();
+  reader.onload = function(){
+    var bytes = new Uint8Array(reader.result);
+    // UTF-8 BOM / Shift_JIS の自動判定
+    var text = '';
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch(e1){
+      try { text = new TextDecoder('shift_jis').decode(bytes); }
+      catch(e2){ text = new TextDecoder('utf-8').decode(bytes); }
+    }
+    document.getElementById('bl-import-text').value = text;
+    _swBlImportTab_('paste');
+    if(info) info.textContent = '✅ ' + file.name + ' を読込 → 「貼り付け」タブで解析してください';
+    _parseBoxLabelText_();
+  };
+  reader.onerror = function(){
+    if(info) info.textContent = '⚠ 読込失敗: ' + file.name;
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function _runBoxLabelOcr_(){
+  var fileInput = document.getElementById('bl-import-ocr-file');
+  var file = fileInput && fileInput.files && fileInput.files[0];
+  var statusEl = document.getElementById('bl-import-ocr-status');
+  if(!file){ alert('PDF または 画像を選択してください'); return; }
+  if(statusEl) statusEl.textContent = '🤖 AI 解析中… (10〜30秒)';
+
+  try {
+    // Base64 化
+    var b64 = await new Promise(function(resolve, reject){
+      var r = new FileReader();
+      r.onload = function(){ resolve(r.result); };
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    var mime = file.type || 'application/octet-stream';
+    var base64data = String(b64).replace(/^data:[^;]+;base64,/, '');
+
+    var perboxCommon = parseInt(document.getElementById('bl-import-perbox')?.value, 10) || 0;
+
+    // Claude へのプロンプト
+    var prompt = 'これは梱包先一覧表 (学校別・部署別など) の依頼書です。各行から「梱包先名」と「数量」を抽出してください。\n\n' +
+      '## 出力フォーマット\n' +
+      '以下の JSON 配列のみを出力してください (前置きや説明は不要):\n' +
+      '[\n' +
+      '  {"destLabel": "梱包先名1", "total": 数量1},\n' +
+      '  {"destLabel": "梱包先名2", "total": 数量2}\n' +
+      ']\n\n' +
+      '## 注意\n' +
+      '- 数量は整数のみ\n' +
+      '- 梱包先名は表記そのままで\n' +
+      '- 表で表現されていない場合 (本文の中に書かれている等) も抽出してください\n' +
+      '- 該当が無ければ空配列 [] を返す';
+
+    var messages = [{
+      role: 'user',
+      content: [
+        { type: mime === 'application/pdf' ? 'document' : 'image',
+          source: { type: 'base64', media_type: mime, data: base64data }
+        },
+        { type: 'text', text: prompt }
+      ]
+    }];
+
+    var resp = await callCloudAPI('claudeChat', {}, {
+      messages: messages,
+      max_tokens: 4000
+    });
+    if(!resp || !resp.success){
+      if(statusEl) statusEl.textContent = '⚠ ' + (resp && resp.error || '失敗');
+      return;
+    }
+    var raw = resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '';
+    // JSON 抽出
+    var jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if(!jsonMatch){ if(statusEl) statusEl.textContent = '⚠ JSON 解析失敗'; console.warn('OCR result:', raw); return; }
+    var arr;
+    try { arr = JSON.parse(jsonMatch[0]); }
+    catch(e){ if(statusEl) statusEl.textContent = '⚠ JSON パース失敗'; return; }
+
+    var parsed = (arr || []).map(function(x){
+      var t = parseInt(x.total, 10) || 0;
+      return { destLabel: String(x.destLabel || '').trim(), total: String(t || ''), perbox: String(perboxCommon || '') };
+    }).filter(function(x){ return x.destLabel && parseInt(x.total,10) > 0; });
+
+    window._blImportParsed = parsed;
+    if(statusEl) statusEl.textContent = '✅ ' + parsed.length + ' 件抽出';
+    _renderBoxLabelImportPreview_();
+  } catch(e){
+    if(statusEl) statusEl.textContent = '⚠ ' + e.message;
+    console.error('OCR error:', e);
+  }
+}
+
+function _renderBoxLabelImportPreview_(){
+  var preview = document.getElementById('bl-import-preview');
+  var list = document.getElementById('bl-import-preview-list');
+  var applyBtn = document.getElementById('bl-import-apply-btn');
+  var parsed = window._blImportParsed || [];
+  if(!preview || !list) return;
+  if(parsed.length === 0){
+    preview.style.display = 'none';
+    if(applyBtn) applyBtn.style.display = 'none';
+    return;
+  }
+  preview.style.display = 'block';
+  if(applyBtn) applyBtn.style.display = '';
+  // テーブル + 編集可能
+  var perboxCommon = parseInt(document.getElementById('bl-import-perbox')?.value, 10) || 0;
+  list.innerHTML =
+    '<table style="width:100%;font-size:12px;border-collapse:collapse">' +
+      '<thead><tr style="background:#f3f4f6"><th style="padding:4px;text-align:left">#</th><th style="padding:4px;text-align:left">梱包先</th><th style="padding:4px;text-align:right">数量</th><th style="padding:4px;text-align:right">1箱</th><th style="padding:4px;text-align:right">箱数</th><th></th></tr></thead>' +
+      '<tbody>' +
+        parsed.map(function(p, i){
+          var t = parseInt(p.total,10) || 0;
+          var pb = parseInt(p.perbox,10) || perboxCommon || 0;
+          var boxes = (t && pb) ? Math.ceil(t/pb) : 0;
+          return '<tr style="border-bottom:1px solid #f3f4f6">' +
+            '<td style="padding:4px">' + (i+1) + '</td>' +
+            '<td style="padding:4px"><input value="' + _escDiff(p.destLabel||'') + '" oninput="window._blImportParsed[' + i + '].destLabel=this.value" style="width:100%;font-size:12px;padding:3px 6px;border:1px solid #e5e7eb;border-radius:3px"></td>' +
+            '<td style="padding:4px;text-align:right"><input type="number" value="' + (p.total||'') + '" oninput="window._blImportParsed[' + i + '].total=this.value;_renderBoxLabelImportPreview_()" style="width:80px;font-size:12px;padding:3px 6px;border:1px solid #e5e7eb;border-radius:3px;text-align:right"></td>' +
+            '<td style="padding:4px;text-align:right"><input type="number" value="' + (p.perbox||'') + '" placeholder="' + (perboxCommon || '共通') + '" oninput="window._blImportParsed[' + i + '].perbox=this.value;_renderBoxLabelImportPreview_()" style="width:80px;font-size:12px;padding:3px 6px;border:1px solid #e5e7eb;border-radius:3px;text-align:right"></td>' +
+            '<td style="padding:4px;text-align:right;font-weight:700">' + (boxes ? boxes + ' 箱' : '-') + '</td>' +
+            '<td style="padding:4px;text-align:center"><button onclick="window._blImportParsed.splice(' + i + ',1);_renderBoxLabelImportPreview_()" style="background:none;border:none;color:#dc2626;cursor:pointer">×</button></td>' +
+          '</tr>';
+        }).join('') +
+      '</tbody>' +
+      '<tfoot>' +
+        (function(){
+          var sumT = 0, sumB = 0;
+          parsed.forEach(function(p){
+            var t = parseInt(p.total,10) || 0; var pb = parseInt(p.perbox,10) || perboxCommon || 0;
+            sumT += t;
+            if(t && pb) sumB += Math.ceil(t/pb);
+          });
+          return '<tr style="background:#fef3c7;font-weight:700"><td colspan="2" style="padding:4px">合計 (' + parsed.length + '梱包先)</td><td style="padding:4px;text-align:right">' + sumT.toLocaleString() + '</td><td></td><td style="padding:4px;text-align:right">' + sumB + ' 箱</td><td></td></tr>';
+        })() +
+      '</tfoot>' +
+    '</table>';
+}
+
+function _applyBoxLabelImport_(){
+  var parsed = window._blImportParsed || [];
+  if(parsed.length === 0){ alert('解析データがありません'); return; }
+  var perboxCommon = parseInt(document.getElementById('bl-import-perbox')?.value, 10) || 0;
+  // 既存グループとの置換 or 追加を確認
+  var existing = (window._blGroups || []).filter(function(g){
+    return (parseInt(g.total,10) || 0) > 0 || (g.destLabel||'').trim();
+  });
+  var mode = 'replace';
+  if(existing.length > 0){
+    mode = confirm('既に ' + existing.length + ' 件の梱包先が入力されています。\n\nOK = 上書き (既存を破棄)\nキャンセル = 末尾に追加') ? 'replace' : 'append';
+  }
+
+  var newGroups = parsed.map(function(p){
+    return {
+      destLabel: p.destLabel || '',
+      total: p.total || '',
+      perbox: p.perbox || String(perboxCommon || '')
+    };
+  });
+
+  if(mode === 'replace'){
+    window._blGroups = newGroups;
+  } else {
+    window._blGroups = (window._blGroups || []).concat(newGroups);
+  }
+  _renderBoxLabelGroups_();
+  document.getElementById('bl-import-modal')?.remove();
+  alert('✅ ' + newGroups.length + ' 件の梱包先を' + (mode === 'replace' ? '取込' : '追加') + 'しました');
 }
 
 function _addBoxLabelGroup_(){
