@@ -27496,8 +27496,63 @@ function setInqSource(key){
 }
 
 // ──────────────────────────────────────────
-// TTTT-1: 受信窓口タブ (社内のどの宛先メールに届いたか)
+// TTTT-1 / UUUU-1: 受信窓口タブ (社内のどの宛先メールに届いたか)
 // ──────────────────────────────────────────
+
+// UUUU-1: 受信窓口アドレス → 会社名を解決
+// 優先順: (1) 署名プロファイル ラベル先頭の会社名 (2) channel_company 多数決 (3) ドメイン推定
+function _recipientCompanyLabel_(addr){
+  if(!addr) return '';
+
+  // (1) 署名プロファイルから
+  try {
+    var mailSettings = (typeof _getMailSettings_ === 'function') ? _getMailSettings_() : { signatures: [] };
+    var sigs = (mailSettings && mailSettings.signatures) || [];
+    for(var i=0; i<sigs.length; i++){
+      var p = sigs[i];
+      var emails = (p.receivingEmails || []).map(function(e){ return (e||'').toLowerCase(); });
+      if(emails.indexOf(addr.toLowerCase()) >= 0){
+        var lab = (p.label || '').trim();
+        if(lab){
+          // ラベル例 "01_トキワ印刷 / 営業" → "01_トキワ印刷" を抽出
+          var first = lab.split('/')[0].trim();
+          if(first) return first;
+        }
+      }
+    }
+  } catch(e){}
+
+  // (2) このアドレス宛て連絡の channel_company 多数決
+  try {
+    var counts = {};
+    (DB.inquiries || []).forEach(function(inq){
+      var to = (inq.to_email || inq.delivered_to || '').trim().toLowerCase();
+      if(to !== addr.toLowerCase()) return;
+      var cc = inq.channel_company || '';
+      if(cc) counts[cc] = (counts[cc] || 0) + 1;
+    });
+    var best = '', bestN = 0;
+    Object.keys(counts).forEach(function(k){
+      if(counts[k] > bestN){ bestN = counts[k]; best = k; }
+    });
+    if(best) return best;
+  } catch(e){}
+
+  // (3) ドメインから推定
+  var domain = (addr.split('@')[1] || '').toLowerCase();
+  var domainMap = {
+    'tokiwap.co.jp':   'トキワ印刷',
+    'murayama-p.co.jp':'村山印刷',
+    'kitakami.co.jp':  '北上プリント',
+    'art-s.co.jp':     'アート・エス',
+    'tsushima-p.co.jp':'津島プリント',
+    'nakao-p.co.jp':   '中尾印刷'
+  };
+  if(domainMap[domain]) return domainMap[domain];
+  if(domain) return domain;
+  return '';
+}
+
 function renderInquiryRecipientTabs(){
   var container = document.getElementById('inq-recipient-tabs');
   if(!container) return;
@@ -27536,10 +27591,8 @@ function renderInquiryRecipientTabs(){
 
   var html = '<span style="font-size:11px;color:#92400e;font-weight:700;margin-right:4px">📥 受信窓口:</span>';
 
-  // すべて (受信窓口フィルタ解除) — 現在 recipient: の時のみ active 判定
-  var allActive = (currentAddr === '' && folder !== 'inbox' && folder !== 'all') ? false : (currentAddr === '');
-  // 実用上は「受信窓口フィルタかかってない=allActive」
-  allActive = currentAddr === '';
+  // すべて (受信窓口フィルタ解除)
+  var allActive = currentAddr === '';
   html += '<button onclick="setInqRecipient(\'all\')" ' +
     'style="padding:4px 10px;background:' + (allActive ? baseColor : baseBg) + ';color:' + (allActive ? '#fff' : baseColor) + ';' +
     'border:2px solid ' + (allActive ? baseColor : 'transparent') + ';' +
@@ -27551,17 +27604,28 @@ function renderInquiryRecipientTabs(){
   addrs.forEach(function(addr){
     var isActive = (currentAddr === addr);
     var localPart = addr.split('@')[0];
-    var domain = addr.split('@')[1] || '';
-    // 表示は localPart のみ (フル address は title 属性)
-    var disp = localPart.length > 16 ? localPart.substring(0,14) + '…' : localPart;
+    var disp = localPart.length > 18 ? localPart.substring(0,16) + '…' : localPart;
+
+    // UUUU-1: 会社名を解決
+    var companyName = _recipientCompanyLabel_(addr);
+    var coDisp = companyName.length > 12 ? companyName.substring(0,11) + '…' : companyName;
+
+    // 2段組: 上に会社名 (小・薄)、下に 📩 localPart (大・太)
+    var topLine = companyName
+      ? '<span style="font-size:9px;font-weight:600;line-height:1;opacity:.85;letter-spacing:.5px">🏢 ' + _escDiff(coDisp) + '</span>'
+      : '';
+
     html += '<button onclick="setInqRecipient(\'' + addr + '\')" ' +
-      'title="' + addr + '" ' +
+      'title="' + (companyName ? companyName + ' / ' : '') + addr + '" ' +
       'style="padding:4px 10px;background:' + (isActive ? baseColor : baseBg) + ';color:' + (isActive ? '#fff' : baseColor) + ';' +
       'border:2px solid ' + (isActive ? baseColor : 'transparent') + ';' +
       (isActive ? 'box-shadow:0 2px 6px rgba(0,0,0,.15);' : '') +
-      'border-radius:14px;font-size:12px;font-weight:' + (isActive ? '700' : '500') + ';cursor:pointer;display:inline-flex;align-items:center;gap:5px">' +
-      '<span>📩</span><span>' + disp + '</span>' +
-      '<span style="background:' + (isActive ? 'rgba(255,255,255,.25)' : '#fff') + ';color:' + (isActive ? '#fff' : baseColor) + ';padding:1px 7px;border-radius:10px;font-size:10px;font-weight:700">' + counts[addr] + '</span>' +
+      'border-radius:14px;font-size:12px;font-weight:' + (isActive ? '700' : '500') + ';cursor:pointer;display:inline-flex;align-items:center;gap:6px;line-height:1.1">' +
+        '<span style="display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px">' +
+          topLine +
+          '<span style="font-size:12px;font-weight:' + (isActive ? '700' : '600') + '">📩 ' + _escDiff(disp) + '</span>' +
+        '</span>' +
+        '<span style="background:' + (isActive ? 'rgba(255,255,255,.25)' : '#fff') + ';color:' + (isActive ? '#fff' : baseColor) + ';padding:1px 7px;border-radius:10px;font-size:10px;font-weight:700;margin-left:2px">' + counts[addr] + '</span>' +
       '</button>';
   });
 
