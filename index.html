@@ -27840,37 +27840,57 @@ async function _summarizeAttachment_(inqId, attIdx){
         });
         if(!resp || !resp.success) throw new Error('AI 要約失敗: ' + (resp && resp.error || 'unknown'));
         summary = resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '';
-      } else if(url){
-        // テキスト抽出失敗 → PDF を直接 Claude へ送る
-        console.info('🔄 extractPdfText 失敗 (' + extractError + ') — Claude へ PDF 直接送信にフォールバック');
+      } else if(fileId){
+        // テキスト抽出失敗 → バックエンド経由で PDF→Claude を試す
+        console.info('🔄 extractPdfText 失敗 (' + extractError + ') — バックエンド summarizeDriveFile にフォールバック');
         try {
-          var pdfResp = await fetch(url);
-          if(!pdfResp.ok) throw new Error('PDF fetch HTTP ' + pdfResp.status);
-          var pdfBlob = await pdfResp.blob();
-          if(pdfBlob.size > 20 * 1024 * 1024) throw new Error('PDF が大きすぎます (20MB超)');
-          var pdfB64 = await new Promise(function(resolve, reject){
-            var r = new FileReader();
-            r.onload = function(){ resolve(String(r.result).replace(/^data:[^;]+;base64,/, '')); };
-            r.onerror = reject;
-            r.readAsDataURL(pdfBlob);
+          var backResp = await callCloudAPI('summarizeDriveFile', {}, {
+            fileId: fileId,
+            fileName: name,
+            prompt: '印刷業務関連のメール添付PDFです。重要なポイントを 3-5 行で要約してください。数量・納期・仕様等の具体的な数字があれば含めてください。'
           });
-          var resp2 = await callCloudAPI('claudeChat', {}, {
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfB64 } },
-                { type: 'text', text: '次は印刷業務関連のメール添付PDF「' + name + '」です。重要なポイントを 3-5 行で要約してください。数量・納期・仕様等の具体的な数字があれば含めてください。' }
-              ]
-            }],
-            max_tokens: 800
-          });
-          if(!resp2 || !resp2.success) throw new Error('Claude 直接送信失敗: ' + (resp2 && resp2.error || 'unknown'));
-          summary = resp2.text || (resp2.content && resp2.content[0] && resp2.content[0].text) || '';
-        } catch(directErr){
-          throw new Error('PDF 処理失敗 (DriveOCR: ' + (extractError || '不明') + ' / 直接送信: ' + directErr.message + ')');
+          if(backResp && backResp.success && backResp.summary){
+            summary = backResp.summary;
+          } else if(backResp && backResp.error && /unknown_action/i.test(backResp.error)){
+            throw new Error('バックエンド未対応 (summarizeDriveFile エンドポイントが必要)');
+          } else {
+            throw new Error(backResp && backResp.error || 'バックエンド要約失敗');
+          }
+        } catch(backErr){
+          // 最終フォールバック: フロントから直接 fetch (CORSで失敗する可能性大)
+          if(url){
+            try {
+              var pdfResp = await fetch(url);
+              if(!pdfResp.ok) throw new Error('PDF fetch HTTP ' + pdfResp.status);
+              var pdfBlob = await pdfResp.blob();
+              if(pdfBlob.size > 20 * 1024 * 1024) throw new Error('PDF が大きすぎます (20MB超)');
+              var pdfB64 = await new Promise(function(resolve, reject){
+                var r = new FileReader();
+                r.onload = function(){ resolve(String(r.result).replace(/^data:[^;]+;base64,/, '')); };
+                r.onerror = reject;
+                r.readAsDataURL(pdfBlob);
+              });
+              var resp2 = await callCloudAPI('claudeChat', {}, {
+                messages: [{
+                  role: 'user',
+                  content: [
+                    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfB64 } },
+                    { type: 'text', text: '印刷業務関連のメール添付PDF「' + name + '」を 3-5 行で要約してください。' }
+                  ]
+                }],
+                max_tokens: 800
+              });
+              if(!resp2 || !resp2.success) throw new Error('Claude 失敗: ' + (resp2 && resp2.error || 'unknown'));
+              summary = resp2.text || (resp2.content && resp2.content[0] && resp2.content[0].text) || '';
+            } catch(directErr){
+              throw new Error('PDF要約は バックエンド更新が必要です (summarizeDriveFile)。フォールバックも失敗: ' + directErr.message);
+            }
+          } else {
+            throw new Error('PDF要約は バックエンド更新が必要です (' + backErr.message + ')');
+          }
         }
       } else {
-        throw new Error('PDF URL/fileId が取得できません (バックエンド設定要確認)');
+        throw new Error('PDF URL/fileId が取得できません (バックエンド側で添付情報を保存する必要があります)');
       }
     } else if(isImage && url){
       // 画像: Claude vision で要約 (URL から base64 取得)
