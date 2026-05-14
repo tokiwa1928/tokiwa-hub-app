@@ -27507,8 +27507,13 @@ function _renderInquiryDetailInPane_(inq){
 // 添付ファイルプレビュー描画 (PDF/画像 inline、その他はダウンロードボタン)
 function _renderAttachmentPreview_(inq){
   if(!inq || !inq.attachments || inq.attachments.length === 0) return '';
+  // 一覧モード: コンパクト (ホバーでフローティングプレビュー)
+  // 全件で常時 inline 展開は重いため、デフォルトはコンパクト + 「展開」 ボタン
   return '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
-    '<div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:6px">📎 添付ファイル (' + inq.attachments.length + ')</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+      '<div style="font-size:12px;font-weight:700;color:#374151">📎 添付ファイル (' + inq.attachments.length + ')</div>' +
+      '<span style="font-size:10px;color:#888">💡 ファイル名にマウスを乗せるとプレビュー</span>' +
+    '</div>' +
     inq.attachments.map(function(att, i){
       var name = att.name || att.filename || ('添付' + (i+1));
       var url = att.url || att.driveUrl || att.dataUrl || '';
@@ -27516,25 +27521,71 @@ function _renderAttachmentPreview_(inq){
       var size = att.size ? (' · ' + Math.round(att.size/1024) + ' KB') : '';
       var isImage = /^image\//.test(mime) || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
       var isPdf   = mime === 'application/pdf' || /\.pdf$/i.test(name);
-      var preview = '';
+      var hoverEvents = '';
+      if(url && (isImage || isPdf)){
+        hoverEvents = ' onmouseenter="_showAttachmentHoverPreview_(event,\'' + _escDiff(url) + '\',' + (isImage ? 'true' : 'false') + ',\'' + _escDiff(name) + '\')" onmousemove="_moveAttachmentHoverPreview_(event)" onmouseleave="_hideAttachmentHoverPreview_()"';
+      }
+      var inlineId = 'att-inline-' + inq.id + '-' + i;
+      var inlinePreview = '';
       if(isImage && url){
-        preview = '<div style="margin-top:6px"><img src="' + _escDiff(url) + '" alt="' + _escDiff(name) + '" style="max-width:100%;max-height:300px;border:1px solid #e5e7eb;border-radius:4px;cursor:pointer" onclick="window.open(\'' + _escDiff(url) + '\',\'_blank\')"></div>';
+        inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px"><img src="' + _escDiff(url) + '" alt="' + _escDiff(name) + '" style="max-width:100%;max-height:400px;border:1px solid #e5e7eb;border-radius:4px;cursor:pointer" onclick="window.open(\'' + _escDiff(url) + '\',\'_blank\')"></div>';
       } else if(isPdf && url){
-        preview = '<div style="margin-top:6px"><iframe src="' + _escDiff(url) + '#toolbar=0" style="width:100%;height:300px;border:1px solid #e5e7eb;border-radius:4px"></iframe></div>';
+        inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px"><iframe src="' + _escDiff(url) + '#toolbar=0" style="width:100%;height:500px;border:1px solid #e5e7eb;border-radius:4px"></iframe></div>';
       }
       return '<div style="background:#fff;border:1px solid #e0ddd6;border-radius:6px;padding:8px 12px;margin-bottom:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
-          '<div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">' +
+          '<div ' + hoverEvents + ' style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;cursor:' + ((isImage||isPdf) ? 'help' : 'default') + '">' +
             (isImage ? '🖼' : isPdf ? '📄' : '📎') + ' <strong>' + _escDiff(name) + '</strong>' +
             '<span style="color:#888;font-size:10px">' + size + '</span>' +
           '</div>' +
+          ((isImage||isPdf) ? '<button onclick="var e=document.getElementById(\'' + inlineId + '\');e.style.display=(e.style.display===\'none\'?\'block\':\'none\')" style="font-size:11px;color:#5b21b6;background:#faf5ff;border:1px solid #c4b5fd;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0">👁 展開</button>' : '') +
           (url ? '<a href="' + _escDiff(url) + '" target="_blank" style="font-size:11px;color:#1e40af;text-decoration:none;flex-shrink:0">↗ 開く</a>' : '') +
           (url ? '<a href="' + _escDiff(url) + '" download="' + _escDiff(name) + '" style="font-size:11px;color:#16a34a;text-decoration:none;flex-shrink:0">💾 DL</a>' : '') +
         '</div>' +
-        preview +
+        inlinePreview +
       '</div>';
     }).join('') +
   '</div>';
+}
+
+// JJJJ-1: 添付ホバープレビュー (フローティング)
+function _showAttachmentHoverPreview_(ev, url, isImage, name){
+  var existing = document.getElementById('att-hover-preview');
+  if(existing) existing.remove();
+  var div = document.createElement('div');
+  div.id = 'att-hover-preview';
+  div.style.cssText = 'position:fixed;z-index:99999999;background:#fff;border:2px solid #1a73e8;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);padding:6px;pointer-events:none;max-width:400px';
+  var content = '';
+  if(isImage){
+    content = '<img src="' + url + '" alt="" style="max-width:400px;max-height:400px;display:block;border-radius:4px">';
+  } else {
+    // PDF
+    content = '<iframe src="' + url + '#toolbar=0&view=Fit" style="width:380px;height:500px;border:none;border-radius:4px"></iframe>';
+  }
+  div.innerHTML = content +
+    '<div style="font-size:10px;color:#666;padding:4px 6px 2px;text-align:center;background:#f9fafb;border-radius:0 0 6px 6px;margin:4px -6px -6px">' +
+    (name || '') + '</div>';
+  document.body.appendChild(div);
+  _moveAttachmentHoverPreview_(ev);
+}
+
+function _moveAttachmentHoverPreview_(ev){
+  var div = document.getElementById('att-hover-preview');
+  if(!div) return;
+  // カーソル右上に配置 (画面右端の場合は左に)
+  var x = ev.clientX + 20;
+  var y = ev.clientY - 30;
+  var rect = div.getBoundingClientRect();
+  if(x + rect.width > window.innerWidth) x = ev.clientX - rect.width - 20;
+  if(y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 10;
+  if(y < 10) y = 10;
+  div.style.left = x + 'px';
+  div.style.top = y + 'px';
+}
+
+function _hideAttachmentHoverPreview_(){
+  var existing = document.getElementById('att-hover-preview');
+  if(existing) existing.remove();
 }
 
 function populateInquiryAssignFilter() {
@@ -27683,6 +27734,29 @@ function renderInquiryFolderList(){
     '</div>';
   });
 
+  // JJJJ-1: 受信メールアドレス別 (Gmail のように「自分のどのアドレスに来たか」)
+  var recipientCounts = {};
+  all.forEach(function(inq){
+    var to = (inq.to_email || inq.delivered_to || '').trim().toLowerCase();
+    if(to) recipientCounts[to] = (recipientCounts[to] || 0) + 1;
+  });
+  var recipientList = Object.keys(recipientCounts).sort(function(a,b){ return recipientCounts[b] - recipientCounts[a]; });
+  if(recipientList.length > 0){
+    folderHtml += '<div class="inq-folder-divider"></div>' +
+      '<div class="inq-folder-section">📥 受信アドレス別</div>';
+    recipientList.forEach(function(addr){
+      var act = current === 'recipient:' + addr;
+      var shortAddr = addr.length > 22 ? addr.substring(0, 20) + '…' : addr;
+      // 名前部分だけ短く (例: honda@... → honda)
+      var localPart = addr.split('@')[0];
+      folderHtml += '<div class="inq-folder-item' + (act ? ' act' : '') + '" onclick="setInqFolder(\'recipient:' + addr + '\')" title="' + addr + '">' +
+        '<span class="inq-folder-icon">📩</span>' +
+        '<span class="inq-folder-label" style="font-size:11px">' + _escDiff(localPart) + '</span>' +
+        '<span class="inq-folder-count">' + recipientCounts[addr] + '</span>' +
+      '</div>';
+    });
+  }
+
   container.innerHTML = folderHtml;
 }
 
@@ -27734,6 +27808,11 @@ function renderInquiryList() {
       } else if(folder.indexOf('channel:') === 0){
         var ch = folder.substring(8);
         if((inq.source_type || 'manual') !== ch) return false;
+      } else if(folder.indexOf('recipient:') === 0){
+        // JJJJ-1: 受信アドレス別
+        var rcpt = folder.substring(10).toLowerCase();
+        var toE = (inq.to_email || inq.delivered_to || '').toLowerCase();
+        if(toE !== rcpt) return false;
       } else {
         // ステータス系フォルダ
         if(_inqAutoFolder_(inq) !== folder) return false;
@@ -27853,6 +27932,13 @@ function renderInquiryList() {
     var assigneeBadge = inq.assignee
       ? '<span style="font-size:10px;color:#5f6368" title="担当: ' + _escDiff(inq.assignee) + '">👤' + _escDiff(inq.assignee.substring(0,4)) + '</span>'
       : '';
+    // JJJJ-1: 受信アドレスバッジ (どの社内アドレスに届いたか)
+    var recipientBadge = '';
+    var toEmail = inq.to_email || inq.delivered_to || '';
+    if(toEmail){
+      var localPart = toEmail.split('@')[0];
+      recipientBadge = '<span style="font-size:10px;color:#0369a1;background:#f0f9ff;padding:1px 5px;border-radius:3px" title="受信先: ' + _escDiff(toEmail) + '">📥' + _escDiff(localPart.substring(0,6)) + '</span>';
+    }
 
     var cardClass = 'inq-card ' + (inq.priority || 'normal') + (isUnread ? ' inq-unread' : '');
 
@@ -27883,9 +27969,10 @@ function renderInquiryList() {
         '<span style="color:#bbb;font-weight:400">—</span>' +
         '<span class="inq-preview">' + (inq.summary ? '🤖 ' : '') + _escDiff(preview) + '</span>' +
       '</div>' +
-      // 右: チップ + 担当者 + 時刻
+      // 右: チップ + 受信先 + 担当者 + 時刻
       '<div class="inq-meta">' +
         chips.join('') +
+        recipientBadge +
         assigneeBadge +
         (replyCount > 0 ? '<span style="font-size:10px;color:#5f6368" title="返信数">💬' + replyCount + '</span>' : '') +
         '<span class="inq-time">' + elapsed + '</span>' +
