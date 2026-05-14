@@ -1867,6 +1867,8 @@ setTimeout(_removeBootLoader_, 5000);
           <button class="btn" onclick="showInquiryFormPreview()">📋 公開フォーム</button>
         </div>
       </div>
+      <!-- 📊 ステータス概要 (全社タブの上に配置 / 選択中会社の件数を反映) -->
+      <div id="inq-stats-bar" style="display:flex;gap:6px;margin-bottom:.5rem;font-size:11px;flex-wrap:wrap"></div>
       <!-- IIII-1: 会社別タブ (グループ7社 + 全社) -->
       <div id="inq-company-tabs" style="display:flex;gap:0;margin-bottom:.5rem;border-bottom:2px solid #e5e7eb;flex-wrap:wrap;align-items:center;background:#fafafa;border-radius:6px 6px 0 0"></div>
       <!-- 社外/社内 切替タブ -->
@@ -1942,8 +1944,7 @@ setTimeout(_removeBootLoader_, 5000);
         </select>
         <button class="btn" style="font-size:11px;padding:3px 8px" onclick="document.getElementById('inq-search').value='';document.getElementById('inq-status-f').value='';document.getElementById('inq-cat-f').value='';document.getElementById('inq-prio-f').value='';document.getElementById('inq-assign-f').value='';document.getElementById('inq-source-f').value='';document.getElementById('inq-kind-f').value='';renderInquiryList()" title="フィルタをクリア">✕</button>
       </div>
-      <!-- 📊 ステータス概要 (フィルタ直下に横並びコンパクト表示) -->
-      <div id="inq-stats-bar" style="display:flex;gap:6px;margin-bottom:.65rem;font-size:11px;flex-wrap:wrap"></div>
+      <!-- ステータスバーは会社タブの上に移動済 (OOOO-1) -->
       <!-- IIII-1: レイアウト切替対応コンテナ (右/下プレビュー対応) -->
       <div id="inq-list-pane-wrap" style="display:flex;flex-direction:column;gap:8px">
         <!-- 問い合わせカード一覧 -->
@@ -27404,6 +27405,8 @@ function setInqCompanyTab(key){
   try { localStorage.setItem('inq_company_tab', key); } catch(e){}
   renderInquiryCompanyTabs();
   renderInquiryList();
+  // OOOO-1: ステータス概要も選択中会社の件数に更新
+  if(typeof renderInquiryStats === 'function') renderInquiryStats();
 }
 
 function setInqReadingPane(mode){
@@ -27766,7 +27769,8 @@ function _renderAttachmentPreview_(inq){
             (existingSummary ? '<span style="color:#16a34a;font-size:10px;margin-left:4px" title="AI要約あり">🤖✓</span>' : '') +
           '</div>' +
           summarizeBtn +
-          ((isImage||isPdf) && url
+          // OOOO-1: AI 要約が既にあれば 展開ボタンは省略 (要約で内容が分かるため)
+          ((isImage||isPdf) && url && !existingSummary
             ? '<button onclick="event.stopPropagation();var e=document.getElementById(\'' + inlineId + '\');if(e)e.style.display=(e.style.display===\'none\'?\'block\':\'none\')" style="font-size:11px;color:#5b21b6;background:#faf5ff;border:1px solid #c4b5fd;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0">👁 展開</button>'
             : '') +
           (url ? '<a href="' + _escAttr_(url) + '" target="_blank" style="font-size:11px;color:#1e40af;text-decoration:none;flex-shrink:0">↗ 開く</a>' : '<span style="font-size:10px;color:#9ca3af">(URL未取得)</span>') +
@@ -28604,10 +28608,17 @@ function renderInquiryStats() {
   const respDiv = document.getElementById('inq-response-stats');
   const catDiv = document.getElementById('inq-cat-stats');
   if(!statsDiv) return;
-  
-  const items = DB.inquiries || [];
+
+  // OOOO-1: 会社別フィルタ反映 — 選択中の会社の件数を表示
+  var allItems = DB.inquiries || [];
+  var companyTab = window._inqCompanyTab_ || 'all';
+  var items = companyTab === 'all'
+    ? allItems
+    : allItems.filter(function(inq){ return _matchesCompanyTab_(inq, companyTab); });
+
   const counts = { new: 0, progress: 0, waiting: 0, done: 0 };
   items.forEach(i => { counts[i.status] = (counts[i.status]||0) + 1; });
+  var totalAll = items.length;
 
   // 既存 (非表示の互換要素) にも書き込む
   statsDiv.innerHTML = `
@@ -28628,16 +28639,24 @@ function renderInquiryStats() {
       <div style="font-size:10px;color:#065f46">完了</div>
     </div>`;
 
-  // 🆕 コンパクトステータスバー (フィルタ直下)
+  // 🆕 OOOO-1: コンパクトステータスバー (会社タブの上 / 全社フィルタ連動 / すべて含む)
   const compactBar = document.getElementById('inq-stats-bar');
   if(compactBar){
     const today = items.filter(i => i.createdAt && new Date(i.createdAt).toDateString() === new Date().toDateString()).length;
+    // 会社名ラベル (現在の選択)
+    var companyLabel = '';
+    if(companyTab !== 'all'){
+      var labels = {'トキワ':'トキワ印刷','村山':'村山印刷','北上':'北上プリント','アート':'アート・エス','津島':'津島プリント','中尾':'中尾印刷'};
+      companyLabel = ' (' + (labels[companyTab] || companyTab) + ')';
+    }
     compactBar.innerHTML = `
-      <span style="background:#fef3c7;color:#92400e;padding:4px 10px;border-radius:12px;font-weight:700">📨 新規 ${counts.new}</span>
+      <span style="background:#374151;color:#fff;padding:4px 10px;border-radius:12px;font-weight:700" title="現在の会社フィルタ内のすべて${companyLabel}">📨 すべて ${totalAll}</span>
+      <span style="background:#fef3c7;color:#92400e;padding:4px 10px;border-radius:12px;font-weight:700">🆕 新規 ${counts.new}</span>
       <span style="background:#dbeafe;color:#1d4ed8;padding:4px 10px;border-radius:12px;font-weight:700">⏳ 対応中 ${counts.progress}</span>
       <span style="background:#f3e8ff;color:#7c3aed;padding:4px 10px;border-radius:12px;font-weight:700">💬 返信待 ${counts.waiting}</span>
       <span style="background:#dcfce7;color:#065f46;padding:4px 10px;border-radius:12px;font-weight:700">✅ 完了 ${counts.done}</span>
-      <span style="background:#f3f4f6;color:#374151;padding:4px 10px;border-radius:12px;margin-left:auto">本日 ${today}件 / 総 ${items.length}件</span>
+      ${companyLabel ? `<span style="background:#fff;color:#666;padding:4px 10px;border-radius:12px;font-size:10px;border:1px solid #e5e7eb">${companyLabel.replace(/[\s()]/g,'')}</span>` : ''}
+      <span style="background:#f3f4f6;color:#374151;padding:4px 10px;border-radius:12px;margin-left:auto">本日 ${today}件 / 全社 ${allItems.length}件</span>
     `;
   }
   
