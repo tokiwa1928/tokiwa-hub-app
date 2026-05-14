@@ -27732,31 +27732,217 @@ function _renderAttachmentPreview_(inq){
       var isImage = /^image\//.test(mime) || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
       var isPdf   = mime === 'application/pdf' || /\.pdf$/i.test(name);
       var kind = isImage ? 'image' : (isPdf ? 'pdf' : 'other');
+      var fileId = att.drive_file_id || att.driveFileId || att.fileId || '';
+      // URL から Drive ファイル ID を逆抽出
+      if(!fileId && url){
+        var m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        if(m) fileId = m[1];
+      }
 
       var inlineId = 'att-inline-' + inq.id + '-' + i;
+      var summaryId = 'att-sum-' + inq.id + '-' + i;
       var inlinePreview = '';
       if(isImage && url){
         inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px"><img src="' + _escAttr_(url) + '" alt="" style="max-width:100%;max-height:400px;border:1px solid #e5e7eb;border-radius:4px;cursor:pointer" onclick="window.open(this.src,\'_blank\')"></div>';
       } else if(isPdf && url){
         inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px"><iframe src="' + _escAttr_(url) + '#toolbar=0" style="width:100%;height:500px;border:1px solid #e5e7eb;border-radius:4px"></iframe></div>';
       }
+      // NNNN-1: 既存の要約があれば表示
+      var existingSummary = att.aiSummary || '';
+      var summaryHtml = existingSummary
+        ? '<div id="' + summaryId + '" style="margin-top:6px;background:#ecfdf5;border:1px solid #86efac;border-radius:6px;padding:8px 10px;font-size:11px;line-height:1.6;color:#14532d;white-space:pre-wrap"><strong>🤖 AI 要約:</strong> ' + _escDiff(existingSummary) + '</div>'
+        : '<div id="' + summaryId + '" style="display:none;margin-top:6px"></div>';
+
+      var summarizeBtn = (isPdf || isImage) && (url || fileId)
+        ? '<button onclick="event.stopPropagation();_summarizeAttachment_(\'' + _escAttr_(inq.id) + '\',' + i + ')" style="font-size:11px;color:#fff;background:#7c3aed;border:1px solid #7c3aed;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0" title="AI で内容を要約">🤖 要約</button>'
+        : '';
+
       // data-属性 + イベント委任 でホバー (URL ない場合も "URL未取得" 表示)
-      return '<div class="att-row" data-inq="' + _escAttr_(inq.id) + '" data-idx="' + i + '" data-kind="' + kind + '" data-url="' + _escAttr_(url) + '" data-name="' + _escAttr_(name) + '" style="background:#fff;border:1px solid #e0ddd6;border-radius:6px;padding:8px 12px;margin-bottom:6px">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+      return '<div class="att-row" data-inq="' + _escAttr_(inq.id) + '" data-idx="' + i + '" data-kind="' + kind + '" data-url="' + _escAttr_(url) + '" data-name="' + _escAttr_(name) + '" data-file-id="' + _escAttr_(fileId) + '" style="background:#fff;border:1px solid #e0ddd6;border-radius:6px;padding:8px 12px;margin-bottom:6px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">' +
           '<div class="att-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;cursor:help">' +
             (isImage ? '🖼' : isPdf ? '📄' : '📎') + ' <strong>' + _escDiff(name) + '</strong>' +
             '<span style="color:#888;font-size:10px">' + size + '</span>' +
+            (existingSummary ? '<span style="color:#16a34a;font-size:10px;margin-left:4px" title="AI要約あり">🤖✓</span>' : '') +
           '</div>' +
+          summarizeBtn +
           ((isImage||isPdf) && url
             ? '<button onclick="event.stopPropagation();var e=document.getElementById(\'' + inlineId + '\');if(e)e.style.display=(e.style.display===\'none\'?\'block\':\'none\')" style="font-size:11px;color:#5b21b6;background:#faf5ff;border:1px solid #c4b5fd;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0">👁 展開</button>'
             : '') +
           (url ? '<a href="' + _escAttr_(url) + '" target="_blank" style="font-size:11px;color:#1e40af;text-decoration:none;flex-shrink:0">↗ 開く</a>' : '<span style="font-size:10px;color:#9ca3af">(URL未取得)</span>') +
           (url ? '<a href="' + _escAttr_(url) + '" download="' + _escAttr_(name) + '" style="font-size:11px;color:#16a34a;text-decoration:none;flex-shrink:0">💾 DL</a>' : '') +
         '</div>' +
+        summaryHtml +
         inlinePreview +
       '</div>';
     }).join('') +
+    // 一括要約ボタン
+    '<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center">' +
+      '<span style="font-size:10px;color:#888">💡 各添付に「🤖 要約」をクリック / または一括でまとめて要約</span>' +
+      '<button onclick="_summarizeAllAttachments_(\'' + _escAttr_(inq.id) + '\')" style="font-size:11px;color:#fff;background:#7c3aed;border:1px solid #7c3aed;padding:4px 12px;border-radius:4px;cursor:pointer">🤖 全添付を一括要約</button>' +
+    '</div>' +
   '</div>';
+}
+
+// NNNN-1: 添付ファイルを AI で要約
+async function _summarizeAttachment_(inqId, attIdx){
+  var inq = (DB.inquiries||[]).find(function(x){ return x.id === inqId; });
+  if(!inq || !inq.attachments) return;
+  var att = inq.attachments[attIdx];
+  if(!att){ alert('添付が見つかりません'); return; }
+
+  var summaryEl = document.getElementById('att-sum-' + inqId + '-' + attIdx);
+  if(summaryEl){
+    summaryEl.style.display = 'block';
+    summaryEl.innerHTML = '<div style="background:#faf5ff;border:1px solid #c4b5fd;border-radius:6px;padding:8px 10px;font-size:11px;color:#5b21b6">🤖 AI が要約中… (PDF: 10-30秒 / 画像: 5-15秒)</div>';
+  }
+
+  var name = att.name || att.filename || '';
+  var url = att.url || att.driveUrl || att.drive_url || att.dataUrl || '';
+  var mime = att.mimeType || att.mime_type || att.type || '';
+  var fileId = att.drive_file_id || att.driveFileId || att.fileId || '';
+  if(!fileId && url){
+    var m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if(m) fileId = m[1];
+  }
+  var isImage = /^image\//.test(mime) || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
+  var isPdf   = mime === 'application/pdf' || /\.pdf$/i.test(name);
+
+  try {
+    var summary = '';
+    if(isPdf && fileId){
+      // PDF: バックエンドでテキスト抽出 → claudeChat で要約
+      var extractResp = await callCloudAPI('extractPdfText', { fileId: fileId });
+      if(!extractResp || !extractResp.success){
+        throw new Error('PDF テキスト抽出失敗: ' + (extractResp && extractResp.error || 'unknown'));
+      }
+      var text = extractResp.text || '';
+      if(!text || text.length < 20){
+        throw new Error('PDF からテキストを抽出できませんでした (画像PDF? OCR 必要かも)');
+      }
+      var prompt = '次は印刷業務関連のメール添付ファイル「' + name + '」の本文です。\n' +
+        '重要なポイントを 3-5 行で要約してください (印刷業界の専門用語はそのまま使用)。\n\n' +
+        '## 抽出テキスト\n' + text.substring(0, 10000) + '\n\n' +
+        '## 出力\n要約のみ (前置きや「以下が要約です」等は不要)';
+      var resp = await callCloudAPI('claudeChat', {}, {
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 600
+      });
+      if(!resp || !resp.success) throw new Error('AI 要約失敗: ' + (resp && resp.error || 'unknown'));
+      summary = resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '';
+    } else if(isImage && url){
+      // 画像: Claude vision で要約 (URL から base64 取得)
+      try {
+        var imgResp = await fetch(url);
+        var blob = await imgResp.blob();
+        var b64 = await new Promise(function(resolve, reject){
+          var r = new FileReader();
+          r.onload = function(){ resolve(String(r.result).replace(/^data:[^;]+;base64,/, '')); };
+          r.onerror = reject;
+          r.readAsDataURL(blob);
+        });
+        var imgMime = blob.type || 'image/jpeg';
+        var resp = await callCloudAPI('claudeChat', {}, {
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: imgMime, data: b64 } },
+              { type: 'text', text: '次は印刷業務関連メール添付画像「' + name + '」です。何の画像か、重要な情報を 3-5 行で要約してください。文字や数字があれば書き起こしてください。' }
+            ]
+          }],
+          max_tokens: 600
+        });
+        if(!resp || !resp.success) throw new Error('AI 要約失敗: ' + (resp && resp.error || 'unknown'));
+        summary = resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '';
+      } catch(fetchErr){
+        throw new Error('画像取得失敗 (CORS or Drive 共有): ' + fetchErr.message);
+      }
+    } else {
+      throw new Error('プレビュー対応ファイルではありません');
+    }
+
+    summary = (summary || '').trim();
+    if(!summary){ throw new Error('要約結果が空でした'); }
+
+    // 保存
+    att.aiSummary = summary;
+    att.aiSummaryAt = new Date().toISOString();
+    if(typeof saveDB === 'function') saveDB();
+
+    // 表示更新
+    if(summaryEl){
+      summaryEl.innerHTML = '<div style="background:#ecfdf5;border:1px solid #86efac;border-radius:6px;padding:8px 10px;font-size:11px;line-height:1.6;color:#14532d;white-space:pre-wrap"><strong>🤖 AI 要約:</strong> ' + _escDiff(summary) + '</div>';
+    }
+  } catch(e){
+    console.error('attachment summarize failed:', e);
+    if(summaryEl){
+      summaryEl.innerHTML = '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 10px;font-size:11px;color:#991b1b">⚠ 要約失敗: ' + _escDiff(e.message) + '</div>';
+    }
+  }
+}
+
+// NNNN-1: 全添付を一括要約 (手動トリガー)
+async function _summarizeAllAttachments_(inqId){
+  var inq = (DB.inquiries||[]).find(function(x){ return x.id === inqId; });
+  if(!inq || !inq.attachments || inq.attachments.length === 0) return;
+  for(var i = 0; i < inq.attachments.length; i++){
+    var att = inq.attachments[i];
+    if(att.aiSummary) continue; // 既に要約済はスキップ
+    await _summarizeAttachment_(inqId, i);
+  }
+}
+
+// NNNN-2: 連絡詳細を開いた時に未要約の添付を自動でバックグラウンド要約
+window._autoSummarizeRunning_ = window._autoSummarizeRunning_ || {};
+async function _autoSummarizeAttachments_(inqId){
+  // 既に同じ連絡で実行中ならスキップ
+  if(window._autoSummarizeRunning_[inqId]) return;
+  var inq = (DB.inquiries||[]).find(function(x){ return x.id === inqId; });
+  if(!inq || !inq.attachments || inq.attachments.length === 0) return;
+
+  // 自動要約対象: PDF or 画像 で URL/fileId があり、まだ aiSummary が無いもの
+  var targets = [];
+  inq.attachments.forEach(function(att, i){
+    if(att.aiSummary) return;
+    if(att._autoSummaryFailed) return; // 一度失敗したものは再試行しない
+    var name = att.name || att.filename || '';
+    var mime = att.mimeType || att.mime_type || att.type || '';
+    var url = att.url || att.driveUrl || att.drive_url || att.dataUrl || '';
+    var fileId = att.drive_file_id || att.driveFileId || att.fileId || '';
+    if(!fileId && url){
+      var m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if(m) fileId = m[1];
+    }
+    var isImage = /^image\//.test(mime) || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
+    var isPdf   = mime === 'application/pdf' || /\.pdf$/i.test(name);
+    if((isPdf && fileId) || (isImage && url)) targets.push(i);
+  });
+
+  if(targets.length === 0) return;
+
+  window._autoSummarizeRunning_[inqId] = true;
+  console.info('🤖 添付自動要約: ' + targets.length + ' 件を順次処理');
+
+  for(var k = 0; k < targets.length; k++){
+    var idx = targets[k];
+    var summaryEl = document.getElementById('att-sum-' + inqId + '-' + idx);
+    // 既にユーザーが手動で要約開始していたらスキップ
+    var att = inq.attachments[idx];
+    if(att && att.aiSummary) continue;
+    if(summaryEl && summaryEl.innerHTML.indexOf('AI が要約中') >= 0) continue;
+    try {
+      await _summarizeAttachment_(inqId, idx);
+    } catch(e){
+      console.warn('auto-summarize failed for idx ' + idx + ':', e);
+      // 失敗フラグ (次回開いた時に無限ループしないように)
+      if(att) att._autoSummaryFailed = true;
+      if(typeof saveDB === 'function') saveDB();
+    }
+    // API レート制限対策: 各要約の間に少しだけウェイト
+    await new Promise(function(r){ setTimeout(r, 500); });
+  }
+
+  window._autoSummarizeRunning_[inqId] = false;
 }
 
 // JJJJ-2: HTML属性用エスケープ (値の中の ' " < > & を保護)
@@ -28694,6 +28880,11 @@ function openInquiryDetail(id) {
 
   panel.classList.add('show');
   overlay.style.display = 'block';
+
+  // 🆕 NNNN-2: 添付ファイルを自動で AI 要約 (バックグラウンド)
+  if(inq.attachments && inq.attachments.length > 0){
+    setTimeout(function(){ _autoSummarizeAttachments_(inq.id); }, 600);
+  }
 
   // 🆕 SSS-2 / XXX-1 / ZZZ-1: 返信窓に AI 下書き自動生成 → 自動挿入
   setTimeout(async function(){
