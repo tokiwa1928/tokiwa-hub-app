@@ -27810,26 +27810,68 @@ async function _summarizeAttachment_(inqId, attIdx){
 
   try {
     var summary = '';
-    if(isPdf && fileId){
-      // PDF: バックエンドでテキスト抽出 → claudeChat で要約
-      var extractResp = await callCloudAPI('extractPdfText', { fileId: fileId });
-      if(!extractResp || !extractResp.success){
-        throw new Error('PDF テキスト抽出失敗: ' + (extractResp && extractResp.error || 'unknown'));
+    if(isPdf){
+      // PDF 要約 — 3段階のフォールバック
+      // 1) バックエンド extractPdfText (Drive OCR) を試す
+      // 2) フロントから PDF を fetch → Claude API へ document として直接送信
+      // 3) どちらも失敗時はエラー表示
+      var text = '';
+      var extractError = null;
+      if(fileId){
+        try {
+          var extractResp = await callCloudAPI('extractPdfText', { fileId: fileId });
+          if(extractResp && extractResp.success && extractResp.text && extractResp.text.length >= 20){
+            text = extractResp.text;
+          } else {
+            extractError = (extractResp && extractResp.error) || 'テキストなし';
+          }
+        } catch(e){ extractError = e.message; }
       }
-      var text = extractResp.text || '';
-      if(!text || text.length < 20){
-        throw new Error('PDF からテキストを抽出できませんでした (画像PDF? OCR 必要かも)');
+
+      if(text){
+        // テキスト取得成功 → 通常要約
+        var prompt = '次は印刷業務関連のメール添付ファイル「' + name + '」の本文です。\n' +
+          '重要なポイントを 3-5 行で要約してください (印刷業界の専門用語はそのまま使用)。\n\n' +
+          '## 抽出テキスト\n' + text.substring(0, 10000) + '\n\n' +
+          '## 出力\n要約のみ (前置きや「以下が要約です」等は不要)';
+        var resp = await callCloudAPI('claudeChat', {}, {
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 600
+        });
+        if(!resp || !resp.success) throw new Error('AI 要約失敗: ' + (resp && resp.error || 'unknown'));
+        summary = resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '';
+      } else if(url){
+        // テキスト抽出失敗 → PDF を直接 Claude へ送る
+        console.info('🔄 extractPdfText 失敗 (' + extractError + ') — Claude へ PDF 直接送信にフォールバック');
+        try {
+          var pdfResp = await fetch(url);
+          if(!pdfResp.ok) throw new Error('PDF fetch HTTP ' + pdfResp.status);
+          var pdfBlob = await pdfResp.blob();
+          if(pdfBlob.size > 20 * 1024 * 1024) throw new Error('PDF が大きすぎます (20MB超)');
+          var pdfB64 = await new Promise(function(resolve, reject){
+            var r = new FileReader();
+            r.onload = function(){ resolve(String(r.result).replace(/^data:[^;]+;base64,/, '')); };
+            r.onerror = reject;
+            r.readAsDataURL(pdfBlob);
+          });
+          var resp2 = await callCloudAPI('claudeChat', {}, {
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfB64 } },
+                { type: 'text', text: '次は印刷業務関連のメール添付PDF「' + name + '」です。重要なポイントを 3-5 行で要約してください。数量・納期・仕様等の具体的な数字があれば含めてください。' }
+              ]
+            }],
+            max_tokens: 800
+          });
+          if(!resp2 || !resp2.success) throw new Error('Claude 直接送信失敗: ' + (resp2 && resp2.error || 'unknown'));
+          summary = resp2.text || (resp2.content && resp2.content[0] && resp2.content[0].text) || '';
+        } catch(directErr){
+          throw new Error('PDF 処理失敗 (DriveOCR: ' + (extractError || '不明') + ' / 直接送信: ' + directErr.message + ')');
+        }
+      } else {
+        throw new Error('PDF URL/fileId が取得できません (バックエンド設定要確認)');
       }
-      var prompt = '次は印刷業務関連のメール添付ファイル「' + name + '」の本文です。\n' +
-        '重要なポイントを 3-5 行で要約してください (印刷業界の専門用語はそのまま使用)。\n\n' +
-        '## 抽出テキスト\n' + text.substring(0, 10000) + '\n\n' +
-        '## 出力\n要約のみ (前置きや「以下が要約です」等は不要)';
-      var resp = await callCloudAPI('claudeChat', {}, {
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 600
-      });
-      if(!resp || !resp.success) throw new Error('AI 要約失敗: ' + (resp && resp.error || 'unknown'));
-      summary = resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '';
     } else if(isImage && url){
       // 画像: Claude vision で要約 (URL から base64 取得)
       try {
@@ -27876,7 +27918,15 @@ async function _summarizeAttachment_(inqId, attIdx){
   } catch(e){
     console.error('attachment summarize failed:', e);
     if(summaryEl){
-      summaryEl.innerHTML = '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 10px;font-size:11px;color:#991b1b">⚠ 要約失敗: ' + _escDiff(e.message) + '</div>';
+      // 簡潔なエラー表示 (詳細は折りたたみ)
+      var msg = e.message || '失敗';
+      var shortMsg = msg.length > 80 ? msg.substring(0, 80) + '…' : msg;
+      summaryEl.innerHTML = '<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 10px;font-size:11px;color:#9a3412">' +
+        '<details style="cursor:pointer">' +
+          '<summary style="font-weight:600">⚠ AI 要約できませんでした <span style="color:#888;font-weight:400">(クリックで詳細)</span></summary>' +
+          '<div style="margin-top:4px;font-size:10px;color:#7c2d12;font-family:monospace;word-break:break-all">' + _escDiff(msg) + '</div>' +
+        '</details>' +
+      '</div>';
     }
   }
 }
