@@ -27763,47 +27763,125 @@ function _escAttr_(s){
   return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// JJJJ-2: グローバルなマウスイベント委任でホバープレビュー
+// JJJJ-2/3: グローバルなマウスイベント委任でホバープレビュー
 (function(){
   if(window._attHoverInited_) return;
   window._attHoverInited_ = true;
+
   document.addEventListener('mouseover', function(e){
-    var nameEl = e.target.closest && e.target.closest('.att-name');
-    if(!nameEl) return;
-    var row = nameEl.closest('.att-row');
-    if(!row) return;
-    var url = row.dataset.url;
-    var kind = row.dataset.kind;
-    var name = row.dataset.name;
-    if(!url || (kind !== 'image' && kind !== 'pdf')) return;
-    _showAttachmentHoverPreview_(e, url, kind === 'image', name);
+    if(!e.target.closest) return;
+    // ① 詳細パネル内の添付行ホバー (1ファイルのプレビュー)
+    var attRow = e.target.closest('.att-name');
+    if(attRow){
+      var row = attRow.closest('.att-row');
+      if(row){
+        var url = row.dataset.url;
+        var kind = row.dataset.kind;
+        var name = row.dataset.name;
+        // URL が無くてもファイル情報は出す
+        _showAttachmentHoverPreview_(e, url || '', kind === 'image', name || '', kind);
+        return;
+      }
+    }
+    // ② 一覧カードの📎アイコンホバー (複数添付の一覧)
+    var listTrigger = e.target.closest('.att-list-trigger');
+    if(listTrigger){
+      var inqId = listTrigger.dataset.inq;
+      var attachments = (window._currentAttachments_ || {})[inqId];
+      if(attachments && attachments.length > 0){
+        _showAttachmentListHoverPreview_(e, attachments, inqId);
+      }
+      return;
+    }
   }, true);
+
   document.addEventListener('mousemove', function(e){
     if(!document.getElementById('att-hover-preview')) return;
     _moveAttachmentHoverPreview_(e);
   }, true);
+
   document.addEventListener('mouseout', function(e){
-    var nameEl = e.target.closest && e.target.closest('.att-name');
-    if(!nameEl) return;
-    // 関連要素 (relatedTarget) が同じ要素内ならそのまま
+    if(!e.target.closest) return;
+    var attRow = e.target.closest('.att-name');
+    var listTrigger = e.target.closest('.att-list-trigger');
+    if(!attRow && !listTrigger) return;
     var related = e.relatedTarget;
-    if(related && nameEl.contains(related)) return;
+    // ホバープレビュー自体に移動した場合は閉じない
+    if(related && (
+      (attRow && attRow.contains(related)) ||
+      (listTrigger && listTrigger.contains(related)) ||
+      (related.id === 'att-hover-preview') ||
+      (related.closest && related.closest('#att-hover-preview'))
+    )) return;
     _hideAttachmentHoverPreview_();
   }, true);
 })();
 
-function _showAttachmentHoverPreview_(ev, url, isImage, name){
+// JJJJ-3: 複数添付の一覧プレビュー (📎アイコンホバー時)
+function _showAttachmentListHoverPreview_(ev, attachments, inqId){
+  var existing = document.getElementById('att-hover-preview');
+  if(existing) existing.remove();
+  var div = document.createElement('div');
+  div.id = 'att-hover-preview';
+  div.style.cssText = 'position:fixed;z-index:99999999;background:#fff;border:2px solid #7c3aed;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);padding:8px;max-width:480px;max-height:500px;overflow-y:auto;pointer-events:auto';
+
+  var html = '<div style="font-size:11px;font-weight:700;color:#5b21b6;padding:4px 6px;background:#faf5ff;border-radius:4px;margin-bottom:6px">📎 添付ファイル ' + attachments.length + ' 件</div>';
+
+  attachments.forEach(function(att, i){
+    var name = att.name || att.filename || ('添付' + (i+1));
+    var url = att.url || att.driveUrl || att.dataUrl || '';
+    var mime = att.mimeType || att.type || '';
+    var size = att.size ? (Math.round(att.size/1024) + ' KB') : '';
+    var isImage = /^image\//.test(mime) || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
+    var isPdf   = mime === 'application/pdf' || /\.pdf$/i.test(name);
+    var icon = isImage ? '🖼' : isPdf ? '📄' : '📎';
+
+    html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:6px 8px;margin-bottom:4px">' +
+      '<div style="font-size:11px;font-weight:600;display:flex;justify-content:space-between;gap:6px;align-items:center">' +
+        '<span>' + icon + ' <strong>' + _escDiff(name) + '</strong> <span style="color:#888;font-size:10px">' + size + '</span></span>' +
+        (url ? '<a href="' + _escAttr_(url) + '" target="_blank" style="font-size:10px;color:#1e40af;text-decoration:none">↗</a>' : '') +
+      '</div>';
+    if(isImage && url){
+      html += '<img src="' + _escAttr_(url) + '" style="max-width:100%;max-height:200px;margin-top:4px;border:1px solid #e5e7eb;border-radius:3px;display:block">';
+    } else if(isPdf && url){
+      html += '<iframe src="' + _escAttr_(url) + '#toolbar=0&view=Fit" style="width:100%;height:240px;margin-top:4px;border:1px solid #e5e7eb;border-radius:3px"></iframe>';
+    } else if(!url){
+      html += '<div style="font-size:10px;color:#9ca3af;margin-top:2px;font-style:italic">⚠ プレビューURL未取得 (バックエンドが添付URLを保存していません)</div>';
+    }
+    html += '</div>';
+  });
+
+  div.innerHTML = html;
+  document.body.appendChild(div);
+  _moveAttachmentHoverPreview_(ev);
+}
+
+function _showAttachmentHoverPreview_(ev, url, isImage, name, kind){
   var existing = document.getElementById('att-hover-preview');
   if(existing) existing.remove();
   var div = document.createElement('div');
   div.id = 'att-hover-preview';
   div.style.cssText = 'position:fixed;z-index:99999999;background:#fff;border:2px solid #1a73e8;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);padding:6px;pointer-events:none;max-width:420px';
   var content = '';
-  if(isImage){
-    content = '<img src="' + _escAttr_(url) + '" alt="" style="max-width:400px;max-height:400px;display:block;border-radius:4px" onerror="this.parentElement.parentElement.innerHTML=\'<div style=&quot;padding:14px;color:#dc2626&quot;>⚠ 画像読込失敗</div>\'">';
-  } else {
-    // PDF
+  if(url && isImage){
+    content = '<img src="' + _escAttr_(url) + '" alt="" style="max-width:400px;max-height:400px;display:block;border-radius:4px">';
+  } else if(url && kind === 'pdf'){
     content = '<iframe src="' + _escAttr_(url) + '#toolbar=0&view=Fit" style="width:400px;height:500px;border:none;border-radius:4px"></iframe>';
+  } else if(!url){
+    // URL 未取得 — ファイル情報のみ表示
+    var icon = isImage ? '🖼' : kind === 'pdf' ? '📄' : '📎';
+    content = '<div style="padding:20px;text-align:center">' +
+      '<div style="font-size:48px;margin-bottom:8px">' + icon + '</div>' +
+      '<div style="font-size:13px;font-weight:700;color:#3c4043">' + _escDiff(name || '') + '</div>' +
+      '<div style="font-size:11px;color:#9ca3af;margin-top:8px;background:#fef3c7;padding:6px 10px;border-radius:4px">⚠ プレビューURL未取得<br>バックエンドの添付URL保存対応が必要です</div>' +
+    '</div>';
+  } else {
+    // 画像でもPDFでもないが URL あり
+    content = '<div style="padding:20px;text-align:center">' +
+      '<div style="font-size:48px;margin-bottom:8px">📎</div>' +
+      '<div style="font-size:13px;font-weight:700;color:#3c4043">' + _escDiff(name || '') + '</div>' +
+      '<div style="font-size:11px;color:#666;margin-top:8px">このファイル形式はプレビュー非対応</div>' +
+    '</div>';
   }
   div.innerHTML = content +
     '<div style="font-size:10px;color:#666;padding:4px 6px 2px;text-align:center;background:#f9fafb;border-radius:0 0 6px 6px;margin:4px -6px -6px">' +
@@ -28131,11 +28209,15 @@ function renderInquiryList() {
     const senderDisplay = senderCompany && senderName
       ? senderCompany + ' / ' + senderName
       : (senderName || senderCompany || '(送信元不明)');
-    // JJJJ-2: 送信者の右隣に表示する添付アイコン (件名横)
+    // JJJJ-2/3: 送信者の右隣に表示する添付アイコン (ホバーで添付一覧+プレビュー)
     var attCountInline = (inq.attachments || []).length;
-    var senderAttachIcon = attCountInline > 0
-      ? ' <span style="color:#7c3aed;font-size:13px" title="' + attCountInline + ' 件の添付ファイル">📎' + (attCountInline > 1 ? attCountInline : '') + '</span>'
-      : '';
+    var senderAttachIcon = '';
+    if(attCountInline > 0){
+      // 添付データを window にキャッシュ → 委任ハンドラから参照
+      window._currentAttachments_ = window._currentAttachments_ || {};
+      window._currentAttachments_[inq.id] = inq.attachments;
+      senderAttachIcon = ' <span class="att-list-trigger" data-inq="' + _escAttr_(inq.id) + '" style="color:#7c3aed;font-size:13px;cursor:help;background:#faf5ff;padding:1px 4px;border-radius:3px;border:1px solid #c4b5fd" title="マウスを乗せると添付ファイルプレビュー">📎' + (attCountInline > 1 ? attCountInline : '') + '</span>';
+    }
 
     // 件名 + プレビュー (Gmail風: 件名 — 本文プレビュー)
     const subject = inq.subject || '(件名なし)';
