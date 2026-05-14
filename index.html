@@ -1871,6 +1871,8 @@ setTimeout(_removeBootLoader_, 5000);
       <div id="inq-stats-bar" style="display:flex;gap:6px;margin-bottom:.5rem;font-size:11px;flex-wrap:wrap"></div>
       <!-- IIII-1: 会社別タブ (グループ7社 + 全社) -->
       <div id="inq-company-tabs" style="display:flex;gap:0;margin-bottom:.5rem;border-bottom:2px solid #e5e7eb;flex-wrap:wrap;align-items:center;background:#fafafa;border-radius:6px 6px 0 0"></div>
+      <!-- VVVV-1: 宛先 (LWトーク/LINE OA/Gmailアドレス を統合) — 受信元の上 -->
+      <div id="inq-destination-tabs" style="display:flex;gap:6px;margin-bottom:.5rem;flex-wrap:wrap;align-items:center;padding:6px 8px;background:#eff6ff;border-radius:6px;border:1px solid #bfdbfe"></div>
       <!-- SSSS-1: 受信元 (Gmail/LW/Web フォーム…) 横並びセレクタ -->
       <div id="inq-source-tabs" style="display:flex;gap:6px;margin-bottom:.5rem;flex-wrap:wrap;align-items:center;padding:6px 8px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb"></div>
       <!-- TTTT-1: 受信窓口 (社内のどの宛先に届いたか) 横並びセレクタ -->
@@ -27344,6 +27346,8 @@ function initInquiryPage() {
   if(typeof renderInquiryFolderList === 'function') renderInquiryFolderList();
   // IIII-1: 会社タブ + レイアウト復元
   if(typeof renderInquiryCompanyTabs === 'function') renderInquiryCompanyTabs();
+  // VVVV-1: 宛先タブ
+  if(typeof renderInquiryDestinationTabs === 'function') renderInquiryDestinationTabs();
   // SSSS-1: 受信元タブ
   if(typeof renderInquirySourceTabs === 'function') renderInquirySourceTabs();
   // TTTT-1: 受信窓口タブ
@@ -27421,6 +27425,10 @@ function setInqCompanyTab(key){
   if(typeof renderInquiryFolderList === 'function') renderInquiryFolderList();
   // SSSS-1: 受信元タブの件数も会社フィルタに連動
   if(typeof renderInquirySourceTabs === 'function') renderInquirySourceTabs();
+  // TTTT-1: 受信窓口タブも会社フィルタに連動
+  if(typeof renderInquiryRecipientTabs === 'function') renderInquiryRecipientTabs();
+  // VVVV-1: 宛先タブも会社フィルタに連動
+  if(typeof renderInquiryDestinationTabs === 'function') renderInquiryDestinationTabs();
 }
 
 // ──────────────────────────────────────────
@@ -27493,6 +27501,7 @@ function setInqSource(key){
   if(typeof renderInquiryStats === 'function') renderInquiryStats();
   renderInquirySourceTabs();
   if(typeof renderInquiryRecipientTabs === 'function') renderInquiryRecipientTabs();
+  if(typeof renderInquiryDestinationTabs === 'function') renderInquiryDestinationTabs();
 }
 
 // ──────────────────────────────────────────
@@ -27644,6 +27653,229 @@ function setInqRecipient(addr){
   if(typeof renderInquiryStats === 'function') renderInquiryStats();
   if(typeof renderInquirySourceTabs === 'function') renderInquirySourceTabs();
   renderInquiryRecipientTabs();
+  if(typeof renderInquiryDestinationTabs === 'function') renderInquiryDestinationTabs();
+}
+
+// ──────────────────────────────────────────
+// VVVV-1: 宛先タブ (チャネル別: Gmail宛先 / LWトーク / LINE OA)
+// 各連絡について「どこに届いたか」を統一キーで集計
+// キー形式: "<source_type>::<destination>"
+//   gmail::sales@tokiwap.co.jp
+//   linesvc::user-uuid または channel-uuid
+//   linebiz::<oa>
+//   webform::<form_id>
+//   phone::<to_number>
+// ──────────────────────────────────────────
+function _destinationKeyFor_(inq){
+  var st = (inq.source_type || '').toLowerCase();
+  if(st === 'gmail'){
+    var to = (inq.to_email || inq.delivered_to || '').trim().toLowerCase();
+    if(!to) return '';
+    return 'gmail::' + to;
+  }
+  if(st === 'linesvc' || st === 'lw'){
+    var lwId = (inq.lw_receiver_id || inq.lw_user_id || inq.lw_channel_id || '').trim();
+    if(!lwId) return '';
+    return 'linesvc::' + lwId;
+  }
+  if(st === 'linebiz' || st === 'line'){
+    var oa = (inq.line_oa || inq.line_channel || inq.line_receiver_id || '').trim();
+    if(!oa) return '';
+    return 'linebiz::' + oa;
+  }
+  if(st === 'webform'){
+    var f = (inq.form_id || inq.form_name || '').trim();
+    if(!f) return '';
+    return 'webform::' + f;
+  }
+  if(st === 'phone'){
+    var p = (inq.to_phone || inq.received_phone || '').trim();
+    if(!p) return '';
+    return 'phone::' + p;
+  }
+  if(st === 'fax'){
+    var fx = (inq.to_fax || inq.received_fax || '').trim();
+    if(!fx) return '';
+    return 'fax::' + fx;
+  }
+  return '';
+}
+
+// 宛先キーを表示用の {icon,label,company} に変換
+function _destinationDisplay_(key){
+  if(!key) return null;
+  var parts = key.split('::');
+  var st = parts[0];
+  var dest = parts.slice(1).join('::');
+
+  if(st === 'gmail'){
+    var local = dest.split('@')[0];
+    return {
+      icon: '📧',
+      label: local,
+      full: dest,
+      company: (typeof _recipientCompanyLabel_ === 'function') ? _recipientCompanyLabel_(dest) : '',
+      color: '#dc2626', bg: '#fee2e2'
+    };
+  }
+  if(st === 'linesvc'){
+    // contactTargets から名前を解決
+    var name = dest;
+    var company = '';
+    var icon = '💬';
+    try {
+      var t = (DB.contactTargets || []).find(function(x){ return x.targetId === dest; });
+      if(t){
+        name = t.name || dest;
+        company = t.group || '';
+        if(t.type === 'lw_user') icon = '👤';
+        else if(t.type === 'lw_channel') icon = '💬';
+      }
+    } catch(e){}
+    return {
+      icon: icon,
+      label: name,
+      full: dest,
+      company: company,
+      color: '#10b981', bg: '#dcfce7'
+    };
+  }
+  if(st === 'linebiz'){
+    var nameL = dest;
+    var companyL = '';
+    try {
+      var tL = (DB.contactTargets || []).find(function(x){ return x.targetId === dest; });
+      if(tL){ nameL = tL.name || dest; companyL = tL.group || ''; }
+    } catch(e){}
+    return {
+      icon: '💚',
+      label: nameL,
+      full: dest,
+      company: companyL,
+      color: '#16a34a', bg: '#dcfce7'
+    };
+  }
+  if(st === 'webform'){
+    return {
+      icon: '🌐',
+      label: dest,
+      full: dest,
+      company: '',
+      color: '#3b82f6', bg: '#dbeafe'
+    };
+  }
+  if(st === 'phone'){
+    return {
+      icon: '📞',
+      label: dest,
+      full: dest,
+      company: '',
+      color: '#0891b2', bg: '#cffafe'
+    };
+  }
+  if(st === 'fax'){
+    return {
+      icon: '📠',
+      label: dest,
+      full: dest,
+      company: '',
+      color: '#7c3aed', bg: '#ede9fe'
+    };
+  }
+  return { icon:'📋', label: dest, full: dest, company:'', color:'#6b7280', bg:'#f3f4f6' };
+}
+
+function renderInquiryDestinationTabs(){
+  var container = document.getElementById('inq-destination-tabs');
+  if(!container) return;
+
+  // 会社フィルタを反映した母集合
+  var companyTab = window._inqCompanyTab_ || 'all';
+  var base = (DB.inquiries||[]).filter(function(inq){
+    if(companyTab === 'all') return true;
+    return _matchesCompanyTab_(inq, companyTab);
+  });
+
+  // 宛先キーごとに集計
+  var counts = {};
+  base.forEach(function(inq){
+    var k = _destinationKeyFor_(inq);
+    if(!k) return;
+    counts[k] = (counts[k] || 0) + 1;
+  });
+  var keys = Object.keys(counts).sort(function(a,b){ return counts[b] - counts[a]; });
+
+  if(keys.length === 0){
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = 'flex';
+
+  // 現在選択中の宛先キー
+  var folder = window._inqFolder_ || 'inbox';
+  var currentDest = '';
+  if(folder.indexOf('dest:') === 0) currentDest = folder.substring(5);
+
+  // すべての件数
+  var totalAll = base.length;
+
+  var html = '<span style="font-size:11px;color:#1e3a8a;font-weight:700;margin-right:4px">📍 宛先:</span>';
+
+  // すべて
+  var allActive = currentDest === '';
+  var allColor = '#1d4ed8', allBg = '#dbeafe';
+  html += '<button onclick="setInqDestination(\'all\')" ' +
+    'style="padding:4px 10px;background:' + (allActive ? allColor : allBg) + ';color:' + (allActive ? '#fff' : allColor) + ';' +
+    'border:2px solid ' + (allActive ? allColor : 'transparent') + ';' +
+    (allActive ? 'box-shadow:0 2px 6px rgba(0,0,0,.15);' : '') +
+    'border-radius:14px;font-size:12px;font-weight:' + (allActive ? '700' : '500') + ';cursor:pointer">' +
+    '📨 すべて <span style="background:' + (allActive ? 'rgba(255,255,255,.25)' : '#fff') + ';color:' + (allActive ? '#fff' : allColor) + ';padding:1px 7px;border-radius:10px;font-size:10px;font-weight:700;margin-left:4px">' + totalAll + '</span>' +
+    '</button>';
+
+  keys.forEach(function(k){
+    var disp = _destinationDisplay_(k);
+    if(!disp) return;
+    var isActive = (currentDest === k);
+
+    var labelText = disp.label;
+    if(labelText.length > 18) labelText = labelText.substring(0,16) + '…';
+    var coText = disp.company;
+    if(coText && coText.length > 12) coText = coText.substring(0,11) + '…';
+
+    var topLine = coText
+      ? '<span style="font-size:9px;font-weight:600;line-height:1;opacity:.85;letter-spacing:.5px">🏢 ' + _escDiff(coText) + '</span>'
+      : '';
+
+    html += '<button onclick="setInqDestination(\'' + k.replace(/'/g, "\\'") + '\')" ' +
+      'title="' + (coText ? coText + ' / ' : '') + disp.full + '" ' +
+      'style="padding:4px 10px;background:' + (isActive ? disp.color : disp.bg) + ';color:' + (isActive ? '#fff' : disp.color) + ';' +
+      'border:2px solid ' + (isActive ? disp.color : 'transparent') + ';' +
+      (isActive ? 'box-shadow:0 2px 6px rgba(0,0,0,.15);' : '') +
+      'border-radius:14px;font-size:12px;font-weight:' + (isActive ? '700' : '500') + ';cursor:pointer;display:inline-flex;align-items:center;gap:6px;line-height:1.1">' +
+        '<span style="display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px">' +
+          topLine +
+          '<span style="font-size:12px;font-weight:' + (isActive ? '700' : '600') + '">' + disp.icon + ' ' + _escDiff(labelText) + '</span>' +
+        '</span>' +
+        '<span style="background:' + (isActive ? 'rgba(255,255,255,.25)' : '#fff') + ';color:' + (isActive ? '#fff' : disp.color) + ';padding:1px 7px;border-radius:10px;font-size:10px;font-weight:700;margin-left:2px">' + counts[k] + '</span>' +
+      '</button>';
+  });
+
+  container.innerHTML = html;
+}
+
+function setInqDestination(key){
+  if(key === 'all'){
+    window._inqFolder_ = 'all';
+  } else {
+    window._inqFolder_ = 'dest:' + key;
+  }
+  if(typeof renderInquiryFolderList === 'function') renderInquiryFolderList();
+  if(typeof renderInquiryList === 'function') renderInquiryList();
+  if(typeof renderInquiryStats === 'function') renderInquiryStats();
+  if(typeof renderInquirySourceTabs === 'function') renderInquirySourceTabs();
+  if(typeof renderInquiryRecipientTabs === 'function') renderInquiryRecipientTabs();
+  renderInquiryDestinationTabs();
 }
 
 function setInqReadingPane(mode){
@@ -28748,6 +28980,9 @@ function setInqFolder(folder){
   if(typeof renderInquiryStats === 'function') renderInquiryStats();
   // SSSS-1: 受信元タブのハイライトも更新
   if(typeof renderInquirySourceTabs === 'function') renderInquirySourceTabs();
+  // TTTT-1 / VVVV-1: 受信窓口・宛先タブのハイライトも更新
+  if(typeof renderInquiryRecipientTabs === 'function') renderInquiryRecipientTabs();
+  if(typeof renderInquiryDestinationTabs === 'function') renderInquiryDestinationTabs();
 }
 
 function renderInquiryList() {
@@ -28797,6 +29032,12 @@ function renderInquiryList() {
         var rcpt = folder.substring(10).toLowerCase();
         var toE = (inq.to_email || inq.delivered_to || '').toLowerCase();
         if(toE !== rcpt) return false;
+      } else if(folder.indexOf('dest:') === 0){
+        // VVVV-1: 宛先キー (チャネル別の到達先)
+        var destKey = folder.substring(5);
+        if(typeof _destinationKeyFor_ === 'function'){
+          if(_destinationKeyFor_(inq) !== destKey) return false;
+        }
       } else {
         // ステータス系フォルダ
         if(_inqAutoFolder_(inq) !== folder) return false;
