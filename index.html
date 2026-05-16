@@ -27465,6 +27465,125 @@ function _matchesCompanyTab_(inq, key){
   return fields.some(function(f){ return String(f).indexOf(key) >= 0; });
 }
 
+// ──────────────────────────────────────────
+// XXXX-1: 関連連絡判定 (同じメールが複数会社に届いたケース)
+// ──────────────────────────────────────────
+// 件名正規化: Re:/Fwd:/RE:/FW: 等のプレフィックスを除去し空白統一
+function _normalizeSubject_(s){
+  if(!s) return '';
+  return String(s)
+    .replace(/^(\s*(re|fw|fwd)\s*[:：]\s*)+/gi, '')
+    .replace(/[\s　]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// 連絡 inq に対する関連連絡 (他社にも届いた同じメール) を返す
+// 判定優先度:
+//   1. rfc_message_id 完全一致 (最も信頼できる)
+//   2. linked_related_ids[] (手動リンク)
+//   3. from_email + 件名 (正規化) + 受信時刻 ±10分 のヒューリスティック
+function _findRelatedInquiries_(inq){
+  if(!inq) return [];
+  var all = (typeof DB !== 'undefined' && DB.inquiries) ? DB.inquiries : [];
+  var related = new Map();  // id → inquiry
+
+  // 1. RFC Message-ID 一致
+  var rfc = (inq.rfc_message_id || '').trim();
+  if(rfc){
+    all.forEach(function(o){
+      if(o.id === inq.id) return;
+      if((o.rfc_message_id || '').trim() === rfc){
+        related.set(o.id, o);
+      }
+    });
+  }
+
+  // 2. 手動リンク
+  var manual = Array.isArray(inq.linked_related_ids) ? inq.linked_related_ids : [];
+  manual.forEach(function(oid){
+    if(oid === inq.id) return;
+    var o = all.find(function(x){ return x.id === oid; });
+    if(o && !related.has(o.id)) related.set(o.id, o);
+  });
+  // 逆方向 (相手の linked_related_ids に自分が含まれているケース)
+  all.forEach(function(o){
+    if(o.id === inq.id) return;
+    if(Array.isArray(o.linked_related_ids) && o.linked_related_ids.indexOf(inq.id) >= 0){
+      if(!related.has(o.id)) related.set(o.id, o);
+    }
+  });
+
+  // 3. ヒューリスティック (rfc_message_id が無い既存データ用)
+  var fromEmail = (inq.from_email || inq.email || '').toLowerCase().trim();
+  var normSubj = _normalizeSubject_(inq.subject);
+  var inqTime = new Date(inq.received_at || inq.createdAt || 0).getTime();
+
+  if(fromEmail && normSubj && inqTime > 0){
+    all.forEach(function(o){
+      if(o.id === inq.id) return;
+      if(related.has(o.id)) return;
+      // ソースタイプはメール系のみ対象 (LWやFAXは別経路)
+      if(o.source_type !== 'gmail' && o.source_type !== 'webform') return;
+      // From 一致
+      var oFrom = (o.from_email || o.email || '').toLowerCase().trim();
+      if(oFrom !== fromEmail) return;
+      // 件名一致 (正規化後)
+      if(_normalizeSubject_(o.subject) !== normSubj) return;
+      // 受信時刻 ±10分
+      var oTime = new Date(o.received_at || o.createdAt || 0).getTime();
+      if(!oTime) return;
+      if(Math.abs(oTime - inqTime) > 10 * 60 * 1000) return;
+      related.set(o.id, o);
+    });
+  }
+
+  return Array.from(related.values());
+}
+
+// XXXX-2: 関連連絡へ返信状態を伝播
+// reason: タイムラインに残す理由テキスト
+function _propagateReplyToRelated_(inq, reason){
+  if(!inq) return 0;
+  var related = _findRelatedInquiries_(inq);
+  if(related.length === 0) return 0;
+
+  var srcCompany = inq.channel_company || '';
+  var who = (typeof currentAuth !== 'undefined' && currentAuth) ? (currentAuth.userName || '') : '';
+
+  related.forEach(function(o){
+    // 既に同じ伝播ログがあればスキップ (二重反映防止)
+    o.timeline = Array.isArray(o.timeline) ? o.timeline : [];
+    var already = o.timeline.some(function(t){
+      return t.type === 'reply_propagated' && t.from_inquiry_id === inq.id;
+    });
+    if(already) return;
+
+    // ステータス更新
+    if(o.status !== 'done' && o.status !== 'waiting'){
+      o.status = 'waiting'; // 「返信待ち」=返信済の意味
+    }
+    o.replied_at = o.replied_at || new Date().toISOString();
+    o.replied_by = o.replied_by || (srcCompany + ' / ' + who);
+
+    o.timeline.push({
+      type: 'reply_propagated',
+      date: new Date().toISOString(),
+      by: who,
+      note: (reason || ('他社 (' + srcCompany + ') からの返信が反映されました')),
+      from_inquiry_id: inq.id,
+      from_company: srcCompany
+    });
+  });
+
+  // DB 保存
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  // 再描画
+  if(typeof renderInquiryList === 'function') try { renderInquiryList(); } catch(e){}
+  if(typeof renderInquiryStats === 'function') try { renderInquiryStats(); } catch(e){}
+  return related.length;
+}
+
 function setInqCompanyTab(key){
   window._inqCompanyTab_ = key;
   try { localStorage.setItem('inq_company_tab', key); } catch(e){}
@@ -29593,6 +29712,32 @@ function openInquiryDetail(id) {
       <span style="font-size:10px;color:#aaa;margin-left:auto">${inq.id}</span>
     </div>
 
+    ${(function(){
+      // XXXX-3: 関連連絡 (他社にも届いた同じメール) を表示
+      try {
+        var related = (typeof _findRelatedInquiries_ === 'function') ? _findRelatedInquiries_(inq) : [];
+        if(!related || related.length === 0) return '';
+        var stLab = { 'new':'新規', 'progress':'対応中', 'waiting':'返信済', 'done':'完了' };
+        var stColor = { 'new':'#dc2626', 'progress':'#1d4ed8', 'waiting':'#15803d', 'done':'#6b7280' };
+        var chips = related.map(function(r){
+          var co = r.channel_company || '-';
+          var s = r.status || 'new';
+          var c = stColor[s] || '#6b7280';
+          return '<button onclick="openInquiryDetail(\'' + r.id + '\')" ' +
+            'style="background:#fff;border:1px solid ' + c + ';color:' + c + ';' +
+            'padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-right:4px;margin-bottom:4px" ' +
+            'title="クリックで開く: ' + (r.subject||'').replace(/"/g,'') + '">' +
+            '🏢 ' + co + ' <span style="background:' + c + ';color:#fff;padding:1px 6px;border-radius:8px;font-size:10px">' + (stLab[s] || s) + '</span>' +
+            '</button>';
+        }).join('');
+        return '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;margin-bottom:1rem;font-size:12px">' +
+          '<div style="font-weight:700;color:#1e3a8a;margin-bottom:6px">🔗 同じメールが他社にも届いています (' + related.length + ' 件)</div>' +
+          '<div style="font-size:10px;color:#64748b;margin-bottom:6px">いずれかで返信送信すると、全て自動的に「返信済」になります</div>' +
+          chips +
+          '</div>';
+      } catch(e){ console.warn('[XXXX-3] 関連連絡描画エラー:', e); return ''; }
+    })()}
+
     <div style="font-size:16px;font-weight:700;margin-bottom:.5rem">${inq.subject||''}</div>
 
 <!-- 案件情報は _renderInquiryLinksSection_ に統合済 (CCCC-1) -->
@@ -30024,6 +30169,14 @@ async function _sendInquiryReplyByChannel_(inqId){
   }
   if(typeof saveDB === 'function') saveDB();
   if(typeof renderInquiryFolderList === 'function') renderInquiryFolderList();
+
+  // XXXX-2: 関連連絡 (他社にも届いた同じメール) に返信状態を伝播
+  try {
+    if(typeof _propagateReplyToRelated_ === 'function'){
+      var n = _propagateReplyToRelated_(inq, '他社 (' + (inq.channel_company||'') + ') から返信されました');
+      if(n > 0) console.log('[XXXX-2] 関連連絡 ' + n + ' 件に返信状態を反映');
+    }
+  } catch(e){ console.warn('[XXXX-2] 伝播失敗:', e); }
 
   // 内部記録 (社内メモ)
   if(ch === 'memo'){
