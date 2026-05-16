@@ -18420,11 +18420,20 @@ function _renderSignatureProfilesHtml_(sigs){
   }
   return sigs.map(function(p, i){
     var receivingValue = (p.receivingEmails || (p.email ? [p.email] : [])).join(', ');
-    return '<div class="sig-profile" data-idx="' + i + '" style="border:' + (p.isDefault ? '2px solid #dc2626' : '1px solid #e5e7eb') + ';border-radius:8px;padding:14px;margin-bottom:10px;background:' + (p.isDefault ? '#fef2f2' : '#fff') + '">' +
+    // YYYY-1: 会社カラー解決
+    var coColor = (typeof _resolveSignatureColor_ === 'function') ? _resolveSignatureColor_(p) : '#6b7280';
+    var coLabel = (typeof _recipientCompanyLabel_ === 'function' && (p.receivingEmails || [])[0])
+      ? _recipientCompanyLabel_((p.receivingEmails || [])[0])
+      : '';
+    return '<div class="sig-profile" data-idx="' + i + '" style="border-left:6px solid ' + coColor + ';border-top:' + (p.isDefault ? '2px solid #dc2626' : '1px solid #e5e7eb') + ';border-right:' + (p.isDefault ? '2px solid #dc2626' : '1px solid #e5e7eb') + ';border-bottom:' + (p.isDefault ? '2px solid #dc2626' : '1px solid #e5e7eb') + ';border-radius:8px;padding:14px;margin-bottom:10px;background:' + (p.isDefault ? '#fef2f2' : '#fff') + '">' +
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">' +
         '<div style="display:flex;align-items:center;gap:8px;flex:1">' +
           (p.isDefault ? '<span style="background:#dc2626;color:#fff;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700">★ デフォルト</span>' : '') +
+          (coLabel ? '<span style="background:' + coColor + ';color:#fff;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700" title="自動判定された会社">🏢 ' + _escDiff(coLabel) + '</span>' : '') +
           '<input class="sp-label" placeholder="ラベル (例: 本田 / 営業共通)" value="' + _escDiff(p.label||'') + '" style="font-weight:700;font-size:13px;border:1px solid #e5e7eb;padding:4px 8px;border-radius:4px;flex:1">' +
+          '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#666" title="会社カラー (自動判定 / 手動指定)">' +
+            '色: <input type="color" class="sp-color" value="' + coColor + '" style="width:32px;height:24px;border:1px solid #ccc;border-radius:4px;padding:0;cursor:pointer">' +
+          '</label>' +
         '</div>' +
         '<div style="display:flex;gap:4px">' +
           (p.isDefault ? '' : '<button class="btn" style="font-size:10px;padding:3px 8px" onclick="_setDefaultSignatureProfile_(' + i + ')">★ デフォルトに</button>') +
@@ -18458,6 +18467,17 @@ function _readSignatureProfilesFromUI_(){
       .split(/[,;、\s\n]+/)
       .map(function(e){ return e.trim(); })
       .filter(function(e){ return e && e.indexOf('@') > 0; });
+    // YYYY-1: 会社カラー (UI から読み取り。色が自動判定と同じなら保存しない)
+    var pickedColor = (node.querySelector('.sp-color')?.value || '').toLowerCase();
+    var tempProfile = {
+      label: node.querySelector('.sp-label')?.value || '',
+      receivingEmails: receivingEmails,
+      email: (node.querySelector('.sp-reply-email')?.value || '').trim()
+    };
+    var autoColor = (typeof _resolveSignatureColor_ === 'function')
+      ? _resolveSignatureColor_(tempProfile).toLowerCase()
+      : '';
+    var saveColor = (pickedColor && pickedColor !== autoColor) ? pickedColor : '';
     sigs.push({
       id: prev.id || ('sig_' + Date.now() + '_' + idx),
       label: node.querySelector('.sp-label')?.value || '',
@@ -18468,6 +18488,7 @@ function _readSignatureProfilesFromUI_(){
       lwUserId: (node.querySelector('.sp-lwid')?.value || '').trim(),
       signature: node.querySelector('.sp-sig')?.value || '',
       lwSignature: node.querySelector('.sp-lwsig')?.value || '',
+      companyColor: saveColor,  // YYYY-1: 自動判定と異なる場合のみ保存
       isDefault: !!prev.isDefault
     });
   });
@@ -27732,6 +27753,61 @@ function _recipientCompanyLabel_(addr){
   return '';
 }
 
+// YYYY-1: 会社カラーを解決 (会社ラベル/メール/手動指定 から色を返す)
+var COMPANY_COLOR_MAP = {
+  'トキワ印刷':   '#65a30d',
+  'トキワ':       '#65a30d',
+  '村山印刷':     '#6d28d9',
+  '村山':         '#6d28d9',
+  '北上プリント': '#c2410c',
+  '北上':         '#c2410c',
+  'アート・エス': '#1d4ed8',
+  'アート':       '#1d4ed8',
+  '津島プリント': '#78350f',
+  '津島':         '#78350f',
+  '中尾印刷':     '#9f1239',
+  '中尾':         '#9f1239'
+};
+var DOMAIN_COLOR_MAP = {
+  'tokiwap.co.jp':   '#65a30d',
+  'murayama-p.co.jp':'#6d28d9',
+  'kitakami.co.jp':  '#c2410c',
+  'art-s.co.jp':     '#1d4ed8',
+  'tsushima-p.co.jp':'#78350f',
+  'nakao-p.co.jp':   '#9f1239'
+};
+
+// 会社名 (label) から色を引く
+function _colorForCompanyLabel_(label){
+  if(!label) return '';
+  // ラベル中に各社名が含まれているか
+  for(var k in COMPANY_COLOR_MAP){
+    if(label.indexOf(k) >= 0) return COMPANY_COLOR_MAP[k];
+  }
+  return '';
+}
+
+// 署名プロファイル (or アドレス) から会社色を解決
+//   priority: profile.companyColor > 受信メール ドメイン > label > default
+function _resolveSignatureColor_(profile){
+  if(!profile) return '#6b7280';
+  // 1. 手動指定
+  if(profile.companyColor && /^#[0-9a-f]{3,8}$/i.test(profile.companyColor)){
+    return profile.companyColor;
+  }
+  // 2. 受信メールドメイン
+  var emails = profile.receivingEmails || (profile.email ? [profile.email] : []);
+  for(var i=0; i<emails.length; i++){
+    var d = (String(emails[i]).split('@')[1] || '').toLowerCase();
+    if(DOMAIN_COLOR_MAP[d]) return DOMAIN_COLOR_MAP[d];
+  }
+  // 3. label に会社名が含まれているか
+  var lc = _colorForCompanyLabel_(profile.label || '');
+  if(lc) return lc;
+  // 4. デフォルト (グレー)
+  return '#6b7280';
+}
+
 function renderInquiryRecipientTabs(){
   var container = document.getElementById('inq-recipient-tabs');
   if(!container) return;
@@ -30025,12 +30101,19 @@ function _renderReplySignatureSelector_(inq){
     else                                                                                 autoReason = '最初のプロファイル';
   }
 
-  return '<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+  // YYYY-1: 選択中プロファイルの会社カラーを取得 → 帯背景に使用
+  var selProfile = sigs.find(function(p){ return p.id === autoId; }) || sigs[0];
+  var selColor = (typeof _resolveSignatureColor_ === 'function' && selProfile)
+    ? _resolveSignatureColor_(selProfile) : '#0369a1';
+
+  return '<div id="inq-sig-bar" style="background:#f0f9ff;border:1px solid #bae6fd;border-left:6px solid ' + selColor + ';border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
     '<span style="font-size:11px;font-weight:700;color:#0369a1">📝 署名:</span>' +
-    '<select id="inq-sig-profile" onchange="_changeReplySignature_(\'' + inq.id + '\')" style="font-size:12px;padding:3px 6px;flex:1;min-width:140px;max-width:280px">' +
+    '<select id="inq-sig-profile" onchange="_changeReplySignature_(\'' + inq.id + '\')" style="font-size:12px;padding:3px 6px;flex:1;min-width:140px;max-width:320px">' +
       sigs.map(function(p){
-        var lbl = (p.label || '無名') + (p.email ? ' (' + p.email + ')' : '');
-        return '<option value="' + p.id + '"' + (p.id === autoId ? ' selected' : '') + '>' + _escDiff(lbl) + '</option>';
+        var c = (typeof _resolveSignatureColor_ === 'function') ? _resolveSignatureColor_(p) : '#888';
+        // option 内に色を表示できないので、●＋ラベルで代替 (実際の色付けは select 自体)
+        var lbl = '● ' + (p.label || '無名') + (p.email ? ' (' + p.email + ')' : '');
+        return '<option value="' + p.id + '" data-color="' + c + '"' + (p.id === autoId ? ' selected' : '') + '>' + _escDiff(lbl) + '</option>';
       }).join('') +
     '</select>' +
     (autoReason ? '<span style="font-size:10px;color:#0369a1" title="自動選択理由">🎯 ' + _escDiff(autoReason) + '</span>' : '') +
@@ -30065,6 +30148,14 @@ function _changeReplySignature_(inqId){
     body = (body || '').replace(/\n*$/, '') + '\n\n' + newSig;
   }
   ta.value = body;
+
+  // YYYY-1: 署名バーの左帯色を選択中プロファイルの会社色に追従
+  try {
+    var newColor = (typeof _resolveSignatureColor_ === 'function')
+      ? _resolveSignatureColor_(newProfile) : '';
+    var bar = document.getElementById('inq-sig-bar');
+    if(bar && newColor) bar.style.borderLeft = '6px solid ' + newColor;
+  } catch(e){}
 }
 
 // DDDD-1 / HHHH-1: 送信チャネルセレクタ + 返信種別 + 統一送信ボタン
