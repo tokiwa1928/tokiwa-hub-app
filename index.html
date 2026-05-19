@@ -18307,7 +18307,8 @@ function _getMailSettings_(){
     var def = (s.signatures.find(function(x){ return x.isDefault; }) || s.signatures[0]);
     s.signature = (def && def.signature) || '';
   }
-  if(s.autoDraftEnabled === undefined) s.autoDraftEnabled = true;
+  // CCCCC-2: API コスト削減のためデフォルト OFF (旧 = true / 新 = false)
+  if(s.autoDraftEnabled === undefined) s.autoDraftEnabled = false;
   if(!s.autoDraftTone) s.autoDraftTone = 'polite';
   return s;
 }
@@ -18374,11 +18375,16 @@ function showMailSignatureSettings(){
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
       '</div>' +
       '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
-        // 自動下書き設定
-        '<div style="background:#faf5ff;border:1px solid #c4b5fd;border-radius:6px;padding:12px;margin-bottom:14px">' +
-          '<div style="font-size:13px;font-weight:700;color:#5b21b6;margin-bottom:8px">🤖 AI 自動下書き</div>' +
-          '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px"><input type="checkbox" id="mail-auto-draft" ' + (settings.autoDraftEnabled ? 'checked' : '') + ' style="width:18px;height:18px"> <span><strong>自動で返信下書きを生成</strong> — 連絡カードを開いた時に AI が自動下書き</span></label>' +
-          '<label style="font-size:12px;display:block;margin-top:8px"><div style="margin-bottom:3px;color:#555;font-weight:600">トーン</div><select id="mail-auto-tone" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' +
+        // CCCCC: AI 自動処理設定 (コスト削減用集約)
+        '<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:12px;margin-bottom:14px">' +
+          '<div style="font-size:13px;font-weight:700;color:#92400e;margin-bottom:8px">💰 AI 自動処理 (API コスト管理)</div>' +
+          '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="mail-auto-draft" ' + (settings.autoDraftEnabled ? 'checked' : '') + ' style="width:18px;height:18px"> <span><strong>連絡を開いた時に AI 返信下書きを自動生成</strong> <span style="color:#dc2626;font-size:10px">(コスト大)</span></span></label>' +
+          '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px"><input type="checkbox" id="mail-auto-summary" ' + ((function(){try{return localStorage.getItem("tokiwa_auto_summary_enabled")==="1"}catch(e){return false}})() ? 'checked' : '') + ' style="width:18px;height:18px"> <span><strong>連絡を開いた時に PDF/画像添付を AI で自動要約</strong> <span style="color:#dc2626;font-size:10px">(コスト最大)</span></span></label>' +
+          '<div style="font-size:10px;color:#78350f;background:#fffbeb;border-left:3px solid #f59e0b;padding:6px 10px;border-radius:0 4px 4px 0;line-height:1.6">' +
+            '両方 OFF にすると API コストを大幅削減できます (要約は手動「🤖要約」ボタン、下書きは返信ボタンクリック時に手動生成)。<br>' +
+            'バックエンドが Haiku モデル切替済なら、ON でも従来の 1/3〜1/5 のコストで動作します。' +
+          '</div>' +
+          '<label style="font-size:12px;display:block;margin-top:10px"><div style="margin-bottom:3px;color:#555;font-weight:600">下書きトーン</div><select id="mail-auto-tone" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' +
             '<option value="polite"' + (settings.autoDraftTone==='polite' ? ' selected' : '') + '>📝 丁寧 (敬語)</option>' +
             '<option value="friendly"' + (settings.autoDraftTone==='friendly' ? ' selected' : '') + '>😊 親しみ</option>' +
             '<option value="concise"' + (settings.autoDraftTone==='concise' ? ' selected' : '') + '>⚡ 簡潔</option>' +
@@ -18654,6 +18660,12 @@ function submitMailSignatureSettings(){
   var settings = _getMailSettings_();
   settings.signatures = _readSignatureProfilesFromUI_();
   settings.autoDraftEnabled = !!document.getElementById('mail-auto-draft')?.checked;
+  // CCCCC-3: 添付自動要約のON/OFFも保存
+  try {
+    var autoSum = document.getElementById('mail-auto-summary')?.checked;
+    if(autoSum) localStorage.setItem('tokiwa_auto_summary_enabled', '1');
+    else        localStorage.removeItem('tokiwa_auto_summary_enabled');
+  } catch(e){}
   settings.autoDraftTone = document.getElementById('mail-auto-tone')?.value || 'polite';
   // 旧 signature フィールドはデフォルトプロファイルから自動更新
   var def = settings.signatures.find(function(x){ return x.isDefault; }) || settings.signatures[0];
@@ -28915,7 +28927,16 @@ async function _summarizeAllAttachments_(inqId){
 
 // NNNN-2: 連絡詳細を開いた時に未要約の添付を自動でバックグラウンド要約
 window._autoSummarizeRunning_ = window._autoSummarizeRunning_ || {};
+// CCCCC-1: 自動要約はコスト削減のためデフォルト無効。手動で「🤖 要約」ボタン押下時のみ実行。
+// ユーザーが localStorage.setItem('tokiwa_auto_summary_enabled','1') すれば有効化可能
 async function _autoSummarizeAttachments_(inqId){
+  // CCCCC-1: フラグでオプトイン化 (デフォルト無効 = コスト削減)
+  try {
+    if(localStorage.getItem('tokiwa_auto_summary_enabled') !== '1'){
+      return; // 自動要約は OFF
+    }
+  } catch(e){ return; }
+
   // 既に同じ連絡で実行中ならスキップ
   if(window._autoSummarizeRunning_[inqId]) return;
   var inq = (DB.inquiries||[]).find(function(x){ return x.id === inqId; });
