@@ -28714,10 +28714,12 @@ function _renderAttachmentPreview_(inq){
       var inlineId = 'att-inline-' + inq.id + '-' + i;
       var summaryId = 'att-sum-' + inq.id + '-' + i;
       var inlinePreview = '';
+      // FFFFF-2: プレビューに ✕ 閉じるボタンを追加
+      var closeBtn = '<button onclick="event.stopPropagation();var e=document.getElementById(\'' + inlineId + '\');if(e)e.style.display=\'none\'" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:50%;width:28px;height:28px;font-size:14px;font-weight:700;cursor:pointer;z-index:10;display:flex;align-items:center;justify-content:center" title="プレビューを閉じる">✕</button>';
       if(isImage && url){
-        inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px"><img src="' + _escAttr_(url) + '" alt="" style="max-width:100%;max-height:400px;border:1px solid #e5e7eb;border-radius:4px;cursor:pointer" onclick="window.open(this.src,\'_blank\')"></div>';
+        inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px;position:relative">' + closeBtn + '<img src="' + _escAttr_(url) + '" alt="" style="max-width:100%;max-height:400px;border:1px solid #e5e7eb;border-radius:4px;cursor:pointer" onclick="window.open(this.src,\'_blank\')"></div>';
       } else if(isPdf && url){
-        inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px"><iframe src="' + _escAttr_(url) + '#toolbar=0" style="width:100%;height:500px;border:1px solid #e5e7eb;border-radius:4px"></iframe></div>';
+        inlinePreview = '<div id="' + inlineId + '" style="display:none;margin-top:6px;position:relative">' + closeBtn + '<iframe src="' + _escAttr_(url) + '#toolbar=0" style="width:100%;height:500px;border:1px solid #e5e7eb;border-radius:4px"></iframe></div>';
       }
       // NNNN-1: 既存の要約があれば表示
       var existingSummary = att.aiSummary || '';
@@ -29141,11 +29143,24 @@ function _showAttachmentHoverPreview_(ev, url, isImage, name, kind){
       '<div style="font-size:11px;color:#666;margin-top:8px">このファイル形式はプレビュー非対応</div>' +
     '</div>';
   }
-  div.innerHTML = content +
+  // FFFFF-2: ホバープレビューにも ✕ 閉じるボタンを追加
+  var hoverCloseBtn = '<button onclick="event.stopPropagation();var p=document.getElementById(\'att-hover-preview\');if(p)p.remove()" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:50%;width:28px;height:28px;font-size:14px;font-weight:700;cursor:pointer;z-index:10;display:flex;align-items:center;justify-content:center" title="閉じる (ESC)">✕</button>';
+  div.innerHTML = hoverCloseBtn + content +
     '<div style="font-size:10px;color:#666;padding:4px 6px 2px;text-align:center;background:#f9fafb;border-radius:0 0 6px 6px;margin:4px -6px -6px">' +
     _escDiff(name || '') + '</div>';
   document.body.appendChild(div);
   _moveAttachmentHoverPreview_(ev);
+
+  // ESC キーでも閉じる
+  if(!window._attHoverEscBound_){
+    window._attHoverEscBound_ = true;
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape'){
+        var p = document.getElementById('att-hover-preview');
+        if(p) p.remove();
+      }
+    });
+  }
 }
 
 function _moveAttachmentHoverPreview_(ev){
@@ -30173,7 +30188,7 @@ function openInquiryDetail(id) {
     setTimeout(function(){ _autoSummarizeAttachments_(inq.id); }, 600);
   }
 
-  // 🆕 SSS-2 / XXX-1 / ZZZ-1: 返信窓に AI 下書き自動生成 → 自動挿入
+  // 🆕 SSS-2 / XXX-1 / ZZZ-1 / FFFFF-1: 返信窓 - 署名のみ自動表示。AI 下書きは「✨ AI 下書き生成」ボタン押下時のみ
   setTimeout(async function(){
     var ta = document.getElementById('inq-reply-text');
     var st = document.getElementById('inq-draft-status');
@@ -30182,7 +30197,7 @@ function openInquiryDetail(id) {
       return;
     }
 
-    // 既に保存済の AI 下書きがあればそれを使う
+    // 既に保存済の AI 下書きがあればそれを使う (既に生成済を再利用するだけなので API 呼出無し・無料)
     var drafts = (inq.timeline || []).filter(function(t){ return t.type === 'ai_draft_reply'; });
     if(drafts.length > 0){
       var latest = drafts[drafts.length - 1];
@@ -30193,14 +30208,35 @@ function openInquiryDetail(id) {
       return;
     }
 
-    // 既存ドラフト無し → 署名だけ先に出して、その後 AI 自動生成
+    // 署名だけ自動挿入
     var sig = '';
     if(typeof _appendSignature_ === 'function'){
       sig = _appendSignature_('', inq);
       if(sig) ta.value = sig;
     }
 
-    // 社内連絡 (internal_msg / interco / voice_memo / phone) は AI 下書き対象外
+    // FFFFF-1: 自動 AI 下書きは **デフォルト OFF** (API コスト削減)
+    // 設定 ON のユーザーだけ自動生成、それ以外は「✨ AI 下書き生成」ボタンで手動起動
+    var mailSettings = (typeof _getMailSettings_ === 'function') ? _getMailSettings_() : {};
+    var autoEnabled = !!mailSettings.autoDraftEnabled;
+
+    if(!autoEnabled){
+      // 手動モード: ステータス欄に AI 下書き生成ボタンを表示
+      if(st){
+        var skipKinds = ['internal_msg','interco','voice_memo','phone'];
+        if(skipKinds.indexOf(inq.source_type) >= 0){
+          st.textContent = '(社内連絡のため AI 下書き対象外)';
+        } else if(!inq.body || inq.body.length < 10){
+          st.textContent = '(本文が短いため AI 下書き対象外)';
+        } else {
+          st.innerHTML = '<button class="btn btn-p" style="font-size:11px;padding:3px 10px;background:#7c3aed;border-color:#7c3aed" onclick="_regenerateAiDraft_(\'' + inq.id + '\')" title="API コストが発生します">✨ AI 下書き生成</button>' +
+            ' <span style="font-size:10px;color:#9ca3af;margin-left:6px">(押した時のみ生成 - 自動 OFF)</span>';
+        }
+      }
+      return;
+    }
+
+    // 自動 ON の場合のみ以下が実行される (元の自動生成ロジック)
     var skipKinds = ['internal_msg','interco','voice_memo','phone'];
     if(skipKinds.indexOf(inq.source_type) >= 0){
       if(st) st.textContent = '(社内連絡のため AI 下書きスキップ)';
@@ -30211,7 +30247,6 @@ function openInquiryDetail(id) {
       return;
     }
 
-    // ローディング表示
     if(st) st.textContent = '🤖 AI が下書きを生成中… (10〜30秒)';
     try {
       var draftBody = await _generateInquiryDraft_(inq, 'polite', '');
