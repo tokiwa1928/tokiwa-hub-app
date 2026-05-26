@@ -30114,6 +30114,78 @@ function openInquiryDetail(id) {
       } catch(e){ console.warn('[XXXX-3] 関連連絡描画エラー:', e); return ''; }
     })()}
 
+    ${(function(){
+      // HHHHH-1: 返信履歴セクション (誰がいつ何で返信したか) - 関連連絡分も統合
+      try {
+        var allEvents = [];
+        // 自連絡の timeline
+        (inq.timeline || []).forEach(function(t){
+          allEvents.push(Object.assign({}, t, { _ownerCompany: inq.channel_company || '', _ownerId: inq.id }));
+        });
+        // 関連連絡の timeline も統合 (他社で送られた返信が見える)
+        try {
+          var related = (typeof _findRelatedInquiries_ === 'function') ? _findRelatedInquiries_(inq) : [];
+          related.forEach(function(r){
+            (r.timeline || []).forEach(function(t){
+              allEvents.push(Object.assign({}, t, { _ownerCompany: r.channel_company || '', _ownerId: r.id }));
+            });
+          });
+        } catch(e){}
+
+        // 返信系イベントのみ抽出
+        var replyTypes = { 'reply':'💬 内部返信', 'forward':'📤 転送', 'ai_draft_reply':'🤖 AI下書き保存', 'reply_propagated':'🔗 他社から伝播' };
+        var replies = allEvents.filter(function(e){ return replyTypes[e.type]; });
+        if(replies.length === 0){
+          return '<div style="background:#f9fafb;border:1px dashed #d1d5db;border-radius:8px;padding:10px;margin-bottom:1rem;font-size:11px;color:#6b7280;text-align:center">💬 返信履歴なし — 最初の返信を作成してください</div>';
+        }
+
+        // 日付順 (新しい順)
+        replies.sort(function(a,b){
+          var da = new Date(a.date || a.at || 0).getTime();
+          var db = new Date(b.date || b.at || 0).getTime();
+          return db - da;
+        });
+
+        var html = '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;margin-bottom:1rem">' +
+          '<div style="font-weight:700;color:#92400e;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">' +
+            '<span>💬 返信履歴 (' + replies.length + '件)</span>' +
+            '<span style="font-size:10px;color:#a16207;font-weight:400">複数担当者の対応履歴を共有</span>' +
+          '</div>';
+
+        replies.forEach(function(e){
+          var dt = e.date || e.at || '';
+          var when = dt ? new Date(dt).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '-';
+          var who = e.by || '不明';
+          var typeLabel = replyTypes[e.type] || e.type;
+          var fromOtherCo = (e._ownerId && e._ownerId !== inq.id);
+          var ownerLabel = fromOtherCo
+            ? '<span style="background:#dc2626;color:#fff;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:4px" title="他社で送られた返信">🏢 ' + _escDiff(e._ownerCompany || 'other') + '</span>'
+            : '';
+          var text = e.text || (e.meta && e.meta.note) || '';
+          if(text.length > 250) text = text.substring(0, 250) + '… (続きあり)';
+          var channelHint = '';
+          if(e.meta && e.meta.channel){
+            var chMap = { 'lineworks':'💼 LW', 'line':'💚 LINE', 'email':'📧 メール', 'memo':'📝 メモ' };
+            channelHint = ' <span style="font-size:9px;color:#a16207;background:#fff;padding:1px 5px;border-radius:3px">' + (chMap[e.meta.channel] || e.meta.channel) + '</span>';
+          }
+
+          html += '<div style="background:#fff;border-left:4px solid #f59e0b;border-radius:4px;padding:8px 10px;margin-bottom:6px">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#78350f;margin-bottom:4px;flex-wrap:wrap;gap:4px">' +
+              '<span><strong>' + typeLabel + '</strong>' + channelHint + ' ' + ownerLabel + '</span>' +
+              '<span style="font-size:10px;color:#a16207">' + when + ' / ' + _escDiff(who) + '</span>' +
+            '</div>' +
+            (text ? '<div style="font-size:12px;color:#1f2937;white-space:pre-wrap;line-height:1.6;background:#fffaf0;padding:6px 8px;border-radius:3px;border:1px solid #fef3c7">' + _escDiff(text) + '</div>' : '') +
+          '</div>';
+        });
+
+        html += '</div>';
+        return html;
+      } catch(e){
+        console.warn('[HHHHH-1] 返信履歴描画エラー:', e);
+        return '';
+      }
+    })()}
+
     <div style="font-size:16px;font-weight:700;margin-bottom:.5rem">${inq.subject||''}</div>
 
 <!-- 案件情報は _renderInquiryLinksSection_ に統合済 (CCCC-1) -->
@@ -30617,6 +30689,19 @@ async function _sendInquiryReplyByChannel_(inqId){
         by: (currentAuth && currentAuth.userName) || 'user'
       });
       if(resp && resp.success){
+        // HHHHH-1: フロント側でも timeline に追加 (バックエンドが古くても履歴が残るように)
+        try {
+          inq.timeline = inq.timeline || [];
+          inq.timeline.push({
+            type: 'forward',
+            date: new Date().toISOString(),
+            at: new Date().toISOString(),
+            by: (currentAuth && currentAuth.userName) || 'user',
+            text: '📧 メール送信 (To: ' + to + (fromEmail ? ' / From: ' + fromEmail : '') + ')\n\n' + text,
+            meta: { channel: 'email', to: to, from: fromEmail, subject: subject }
+          });
+          if(typeof saveDB === 'function') saveDB();
+        } catch(saveErr){ console.warn('timeline 追加失敗:', saveErr); }
         alert('✅ メール送信完了' + (fromEmail ? '\nFrom: ' + fromEmail : ''));
         if(ta) ta.value = '';
         if(typeof loadFromCloud === 'function') await loadFromCloud();
@@ -30646,6 +30731,19 @@ async function _sendInquiryReplyByChannel_(inqId){
         by: (currentAuth && currentAuth.userName) || 'user'
       });
       if(resp && resp.success){
+        // HHHHH-1: timeline に追加
+        try {
+          inq.timeline = inq.timeline || [];
+          inq.timeline.push({
+            type: 'forward',
+            date: new Date().toISOString(),
+            at: new Date().toISOString(),
+            by: (currentAuth && currentAuth.userName) || 'user',
+            text: '💼 LINE WORKS 送信 (' + lwTarget + ')\n\n' + text,
+            meta: { channel: 'lineworks', target: 'user', targetId: lwTarget }
+          });
+          if(typeof saveDB === 'function') saveDB();
+        } catch(saveErr){ console.warn('timeline 追加失敗:', saveErr); }
         alert('✅ LINE WORKS 送信完了');
         if(ta) ta.value = '';
         if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId);
