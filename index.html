@@ -431,7 +431,7 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 /* 既読: 通常 */
 .inq-card .inq-sender{font-weight:500;color:#3c4043;flex-shrink:0;min-width:140px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
 .inq-card .inq-subject-line{flex:1;min-width:0;overflow:hidden;display:flex;align-items:center;gap:6px}
-.inq-card .inq-subject{font-weight:500;color:#3c4043;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%}
+.inq-card .inq-subject{font-weight:500;color:#3c4043;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
 .inq-card .inq-preview{font-weight:400;color:#5f6368;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;font-size:12px}
 .inq-card .inq-meta{display:flex;align-items:center;gap:6px;flex-shrink:0;font-size:11px;color:#5f6368}
 .inq-card .inq-time{color:#5f6368;font-size:11px;white-space:nowrap;font-weight:500}
@@ -761,9 +761,9 @@ setTimeout(_removeBootLoader_, 5000);
   <div class="tb-scroll" id="tb-scroll">
     <button class="tb-btn act" data-page="realtime" onclick="swPage('realtime',this)" draggable="true" title="🏠 ホーム — 業務フロー図 + KPI・売上グラフ・案件一覧などをウィジェット形式でカスタマイズ表示 (30秒自動更新)">🏠 ホーム</button>
     <button class="tb-btn" data-page="inquiry" onclick="swPage('inquiry',this)" draggable="true" title="📨 連絡管理 — 社外 (Gmail / LINE WORKS / Web フォーム / 顧客問い合わせ) と 社内 (社内連絡 / 社間依頼) の統合受信トレイ。AI 返信下書き・自動見積抽出">📨 連絡管理</button>
-    <button class="tb-btn" data-page="est" onclick="swPage('est',this)" draggable="true" title="📝 見積作成 — 新規見積をタブ式で複数並行作成。用紙・印刷・製版・データ・製本の原価を積算して見積書を作成">📝 見積作成</button>
+    <button class="tb-btn" data-page="project" onclick="swPage('project',this)" draggable="true" title="📁 案件管理 — 業務の中心。受注・リピート発注・見積・校正・配送を案件単位で一元管理。🔁リピートで前回複製、必要時のみ見積作成">📁 案件管理</button>
+    <button class="tb-btn" data-page="est" onclick="swPage('est',this)" draggable="true" title="📝 見積作成 — 新規・複雑案件の見積を積算作成 (必要な時のみ)。用紙・印刷・製版・データ・製本の原価を積算">📝 見積作成</button>
     <button class="tb-btn" data-page="history" onclick="swPage('history',this)" draggable="true" title="📋 見積管理 — 見積中の依頼と過去見積を統合管理。サブタブで切替">📋 見積管理</button>
-    <button class="tb-btn" data-page="project" onclick="swPage('project',this)" draggable="true" title="📁 案件管理 — 受注確定後の案件管理。ステータス・納期・担当者・作業ステップ・タイムライン・校正・配送の一元管理">📁 案件管理</button>
     <button class="tb-btn" data-page="proofing" onclick="swPage('proofing',this)" draggable="true" title="📸 校正BOX — PDF 校正管理。新旧並列表示・自動差分検出・OCR テキスト抽出。Google Drive と連携">📸 校正BOX</button>
     <!-- 🔧 仕入 ドロップダウン -->
     <div class="tb-dropdown-wrap">
@@ -2041,6 +2041,7 @@ setTimeout(_removeBootLoader_, 5000);
         <div style="margin-top:1.5rem;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
           <button class="btn" onclick="wikiOpenTool('mentu')">🖨 面付計算ツール</button>
           <button class="btn" onclick="wikiOpenTool('calc')">🔢 電卓</button>
+          <button class="btn" onclick="wikiOpenTool('hiragana')">📝 ひらがな変換ツール</button>
         </div>
       </div>
     </div>
@@ -4247,7 +4248,7 @@ function cloudSync(){
 // ═══════════════════ タブ並び替え (Drag & Drop) ════════════════
 
 const TAB_ORDER_KEY = 'tokiwa_hub_tab_order';
-const TAB_ORDER_VERSION = 'v9-2026-05-01-history-after-estimates'; // デフォルト並び順バージョン (変更時は localStorage の旧データを破棄)
+const TAB_ORDER_VERSION = 'v10-2026-05-project-first'; // 案件主体モデル: 案件管理を連絡管理の直後に
 const TAB_ORDER_VERSION_KEY = 'tokiwa_hub_tab_order_version';
 
 // バージョンが古ければ localStorage の保存順序を破棄して HTML 順序を採用
@@ -15742,6 +15743,172 @@ function repeatProject(src, idx){
 }
 
 // ─────────────────────────────────────────────────────
+// 🔁 JJJJJ-1: クイックリピート (数量・納期・単価だけ入力する軽量モーダル)
+//    リピート8割の業態向け。仕様は前回引き継ぎ、見積はスキップ可。
+// ─────────────────────────────────────────────────────
+function showQuickRepeatModal(projId){
+  var prev = (DB.projects || []).find(function(p){ return p.id === projId; });
+  if(!prev){ alert('元の案件が見つかりません'); return; }
+
+  var prevQty = parseInt(prev.qty) || 0;
+  var prevExTax = parseInt(prev.exTax) || 0;
+  var unitPrice = prevQty > 0 ? Math.round(prevExTax / prevQty * 100) / 100 : 0;
+  var today = new Date().toISOString().slice(0,10);
+
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:480px;border-radius:10px;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#0891b2;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<strong style="font-size:15px">🔁 リピート発注</strong>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:24px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>' +
+      '</div>' +
+      '<div style="padding:18px 20px">' +
+        // 引き継ぎ情報 (読み取り専用)
+        '<div style="background:#ecfeff;border:1px solid #67e8f9;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;line-height:1.7">' +
+          '<div style="font-weight:700;color:#0e7490;margin-bottom:4px">前回案件から引き継ぎ</div>' +
+          '<div><span style="color:#888">得意先:</span> <strong>' + _escDiff(prev.cust || '-') + '</strong></div>' +
+          '<div><span style="color:#888">品名:</span> <strong>' + _escDiff(prev.item || '-') + '</strong></div>' +
+          '<div><span style="color:#888">仕様:</span> ' + _escDiff(prev.spec || '-') + '</div>' +
+          '<div><span style="color:#888">元番号:</span> ' + _escDiff(prev.id) + '</div>' +
+        '</div>' +
+        // 編集項目 (数量・納期・単価のみ)
+        '<div style="display:grid;grid-template-columns:90px 1fr;gap:12px 10px;font-size:13px;align-items:center">' +
+          '<label style="font-weight:700">数量</label>' +
+          '<div style="display:flex;gap:6px;align-items:center">' +
+            '<input id="qr-qty" type="number" value="' + prevQty + '" oninput="_qrRecalc_()" style="font-size:14px;padding:7px 9px;border:1px solid #ccc;border-radius:4px;flex:1">' +
+            '<span style="font-size:12px;color:#666">' + _escDiff(prev.unit || '部') + '</span>' +
+          '</div>' +
+          '<label style="font-weight:700">納期</label>' +
+          '<input id="qr-due" type="date" style="font-size:14px;padding:7px 9px;border:1px solid #ccc;border-radius:4px">' +
+          '<label style="font-weight:700">単価</label>' +
+          '<div style="display:flex;gap:6px;align-items:center">' +
+            '<span style="font-size:12px;color:#666">¥</span>' +
+            '<input id="qr-unitprice" type="number" step="0.01" value="' + unitPrice + '" oninput="_qrRecalc_()" style="font-size:14px;padding:7px 9px;border:1px solid #ccc;border-radius:4px;flex:1">' +
+            '<span style="font-size:11px;color:#999">前回: ¥' + unitPrice.toLocaleString() + '</span>' +
+          '</div>' +
+          '<label style="font-weight:700">税抜金額</label>' +
+          '<div style="display:flex;gap:8px;align-items:center">' +
+            '<strong id="qr-extax-disp" style="font-size:16px;color:#0e7490">¥' + prevExTax.toLocaleString() + '</strong>' +
+            '<span style="font-size:11px;color:#999">(数量×単価 自動計算)</span>' +
+          '</div>' +
+        '</div>' +
+        // 物価改定ショートカット
+        '<div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+          '<span style="font-size:11px;color:#92400e">📈 物価改定:</span>' +
+          '<button class="btn" style="font-size:10px;padding:2px 8px" onclick="_qrBump_(3)">+3%</button>' +
+          '<button class="btn" style="font-size:10px;padding:2px 8px" onclick="_qrBump_(5)">+5%</button>' +
+          '<button class="btn" style="font-size:10px;padding:2px 8px" onclick="_qrBump_(10)">+10%</button>' +
+          '<button class="btn" style="font-size:10px;padding:2px 8px;color:#666" onclick="_qrReset_(' + unitPrice + ')">前回に戻す</button>' +
+        '</div>' +
+        // 見積作成オプション (デフォルト OFF)
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12px;cursor:pointer;color:#555">' +
+          '<input type="checkbox" id="qr-make-est" style="width:16px;height:16px"> 見積書も作成する (客先要求時のみ)' +
+        '</label>' +
+        '<div style="margin-top:18px;display:flex;justify-content:flex-end;gap:8px">' +
+          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+          '<button class="btn btn-p" style="background:#0891b2;border-color:#0891b2" onclick="submitQuickRepeat(\'' + _escAttr_(projId) + '\')">🔁 受注登録</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+  // 納期の初期値を前回の受注→納期間隔で推定 (なければ2週間後)
+  setTimeout(function(){
+    var dueEl = document.getElementById('qr-due');
+    if(dueEl){
+      var d = new Date(); d.setDate(d.getDate() + 14);
+      dueEl.value = d.toISOString().slice(0,10);
+    }
+    document.getElementById('qr-qty')?.focus();
+  }, 100);
+}
+
+function _qrRecalc_(){
+  var qty = parseFloat(document.getElementById('qr-qty')?.value) || 0;
+  var up = parseFloat(document.getElementById('qr-unitprice')?.value) || 0;
+  var ex = Math.round(qty * up);
+  var disp = document.getElementById('qr-extax-disp');
+  if(disp) disp.textContent = '¥' + ex.toLocaleString();
+}
+function _qrBump_(pct){
+  var el = document.getElementById('qr-unitprice');
+  if(!el) return;
+  var cur = parseFloat(el.value) || 0;
+  el.value = Math.round(cur * (1 + pct/100) * 100) / 100;
+  _qrRecalc_();
+}
+function _qrReset_(orig){
+  var el = document.getElementById('qr-unitprice');
+  if(el){ el.value = orig; _qrRecalc_(); }
+}
+
+function submitQuickRepeat(projId){
+  var prev = (DB.projects || []).find(function(p){ return p.id === projId; });
+  if(!prev){ alert('元の案件が見つかりません'); return; }
+  var qty = parseInt(document.getElementById('qr-qty')?.value) || 0;
+  var due = document.getElementById('qr-due')?.value || '';
+  var unitPrice = parseFloat(document.getElementById('qr-unitprice')?.value) || 0;
+  var makeEst = !!document.getElementById('qr-make-est')?.checked;
+  if(qty <= 0){ alert('数量を入力してください'); return; }
+  var exTax = Math.round(qty * unitPrice);
+
+  var newId = (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now());
+  var proj = {
+    id: newId,
+    companyId: currentAuth?.companyId || 'COMP001',
+    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+    orderDate: new Date().toISOString().slice(0,10),
+    dueDate: due,
+    cust: prev.cust || '',
+    item: prev.item || '',
+    spec: prev.spec || '',
+    qty: qty,
+    unit: prev.unit || '部',
+    exTax: exTax,
+    grand: Math.round(exTax * 1.1),
+    status: '制作中',
+    assignee: currentAuth?.userName || prev.assignee || '',
+    memo: '[リピート元: ' + prev.id + ']' + (unitPrice !== (prev.qty > 0 ? prev.exTax/prev.qty : 0) ? ' 単価改定あり' : ''),
+    endUser: prev.endUser || '',
+    groupRole: prev.groupRole || '',
+    subTo: prev.subTo || '',
+    master_no: prev.master_no || '',
+    steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
+    stepDates: {},
+    createdAt: new Date().toISOString(),
+    fromRepeatProjectId: prev.id,
+    repeatCount: (prev.repeatCount || 0) + 1
+  };
+  if(!DB.projects) DB.projects = [];
+  DB.projects.push(proj);
+  if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('create', 'project:' + newId, 'クイックリピート: ' + prev.id + ' から (数量' + qty + ' 単価¥' + unitPrice + ')'); } catch(e){}
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  document.querySelector('.proof-modal')?.remove();
+  if(typeof renderProjects === 'function') try { renderProjects(); } catch(e){}
+
+  // 見積も作る場合は見積依頼に転記
+  if(makeEst && typeof DB !== 'undefined'){
+    try {
+      DB.estimates = DB.estimates || [];
+      DB.estimates.push({
+        id: 'EST-' + Date.now(),
+        companyId: proj.companyId,
+        companyCode: proj.companyCode,
+        cust: proj.cust, item: proj.item, spec: proj.spec,
+        qty: qty, unit: proj.unit, exTax: exTax,
+        status: 'draft', createdAt: new Date().toISOString(),
+        linkedProjectId: newId, fromRepeat: true
+      });
+      if(typeof saveDB === 'function') saveDB();
+    } catch(e){}
+  }
+
+  alert('✅ リピート受注を登録しました\n\n案件番号: ' + newId + '\n数量: ' + qty + ' ' + proj.unit + '\n金額: ¥' + exTax.toLocaleString() + (makeEst ? '\n\n見積依頼も作成しました' : ''));
+}
+
+// ─────────────────────────────────────────────────────
 // 📜 過去実績パネル (見積作成タブから使う)
 // ─────────────────────────────────────────────────────
 function _openHistoryTab_(){
@@ -24893,7 +25060,9 @@ function renderProjects(){
     const driveBtn = r.driveFolderId
       ? `<button class="use-btn" style="background:#0891b2;color:#fff;border-color:#0891b2;white-space:nowrap" onclick="showProjectDriveFolderPreview('${r.id}')">📁 Drive プレビュー</button>`
       : `<button class="use-btn" style="background:#ecfeff;border-color:#67e8f9;color:#0e7490;white-space:nowrap" onclick="createProjectDriveFolder('${r.id}')">📁 Drive フォルダ作成</button>`;
-    const repeatBtn = `<button class="use-btn" style="background:#fef3c7;border-color:#fbbf24;color:#78350f;white-space:nowrap" onclick="repeatProjectFromPrevious('${r.id}')" title="この案件をリピート (新案件作成 + 校了データを 00_前回データ にコピー)">🔁 リピート発注</button>`;
+    // JJJJJ-1: クイックリピート (数量・納期・単価だけ) を主ボタンに。Drive複製は副ボタン。
+    const repeatBtn = `<button class="use-btn" style="background:#0891b2;color:#fff;border-color:#0891b2;white-space:nowrap;font-weight:700" onclick="showQuickRepeatModal('${r.id}')" title="数量・納期・単価だけ入力して即受注 (リピート8割向けの最速フロー)">🔁 リピート発注</button>` +
+      `<button class="use-btn" style="background:#fef3c7;border-color:#fbbf24;color:#78350f;white-space:nowrap" onclick="repeatProjectFromPrevious('${r.id}')" title="Driveフォルダごと複製 (前回データを 00_前回データ にコピー)">📁 フォルダ複製</button>`;
     // KKK-1: タブ式整理 (基本/進捗/仕様/Drive/アクション)
     const kkkStepIcons = { '版下':'📐', '校了':'✅', '印刷':'🖨', '加工':'✂', '納品':'🚚' };
     const kkkStepStatusColor = function(s){
@@ -28415,17 +28584,24 @@ function applyInqReadingPane(){
   if(!wrap || !list || !pane) return;
 
   if(mode === 'right'){
+    // 保存済みの一覧幅 (ドラッグでリサイズ可能) を復元。未設定は 420px
+    var savedW = parseInt(localStorage.getItem('inq_list_width') || '', 10);
+    var listW = (savedW && savedW >= 280 && savedW <= 1000) ? savedW : 420;
     wrap.style.flexDirection = 'row';
-    list.style.flex = '1';
-    list.style.maxWidth = '420px';
+    wrap.style.alignItems = 'stretch';
+    list.style.flex = '0 0 ' + listW + 'px';
+    list.style.maxWidth = '';
     list.style.maxHeight = 'calc(100vh - 320px)';
     list.style.minHeight = '400px';
     pane.style.display = 'block';
-    pane.style.flex = '2';
+    pane.style.flex = '1';
     pane.style.maxHeight = 'calc(100vh - 320px)';
     pane.style.overflowY = 'auto';
+    _ensureInqPaneResizer_();
   } else if(mode === 'bottom'){
+    _removeInqPaneResizer_();
     wrap.style.flexDirection = 'column';
+    wrap.style.alignItems = '';
     list.style.flex = 'unset';
     list.style.maxWidth = '';
     list.style.maxHeight = '300px';
@@ -28437,13 +28613,72 @@ function applyInqReadingPane(){
     pane.style.overflowY = 'auto';
   } else {
     // none
+    _removeInqPaneResizer_();
     wrap.style.flexDirection = 'column';
+    wrap.style.alignItems = '';
     list.style.flex = '';
     list.style.maxWidth = '';
     list.style.maxHeight = 'calc(100vh - 320px)';
     list.style.minHeight = '400px';
     pane.style.display = 'none';
   }
+}
+
+// 一覧とプレビューの境界に挿入するドラッグ用リサイザ (右プレビュー時のみ)
+function _ensureInqPaneResizer_(){
+  var wrap = document.getElementById('inq-list-pane-wrap');
+  var list = document.getElementById('inq-list');
+  var pane = document.getElementById('inq-reading-pane');
+  if(!wrap || !list || !pane) return;
+  var rz = document.getElementById('inq-pane-resizer');
+  if(!rz){
+    rz = document.createElement('div');
+    rz.id = 'inq-pane-resizer';
+    rz.title = 'ドラッグで一覧の幅を調整';
+    rz.style.cssText = 'flex:0 0 6px;cursor:col-resize;background:#e5e7eb;border-radius:3px;align-self:stretch;transition:background .12s';
+    rz.onmouseenter = function(){ rz.style.background = '#93c5fd'; };
+    rz.onmouseleave = function(){ if(!window._inqResizing_) rz.style.background = '#e5e7eb'; };
+    rz.addEventListener('mousedown', _inqResizerStart_);
+  }
+  // list と pane の間に配置
+  if(rz.previousElementSibling !== list || rz.nextElementSibling !== pane){
+    wrap.insertBefore(rz, pane);
+  }
+  rz.style.display = 'block';
+}
+
+function _removeInqPaneResizer_(){
+  var rz = document.getElementById('inq-pane-resizer');
+  if(rz) rz.style.display = 'none';
+}
+
+function _inqResizerStart_(e){
+  e.preventDefault();
+  var list = document.getElementById('inq-list');
+  if(!list) return;
+  window._inqResizing_ = true;
+  var startX = e.clientX;
+  var startW = list.getBoundingClientRect().width;
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = 'col-resize';
+  function onMove(ev){
+    var w = startW + (ev.clientX - startX);
+    if(w < 280) w = 280;
+    if(w > 1000) w = 1000;
+    list.style.flex = '0 0 ' + w + 'px';
+  }
+  function onUp(){
+    window._inqResizing_ = false;
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    try { localStorage.setItem('inq_list_width', String(Math.round(list.getBoundingClientRect().width))); } catch(err){}
+    var rz = document.getElementById('inq-pane-resizer');
+    if(rz) rz.style.background = '#e5e7eb';
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
 }
 
 // インラインプレビュー (right/bottom モード時) - 既存スライドパネル HTML を借りる
@@ -28751,8 +28986,8 @@ function _renderAttachmentPreview_(inq){
             (existingSummary ? '<span style="color:#16a34a;font-size:10px;margin-left:4px" title="AI要約あり">🤖✓</span>' : '') +
           '</div>' +
           summarizeBtn +
-          // OOOO-1: AI 要約が既にあれば 展開ボタンは省略 (要約で内容が分かるため)
-          ((isImage||isPdf) && url && !existingSummary
+          // IIIII-1: AI 要約があっても 展開プレビューは常に表示する (要約と現物確認は別ニーズ)
+          ((isImage||isPdf) && url
             ? '<button onclick="event.stopPropagation();var e=document.getElementById(\'' + inlineId + '\');if(e)e.style.display=(e.style.display===\'none\'?\'block\':\'none\')" style="font-size:11px;color:#5b21b6;background:#faf5ff;border:1px solid #c4b5fd;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0">👁 展開</button>'
             : '') +
           (url ? '<a href="' + _escAttr_(url) + '" target="_blank" style="font-size:11px;color:#1e40af;text-decoration:none;flex-shrink:0">↗ 開く</a>' : '<span style="font-size:10px;color:#9ca3af">(URL未取得)</span>') +
@@ -29646,9 +29881,9 @@ function renderInquiryList() {
     const senderName = inq.from_name || inq.custName || '';
     const senderCompany = inq.from_company || inq.company || '';
     const senderEmail = inq.from_email || inq.email || '';
-    var _coreName = senderCompany && senderName
+    var _coreName = _escDiff(senderCompany && senderName
       ? senderCompany + ' / ' + senderName
-      : (senderName || senderCompany || '');
+      : (senderName || senderCompany || ''));
     var senderDisplay;
     if(_coreName){
       senderDisplay = senderEmail
@@ -29745,7 +29980,7 @@ function renderInquiryList() {
         sourceIcon +
       '</div>' +
       // 中央: 送信者 [📎] — 件名 — プレビュー
-      '<div class="inq-sender">' + _escDiff(senderDisplay) + senderAttachIcon + '</div>' +
+      '<div class="inq-sender">' + senderDisplay + senderAttachIcon + '</div>' +
       '<div class="inq-subject-line">' +
         '<span class="inq-subject">' + _escDiff(subject) + '</span>' +
         '<span style="color:#bbb;font-weight:400">—</span>' +
@@ -32245,7 +32480,7 @@ function initWikiPage() {
   if(!DB) return;
   if(!DB.wikiArticles || !Array.isArray(DB.wikiArticles)) DB.wikiArticles = [];
   // ツール記事がなければ追加
-  const toolIds = ['WIKI_TOOL_MENTU','WIKI_TOOL_CALC'];
+  const toolIds = ['WIKI_TOOL_MENTU','WIKI_TOOL_CALC','WIKI_TOOL_HIRAGANA'];
   toolIds.forEach(tid => {
     if(!DB.wikiArticles.find(a=>a.id===tid)) {
       const init = WIKI_INIT_ARTICLES.find(a=>a.id===tid);
