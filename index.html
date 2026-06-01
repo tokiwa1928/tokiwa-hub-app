@@ -1190,6 +1190,13 @@ setTimeout(_removeBootLoader_, 5000);
       <button class="btn btn-p" onclick="showAddProjectModal()">＋ 新規登録</button>
     </div>
   </div>
+  <!-- KKKKK-1: 表示モード切替 (一覧 / 台帳) -->
+  <div style="display:flex;gap:0;margin-bottom:.6rem;border-bottom:2px solid #e5e7eb">
+    <button id="proj-view-list" class="proj-view-tab" onclick="setProjView('list')" style="padding:7px 16px;font-size:13px;font-weight:700;background:#1e40af;color:#fff;border:none;border-radius:6px 6px 0 0;cursor:pointer">📋 一覧 (受注ごと)</button>
+    <button id="proj-view-ledger" class="proj-view-tab" onclick="setProjView('ledger')" style="padding:7px 16px;font-size:13px;font-weight:500;background:transparent;color:#3c4043;border:none;cursor:pointer">📒 案件台帳 (品目ごと)</button>
+  </div>
+  <!-- 一覧ビュー -->
+  <div id="proj-list-view">
   <div style="overflow-x:auto">
   <table class="m-tbl" id="proj-table" style="min-width:1100px">
     <thead><tr>
@@ -1209,6 +1216,9 @@ setTimeout(_removeBootLoader_, 5000);
     <tbody id="proj-body"></tbody>
   </table>
   </div>
+  </div>
+  <!-- 台帳ビュー (品目ごとにグループ化) -->
+  <div id="proj-ledger-view" style="display:none"></div>
 </div>
 
 
@@ -5031,7 +5041,7 @@ function swPage(id,btn){
   var renderers = {
     master:    function(){ renderMaster(curMaster); },
     history:   function(){ renderHistory(); },
-    project:   function(){ renderProjects(); },
+    project:   function(){ if(typeof setProjView === 'function'){ setProjView(window._projViewMode_ || 'list'); } else { renderProjects(); } },
     estimates: function(){ renderEstimates(); },
     invoices:  function(){ renderInvoices(); },
     receipts:  function(){ renderReceipts(); },
@@ -25199,6 +25209,229 @@ function renderProjects(){
 
     return mainRow + specRow;
   }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+// 📒 KKKKK-1: 案件台帳ビュー (品目 = 得意先×品名 でグループ化)
+//    1品目に 見積書履歴[] と 受注履歴[] がぶら下がる構造
+// ═══════════════════════════════════════════════════════════
+window._projViewMode_ = (function(){ try { return localStorage.getItem('proj_view_mode') || 'list'; } catch(e){ return 'list'; } })();
+
+function setProjView(mode){
+  window._projViewMode_ = mode;
+  try { localStorage.setItem('proj_view_mode', mode); } catch(e){}
+  var listView = document.getElementById('proj-list-view');
+  var ledgerView = document.getElementById('proj-ledger-view');
+  var btnList = document.getElementById('proj-view-list');
+  var btnLedger = document.getElementById('proj-view-ledger');
+  if(mode === 'ledger'){
+    if(listView) listView.style.display = 'none';
+    if(ledgerView) ledgerView.style.display = 'block';
+    if(btnList){ btnList.style.background = 'transparent'; btnList.style.color = '#3c4043'; btnList.style.fontWeight = '500'; }
+    if(btnLedger){ btnLedger.style.background = '#1e40af'; btnLedger.style.color = '#fff'; btnLedger.style.fontWeight = '700'; btnLedger.style.borderRadius = '6px 6px 0 0'; }
+    renderProjectLedger();
+  } else {
+    if(listView) listView.style.display = 'block';
+    if(ledgerView) ledgerView.style.display = 'none';
+    if(btnList){ btnList.style.background = '#1e40af'; btnList.style.color = '#fff'; btnList.style.fontWeight = '700'; }
+    if(btnLedger){ btnLedger.style.background = 'transparent'; btnLedger.style.color = '#3c4043'; btnLedger.style.fontWeight = '500'; }
+    renderProjects();
+  }
+}
+
+// 品目グループキー: 手動上書き(ledgerKey) > 自動(得意先+品名 正規化)
+function _ledgerKeyOf_(rec){
+  if(rec && rec.ledgerKey) return rec.ledgerKey;
+  var cust = (rec.cust || rec.from_company || '').trim();
+  var item = (rec.item || '').trim();
+  // 正規化: 全角空白・記号ゆれを吸収、品名の括弧内 (様付け等) は残す
+  var norm = function(s){ return String(s).replace(/[\s　]+/g,'').toLowerCase(); };
+  return norm(cust) + '|' + norm(item);
+}
+
+function renderProjectLedger(){
+  var container = document.getElementById('proj-ledger-view');
+  if(!container) return;
+
+  var q = (document.getElementById('proj-q')?.value || '').toLowerCase();
+  var cf = document.getElementById('proj-company-f')?.value || '';
+
+  var projects = (DB.projects || []).filter(function(r){
+    if(cf === 'own'){
+      var isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId === 'COMP001');
+      if(!isOwn) return false;
+    }
+    return true;
+  });
+  var estimates = (DB.estimates || []);
+
+  // グループ化
+  var groups = {};
+  function ensure(key, sample){
+    if(!groups[key]){
+      groups[key] = {
+        key: key,
+        cust: sample.cust || sample.from_company || '',
+        item: sample.item || '',
+        spec: sample.spec || '',
+        orders: [],
+        quotes: []
+      };
+    }
+    return groups[key];
+  }
+  projects.forEach(function(p){
+    var g = ensure(_ledgerKeyOf_(p), p);
+    g.orders.push(p);
+    if(!g.spec && p.spec) g.spec = p.spec;
+  });
+  estimates.forEach(function(e){
+    var g = ensure(_ledgerKeyOf_(e), e);
+    g.quotes.push(e);
+  });
+
+  var groupList = Object.values(groups);
+
+  // 検索フィルタ (得意先・品名)
+  if(q){
+    groupList = groupList.filter(function(g){
+      return (g.cust + g.item + (g.spec||'')).toLowerCase().includes(q);
+    });
+  }
+
+  // 並び: 最新受注日の新しい順
+  function latestOrderDate(g){
+    var ds = g.orders.map(function(o){ return o.orderDate || o.createdAt || ''; }).filter(Boolean).sort();
+    return ds.length ? ds[ds.length-1] : '';
+  }
+  groupList.sort(function(a,b){ return latestOrderDate(b).localeCompare(latestOrderDate(a)); });
+
+  if(groupList.length === 0){
+    container.innerHTML = '<div style="text-align:center;padding:2rem;color:#aaa">案件がありません。見積や受注を登録すると品目ごとに台帳化されます。</div>';
+    return;
+  }
+
+  var statusColor = {制作中:'#1e40af',校了待ち:'#78350f',印刷中:'#065f46',加工中:'#5b21b6',納品済:'#374151',完了:'#9ca3af',見積中:'#0891b2',失注:'#dc2626'};
+
+  container.innerHTML = groupList.map(function(g, gi){
+    // 集計
+    var orderCount = g.orders.length;
+    var totalSales = g.orders.reduce(function(s,o){ return s + (parseInt(o.exTax)||0); }, 0);
+    var totalCost = g.orders.reduce(function(s,o){
+      var oc = o.outsourceTotal || 0;
+      var est = (typeof o.estCost === 'number') ? o.estCost : 0;
+      return s + (oc || est || 0);
+    }, 0);
+    var totalProfit = g.orders.reduce(function(s,o){
+      var gp = (typeof o.grossProfit === 'number') ? o.grossProfit : ((parseInt(o.exTax)||0) - (o.outsourceTotal||0));
+      return s + gp;
+    }, 0);
+    var profitRate = totalSales > 0 ? Math.round(totalProfit / totalSales * 100) : 0;
+
+    // 最新受注の単価
+    var sortedOrders = g.orders.slice().sort(function(a,b){ return (a.orderDate||a.createdAt||'').localeCompare(b.orderDate||b.createdAt||''); });
+    var latest = sortedOrders[sortedOrders.length-1];
+    var latestUnit = latest && latest.qty > 0 ? Math.round(latest.exTax/latest.qty*100)/100 : 0;
+    var firstOrder = sortedOrders[0];
+    var firstUnit = firstOrder && firstOrder.qty > 0 ? Math.round(firstOrder.exTax/firstOrder.qty*100)/100 : 0;
+    var priceUp = (latestUnit && firstUnit && latestUnit > firstUnit);
+
+    var gid = 'ledger-' + gi;
+    var grp = (typeof _detectGroupCompany_ === 'function' && latest) ? _detectGroupCompany_(latest) : null;
+    var accent = grp ? grp.border : '#1e40af';
+
+    // 受注履歴行
+    var ordersHtml = sortedOrders.slice().reverse().map(function(o){
+      var oi = (DB.projects||[]).lastIndexOf(o);
+      var up = o.qty > 0 ? Math.round(o.exTax/o.qty*100)/100 : 0;
+      var gp = (typeof o.grossProfit === 'number') ? o.grossProfit : ((parseInt(o.exTax)||0) - (o.outsourceTotal||0));
+      var gpr = o.exTax > 0 ? Math.round(gp/o.exTax*100) : 0;
+      var sc = statusColor[o.status] || '#888';
+      return '<tr style="border-bottom:1px solid #f3f4f6;font-size:12px">' +
+        '<td style="padding:6px 8px;font-family:monospace;color:#1e40af;cursor:pointer" onclick="editProjDetail(' + oi + ')" title="クリックで詳細">' + _escDiff(o.id||'') + '</td>' +
+        '<td style="padding:6px 8px">' + (o.orderDate||'').slice(0,10) + '</td>' +
+        '<td style="padding:6px 8px;text-align:right">' + (parseInt(o.qty)||0).toLocaleString() + ' ' + _escDiff(o.unit||'') + '</td>' +
+        '<td style="padding:6px 8px;text-align:right">¥' + up.toLocaleString() + '</td>' +
+        '<td style="padding:6px 8px;text-align:right;font-weight:700">¥' + (parseInt(o.exTax)||0).toLocaleString() + '</td>' +
+        '<td style="padding:6px 8px;text-align:right;color:' + (gpr>=0?'#065f46':'#dc2626') + '">' + gpr + '%</td>' +
+        '<td style="padding:6px 8px"><span style="background:' + sc + ';color:#fff;font-size:10px;padding:1px 7px;border-radius:8px">' + _escDiff(o.status||'') + '</span></td>' +
+        '<td style="padding:6px 8px">' + _escDiff(o.assignee||'') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    // 見積書履歴行
+    var quotesHtml = '';
+    if(g.quotes.length > 0){
+      quotesHtml = '<div style="margin-top:8px;font-size:11px;color:#7c3aed;font-weight:700">📝 見積書履歴 (' + g.quotes.length + '件)</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px">' +
+        g.quotes.slice().reverse().map(function(e){
+          var up = e.qty > 0 ? Math.round((e.exTax||0)/e.qty*100)/100 : 0;
+          var stLabel = { draft:'下書き', sent:'提出済', ordered:'受注', declined:'失注' }[e.status] || e.status || '';
+          return '<tr style="border-bottom:1px solid #faf5ff">' +
+            '<td style="padding:4px 8px;color:#7c3aed">' + (e.createdAt||'').slice(0,10) + '</td>' +
+            '<td style="padding:4px 8px">' + _escDiff(e.spec||e.item||'') + '</td>' +
+            '<td style="padding:4px 8px;text-align:right">' + (parseInt(e.qty)||0).toLocaleString() + _escDiff(e.unit||'') + '</td>' +
+            '<td style="padding:4px 8px;text-align:right">@¥' + up.toLocaleString() + '</td>' +
+            '<td style="padding:4px 8px;text-align:right;font-weight:700">¥' + (parseInt(e.exTax)||0).toLocaleString() + '</td>' +
+            '<td style="padding:4px 8px"><span style="background:#ede9fe;color:#5b21b6;font-size:9px;padding:1px 6px;border-radius:6px">' + _escDiff(stLabel) + '</span></td>' +
+            '</tr>';
+        }).join('') +
+        '</table>';
+    }
+
+    return '<div style="border:1px solid #e5e7eb;border-left:5px solid ' + accent + ';border-radius:8px;margin-bottom:10px;overflow:hidden">' +
+      // ヘッダー (品目サマリ)
+      '<div style="background:#f9fafb;padding:10px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;cursor:pointer" onclick="(function(el){var d=document.getElementById(\'' + gid + '\');if(d)d.style.display=(d.style.display===\'none\'?\'block\':\'none\');})(this)">' +
+        '<div style="flex:1;min-width:200px">' +
+          '<div style="font-weight:700;font-size:14px">' + _escDiff(g.cust || '(得意先未設定)') + ' <span style="color:#6b7280">/</span> ' + _escDiff(g.item || '(品名未設定)') + '</div>' +
+          (g.spec ? '<div style="font-size:11px;color:#9ca3af;margin-top:2px">' + _escDiff(g.spec.slice(0,60)) + '</div>' : '') +
+        '</div>' +
+        '<div style="text-align:center;min-width:70px"><div style="font-size:18px;font-weight:700;color:#1e40af">' + orderCount + '</div><div style="font-size:9px;color:#888">受注回数</div></div>' +
+        '<div style="text-align:center;min-width:90px"><div style="font-size:15px;font-weight:700;color:#065f46">¥' + totalSales.toLocaleString() + '</div><div style="font-size:9px;color:#888">累計売上</div></div>' +
+        '<div style="text-align:center;min-width:70px"><div style="font-size:15px;font-weight:700;color:' + (profitRate>=0?'#065f46':'#dc2626') + '">' + profitRate + '%</div><div style="font-size:9px;color:#888">平均粗利率</div></div>' +
+        '<div style="text-align:center;min-width:90px"><div style="font-size:13px;font-weight:700">¥' + latestUnit.toLocaleString() + (priceUp ? ' <span style="color:#dc2626">📈</span>' : '') + '</div><div style="font-size:9px;color:#888">最新単価</div></div>' +
+        '<button class="btn btn-p" style="background:#0891b2;border-color:#0891b2;font-size:11px;padding:4px 12px" onclick="event.stopPropagation();' + (latest ? 'showQuickRepeatModal(\'' + _escAttr_(latest.id) + '\')' : 'alert(\'受注がありません\')') + '">🔁 リピート</button>' +
+      '</div>' +
+      // 展開: 受注履歴 + 見積履歴
+      '<div id="' + gid + '" style="display:none;padding:10px 14px;background:#fff">' +
+        '<div style="font-size:11px;color:#1e40af;font-weight:700;margin-bottom:4px">🔁 受注履歴 (' + orderCount + '件・新しい順)</div>' +
+        (orderCount > 0
+          ? '<table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:10px;color:#888;border-bottom:1px solid #e5e7eb">' +
+            '<th style="padding:4px 8px;text-align:left">案件番号</th><th style="padding:4px 8px;text-align:left">受注日</th><th style="padding:4px 8px;text-align:right">数量</th><th style="padding:4px 8px;text-align:right">単価</th><th style="padding:4px 8px;text-align:right">金額</th><th style="padding:4px 8px;text-align:right">粗利率</th><th style="padding:4px 8px;text-align:left">状態</th><th style="padding:4px 8px;text-align:left">担当</th>' +
+            '</tr></thead><tbody>' + ordersHtml + '</tbody></table>'
+          : '<div style="font-size:11px;color:#aaa;padding:8px">受注なし (見積のみ)</div>') +
+        quotesHtml +
+        '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
+          (latest ? '<button class="btn" style="font-size:10px;padding:3px 10px;background:#0891b2;color:#fff;border-color:#0891b2" onclick="showQuickRepeatModal(\'' + _escAttr_(latest.id) + '\')">🔁 リピート発注</button>' : '') +
+          '<button class="btn" style="font-size:10px;padding:3px 10px" onclick="_reassignLedger_(\'' + _escAttr_(g.key) + '\')" title="この品目を別の案件台帳に統合・分離">🔧 品目を修正</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// 手動修正: グループキーの上書き (品目の統合・分離)
+function _reassignLedger_(currentKey){
+  var newName = prompt('この品目の「束ねキー」を入力してください。\n\n同じ文字にすると他の品目と統合され、\n別の文字にすると独立した品目になります。\n\n空欄で自動 (得意先×品名) に戻ります。', currentKey);
+  if(newName === null) return;
+  newName = newName.trim();
+  // 対象: 現在このキーに属する全 projects + estimates
+  var affected = 0;
+  (DB.projects||[]).forEach(function(p){
+    if(_ledgerKeyOf_(p) === currentKey){
+      if(newName) p.ledgerKey = newName; else delete p.ledgerKey;
+      affected++;
+    }
+  });
+  (DB.estimates||[]).forEach(function(e){
+    if(_ledgerKeyOf_(e) === currentKey){
+      if(newName) e.ledgerKey = newName; else delete e.ledgerKey;
+      affected++;
+    }
+  });
+  if(typeof saveDB === 'function') saveDB();
+  renderProjectLedger();
+  alert('✅ ' + affected + ' 件の束ねキーを更新しました');
 }
 
 // アコーディオン開閉
