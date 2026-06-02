@@ -6683,9 +6683,11 @@ function buildPanel(id,initData){
       <button class="btn" onclick="saveQuotationPattern(${id})">💾 見積パターンを保存</button>
     </div>
     <div id="saved-patterns-${id}" style="margin-top:.75rem"></div>
-    <div style="border-top:1px solid #93c5fd;margin-top:.75rem;padding-top:.75rem">
-      <button class="btn btn-p" style="width:100%;background:#065f46;border-color:#065f46" onclick="openOrderConfirmModal(${id})">✓ 見積採用 → 受注確定・発注</button>
+    <div style="border-top:1px solid #93c5fd;margin-top:.75rem;padding-top:.75rem;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" style="flex:1;min-width:200px;background:#0891b2;color:#fff;border-color:#0891b2;font-weight:700" onclick="saveEstimateAsQuote(${id})" title="見積中として保存。案件管理の「🔵見積中」に表示され、後で受注/失注を選べます">🔵 見積中で保存 (案件管理へ)</button>
+      <button class="btn btn-p" style="flex:1;min-width:200px;background:#065f46;border-color:#065f46" onclick="openOrderConfirmModal(${id})">🟢 受注で登録 → 発注</button>
     </div>
+    <div style="font-size:10px;color:#1e40af;margin-top:6px">💡 見積だけ先に出す時は「🔵見積中で保存」/ 受注が決まっていれば「🟢受注で登録」。2仕様の依頼は見積中で2枚保存できます。</div>
   </div>
 </div>`;
   document.getElementById('tab-panels').appendChild(div);
@@ -15616,14 +15618,40 @@ function showAddProjectModal(){
           '<label style="font-weight:700;align-self:start">失注理由</label>' +
           '<select id="add-proj-lost-reason" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px"><option value="">(失注の場合のみ)</option><option>価格</option><option>納期</option><option>仕様不一致</option><option>競合他社</option><option>顧客都合</option><option>予算未確保</option><option>その他</option></select>' +
         '</div>' +
-        '<div style="margin-top:18px;display:flex;justify-content:flex-end;gap:8px">' +
-          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
-          '<button class="btn btn-p" onclick="submitAddProject()">📁 登録</button>' +
+        '<div style="margin-top:18px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">' +
+          '<button class="btn" style="background:#eff6ff;border-color:#93c5fd;color:#1e40af;font-size:12px" onclick="_openDetailEstimateFromProject_()" title="用紙・印刷・製版などの原価を積算する詳細見積画面で入力します">📝 詳細見積で入力 (原価積算)</button>' +
+          '<div style="display:flex;gap:8px">' +
+            '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+            '<button class="btn btn-p" onclick="submitAddProject()">📁 登録</button>' +
+          '</div>' +
         '</div>' +
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
   setTimeout(function(){ document.getElementById('add-proj-cust')?.focus(); }, 100);
+}
+
+// PPPPP-1: 案件登録の入力を引き継いで「詳細見積 (見積作成タブ)」を開く
+function _openDetailEstimateFromProject_(){
+  var cust = document.getElementById('add-proj-cust')?.value?.trim() || '';
+  var item = document.getElementById('add-proj-item')?.value?.trim() || '';
+  var spec = document.getElementById('add-proj-spec')?.value?.trim() || '';
+  var qty = parseInt(document.getElementById('add-proj-qty')?.value) || 0;
+  var unit = document.getElementById('add-proj-unit')?.value?.trim() || '部';
+  var due = document.getElementById('add-proj-due')?.value || '';
+  // モーダルを閉じる
+  document.querySelector('.proof-modal')?.remove();
+  // 見積作成タブへ切替 + プリフィル
+  var btn = document.querySelector('.tb-btn[data-page="est"]');
+  if(btn && typeof swPage === 'function') swPage('est', btn);
+  if(typeof applyIngestToEstimate === 'function'){
+    applyIngestToEstimate({ cust: cust, item: item, spec: spec, qty: qty, unit: unit, dueDate: due });
+    setTimeout(function(){
+      alert('📝 詳細見積画面に引き継ぎました\n\n用紙・印刷・製版などの原価を積算して、\n下部の「🔵見積中で保存」または「🟢受注で登録」で確定してください。');
+    }, 300);
+  } else {
+    alert('見積作成画面を開けませんでした');
+  }
 }
 
 // MMMMM-1: 案件登録フォームの原価計算
@@ -24650,11 +24678,77 @@ function deleteQuotationPattern(idx, tabId){
 // ═══════════════════ 受注確定モーダル ════════════════════
 
 // 受注確定モーダルを開く
+// PPPPP-1: 見積作成タブの内容を「見積中」として保存 (案件管理の見積中に表示)
+function saveEstimateAsQuote(tabId){
+  var s = ts(tabId);
+  var cust = document.getElementById('cust-' + tabId)?.value || '';
+  var item = document.getElementById('prod-' + tabId)?.value || '';
+  if(!cust || !item){ alert('得意先と品名を入力してください'); return; }
+  var enduser = document.getElementById('enduser-' + tabId)?.value || '';
+  var qty = s.qtyPats?.[0]?.v || 0;
+  var unit = document.getElementById('unit-' + tabId)?.value || '枚';
+  var adEl = document.getElementById('adopted-' + tabId + '-0-0') || document.getElementById('adopted-' + tabId + '-0');
+  var adopted = parseFloat(adEl?.value) || 0;
+  var exTax = Math.round(qty * adopted);
+  // 想定原価 = 採用売価 - 粗利 が取れない場合は g-grand 等から。簡易に原価率欄があれば使う
+  var costEl = document.getElementById('g-cost-' + tabId);
+  var estCost = costEl ? (parseInt(costEl.textContent?.replace(/[^0-9]/g,'')) || 0) : 0;
+  // 仕様: lines から組み立て
+  var spec = '';
+  try {
+    spec = (s.lines || []).map(function(l){ return [l.item, l.spec].filter(Boolean).join(' '); }).filter(Boolean).join(' / ');
+  } catch(e){}
+  if(!spec) spec = document.getElementById('prod-' + tabId)?.value || '';
+
+  var estId = 'EST-' + Date.now();
+  DB.estimates = DB.estimates || [];
+  DB.estimates.push({
+    id: estId,
+    companyId: currentAuth?.companyId || 'COMP001',
+    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+    cust: cust, item: item, spec: spec, endUser: enduser,
+    qty: qty, unit: unit, exTax: exTax,
+    estCost: estCost,
+    status: 'sent',          // 見積中 (提出済)
+    source: 'estimator',
+    createdAt: new Date().toISOString(),
+    createdBy: currentAuth?.userName || ''
+  });
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('create', 'estimate:' + estId, '見積中で保存: ' + cust + '/' + item + ' ¥' + exTax.toLocaleString()); } catch(e){}
+
+  if(confirm('🔵 見積中として保存しました\n\n' + cust + ' / ' + item + '\n¥' + exTax.toLocaleString() + '\n\n案件管理の「見積中」で確認できます。\n\n別の仕様でもう1枚見積を作りますか? (このタブを複製)')){
+    // 別仕様で見積追加: 新規タブを作って同じ得意先・品名をプリフィル
+    if(typeof addTab === 'function'){
+      addTab();
+      // 新タブに得意先・品名を引き継ぎ (最新タブ)
+      setTimeout(function(){
+        try {
+          var ids = (window.tabs||[]).map(function(t){return t.id;});
+          var newId = ids[ids.length-1];
+          var c = document.getElementById('cust-'+newId); if(c) c.value = cust;
+          var p = document.getElementById('prod-'+newId); if(p) p.value = item;
+        } catch(e){}
+      }, 200);
+    }
+  } else {
+    // 案件管理の見積中へ誘導
+    if(confirm('案件管理の「見積中」を開きますか?')){
+      var btn = document.querySelector('.tb-btn[data-page="project"]');
+      if(btn && typeof swPage === 'function'){
+        swPage('project', btn);
+        setTimeout(function(){ if(typeof setProjStage === 'function') setProjStage('quote'); }, 100);
+      }
+    }
+  }
+}
+
 function openOrderConfirmModal(tabId){
   const s = ts(tabId);
   const cust = document.getElementById(`cust-${tabId}`)?.value || '';
   const item = document.getElementById(`prod-${tabId}`)?.value || '';
-  
+
   if(!cust || !item){
     alert('得意先と品名を入力してください');
     return;
