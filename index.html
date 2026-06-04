@@ -24528,6 +24528,41 @@ function _migrateProjStatuses_(){
     if(typeof saveDB==='function') saveDB();
   }catch(e){}
 }
+// HHHHHH-2: 仕入マスタの値上げを自動検知 (全マスタの価格フィールド .p をスナップショット比較)
+function _checkMasterPriceRises_(){
+  try{
+    var M=DB.master||{};
+    var types=['paper','envelope','print','plate','bind','data','printOption'];
+    var cur={};
+    types.forEach(function(t){
+      (M[t]||[]).forEach(function(it,i){
+        var p=parseFloat(it&&it.p); if(isNaN(p)) return;
+        cur[t+':'+((it.nm||it.n||('#'+i)))]=p;
+      });
+    });
+    var snapRaw=localStorage.getItem('tokiwa_master_price_snap_v1');
+    if(!snapRaw){ localStorage.setItem('tokiwa_master_price_snap_v1',JSON.stringify(cur)); return; } // 初回は基準を保存のみ
+    var snap={}; try{ snap=JSON.parse(snapRaw)||{}; }catch(e){}
+    var rose=false;
+    Object.keys(cur).forEach(function(k){ if(snap[k]!=null && cur[k]>snap[k]) rose=true; });
+    if(rose){ localStorage.setItem('tokiwa_last_master_price_rise', new Date().toISOString().slice(0,10)); }
+    localStorage.setItem('tokiwa_master_price_snap_v1',JSON.stringify(cur));
+  }catch(e){}
+}
+function _lastMasterPriceRise_(){ try{ return localStorage.getItem('tokiwa_last_master_price_rise')||''; }catch(e){ return ''; } }
+// 値上げ後に受注した未完了案件で、売価見直し未確認のものを検知 (日付ベース)
+function _projPriceLagFlag_(p){
+  if(!p) return '';
+  if(['完了','納品済','失注','キャンセル'].indexOf(p.status)>=0) return '';
+  var rise=_lastMasterPriceRise_(); if(!rise) return '';
+  var od=(p.orderDate||p.createdAt||'').slice(0,10); if(!od || od>=rise) return '';
+  if(p._priceReviewedAt && p._priceReviewedAt>=rise) return ''; // 確認済み
+  return rise;
+}
+function _markPriceReviewed_(projId){
+  var p=(DB.projects||[]).find(function(x){return x.id===projId;});
+  if(p){ p._priceReviewedAt=new Date().toISOString().slice(0,10); if(typeof saveDB==='function') saveDB(); if(typeof renderProjects==='function') renderProjects(); }
+}
 
 const PROC_OPTIONS_HTML={
   版下:['─','未着手','進行中','完了'],
@@ -25673,23 +25708,13 @@ function _renderProjSummaryBar_(rows){
   var stage = window._projStageTab_ || 'all';
   var stageLabel = ({ all:'すべて', active:'受注・進行中', done:'完了', lost:'失注' })[stage] || '';
 
-  // 値上げ未適用 (原価改定後に未受注の品目) の検知件数
+  // HHHHHH-2: 仕入マスタ値上げ後・売価未見直しの案件件数 (日付ベース自動フラグ)
   var lagAlert = '';
   try {
-    if(typeof _detectPriceLag_ === 'function' && (DB.costRevisions||[]).length){
-      // 得意先×品名でグループ化して検知
-      var groups = {};
-      rows.forEach(function(r){
-        var key = (typeof _ledgerKeyOf_==='function') ? _ledgerKeyOf_(r) : ((r.cust||'')+'|'+(r.item||''));
-        if(!groups[key]) groups[key] = { orders: [] };
-        groups[key].orders.push(r);
-      });
-      var lagCount = 0;
-      Object.keys(groups).forEach(function(k){
-        if(_detectPriceLag_(groups[k])) lagCount++;
-      });
+    if(typeof _projPriceLagFlag_ === 'function' && _lastMasterPriceRise_()){
+      var lagCount = rows.filter(function(r){ return _projPriceLagFlag_(r); }).length;
       if(lagCount > 0){
-        lagAlert = '<span style="background:#ea580c;color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;cursor:pointer" onclick="showCostRevisionManager()" title="原価改定後に受注がなく、売価が据置の可能性がある品目">📈 売価見直し推奨 ' + lagCount + '品目</span>';
+        lagAlert = '<span style="background:#ea580c;color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700" title="仕入マスタが値上げされた後に受注した未完了案件で、売価の見直しが未確認のもの。各行の🚩をクリックすると確認済みにできます">🚩 値上げ未反映 ' + lagCount + '件</span>';
       }
     }
   } catch(e){}
@@ -25816,6 +25841,7 @@ function _populateProjFilterOptions_(){
 
 function renderProjects(){
   if(typeof _migrateProjStatuses_ === 'function') _migrateProjStatuses_();
+  if(typeof _checkMasterPriceRises_ === 'function') _checkMasterPriceRises_();
   if(typeof renderProjStageTabs === 'function') renderProjStageTabs();
   if(typeof _populateProjFilterOptions_ === 'function') _populateProjFilterOptions_();
   // NNNNN-1: 見積中ステージは見積一覧を表示 (見積管理を吸収)
@@ -26008,6 +26034,7 @@ function renderProjects(){
       <td style="font-size:11px;font-family:monospace;white-space:nowrap">
         ${hasDetail?`<span style="font-size:10px;color:#aaa;margin-right:3px" id="proj-acc-arrow-${oi}">▶</span>`:''}
         ${r.id}
+        ${(typeof _projPriceLagFlag_==='function' && _projPriceLagFlag_(r))?`<span onclick="event.stopPropagation();_markPriceReviewed_('${r.id}')" style="display:inline-block;background:#ea580c;color:#fff;font-size:9px;padding:1px 5px;margin-left:4px;border-radius:8px;font-weight:700;cursor:pointer" title="仕入マスタが値上げされた後の受注で、売価が見直されていない可能性があります。クリックで「確認済み」にできます">🚩値上げ未反映</span>`:''}
         ${r.master_no ? `<button class="use-btn" style="background:#1e40af;color:#fff;border-color:#1e40af;font-size:10px;padding:1px 6px;margin-left:4px;border-radius:4px;font-weight:700" onclick="event.stopPropagation();showRelatedDocsModal('${r.master_no}')" title="関連書類 (見積書/外注/仕入/請求書) を表示">P${r.master_no} 🔗</button>` : ''}
       </td>
       <td style="font-size:11px;white-space:nowrap">${r.orderDate||''}</td>
