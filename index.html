@@ -1940,8 +1940,13 @@ setTimeout(_removeBootLoader_, 5000);
       <div class="st" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <span>📨 連絡管理</span>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <!-- YPPPP-1: 一覧 / かんばん 切替 -->
+          <div style="display:flex;gap:2px;background:#f3f4f6;border-radius:6px;padding:2px;font-size:11px">
+            <button id="inq-mode-list" onclick="setInqViewMode('list')" title="一覧表示" style="padding:3px 10px;background:#1a73e8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700">📋 一覧</button>
+            <button id="inq-mode-kanban" onclick="setInqViewMode('kanban')" title="かんばん (未対応/対応中/対応済 をドラッグで移動)" style="padding:3px 10px;background:transparent;color:#3c4043;border:none;border-radius:4px;cursor:pointer">📊 かんばん</button>
+          </div>
           <!-- IIII-1: レイアウト切替 (なし/右/下) -->
-          <div style="display:flex;gap:2px;background:#f3f4f6;border-radius:6px;padding:2px;font-size:10px">
+          <div id="inq-pane-toggle" style="display:flex;gap:2px;background:#f3f4f6;border-radius:6px;padding:2px;font-size:10px">
             <button id="inq-pane-none" class="inq-pane-btn act" onclick="setInqReadingPane('none')" title="一覧のみ (クリックで詳細はスライドパネル)" style="padding:3px 8px;background:#1a73e8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700">☐ 一覧</button>
             <button id="inq-pane-right" class="inq-pane-btn" onclick="setInqReadingPane('right')" title="一覧 + 右側プレビュー (Gmail風)" style="padding:3px 8px;background:transparent;color:#3c4043;border:none;border-radius:4px;cursor:pointer">⊞ 右</button>
             <button id="inq-pane-bottom" class="inq-pane-btn" onclick="setInqReadingPane('bottom')" title="一覧 + 下プレビュー" style="padding:3px 8px;background:transparent;color:#3c4043;border:none;border-radius:4px;cursor:pointer">⊟ 下</button>
@@ -1988,7 +1993,7 @@ setTimeout(_removeBootLoader_, 5000);
       </div>
       <!-- フィルタ (1行配置 — 各 select 幅 90px 固定でコンパクトに) -->
       <div style="display:flex;gap:4px;margin-bottom:.65rem;align-items:center;flex-wrap:wrap">
-        <input id="inq-search" placeholder="🔍検索…" style="flex:1;min-width:120px;max-width:180px;font-size:12px;padding:4px 8px" oninput="renderInquiryList()">
+        <input id="inq-search" placeholder="🔍検索…" style="flex:1;min-width:120px;max-width:180px;font-size:12px;padding:4px 8px" oninput="if(window._inqViewMode_==='kanban'){renderInquiryKanban()}else{renderInquiryList()}">
         <select id="inq-status-f" style="font-size:11px;padding:4px 4px;width:90px" onchange="renderInquiryList()" title="ステータス">
           <option value="">📊 状態</option>
           <option value="new">新規</option>
@@ -2045,6 +2050,8 @@ setTimeout(_removeBootLoader_, 5000);
         <!-- インラインプレビュー (右/下モード時に使用) -->
         <div id="inq-reading-pane" style="display:none;background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
       </div>
+      <!-- YPPPP-1: かんばんビュー (未対応/対応中/対応済) -->
+      <div id="inq-kanban-wrap" style="display:none"></div>
       <!-- 互換性のため (renderInquiryStats 内で参照される) -->
       <div id="inq-stats" style="display:none"></div>
       <div id="inq-response-stats" style="display:none"></div>
@@ -29300,7 +29307,9 @@ function initInquiryPage() {
   // TTTT-1: 受信窓口タブ
   if(typeof renderInquiryRecipientTabs === 'function') renderInquiryRecipientTabs();
   if(typeof applyInqReadingPane === 'function') applyInqReadingPane();
-  renderInquiryList();
+  // YPPPP-1: 保存済みビューモード (一覧/かんばん) を復元
+  if(typeof setInqViewMode === 'function'){ setInqViewMode(window._inqViewMode_ || 'list'); }
+  else renderInquiryList();
   renderInquiryStats();
   populateInquiryAssignFilter();
 }
@@ -29495,6 +29504,8 @@ function setInqCompanyTab(key){
   if(typeof renderInquiryRecipientTabs === 'function') renderInquiryRecipientTabs();
   // VVVV-1: 宛先タブも会社フィルタに連動
   if(typeof renderInquiryDestinationTabs === 'function') renderInquiryDestinationTabs();
+  // YPPPP-1: かんばん表示中なら更新
+  if(window._inqViewMode_ === 'kanban' && typeof renderInquiryKanban === 'function') renderInquiryKanban();
 }
 
 // ──────────────────────────────────────────
@@ -31145,6 +31156,148 @@ function setInqFolder(folder){
   // TTTT-1 / VVVV-1: 受信窓口・宛先タブのハイライトも更新
   if(typeof renderInquiryRecipientTabs === 'function') renderInquiryRecipientTabs();
   if(typeof renderInquiryDestinationTabs === 'function') renderInquiryDestinationTabs();
+}
+
+// ═══════════════════════════════════════════════════════════
+// 📊 YPPPP-1: 連絡管理 かんばん (未対応 / 対応中 / 対応済)
+// ═══════════════════════════════════════════════════════════
+window._inqViewMode_ = (function(){ try { return localStorage.getItem('inq_view_mode') || 'list'; } catch(e){ return 'list'; } })();
+
+function setInqViewMode(mode){
+  window._inqViewMode_ = mode;
+  try { localStorage.setItem('inq_view_mode', mode); } catch(e){}
+  var listWrap = document.getElementById('inq-list-pane-wrap');
+  var kanbanWrap = document.getElementById('inq-kanban-wrap');
+  var paneToggle = document.getElementById('inq-pane-toggle');
+  var btnList = document.getElementById('inq-mode-list');
+  var btnKanban = document.getElementById('inq-mode-kanban');
+  if(mode === 'kanban'){
+    if(listWrap) listWrap.style.display = 'none';
+    if(kanbanWrap) kanbanWrap.style.display = 'block';
+    if(paneToggle) paneToggle.style.display = 'none';
+    if(btnList){ btnList.style.background = 'transparent'; btnList.style.color = '#3c4043'; btnList.style.fontWeight = '500'; }
+    if(btnKanban){ btnKanban.style.background = '#1a73e8'; btnKanban.style.color = '#fff'; btnKanban.style.fontWeight = '700'; }
+    renderInquiryKanban();
+  } else {
+    if(listWrap) listWrap.style.display = 'flex';
+    if(kanbanWrap) kanbanWrap.style.display = 'none';
+    if(paneToggle) paneToggle.style.display = 'flex';
+    if(btnList){ btnList.style.background = '#1a73e8'; btnList.style.color = '#fff'; btnList.style.fontWeight = '700'; }
+    if(btnKanban){ btnKanban.style.background = 'transparent'; btnKanban.style.color = '#3c4043'; btnKanban.style.fontWeight = '500'; }
+    renderInquiryList();
+  }
+}
+
+// かんばん用の連絡取得 (会社タブ・スコープ・検索を反映。ステータスフォルダは無視=全状況、完了も含む)
+function _getInquiriesForKanban_(){
+  var q = (document.getElementById('inq-search')?.value || '').toLowerCase();
+  var companyTab = window._inqCompanyTab_ || 'all';
+  var scope = window._inqScope_ || 'all';
+  var externalSources = ['gmail','linesvc','webform','manual','fax','phone',''];
+  var all = DB.inquiries || [];
+  var period = (typeof _filterByPeriod_ === 'function') ? _filterByPeriod_(all, 'inq-list', ['received_at','createdAt']) : all;
+  return period.filter(function(inq){
+    if(companyTab !== 'all' && typeof _matchesCompanyTab_ === 'function' && !_matchesCompanyTab_(inq, companyTab)) return false;
+    var src = inq.source_type || '';
+    if(scope === 'external' && externalSources.indexOf(src) < 0) return false;
+    if(scope === 'internal' && src !== 'internal_msg') return false;
+    if(scope === 'interco' && src !== 'interco') return false;
+    if(scope === 'voice' && src !== 'voice_memo') return false;
+    if(q){
+      var ss = ((inq.custName||inq.from_name||'') + ' ' + (inq.subject||'') + ' ' + (inq.body||'') + ' ' + (inq.email||inq.from_email||'') + ' ' + (inq.summary||'')).toLowerCase();
+      if(!ss.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+// 連絡を かんばん列キー (todo/doing/done) に分類
+function _inqKanbanCol_(inq){
+  var s = inq.status || 'new';
+  if(s === 'done') return 'done';
+  if(s === 'progress' || s === 'waiting') return 'doing';
+  return 'todo'; // new / 未設定
+}
+
+var INQ_KANBAN_COLS = [
+  { key:'todo',  label:'未対応',  icon:'🔴', color:'#dc2626', bg:'#fef2f2', status:'new' },
+  { key:'doing', label:'対応中',  icon:'🟡', color:'#d97706', bg:'#fffbeb', status:'progress' },
+  { key:'done',  label:'対応済',  icon:'✅', color:'#16a34a', bg:'#f0fdf4', status:'done' }
+];
+
+function renderInquiryKanban(){
+  var wrap = document.getElementById('inq-kanban-wrap');
+  if(!wrap) return;
+  var items = _getInquiriesForKanban_();
+  // 新しい順
+  items.sort(function(a,b){ return (b.received_at||b.createdAt||'').localeCompare(a.received_at||a.createdAt||''); });
+
+  var buckets = { todo:[], doing:[], done:[] };
+  items.forEach(function(inq){ buckets[_inqKanbanCol_(inq)].push(inq); });
+
+  wrap.innerHTML =
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;align-items:start">' +
+    INQ_KANBAN_COLS.map(function(col){
+      var list = buckets[col.key] || [];
+      var cards = list.map(function(inq){ return _inqKanbanCard_(inq, col); }).join('');
+      return '<div ondragover="event.preventDefault();this.style.outline=\'2px dashed ' + col.color + '\'" ' +
+        'ondragleave="this.style.outline=\'none\'" ' +
+        'ondrop="this.style.outline=\'none\';_onInqKanbanDrop_(event,\'' + col.key + '\')" ' +
+        'style="background:' + col.bg + ';border:1px solid ' + col.color + '33;border-radius:10px;padding:8px;min-height:calc(100vh - 360px)">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 6px 8px;border-bottom:2px solid ' + col.color + ';margin-bottom:8px">' +
+          '<span style="font-weight:700;color:' + col.color + ';font-size:14px">' + col.icon + ' ' + col.label + '</span>' +
+          '<span style="background:' + col.color + ';color:#fff;font-size:11px;padding:1px 9px;border-radius:10px;font-weight:700">' + list.length + '</span>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:6px">' + (cards || '<div style="text-align:center;color:#cbd5e1;font-size:11px;padding:20px">なし</div>') + '</div>' +
+      '</div>';
+    }).join('') +
+    '</div>';
+}
+
+function _inqKanbanCard_(inq, col){
+  var who = inq.from_name || inq.custName || inq.from_email || inq.email || '(送信元不明)';
+  var subj = inq.subject || '(件名なし)';
+  var when = (inq.received_at || inq.createdAt || '');
+  var whenStr = when ? new Date(when).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+  var srcMeta = (typeof SOURCE_TYPE_META !== 'undefined' && SOURCE_TYPE_META[inq.source_type]) ? SOURCE_TYPE_META[inq.source_type] : { icon:'📋', label:inq.source_type||'' };
+  var prio = inq.priority === 'urgent' ? '<span style="background:#dc2626;color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700">緊急</span> ' : '';
+  var assignee = inq.assignee ? '<span style="font-size:10px;color:#6b7280;background:#fff;padding:1px 6px;border-radius:8px;border:1px solid #e5e7eb">👤 ' + _escDiff(inq.assignee) + '</span>' : '';
+  var grp = (typeof _detectGroupCompany_ === 'function') ? _detectGroupCompany_(inq) : null;
+  var accent = grp ? grp.border : '#cbd5e1';
+
+  return '<div draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\'' + _escAttr_(inq.id) + '\')" ' +
+    'onclick="if(typeof openInquiryDetail===\'function\')openInquiryDetail(\'' + _escAttr_(inq.id) + '\')" ' +
+    'style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid ' + accent + ';border-radius:6px;padding:8px 10px;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.05)" ' +
+    'title="ドラッグで列を移動 / クリックで詳細">' +
+    '<div style="font-size:12px;font-weight:700;color:#1a1a1a;line-height:1.3;margin-bottom:3px">' + prio + _escDiff(subj.slice(0,40)) + '</div>' +
+    '<div style="font-size:11px;color:#475569;margin-bottom:4px">' + (srcMeta.icon||'') + ' ' + _escDiff(String(who).slice(0,24)) + '</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;flex-wrap:wrap">' +
+      assignee +
+      '<span style="font-size:10px;color:#94a3b8;margin-left:auto">' + whenStr + '</span>' +
+    '</div>' +
+  '</div>';
+}
+
+// ドロップでステータス変更
+function _onInqKanbanDrop_(ev, colKey){
+  ev.preventDefault();
+  var id = ev.dataTransfer.getData('text/plain');
+  if(!id) return;
+  var inq = (DB.inquiries||[]).find(function(x){ return x.id === id; });
+  if(!inq) return;
+  var col = INQ_KANBAN_COLS.find(function(c){ return c.key === colKey; });
+  if(!col) return;
+  if(_inqKanbanCol_(inq) === colKey) return; // 同じ列なら何もしない
+  inq.status = col.status;
+  inq.updatedAt = new Date().toISOString();
+  // 対応済にしたら担当が空なら自分を割当
+  if(colKey !== 'todo' && !inq.assignee && currentAuth && currentAuth.userName){ inq.assignee = currentAuth.userName; }
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('update', 'inquiry:' + id, 'かんばん: ' + col.label + ' に変更'); } catch(e){}
+  renderInquiryKanban();
+  // 統計・サイドバーも更新
+  if(typeof renderInquiryStats === 'function') try { renderInquiryStats(); } catch(e){}
+  if(typeof renderInquiryFolderList === 'function') try { renderInquiryFolderList(); } catch(e){}
 }
 
 function renderInquiryList() {
