@@ -1171,15 +1171,16 @@ setTimeout(_removeBootLoader_, 5000);
 
 <!-- 案件管理ページ -->
 <div class="page" id="page-project">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:8px">
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <input id="proj-q" list="proj-q-suggest" placeholder="🔍 得意先・品名・仕様で検索 (無線綴じ / コート90K / 名刺 等)" style="width:280px;font-size:12px;padding:4px 8px" oninput="_onProjFilterChange_()">
-      <datalist id="proj-q-suggest"></datalist>
-      <select id="proj-cust-f" style="font-size:12px;padding:4px 8px;max-width:160px" onchange="_onProjFilterChange_()" title="得意先で絞り込み">
-        <option value="">🏢 全得意先</option>
-      </select>
-      <select id="proj-cat-f" style="font-size:12px;padding:4px 8px" onchange="_onProjFilterChange_()" title="品目の種別で絞り込み">
-        <option value="">📦 全種別</option>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap">
+      <!-- AAAAAA-1: チップ式 複数キーワード検索 (得意先・品名・仕様・種別語 を AND 絞り込み) -->
+      <div id="proj-chip-search" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;min-width:300px;max-width:520px;border:1px solid #cbd5e1;border-radius:8px;padding:3px 6px;background:#fff" onclick="document.getElementById('proj-q').focus()">
+        <span id="proj-chips" style="display:inline-flex;flex-wrap:wrap;gap:4px"></span>
+        <input id="proj-q" list="proj-q-suggest" placeholder="🔍 語を入力しEnterで追加 (得意先/品名/無線綴じ/コート90K…)" style="flex:1;min-width:160px;border:none;outline:none;font-size:12px;padding:3px 2px" onkeydown="_projSearchKeydown_(event)" oninput="if(window._inqDeferSearch_!==1)_onProjFilterChange_()">
+        <datalist id="proj-q-suggest"></datalist>
+      </div>
+      <select id="proj-cat-f" style="font-size:12px;padding:4px 8px" onchange="_addProjChipFromSelect_('種別',this.value);this.value='';" title="品目の種別で絞り込み (選ぶとチップ追加)">
+        <option value="">📦 種別で追加</option>
         <option>名刺・カード</option><option>封筒</option><option>チラシ・ポスター</option><option>冊子・パンフ</option><option>帳票・伝票</option><option>シール・ラベル</option><option>その他</option>
       </select>
       <select id="proj-status-f" style="font-size:12px;padding:4px 8px" onchange="_onProjFilterChange_()">
@@ -25534,13 +25535,80 @@ function _projCategory_(r){
 }
 
 // WPPPP-2: 案件管理フィルタ変更時 (得意先ドロップダウン・候補も更新)
+// AAAAAA-1: チップ式 複数キーワード検索
+window._projSearchChips_ = window._projSearchChips_ || [];  // [{type:'text'|'cat', value:'...'}]
+
+function _renderProjChips_(){
+  var box = document.getElementById('proj-chips');
+  if(!box) return;
+  box.innerHTML = (window._projSearchChips_||[]).map(function(c, i){
+    var icon = c.type === 'cat' ? '📦' : '🔍';
+    var bg = c.type === 'cat' ? '#ede9fe' : '#e0f2fe';
+    var col = c.type === 'cat' ? '#5b21b6' : '#075985';
+    return '<span style="display:inline-flex;align-items:center;gap:3px;background:' + bg + ';color:' + col + ';border-radius:12px;padding:2px 4px 2px 8px;font-size:11px;font-weight:600">' +
+      icon + ' ' + _escDiff(c.value) +
+      '<button onclick="event.stopPropagation();_removeProjChip_(' + i + ')" style="background:rgba(0,0,0,.12);color:' + col + ';border:none;border-radius:50%;width:16px;height:16px;font-size:11px;cursor:pointer;line-height:1;display:inline-flex;align-items:center;justify-content:center" title="削除">×</button>' +
+    '</span>';
+  }).join('');
+}
+
+function _addProjChip_(value, type){
+  value = (value||'').trim();
+  if(!value) return;
+  type = type || 'text';
+  // 重複は追加しない
+  if((window._projSearchChips_||[]).some(function(c){ return c.type === type && c.value === value; })) return;
+  window._projSearchChips_.push({ type: type, value: value });
+  _renderProjChips_();
+  _onProjFilterChange_();
+}
+function _addProjChipFromSelect_(label, value){
+  if(!value) return;
+  _addProjChip_(value, 'cat');
+}
+function _removeProjChip_(i){
+  window._projSearchChips_.splice(i, 1);
+  _renderProjChips_();
+  _onProjFilterChange_();
+}
+function _projSearchKeydown_(ev){
+  var input = document.getElementById('proj-q');
+  if(!input) return;
+  if(ev.key === 'Enter'){
+    ev.preventDefault();
+    if(input.value.trim()){ _addProjChip_(input.value, 'text'); input.value = ''; }
+  } else if(ev.key === 'Backspace' && !input.value && (window._projSearchChips_||[]).length){
+    // 空入力でBackspace → 最後のチップを削除
+    _removeProjChip_(window._projSearchChips_.length - 1);
+  }
+}
+// チップ + 一時入力中テキストで案件1件が通るか判定
+function _projMatchesChips_(r){
+  var chips = window._projSearchChips_ || [];
+  var text = ((r.cust||r.from_company||'') + ' ' + (r.item||'') + ' ' + (r.spec||'') + ' ' + (r.id||'') + ' ' + (r.assignee||'') + ' ' + (r.memo||'')).toLowerCase();
+  for(var i=0; i<chips.length; i++){
+    var c = chips[i];
+    if(c.type === 'cat'){
+      if(typeof _projCategory_ === 'function' && _projCategory_(r) !== c.value) return false;
+    } else {
+      if(text.indexOf(c.value.toLowerCase()) < 0) return false;
+    }
+  }
+  // 入力途中のテキスト (まだEnter押してない) も即時絞り込み
+  var live = (document.getElementById('proj-q')?.value || '').trim().toLowerCase();
+  if(live && text.indexOf(live) < 0) return false;
+  return true;
+}
+
 function _onProjFilterChange_(){
   _populateProjFilterOptions_();
   if((window._projViewMode_||'detail') === 'ledger') renderProjectLedger();
   else renderProjects();
 }
 function _clearProjFilters_(){
-  ['proj-q','proj-cust-f','proj-cat-f','proj-status-f','proj-company-f'].forEach(function(id){
+  window._projSearchChips_ = [];
+  _renderProjChips_();
+  ['proj-q','proj-cat-f','proj-status-f','proj-company-f'].forEach(function(id){
     var el = document.getElementById(id); if(el) el.value = '';
   });
   _onProjFilterChange_();
@@ -25575,11 +25643,9 @@ function renderProjects(){
   if(_mt) _mt.style.display = 'none';
   // WPPPP-2: フラットビューは廃止。常に詳細(アコーディオン)で描画。
 
-  const q=(document.getElementById('proj-q')?.value||'').toLowerCase();
   const sf=document.getElementById('proj-status-f')?.value||'';
   const cf=document.getElementById('proj-company-f')?.value||'';
-  const custF=(document.getElementById('proj-cust-f')?.value||'');   // WPPPP-2: 得意先絞り込み
-  const catF=(document.getElementById('proj-cat-f')?.value||'');     // WPPPP-2: 種別絞り込み
+  if(typeof _renderProjChips_ === 'function') _renderProjChips_();
   // ⚡ 期間フィルタ
   var allProjs = DB.projects || [];
   var periodFilteredProjs = _filterByPeriod_(allProjs, 'proj-body', ['orderDate','createdAt']);
@@ -25590,10 +25656,8 @@ function renderProjects(){
     if(sf&&r.status!==sf)return false;
     // NNNNN-1: ステージフィルタ
     if(stage !== 'all' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
-    // WPPPP-2: 得意先・種別フィルタ
-    if(custF && (r.cust||r.from_company||'') !== custF) return false;
-    if(catF && typeof _projCategory_==='function' && _projCategory_(r) !== catF) return false;
-    if(q&&!((r.cust||'')+(r.item||'')+(r.spec||'')+(r.id||'')+(r.assignee||'')).toLowerCase().includes(q))return false;
+    // AAAAAA-1: チップ式 複数キーワード AND 判定 (得意先/品名/仕様/種別)
+    if(typeof _projMatchesChips_ === 'function' && !_projMatchesChips_(r)) return false;
     // 会社フィルタ
     if(cf==='own'){
       const isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId==='COMP001');
@@ -26457,12 +26521,9 @@ function renderProjectLedger(){
 
   var q = (document.getElementById('proj-q')?.value || '').toLowerCase();
   var cf = document.getElementById('proj-company-f')?.value || '';
-  var custF = (document.getElementById('proj-cust-f')?.value || '');   // WPPPP-2
-  var catF = (document.getElementById('proj-cat-f')?.value || '');     // WPPPP-2
-
   var _passFilter_ = function(r){
-    if(custF && (r.cust||r.from_company||'') !== custF) return false;
-    if(catF && typeof _projCategory_==='function' && _projCategory_(r) !== catF) return false;
+    // AAAAAA-1: チップ式 複数キーワード判定
+    if(typeof _projMatchesChips_ === 'function' && !_projMatchesChips_(r)) return false;
     if(cf === 'own'){
       var isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId === 'COMP001');
       if(!isOwn) return false;
