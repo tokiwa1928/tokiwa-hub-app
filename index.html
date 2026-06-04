@@ -25799,7 +25799,7 @@ function renderProjects(){
   if(typeof _populateProjFilterOptions_ === 'function') _populateProjFilterOptions_();
   // NNNNN-1: 見積中ステージは見積一覧を表示 (見積管理を吸収)
   var stage = window._projStageTab_ || 'all';
-  if(stage === 'quote'){ _renderProjQuoteList_(); return; }
+  if(stage === 'quote' || stage === 'allquote'){ _renderProjQuoteList_(stage); return; }
   // RPPPP-1: 見積中以外では合冊ツールバーを隠す
   var _mt = document.getElementById('quote-merge-toolbar');
   if(_mt) _mt.style.display = 'none';
@@ -25817,7 +25817,7 @@ function renderProjects(){
   const rows=periodFilteredProjs.filter(r=>{
     if(sf&&r.status!==sf)return false;
     // NNNNN-1: ステージフィルタ
-    if(stage !== 'all' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
+    if(stage !== 'all' && stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
     // AAAAAA-1: チップ式 複数キーワード AND 判定 (得意先/品名/仕様/種別)
     if(typeof _projMatchesChips_ === 'function' && !_projMatchesChips_(r)) return false;
     // 会社フィルタ
@@ -26040,7 +26040,7 @@ function _renderProjFlatList_(){
   var all = DB.projects || [];
   var rows = _filterByPeriod_(all, 'proj-body', ['orderDate','createdAt']).filter(function(r){
     if(sf && r.status !== sf) return false;
-    if(stage !== 'all' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
+    if(stage !== 'all' && stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
     if(q && !((r.cust||'')+(r.item||'')+(r.spec||'')+(r.id||'')+(r.assignee||'')).toLowerCase().includes(q)) return false;
     if(cf === 'own'){
       var isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId === 'COMP001');
@@ -26111,12 +26111,13 @@ function _renderProjFlatList_(){
 }
 
 // NNNNN-1: 見積中ステージ — 見積一覧 (見積管理を案件管理に吸収)
-function _renderProjQuoteList_(){
+function _renderProjQuoteList_(stageArg){
   var body = document.getElementById('proj-body');
   if(!body) return;
   var q = (document.getElementById('proj-q')?.value || '').toLowerCase();
+  var _showAllQuotes = (stageArg === 'allquote'); // 見積書一覧=全件 / 見積中=受注済除外
   var estimates = (DB.estimates || []).filter(function(e){
-    if(e.status === 'ordered') return false; // 受注済は見積中から除外
+    if(!_showAllQuotes && e.status === 'ordered') return false; // 見積中は受注済を除外
     if(q && !((e.cust||'') + (e.item||'') + (e.spec||'')).toLowerCase().includes(q)) return false;
     return true;
   }).sort(function(a,b){ return (b.createdAt||'').localeCompare(a.createdAt||''); });
@@ -26126,7 +26127,8 @@ function _renderProjQuoteList_(){
   if(pwProj) pwProj.innerHTML = '';
 
   if(!estimates.length){
-    body.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:2rem;color:#aaa">見積中の案件はありません。連絡管理の「📝 見積を作成」や、案件登録でステータス「見積中」で作成できます。</td></tr>';
+    var _emptyMsg = _showAllQuotes ? '見積書がありません。リピート登録や連絡管理から見積を作成できます。' : '見積中の案件はありません。連絡管理の「📝 見積を作成」や、案件登録でステータス「見積中」で作成できます。';
+    body.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:2rem;color:#aaa">' + _emptyMsg + '</td></tr>';
     return;
   }
   // RPPPP-1: 案件をまたいだ合冊見積ツールバー
@@ -26562,18 +26564,23 @@ window._projRowMode_ = 'detail';
 window._projStageTab_ = 'all';
 
 // NNNNN-1: ライフサイクル ステージ定義 (見積管理・受注管理を吸収)
-// GGGGGG-1: ステージを3タブに集約 (すべて / 受注案件一覧=全受注案件 / 見積書一覧=全見積)
+// GGGGGG-2: 集約2タブ(受注案件一覧/見積書一覧) + 詳細4タブ(見積中/受注・進行中/完了/失注)
+// orders/allquote は集約(statuses無し → _projStageOf_ では扱わず、フィルタで特別処理)
 var PROJ_STAGES = [
-  { key:'all',    label:'すべて',       icon:'📂', color:'#374151' },
-  { key:'orders', label:'受注案件一覧', icon:'🟢', color:'#1e40af', statuses:['制作中','校了待ち','印刷中','加工中','保留','','納品済','完了','失注','キャンセル'] }, // 全受注案件 (DB.projects)
-  { key:'quote',  label:'見積書一覧',   icon:'📝', color:'#0891b2', statuses:[] }      // 全見積 (DB.estimates)
+  { key:'all',      label:'すべて',       icon:'📂', color:'#374151' },
+  { key:'orders',   label:'受注案件一覧', icon:'📋', color:'#15803d' },                 // 全受注案件 (DB.projects 全件)
+  { key:'allquote', label:'見積書一覧',   icon:'📝', color:'#7c3aed' },                 // 全見積 (DB.estimates 全件)
+  { key:'quote',    label:'見積中',       icon:'🔵', color:'#0891b2', statuses:[] },    // 進行中の見積 (受注済除外)
+  { key:'active',   label:'受注・進行中', icon:'🏭', color:'#1e40af', statuses:['制作中','校了待ち','印刷中','加工中','保留',''] },
+  { key:'done',     label:'完了',         icon:'✅', color:'#16a34a', statuses:['納品済','完了'] },
+  { key:'lost',     label:'失注',         icon:'❌', color:'#dc2626', statuses:['失注','キャンセル'] }
 ];
 
 function _projStageOf_(status){
   for(var i=1;i<PROJ_STAGES.length;i++){
     if((PROJ_STAGES[i].statuses||[]).indexOf(status||'') >= 0) return PROJ_STAGES[i].key;
   }
-  return 'orders'; // 不明は受注案件扱い
+  return 'active'; // 不明は進行中扱い
 }
 
 function renderProjStageTabs(){
@@ -26607,7 +26614,8 @@ function renderProjStageTabs(){
   var projects = DB.projects || [];
   var estimates = (DB.estimates || []).filter(function(e){ return e.status !== 'ordered'; });
   // 件数集計
-  var counts = { all: projects.length + estimates.length, quote: estimates.length, orders:0 };
+  var estimatesAll = DB.estimates || [];
+  var counts = { all: projects.length + estimates.length, orders: projects.length, allquote: estimatesAll.length, quote: estimates.length, active:0, done:0, lost:0 };
   projects.forEach(function(p){ var s = _projStageOf_(p.status); counts[s] = (counts[s]||0)+1; });
 
   var cur = window._projStageTab_ || 'all';
@@ -26695,8 +26703,8 @@ function renderProjectLedger(){
   var _stage = window._projStageTab_ || 'all';
   var projects = (DB.projects || []).filter(function(r){
     // NNNNN-1: ステージフィルタ (見積中は受注なしなので projects からは除外)
-    if(_stage === 'quote') return false;
-    if(_stage !== 'all' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== _stage) return false;
+    if(_stage === 'quote' || _stage === 'allquote') return false;
+    if(_stage !== 'all' && _stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== _stage) return false;
     return _passFilter_(r);
   });
   var estimates = (DB.estimates || []).filter(_passFilter_);
