@@ -15884,11 +15884,11 @@ function showRepeatProjectModal(){
             '<option value="amt-a">💴 金額(低→高)</option>' +
           '</select>' +
         '</div>' +
-        '<div style="display:flex;gap:12px;margin-top:8px;font-size:11px;color:#666;align-items:center">' +
-          '<label style="display:flex;align-items:center;gap:4px"><input type="radio" name="repeat-src" value="projects" checked onchange="_refreshRepeatCustOpts_();_renderRepeatList_()"> 過去案件 (' + ((DB.projects||[]).length) + '件)</label>' +
-          '<label style="display:flex;align-items:center;gap:4px"><input type="radio" name="repeat-src" value="history" onchange="_refreshRepeatCustOpts_();_renderRepeatList_()"> 見積実績 (' + ((DB.history||[]).length) + '件)</label>' +
-          '<button type="button" onclick="_clearRepeatFilters_()" style="font-size:10px;padding:2px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;color:#64748b">✕ 絞り込みクリア</button>' +
-          '<span style="margin-left:auto;font-size:10px;color:#94a3b8" id="repeat-result-count"></span>' +
+        '<div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">' +
+          '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#334155;white-space:nowrap;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#fff"><input type="radio" name="repeat-src" value="projects" checked onchange="_refreshRepeatCustOpts_();_renderRepeatList_()" style="width:16px;height:16px"> 📋 過去受注案件 <span style="color:#94a3b8;font-size:12px">(' + ((DB.projects||[]).length) + '件)</span></label>' +
+          '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#334155;white-space:nowrap;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#fff"><input type="radio" name="repeat-src" value="history" onchange="_refreshRepeatCustOpts_();_renderRepeatList_()" style="width:16px;height:16px"> 📝 見積実績案件 <span style="color:#94a3b8;font-size:12px">(' + ((DB.history||[]).length) + '件)</span></label>' +
+          '<button type="button" onclick="_clearRepeatFilters_()" style="font-size:12px;padding:6px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;cursor:pointer;color:#64748b;white-space:nowrap">✕ 絞り込みクリア</button>' +
+          '<span style="margin-left:auto;font-size:11px;color:#94a3b8;white-space:nowrap" id="repeat-result-count"></span>' +
         '</div>' +
       '</div>' +
       '<div id="repeat-list" style="overflow-y:auto;flex:1;padding:8px"></div>' +
@@ -20931,6 +20931,10 @@ var WIDGET_CATALOG = {
   kpi_proofing_active:{ label: '校正進行中', category: 'KPI', size: 'small' },
   kpi_due_soon:       { label: '納期1週間以内', category: 'KPI', size: 'small' },
   kpi_unread_emails:  { label: '未読メール', category: 'KPI', size: 'small' },
+  // EEEEEE-1: 経営KPI (今月の案件数・粗利額・粗利率)
+  kpi_month_projects: { label: '今月の案件数', category: 'KPI', size: 'small' },
+  kpi_month_gross:     { label: '今月の粗利額', category: 'KPI', size: 'small' },
+  kpi_month_gross_rate:{ label: '今月の粗利率', category: 'KPI', size: 'small' },
   // グラフ系 (中)
   chart_monthly_sales:{ label: '月次売上 (棒)', category: 'チャート', size: 'medium' },
   chart_status:       { label: '案件ステータス分布', category: 'チャート', size: 'medium' },
@@ -20947,7 +20951,8 @@ var WIDGET_CATALOG = {
 };
 
 var DEFAULT_WIDGETS = [
-  'kpi_month_sales', 'kpi_active_projects', 'kpi_pending_inq', 'kpi_today_delivery',
+  'kpi_month_sales', 'kpi_month_projects', 'kpi_month_gross', 'kpi_month_gross_rate',
+  'kpi_active_projects', 'kpi_pending_inq', 'kpi_today_delivery',
   'list_recent_inquiries', 'list_due_soon',
   'chart_monthly_sales', 'chart_status',
   'chart_top_customers', 'chart_category', 'chart_margin'
@@ -20957,11 +20962,25 @@ var _rtCharts = {};
 var _rtRefreshTimer = null;
 
 function _getEnabledWidgets_(){
+  var list;
   try {
     var saved = JSON.parse(localStorage.getItem('rt_widgets') || 'null');
-    if(saved && Array.isArray(saved)) return saved;
+    list = (saved && Array.isArray(saved)) ? saved : DEFAULT_WIDGETS.slice();
+  } catch(e){ list = DEFAULT_WIDGETS.slice(); }
+  // EEEEEE-1: 既存ユーザーにも新KPI(案件数/粗利額/粗利率)を一度だけKPI群の直後に追加
+  try {
+    if(!localStorage.getItem('rt_widgets_kpi_v2')){
+      var lastKpi = -1;
+      list.forEach(function(k,i){ if(String(k).indexOf('kpi_') === 0) lastKpi = i; });
+      var insertAt = lastKpi >= 0 ? lastKpi + 1 : 0;
+      ['kpi_month_projects','kpi_month_gross','kpi_month_gross_rate'].forEach(function(k){
+        if(list.indexOf(k) < 0){ list.splice(insertAt, 0, k); insertAt++; }
+      });
+      localStorage.setItem('rt_widgets_kpi_v2','1');
+      try { localStorage.setItem('rt_widgets', JSON.stringify(list)); } catch(e){}
+    }
   } catch(e){}
-  return DEFAULT_WIDGETS.slice();
+  return list;
 }
 
 function _saveEnabledWidgets_(list){
@@ -21361,6 +21380,9 @@ function _renderWidget_(wId){
   if(wId === 'kpi_proofing_active')return _renderKpiProofingActive_(contentEl);
   if(wId === 'kpi_due_soon')       return _renderKpiDueSoon_(contentEl);
   if(wId === 'kpi_unread_emails')  return _renderKpiUnreadEmails_(contentEl);
+  if(wId === 'kpi_month_projects') return _renderKpiMonthProjects_(contentEl);
+  if(wId === 'kpi_month_gross')    return _renderKpiMonthGross_(contentEl);
+  if(wId === 'kpi_month_gross_rate')return _renderKpiMonthGrossRate_(contentEl);
   // チャート系
   if(wId === 'chart_monthly_sales')return _renderChartMonthlySales_(contentEl);
   if(wId === 'chart_status')       return _renderChartStatus_(contentEl);
@@ -21394,6 +21416,35 @@ function _renderKpiMonthSales_(el){
   var ps = (DB.projects||[]).filter(function(p){ return (p.orderDate||'').startsWith(m); });
   var sum = ps.reduce(function(s, p){ return s + (parseInt(p.exTax)||0); }, 0);
   el.innerHTML = _bigNumber_('¥' + sum.toLocaleString(), m + ' (' + ps.length + '件)', '#065f46');
+}
+// EEEEEE-1: 案件の粗利 (集計バー _renderProjSummaryBar_ と同一式: grossProfit 優先, 無ければ exTax - 外注費)
+function _projGross_(p){
+  return (typeof p.grossProfit === 'number') ? p.grossProfit : ((parseInt(p.exTax)||0) - (parseInt(p.outsourceTotal)||0));
+}
+function _thisMonthProjects_(){
+  var m = new Date().toISOString().slice(0,7);
+  return (DB.projects||[]).filter(function(p){ return (p.orderDate||'').startsWith(m); });
+}
+// EEEEEE-1: 今月の案件数
+function _renderKpiMonthProjects_(el){
+  var m = new Date().toISOString().slice(0,7);
+  var ps = _thisMonthProjects_();
+  el.innerHTML = _bigNumber_(ps.length + '件', m + ' の受注案件数', '#0891b2');
+}
+// EEEEEE-1: 今月の粗利額
+function _renderKpiMonthGross_(el){
+  var m = new Date().toISOString().slice(0,7);
+  var ps = _thisMonthProjects_();
+  var gross = ps.reduce(function(s, p){ return s + _projGross_(p); }, 0);
+  el.innerHTML = _bigNumber_('¥' + gross.toLocaleString(), m + ' の粗利額', '#b45309');
+}
+// EEEEEE-1: 今月の粗利率
+function _renderKpiMonthGrossRate_(el){
+  var ps = _thisMonthProjects_();
+  var sales = ps.reduce(function(s, p){ return s + (parseInt(p.exTax)||0); }, 0);
+  var gross = ps.reduce(function(s, p){ return s + _projGross_(p); }, 0);
+  var rate = sales > 0 ? Math.round(gross / sales * 1000) / 10 : 0;
+  el.innerHTML = _bigNumber_(rate + '%', '今月 粗利 ¥' + gross.toLocaleString(), '#dc2626');
 }
 function _renderKpiActiveProjects_(el){
   var n = (DB.projects||[]).filter(function(p){ return p.status && p.status !== '完了' && p.status !== '納品済'; }).length;
@@ -21509,27 +21560,46 @@ function _renderChartTopCustomers_(el){
 // 品目カテゴリ別売上比率 (DB.history を使用)
 function _renderChartCategory_(el){
   if(typeof Chart === 'undefined'){ el.innerHTML = '<div style="color:#888;text-align:center">Chart.js 読込中…</div>'; return; }
-  var sums = {};
-  (DB.history||[]).forEach(function(h){
-    var cat = h.cat || h.category || 'その他';
+  // EEEEEE-1: 種別ごとに「売上」と「案件数」の両方を集計
+  var sums = {}, counts = {};
+  var useHistory = !!(DB.history && DB.history.length);
+  var pool = useHistory ? DB.history : (DB.projects||[]);
+  pool.forEach(function(h){
+    var cat = useHistory ? (h.cat || h.category || 'その他')
+            : ((h.item||'').match(/(チラシ|名刺|パンフ|封筒|カタログ|シール|冊子|伝票)/)?.[1] || 'その他');
     sums[cat] = (sums[cat]||0) + (parseInt(h.exTax)||0);
+    counts[cat] = (counts[cat]||0) + 1;
   });
-  // history が無いなら projects の品名から簡易推定
-  if(!Object.keys(sums).length){
-    (DB.projects||[]).forEach(function(p){
-      var cat = (p.item||'').match(/(チラシ|名刺|パンフ|封筒|カタログ|シール|冊子|伝票)/)?.[1] || 'その他';
-      sums[cat] = (sums[cat]||0) + (parseInt(p.exTax)||0);
-    });
-  }
   var keys = Object.keys(sums);
   if(!keys.length){ el.innerHTML = '<div style="color:#888;text-align:center;padding:1rem;font-size:12px">データなし</div>'; return; }
+  keys.sort(function(a,b){ return (sums[b]||0) - (sums[a]||0); }); // 売上降順
+  var colors = ['#1e40af','#0891b2','#7c3aed','#f59e0b','#16a34a','#dc2626','#6b7280','#78350f'];
+  el.innerHTML = '';
+  var chartBox = document.createElement('div');
+  chartBox.style.cssText = 'height:150px;position:relative';
   var canvas = document.createElement('canvas');
-  el.innerHTML = ''; el.appendChild(canvas);
+  chartBox.appendChild(canvas);
+  el.appendChild(chartBox);
   _rtCharts.category = new Chart(canvas, {
     type: 'doughnut',
-    data: { labels: keys, datasets: [{ data: keys.map(function(k){ return sums[k]; }), backgroundColor: ['#1e40af','#0891b2','#7c3aed','#f59e0b','#16a34a','#dc2626','#6b7280','#78350f'] }] },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { font: { size: 10 } } } } }
+    data: { labels: keys, datasets: [{ data: keys.map(function(k){ return sums[k]; }), backgroundColor: colors }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: {
+      legend: { position: 'right', labels: { font: { size: 10 } } },
+      tooltip: { callbacks: { label: function(ctx){ var k = ctx.label; return k + ': ¥' + (sums[k]||0).toLocaleString() + ' / ' + (counts[k]||0) + '件'; } } }
+    } }
   });
+  // 売上・案件数 の内訳テーブル (グラフ下)
+  var tbl = document.createElement('div');
+  tbl.style.cssText = 'margin-top:6px;border-top:1px solid #eee;padding-top:4px;max-height:96px;overflow-y:auto';
+  tbl.innerHTML =
+    '<div style="display:flex;justify-content:space-between;font-size:9px;color:#94a3b8;font-weight:700;padding:1px 0"><span>種別</span><span>売上 / 案件数</span></div>' +
+    keys.map(function(k, i){
+      return '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;gap:6px">' +
+        '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' + colors[i % colors.length] + ';margin-right:4px"></span>' + k + '</span>' +
+        '<span style="color:#475569;white-space:nowrap">¥' + (sums[k]||0).toLocaleString() + ' / ' + (counts[k]||0) + '件</span>' +
+        '</div>';
+    }).join('');
+  el.appendChild(tbl);
 }
 
 // 月次粗利率推移 (直近12ヶ月)
