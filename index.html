@@ -1195,10 +1195,11 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <!-- NNNNN-1: ライフサイクル ステータスサブタブ (見積管理・受注管理を吸収) -->
   <div id="proj-stage-tabs" style="display:flex;gap:6px;margin-bottom:.6rem;flex-wrap:wrap"></div>
-  <!-- KKKKK-1: 表示モード切替 (一覧 / 台帳) -->
+  <!-- KKKKK-1 / WPPPP-1: 表示モード切替 (一覧フラット / 詳細 / 台帳) -->
   <div style="display:flex;gap:0;margin-bottom:.6rem;border-bottom:2px solid #e5e7eb">
-    <button id="proj-view-list" class="proj-view-tab" onclick="setProjView('list')" style="padding:7px 16px;font-size:13px;font-weight:700;background:#1e40af;color:#fff;border:none;border-radius:6px 6px 0 0;cursor:pointer">📋 一覧</button>
-    <button id="proj-view-ledger" class="proj-view-tab" onclick="setProjView('ledger')" style="padding:7px 16px;font-size:13px;font-weight:500;background:transparent;color:#3c4043;border:none;cursor:pointer">📒 案件台帳 (品目ごと)</button>
+    <button id="proj-view-flat" class="proj-view-tab" onclick="setProjView('flat')" style="padding:7px 16px;font-size:13px;font-weight:700;background:#1e40af;color:#fff;border:none;border-radius:6px 6px 0 0;cursor:pointer" title="1行=1件のスッキリした一覧表 (クリックで詳細)">📋 一覧</button>
+    <button id="proj-view-detail" class="proj-view-tab" onclick="setProjView('detail')" style="padding:7px 16px;font-size:13px;font-weight:500;background:transparent;color:#3c4043;border:none;cursor:pointer" title="工程・校正・配送などをその場で操作できる詳細表示">📑 詳細</button>
+    <button id="proj-view-ledger" class="proj-view-tab" onclick="setProjView('ledger')" style="padding:7px 16px;font-size:13px;font-weight:500;background:transparent;color:#3c4043;border:none;cursor:pointer" title="品目(得意先×品名)ごとに見積・受注履歴をまとめて表示">📒 台帳</button>
   </div>
   <!-- 一覧ビュー -->
   <div id="proj-list-view">
@@ -25295,6 +25296,8 @@ function renderProjects(){
   // RPPPP-1: 見積中以外では合冊ツールバーを隠す
   var _mt = document.getElementById('quote-merge-toolbar');
   if(_mt) _mt.style.display = 'none';
+  // WPPPP-1: フラット一覧モードなら別レンダラへ
+  if((window._projRowMode_ || 'flat') === 'flat'){ _renderProjFlatList_(); return; }
 
   const q=(document.getElementById('proj-q')?.value||'').toLowerCase();
   const sf=document.getElementById('proj-status-f')?.value||'';
@@ -25514,6 +25517,88 @@ function renderProjects(){
 
     return mainRow + specRow;
   }).join('');
+}
+
+// WPPPP-1: 受注案件をフラットな表で一覧表示 (1行=1件・クリックで詳細)
+function _renderProjFlatList_(){
+  var body = document.getElementById('proj-body');
+  if(!body) return;
+  var q = (document.getElementById('proj-q')?.value || '').toLowerCase();
+  var sf = document.getElementById('proj-status-f')?.value || '';
+  var cf = document.getElementById('proj-company-f')?.value || '';
+  var stage = window._projStageTab_ || 'all';
+
+  var all = DB.projects || [];
+  var rows = _filterByPeriod_(all, 'proj-body', ['orderDate','createdAt']).filter(function(r){
+    if(sf && r.status !== sf) return false;
+    if(stage !== 'all' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
+    if(q && !((r.cust||'')+(r.item||'')+(r.spec||'')+(r.id||'')+(r.assignee||'')).toLowerCase().includes(q)) return false;
+    if(cf === 'own'){
+      var isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId === 'COMP001');
+      if(!isOwn) return false;
+    }
+    return true;
+  });
+  // 期間セレクタ描画
+  var pwProj = document.getElementById('proj-period-wrapper');
+  if(pwProj) pwProj.innerHTML = _renderPeriodFilter_('proj-body', 'renderProjects', all.length);
+
+  if(!rows.length){
+    body.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:2rem;color:#aaa">該当する案件はありません。「＋ 新規登録」または「🔁 リピート発注」で追加できます。</td></tr>';
+    return;
+  }
+
+  // 新しい順 + 表示件数制限
+  var sorted = rows.slice().sort(function(a,b){ return (b.orderDate||b.createdAt||'').localeCompare(a.orderDate||a.createdAt||''); });
+  var limit = _getShowCount_('proj-body', PAGE_LIMITS.project);
+  var disp = sorted.slice(0, limit);
+
+  var statusColor = {制作中:'#1e40af',校了待ち:'#78350f',印刷中:'#065f46',加工中:'#5b21b6',納品済:'#374151',完了:'#9ca3af',見積中:'#0891b2',失注:'#dc2626',保留:'#a16207',キャンセル:'#6b7280'};
+
+  body.innerHTML = disp.map(function(r){
+    var oi = (DB.projects||[]).lastIndexOf(r);
+    var sc = statusColor[r.status] || '#888';
+    var out = r.outsourceTotal || 0;
+    var gp = (typeof r.grossProfit === 'number') ? r.grossProfit : ((parseInt(r.exTax)||0) - out);
+    var gpr = (r.exTax > 0) ? Math.round(gp/r.exTax*100) : null;
+    var grp = (typeof _detectGroupCompany_ === 'function') ? _detectGroupCompany_(r) : null;
+    var rowBg = grp ? ('background:' + grp.bg + ';border-left:4px solid ' + grp.border) : '';
+    var grpTag = grp ? '<span style="display:inline-block;background:' + grp.border + ';color:#fff;font-size:9px;padding:1px 4px;border-radius:3px;margin-right:3px;font-weight:700">' + grp.label + '</span>' : '';
+    // 工程進捗 (簡易バッジ)
+    var stepsHtml = (typeof PROC_STEPS !== 'undefined' ? PROC_STEPS : ['版下','校了','印刷','加工','納品']).map(function(step){
+      var val = (r.steps && r.steps[step]) || '─';
+      var done = val==='完了'||val==='OK'||val==='納品済'||val==='発送済';
+      var active = val && val!=='─' && val!=='未着手' && !done;
+      var bg = done?'#065f46':active?'#1e40af':'#e5e7eb';
+      var col = (done||active)?'#fff':'#9ca3af';
+      return '<span style="background:'+bg+';color:'+col+';font-size:9px;padding:1px 4px;border-radius:8px;white-space:nowrap">'+step.slice(0,1)+'</span>';
+    }).join(' ');
+    var due = r.dueDate || '';
+    var dueLate = due && new Date(due) < new Date() && r.status!=='納品済' && r.status!=='完了';
+
+    return '<tr style="cursor:pointer;' + rowBg + '" onclick="editProjDetail(' + oi + ')" title="クリックで詳細・編集">' +
+      '<td style="font-size:11px;font-family:monospace;white-space:nowrap">' + grpTag + _escDiff(r.id||'') + '</td>' +
+      '<td style="font-size:11px;white-space:nowrap">' + (r.orderDate||'').slice(0,10) + '</td>' +
+      '<td style="font-size:12px">' + _escDiff(r.cust||r.from_company||'') + '</td>' +
+      '<td style="font-size:12px">' + _escDiff(r.item||'') + (r.spec?'<br><span style="font-size:10px;color:#999">'+_escDiff(String(r.spec).slice(0,28))+'</span>':'') + '</td>' +
+      '<td class="r" style="font-size:12px;font-weight:700;white-space:nowrap">¥' + (parseInt(r.exTax)||0).toLocaleString() + '</td>' +
+      '<td class="r" style="font-size:11px;color:#666;white-space:nowrap">' + (out?'¥'+out.toLocaleString():'-') + '</td>' +
+      '<td class="r" style="font-size:11px;white-space:nowrap;color:' + (gpr!==null?(gpr>=0?'#065f46':'#dc2626'):'#999') + '">' + (gpr!==null?'¥'+gp.toLocaleString()+'<br><span style="font-size:9px">'+gpr+'%</span>':'-') + '</td>' +
+      '<td style="font-size:11px;white-space:nowrap;color:' + (dueLate?'#dc2626':'#374151') + ';font-weight:' + (dueLate?'700':'400') + '">' + (due?due.slice(5):'-') + (dueLate?' ⚠':'') + '</td>' +
+      '<td><span style="background:' + sc + ';color:#fff;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700;white-space:nowrap">' + _escDiff(r.status||'制作中') + '</span></td>' +
+      '<td style="white-space:nowrap">' + stepsHtml + '</td>' +
+      '<td style="font-size:11px;white-space:nowrap">' + _escDiff(r.assignee||'-') + '</td>' +
+      '<td style="white-space:nowrap" onclick="event.stopPropagation()">' +
+        '<button class="use-btn" style="font-size:10px;padding:2px 8px;background:#0891b2;color:#fff;border-color:#0891b2" onclick="showQuickRepeatModal(\'' + _escAttr_(r.id) + '\')" title="この案件をリピート発注">🔁</button> ' +
+        '<button class="use-btn" style="font-size:10px;padding:2px 8px" onclick="editProjDetail(' + oi + ')">✏</button>' +
+      '</td>' +
+    '</tr>';
+  }).join('');
+
+  // 件数表示 (制限時)
+  if(sorted.length > disp.length){
+    body.innerHTML += '<tr><td colspan="12" style="text-align:center;padding:10px"><button class="btn" style="font-size:11px" onclick="_expandShowCount_(\'proj-body\', ' + PAGE_LIMITS.project + ')">▼ さらに表示 (' + (sorted.length - disp.length) + '件)</button></td></tr>';
+  }
 }
 
 // NNNNN-1: 見積中ステージ — 見積一覧 (見積管理を案件管理に吸収)
@@ -25963,7 +26048,8 @@ function _saveCostRevision_(){
 // 📒 KKKKK-1: 案件台帳ビュー (品目 = 得意先×品名 でグループ化)
 //    1品目に 見積書履歴[] と 受注履歴[] がぶら下がる構造
 // ═══════════════════════════════════════════════════════════
-window._projViewMode_ = (function(){ try { return localStorage.getItem('proj_view_mode') || 'list'; } catch(e){ return 'list'; } })();
+window._projViewMode_ = (function(){ try { var m = localStorage.getItem('proj_view_mode') || 'flat'; return (m === 'list') ? 'flat' : m; } catch(e){ return 'flat'; } })();
+window._projRowMode_ = (window._projViewMode_ === 'detail') ? 'detail' : 'flat';
 window._projStageTab_ = 'all';
 
 // NNNNN-1: ライフサイクル ステージ定義 (見積管理・受注管理を吸収)
@@ -26011,24 +26097,39 @@ function setProjStage(stage){
 }
 
 function setProjView(mode){
+  // WPPPP-1: 旧 'list' は 'flat' に読み替え (互換)
+  if(mode === 'list') mode = 'flat';
   window._projViewMode_ = mode;
   try { localStorage.setItem('proj_view_mode', mode); } catch(e){}
   if(typeof renderProjStageTabs === 'function') renderProjStageTabs();
   var listView = document.getElementById('proj-list-view');
   var ledgerView = document.getElementById('proj-ledger-view');
-  var btnList = document.getElementById('proj-view-list');
+  var btnFlat = document.getElementById('proj-view-flat');
+  var btnDetail = document.getElementById('proj-view-detail');
   var btnLedger = document.getElementById('proj-view-ledger');
+  // ボタンの見た目をリセット
+  [btnFlat, btnDetail, btnLedger].forEach(function(b){
+    if(b){ b.style.background = 'transparent'; b.style.color = '#3c4043'; b.style.fontWeight = '500'; }
+  });
+  var activate = function(b){ if(b){ b.style.background = '#1e40af'; b.style.color = '#fff'; b.style.fontWeight = '700'; b.style.borderRadius = '6px 6px 0 0'; } };
+
   if(mode === 'ledger'){
     if(listView) listView.style.display = 'none';
     if(ledgerView) ledgerView.style.display = 'block';
-    if(btnList){ btnList.style.background = 'transparent'; btnList.style.color = '#3c4043'; btnList.style.fontWeight = '500'; }
-    if(btnLedger){ btnLedger.style.background = '#1e40af'; btnLedger.style.color = '#fff'; btnLedger.style.fontWeight = '700'; btnLedger.style.borderRadius = '6px 6px 0 0'; }
+    activate(btnLedger);
     renderProjectLedger();
-  } else {
+  } else if(mode === 'detail'){
     if(listView) listView.style.display = 'block';
     if(ledgerView) ledgerView.style.display = 'none';
-    if(btnList){ btnList.style.background = '#1e40af'; btnList.style.color = '#fff'; btnList.style.fontWeight = '700'; }
-    if(btnLedger){ btnLedger.style.background = 'transparent'; btnLedger.style.color = '#3c4043'; btnLedger.style.fontWeight = '500'; }
+    activate(btnDetail);
+    window._projRowMode_ = 'detail';
+    renderProjects();
+  } else {
+    // flat (デフォルト)
+    if(listView) listView.style.display = 'block';
+    if(ledgerView) ledgerView.style.display = 'none';
+    activate(btnFlat);
+    window._projRowMode_ = 'flat';
     renderProjects();
   }
 }
