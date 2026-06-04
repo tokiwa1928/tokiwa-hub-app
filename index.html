@@ -198,6 +198,8 @@ body{font-family:'Hiragino Kaku Gothic ProN','Meiryo',sans-serif;font-size:13px;
 }
 @keyframes tbTooltipIn { to { opacity: 1; } }
 .tb-btn:hover{color:#fff;background:rgba(255,255,255,.08)}
+/* DDDDDD-1: 見積作成(est)タブは廃止。遷移用にボタン要素は残すが、ナビには絶対に表示しない */
+.tb-btn[data-page="est"]{display:none !important}
 .tb-btn.act{
   color:#1a1a1a !important;
   background:#fff !important;
@@ -16018,37 +16020,116 @@ function repeatProject(src, idx){
   try { rows = JSON.parse(list.dataset.rows || '[]'); } catch(e){ rows = []; }
   var r = rows[idx];
   if(!r){ alert('対象が見つかりません'); return; }
+  // DDDDDD-2: 受注案件へのリピートか、見積へのリピートかを選ばせる
+  window._repeatChoiceRow_ = r;
+  _showRepeatModeChoice_(r);
+}
 
-  if(!confirm('「' + (r.cust || '') + ' / ' + (r.item || '') + '」を元にリピート案件を作成しますか?\n\n受注日は本日、ステータスは「制作中」、ステップは初期化されます。')) return;
+// DDDDDD-2: リピートの種類選択モーダル (受注案件 or 見積)
+function _showRepeatModeChoice_(r){
+  var m = document.createElement('div');
+  m.className = 'proof-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:100000;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var qtyStr = (r.qty || r.qty === 0) ? (r.qty + (r.unit || '部')) : '';
+  var amtStr = (r.exTax || r.exTax === 0) ? ('¥' + (parseInt(r.exTax) || 0).toLocaleString()) : '';
+  m.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:460px;border-radius:10px;overflow:hidden">' +
+      '<div style="padding:14px 18px;background:#0891b2;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<strong style="font-size:14px">🔁 リピートの種類を選択</strong>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 6px">×</button>' +
+      '</div>' +
+      '<div style="padding:16px 18px">' +
+        '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;line-height:1.6">' +
+          '<div style="font-weight:700;margin-bottom:2px">' + _escDiff(r.cust || '-') + ' <span style="color:#888;font-weight:400">/ ' + _escDiff(r.item || '') + '</span></div>' +
+          '<div style="color:#888">' + [qtyStr, amtStr].filter(Boolean).join(' · ') + '</div>' +
+        '</div>' +
+        '<div style="font-size:12px;color:#475569;margin-bottom:10px">この案件をどちらで登録しますか?</div>' +
+        '<div style="display:flex;flex-direction:column;gap:10px">' +
+          '<button onclick="_doRepeatCreate_(\'order\')" style="display:flex;align-items:center;gap:12px;text-align:left;padding:12px 14px;border:2px solid #0891b2;background:#ecfeff;border-radius:8px;cursor:pointer;font-family:inherit">' +
+            '<span style="font-size:24px">📋</span><span><strong style="font-size:13px;color:#0e7490">受注案件として登録</strong><br><span style="font-size:11px;color:#64748b">確定した注文。ステータス「制作中」で工程開始 (🟢受注・進行中)</span></span>' +
+          '</button>' +
+          '<button onclick="_doRepeatCreate_(\'estimate\')" style="display:flex;align-items:center;gap:12px;text-align:left;padding:12px 14px;border:2px solid #a855f7;background:#faf5ff;border-radius:8px;cursor:pointer;font-family:inherit">' +
+            '<span style="font-size:24px">📝</span><span><strong style="font-size:13px;color:#7c3aed">見積として登録</strong><br><span style="font-size:11px;color:#64748b">まだ提出前の見積 (🔵見積中)。受注確定後に切替できる</span></span>' +
+          '</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(m);
+}
 
-  var proj = {
-    id: (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now()),
-    companyId: currentAuth?.companyId || 'COMP001',
-    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
-    orderDate: new Date().toISOString().slice(0,10),
-    dueDate: '',
-    cust: r.cust || '',
-    item: r.item || '',
-    spec: r.spec || '',
-    qty: parseInt(r.qty) || 0,
-    unit: r.unit || '部',
-    exTax: parseInt(r.exTax) || 0,
-    grand: 0,
-    status: '制作中',
-    assignee: currentAuth?.userName || '',
-    memo: (r.memo || '') + (r.id ? '\n[リピート元: ' + r.id + ']' : ''),
-    steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
-    stepDates: {},
-    createdAt: new Date().toISOString(),
-    fromRepeatId: r.id || null
-  };
-  if(!DB.projects) DB.projects = [];
-  DB.projects.push(proj);
+// DDDDDD-2: 選択に応じて 受注案件(DB.projects) または 見積(DB.estimates) を作成
+function _doRepeatCreate_(mode){
+  var r = window._repeatChoiceRow_;
+  if(!r){ alert('対象が見つかりません'); return; }
+  var isEst = (mode === 'estimate');
+  var today = new Date().toISOString().slice(0,10);
+  var createdId = '';
+
+  if(isEst){
+    // 見積へのリピート → DB.estimates に登録 (案件管理の「🔵見積中」に表示)
+    DB.estimates = DB.estimates || [];
+    createdId = 'EST-' + Date.now();
+    DB.estimates.push({
+      id: createdId,
+      companyId: currentAuth?.companyId || 'COMP001',
+      companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+      cust: r.cust || '', item: r.item || '', spec: r.spec || '',
+      qty: parseInt(r.qty) || 0, unit: r.unit || '部', exTax: parseInt(r.exTax) || 0,
+      status: '見積中',
+      source: 'repeat',
+      createdAt: new Date().toISOString(),
+      createdBy: currentAuth?.userName || '',
+      memo: (r.memo || '') + (r.id ? '\n[リピート元: ' + r.id + ']' : ''),
+      fromRepeatId: r.id || null
+    });
+    if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('create', 'estimate:' + createdId, 'リピート見積: ' + (r.cust||'') + '/' + (r.item||'')); } catch(e){}
+  } else {
+    // 受注へのリピート → DB.projects に登録 (従来動作)
+    if(!DB.projects) DB.projects = [];
+    createdId = (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now());
+    DB.projects.push({
+      id: createdId,
+      companyId: currentAuth?.companyId || 'COMP001',
+      companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+      orderDate: today,
+      dueDate: '',
+      cust: r.cust || '', item: r.item || '', spec: r.spec || '',
+      qty: parseInt(r.qty) || 0, unit: r.unit || '部', exTax: parseInt(r.exTax) || 0,
+      grand: 0,
+      status: '制作中',
+      assignee: currentAuth?.userName || '',
+      memo: (r.memo || '') + (r.id ? '\n[リピート元: ' + r.id + ']' : ''),
+      steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
+      stepDates: {},
+      createdAt: new Date().toISOString(),
+      fromRepeatId: r.id || null
+    });
+    if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('create', 'project:' + createdId, 'リピート受注: ' + (r.cust||'') + '/' + (r.item||'')); } catch(e){}
+  }
+
   if(typeof saveDB === 'function') saveDB();
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
-  if(typeof renderProjects === 'function') renderProjects();
-  document.querySelector('.proof-modal')?.remove();
-  alert('✅ 案件 ' + proj.id + ' をリピート登録しました');
+
+  // モーダルを全部閉じる (選択モーダル + リストモーダル)
+  document.querySelectorAll('.proof-modal').forEach(function(x){ x.remove(); });
+  window._repeatChoiceRow_ = null;
+
+  // 案件管理を開き、該当ステージ(見積中 or 受注・進行中)に切り替えて表示
+  try {
+    if(typeof swPage === 'function'){
+      var pbtn = document.querySelector('.tb-btn[data-page="project"]');
+      swPage('project', pbtn || null);
+    }
+    var stageKey = isEst ? 'quote' : 'active';
+    setTimeout(function(){
+      var stab = document.querySelector('#proj-stage-tabs button[data-stage="' + stageKey + '"]');
+      if(stab){ stab.click(); }
+      else if(typeof setProjStage === 'function'){ setProjStage(stageKey); }
+      else if(typeof renderProjects === 'function'){ renderProjects(); }
+    }, 80);
+  } catch(e){ if(typeof renderProjects === 'function') renderProjects(); }
+
+  alert('✅ ' + (isEst ? '見積 (見積中) ' + createdId : '受注案件 (制作中) ' + createdId) + ' をリピート登録しました');
 }
 
 // ─────────────────────────────────────────────────────
