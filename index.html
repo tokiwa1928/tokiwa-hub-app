@@ -226,13 +226,10 @@ body{font-family:'Hiragino Kaku Gothic ProN','Meiryo',sans-serif;font-size:13px;
 .tb-btn[draggable=true]{cursor:grab}
 .tb-btn[draggable=true]:active{cursor:grabbing}
 /* リアルタイムウィジェットの D&D */
-.rt-widget{cursor:default;resize:both;overflow:auto;min-width:200px;min-height:80px;box-sizing:border-box}
+.rt-widget{cursor:default;overflow:hidden;box-sizing:border-box;position:relative}
 .rt-widget-handle{cursor:grab !important}
 .rt-widget-handle:active{cursor:grabbing !important}
 .rt-widget:hover .rt-widget-handle span{color:#7c3aed !important}
-/* リサイズハンドルをわかりやすく */
-.rt-widget::after{content:'⤡';position:absolute;bottom:3px;right:5px;font-size:11px;color:#ccc;pointer-events:none;line-height:1}
-.rt-widget{position:relative}
 .tb-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-shrink:0;padding-left:8px;align-self:center}
 .tb-icon-btn{padding:4px 10px;border:1px solid rgba(255,255,255,.3);border-radius:5px;background:transparent;color:rgba(255,255,255,.7);font-size:12px;cursor:pointer;font-family:inherit}
 .tb-icon-btn:hover{color:#fff;border-color:#fff}
@@ -21044,6 +21041,52 @@ var DEFAULT_WIDGETS = [
 var _rtCharts = {};
 var _rtRefreshTimer = null;
 
+// LLLLLL-1: ウィジェットサイズ管理 (重なりなし・Grid自動再配置)
+// sizes: { wId: { cols: 1|2, height: 'S'|'M'|'L'|'XL' } }
+function _getWidgetSizes_(){ try{ return JSON.parse(localStorage.getItem('rt_widget_sizes')||'{}'); }catch(e){ return {}; } }
+function _saveWidgetSize_(wId, key, val){
+  var s=_getWidgetSizes_(); if(!s[wId]) s[wId]={};
+  s[wId][key]=val; try{ localStorage.setItem('rt_widget_sizes',JSON.stringify(s)); }catch(e){}
+}
+function _widgetHeightPx_(h){ return {S:'80px',M:'180px',L:'320px',XL:'480px'}[h]||'180px'; }
+function _applyWidgetSize_(wId){
+  var s=_getWidgetSizes_()[wId]||{};
+  var el=document.querySelector('.rt-widget[data-widget="'+wId+'"]');
+  if(!el) return;
+  var cols=s.cols||1;
+  var w=WIDGET_CATALOG[wId]; var defaultCols=(w&&w.size==='small')?1:2;
+  el.style.gridColumn='span '+Math.max(cols,1);
+  var contentEl=document.getElementById('rt-widget-content-'+wId);
+  if(contentEl){
+    var h=s.height||(w&&w.category==='チャート'?'M':'M');
+    contentEl.style.height=_widgetHeightPx_(h);
+    contentEl.style.overflow='auto';
+    contentEl.style.minHeight='40px';
+  }
+}
+function setWidgetCols(wId, cols){
+  _saveWidgetSize_(wId,'cols',cols);
+  var el=document.querySelector('.rt-widget[data-widget="'+wId+'"]');
+  if(el) el.style.gridColumn='span '+cols;
+  // ボタン状態更新
+  document.querySelectorAll('.wsize-cols[data-wid="'+wId+'"]').forEach(function(b){
+    b.style.background=b.dataset.val==cols?'#7c3aed':'#f3f4f6';
+    b.style.color=b.dataset.val==cols?'#fff':'#666';
+  });
+}
+function setWidgetHeight(wId, h){
+  _saveWidgetSize_(wId,'height',h);
+  var contentEl=document.getElementById('rt-widget-content-'+wId);
+  if(contentEl){ contentEl.style.height=_widgetHeightPx_(h); contentEl.style.overflow='auto'; }
+  // Chart.js の場合は再描画
+  var w=WIDGET_CATALOG[wId]; if(w&&w.category==='チャート') _renderWidget_(wId);
+  // ボタン状態更新
+  document.querySelectorAll('.wsize-h[data-wid="'+wId+'"]').forEach(function(b){
+    b.style.background=b.dataset.val===h?'#0891b2':'#f3f4f6';
+    b.style.color=b.dataset.val===h?'#fff':'#666';
+  });
+}
+
 function _getEnabledWidgets_(){
   var list;
   try {
@@ -21270,14 +21313,29 @@ function renderRealtimeView(){
   var html = enabled.map(function(wId){
     var w = WIDGET_CATALOG[wId];
     if(!w) return '';
-    // span 2 だがグリッドの最大列数を超えないよう min(2,全体) で制御
-    var span = w.size === 'small' ? '' : 'grid-column:span 2;min-width:0';
-    return '<div class="rt-widget" data-widget="' + wId + '" draggable="true" style="background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px;overflow:hidden;' + span + ';transition:box-shadow .15s,transform .15s">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;cursor:grab" class="rt-widget-handle" title="ドラッグで並び替え">' +
-        '<div style="font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:6px"><span style="color:#aaa">⋮⋮</span>' + w.label + '</div>' +
-        '<button onclick="event.stopPropagation();removeWidget(\'' + wId + '\')" style="font-size:11px;border:none;background:none;color:#aaa;cursor:pointer" title="削除">×</button>' +
+    // サイズ設定を読み込む
+    var _wss = _getWidgetSizes_()[wId]||{};
+    var _cols = _wss.cols || (w.size === 'small' ? 1 : 2);
+    var _h    = _wss.height || 'M';
+    var _hpx  = _widgetHeightPx_(_h);
+    var span  = 'grid-column:span ' + _cols;
+    // 幅・高さのサイズボタン生成
+    var _colBtns = [1,2].map(function(c){
+      var act=c===_cols; return '<button class="wsize-cols" data-wid="'+wId+'" data-val="'+c+'" onclick="event.stopPropagation();setWidgetCols(\''+wId+'\','+c+')" style="font-size:9px;padding:1px 5px;border:1px solid #e2e8f0;border-radius:3px;cursor:pointer;background:'+(act?'#7c3aed':'#f3f4f6')+';color:'+(act?'#fff':'#666')+'" title="幅'+(c===1?'通常':'横広')+'">'+(c===1?'□':'⬜⬜')+'</button>';
+    }).join('');
+    var _hBtns = ['S','M','L','XL'].map(function(hv){
+      var act=hv===_h; var lbl={S:'S',M:'M',L:'L',XL:'XL'}[hv];
+      return '<button class="wsize-h" data-wid="'+wId+'" data-val="'+hv+'" onclick="event.stopPropagation();setWidgetHeight(\''+wId+'\',\''+hv+'\')" style="font-size:9px;padding:1px 5px;border:1px solid #e2e8f0;border-radius:3px;cursor:pointer;background:'+(act?'#0891b2':'#f3f4f6')+';color:'+(act?'#fff':'#666')+'">'+lbl+'</button>';
+    }).join('');
+    return '<div class="rt-widget" data-widget="' + wId + '" draggable="true" style="background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px;overflow:hidden;' + span + ';transition:box-shadow .15s">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;cursor:grab;gap:4px" class="rt-widget-handle" title="ドラッグで並び替え">' +
+        '<div style="font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:6px;flex:1;min-width:0"><span style="color:#aaa;flex-shrink:0">⋮⋮</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + w.label + '</span></div>' +
+        '<div style="display:flex;gap:2px;align-items:center;flex-shrink:0">' +
+          _colBtns + '<span style="color:#ddd;margin:0 2px">|</span>' + _hBtns +
+          '<button onclick="event.stopPropagation();removeWidget(\'' + wId + '\')" style="font-size:11px;border:none;background:none;color:#aaa;cursor:pointer;margin-left:2px" title="削除">×</button>' +
+        '</div>' +
       '</div>' +
-      '<div id="rt-widget-content-' + wId + '" style="' + (w.category === 'チャート' ? 'height:180px;position:relative' : '') + ';min-width:0;word-break:break-word;overflow:auto"></div>' +
+      '<div id="rt-widget-content-' + wId + '" style="height:' + _hpx + ';overflow:auto;min-width:0;word-break:break-word"></div>' +
     '</div>';
   }).join('');
 
