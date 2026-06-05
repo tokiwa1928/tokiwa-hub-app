@@ -16108,26 +16108,33 @@ function _doRepeatCreate_(mode){
   if(typeof saveDB === 'function') saveDB();
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
 
-  // モーダルを全部閉じる (選択モーダル + リストモーダル)
+  // モーダルを全部閉じる
   document.querySelectorAll('.proof-modal').forEach(function(x){ x.remove(); });
   window._repeatChoiceRow_ = null;
 
-  // 案件管理を開き、該当ステージ(見積中 or 受注・進行中)に切り替えて表示
-  try {
-    if(typeof swPage === 'function'){
+  // IIIIII-1: リピート後は一度編集画面を開いて内容確認→保存を促す
+  var kindLabel = isEst ? '見積書' : '受注案件';
+  var numLabel = isEst ? '見積書番号: ' : '受注番号: ';
+  if(isEst){
+    // 見積書タブで編集モードとして開く
+    alert('✅ リピート' + kindLabel + 'を作成しました\n\n' + numLabel + createdId + '\n\n内容を確認・修正してから「見積中で保存」ボタンで確定してください。');
+    if(typeof editEstimateInTab === 'function') editEstimateInTab(createdId);
+  } else {
+    // 受注案件の詳細を開く
+    alert('✅ リピート' + kindLabel + 'を作成しました\n\n' + numLabel + createdId + '\n\n内容を確認・修正してから保存してください。');
+    try {
       var pbtn = document.querySelector('.tb-btn[data-page="project"]');
-      swPage('project', pbtn || null);
-    }
-    var stageKey = isEst ? 'quote' : 'orders';
-    setTimeout(function(){
-      var stab = document.querySelector('#proj-stage-tabs button[data-stage="' + stageKey + '"]');
-      if(stab){ stab.click(); }
-      else if(typeof setProjStage === 'function'){ setProjStage(stageKey); }
-      else if(typeof renderProjects === 'function'){ renderProjects(); }
-    }, 80);
-  } catch(e){ if(typeof renderProjects === 'function') renderProjects(); }
-
-  alert('✅ ' + (isEst ? '見積 (見積中) ' + createdId : '受注案件 (データ作成中) ' + createdId) + ' をリピート登録しました');
+      if(typeof swPage === 'function') swPage('project', pbtn || null);
+      setTimeout(function(){
+        if(typeof setProjStage === 'function') setProjStage('orders');
+        // 該当行を展開する
+        setTimeout(function(){
+          var oi = (DB.projects||[]).findIndex(function(p){return p.id===createdId;});
+          if(oi>=0 && typeof toggleProjAcc === 'function') toggleProjAcc(oi, {stopPropagation:function(){}});
+        }, 200);
+      }, 80);
+    } catch(e){ if(typeof renderProjects === 'function') renderProjects(); }
+  }
 }
 
 // ─────────────────────────────────────────────────────
@@ -25212,25 +25219,31 @@ function saveEstimateAsQuote(tabId){
   } catch(e){}
   if(!spec) spec = document.getElementById('prod-' + tabId)?.value || '';
 
-  var estId = 'EST-' + Date.now();
+  // IIIIII-1: 編集モード判定 (_editingEstId があれば既存を上書き、なければ新規)
   DB.estimates = DB.estimates || [];
-  DB.estimates.push({
+  var existingIdx = s._editingEstId ? DB.estimates.findIndex(function(e){ return e.id === s._editingEstId; }) : -1;
+  var isEdit = existingIdx >= 0;
+  var estId = isEdit ? s._editingEstId : ('EST-' + Date.now());
+  var estData = {
     id: estId,
     companyId: currentAuth?.companyId || 'COMP001',
     companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
     cust: cust, item: item, spec: spec, endUser: enduser,
     qty: qty, unit: unit, exTax: exTax,
     estCost: estCost,
-    status: 'sent',          // 見積中 (提出済)
+    status: isEdit ? (DB.estimates[existingIdx].status || 'sent') : 'sent',
     source: 'estimator',
-    createdAt: new Date().toISOString(),
-    createdBy: currentAuth?.userName || ''
-  });
+    createdAt: isEdit ? DB.estimates[existingIdx].createdAt : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    createdBy: isEdit ? DB.estimates[existingIdx].createdBy : (currentAuth?.userName || '')
+  };
+  if(isEdit){ DB.estimates[existingIdx] = estData; }
+  else { DB.estimates.push(estData); }
   if(typeof saveDB === 'function') saveDB();
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
-  if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('create', 'estimate:' + estId, '見積中で保存: ' + cust + '/' + item + ' ¥' + exTax.toLocaleString()); } catch(e){}
+  if(typeof _addAuditLog_ === 'function') try { _addAuditLog_(isEdit?'update':'create', 'estimate:' + estId, (isEdit?'見積編集':'見積中で保存') + ': ' + cust + '/' + item + ' ¥' + exTax.toLocaleString()); } catch(e){}
 
-  if(confirm('🔵 見積中として保存しました\n\n' + cust + ' / ' + item + '\n¥' + exTax.toLocaleString() + '\n\n案件管理の「見積中」で確認できます。\n\n別の仕様でもう1枚見積を作りますか? (このタブを複製)')){
+  if(confirm((isEdit ? '✏️ 見積書を更新しました' : '🔵 見積書として保存しました') + '\n\n📋 見積書番号: ' + estId + '\n得意先: ' + cust + ' / ' + item + '\n金額: ¥' + exTax.toLocaleString() + '\n\n案件管理の「見積書一覧」で確認できます。\n\n別の仕様でもう1枚見積を作りますか? (このタブを複製)')){
     // 別仕様で見積追加: 新規タブを作って同じ得意先・品名をプリフィル
     if(typeof addTab === 'function'){
       addTab();
@@ -26357,7 +26370,7 @@ function _convertEstimateToOrder_(estId){
   if(typeof saveToCloud==='function') try { saveToCloud(); } catch(ex){}
   if(typeof renderProjStageTabs==='function') renderProjStageTabs();
   setProjStage('orders');
-  alert('✅ 受注しました\n案件番号: ' + newId);
+  alert('✅ 受注確定しました\n\n📋 受注番号: ' + newId + '\n\n案件管理「受注案件一覧」で確認・編集できます。');
 }
 
 function _markEstimateLost_(estId){
