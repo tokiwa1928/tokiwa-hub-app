@@ -16886,7 +16886,7 @@ function _generateOutsourceSheet_(projectId){
       '<table class="info-table">' +
         '<tr><td class="label">品名</td><td>' + _escDiff(p.item || '') + '</td></tr>' +
         '<tr><td class="label">数量</td><td>' + (p.qty || 0).toLocaleString() + ' ' + (p.unit || '部') + '</td></tr>' +
-        '<tr><td class="label">仕様 (概要)</td><td style="white-space:pre-wrap">' + _escDiff(p.spec || '-') + '</td></tr>' +
+        '<tr><td class="label">仕様 (概要)</td><td>' + (p.spec ? ((typeof _specChipsHtml_==='function' ? _specChipsHtml_(p.spec,{big:true}) : '') + '<div style="margin-top:6px;padding-top:4px;border-top:1px dashed #e5e7eb;font-size:11px;color:#94a3b8;white-space:pre-wrap">' + _escDiff(p.spec) + '</div>') : '-') + '</td></tr>' +
         (scope ? '<tr><td class="label">外注内容</td><td style="font-weight:700">' + _escDiff(scope) + '</td></tr>' : '') +
         '<tr><td class="label">希望納期</td><td style="font-weight:700;color:#dc2626">' + (due || '-') + '</td></tr>' +
       '</table>' +
@@ -22786,7 +22786,7 @@ function showWorkInstructionView(projectId){
         ${project.spec ? `
           <div style="margin-bottom:12px">
             <div style="font-size:11px;font-weight:700;color:#888;letter-spacing:.05em;margin-bottom:4px">📝 仕様・規格</div>
-            <div style="background:#fff;border:1px solid #e0ddd6;padding:10px;border-radius:6px;font-size:13px;white-space:pre-wrap;line-height:1.6">${project.spec}</div>
+            <div style="background:#fff;border:1px solid #e0ddd6;padding:10px;border-radius:6px;line-height:1.8">${(typeof _specChipsHtml_==='function')?_specChipsHtml_(project.spec,{big:true}):`<span style="white-space:pre-wrap;font-size:13px">${project.spec}</span>`}<div style="margin-top:8px;padding-top:6px;border-top:1px dashed #e5e7eb;font-size:11px;color:#94a3b8;white-space:pre-wrap">${project.spec}</div></div>
           </div>` : ''}
 
         ${project.memo ? `
@@ -24564,6 +24564,38 @@ function _markPriceReviewed_(projId){
   var p=(DB.projects||[]).find(function(x){return x.id===projId;});
   if(p){ p._priceReviewedAt=new Date().toISOString().slice(0,10); if(typeof saveDB==='function') saveDB(); if(typeof renderProjects==='function') renderProjects(); }
 }
+// HHHHHH-3: 自由文の仕様を「サイズ/用紙/印刷/窓/加工」に分類 (ヒューリスティック)
+function _parseSpec_(spec){
+  var out={サイズ:[],用紙:[],印刷:[],窓:[],加工:[],その他:[]};
+  if(!spec) return out;
+  var paperNames=(((typeof DB!=='undefined'&&DB.master&&DB.master.paper)||[]).map(function(p){return p&&p.nm;}).filter(Boolean));
+  var finish=['貼り','アドヘア','糊','折り','折','PP','スジ','ミシン','穴','ナンバリング','製本','綴じ','無線','中綴','平綴','箔','エンボス','カット','断裁','ラミ','コーティング','トムソン','型抜き','圧着','ニス','UV','くるみ'];
+  var paperHint=['カラー','コート','上質','クラフト','グラシン','ケント','アート','マット','ヴァン','色上','再生','NPI','b7','sw','エコ','嵩高','書籍','微塗','道','メタル','パール','タック'];
+  String(spec).split(/[\s　]+/).forEach(function(tok){
+    if(!tok) return;
+    if(/^\d+[×xX]\d+(\+\d+)?$/.test(tok)){ out.サイズ.push(tok); return; }
+    if(tok.indexOf('窓')>=0){ out.窓.push(tok); return; }
+    if(/^\d+\/\d+/.test(tok) || /[(（][^)）]*(スミ|墨|特|色)[^)）]*[)）]/.test(tok) || /^\d+色/.test(tok)){ out.印刷.push(tok); return; }
+    if(finish.some(function(f){return tok.indexOf(f)>=0;})){ out.加工.push(tok); return; }
+    if(paperNames.some(function(p){return p && tok.indexOf(p)>=0;}) || paperHint.some(function(h){return tok.indexOf(h)>=0;})){ out.用紙.push(tok); return; }
+    out.その他.push(tok);
+  });
+  return out;
+}
+function _specChipsHtml_(spec, opts){
+  opts=opts||{};
+  if(!spec) return '<span style="color:#94a3b8;font-size:11px">(仕様未入力)</span>';
+  var p=_parseSpec_(spec);
+  var defs=[['サイズ','#0e7490'],['用紙','#15803d'],['印刷','#b45309'],['窓','#7c3aed'],['加工','#be185d'],['その他','#475569']];
+  var fs=opts.big?'13px':'11px';
+  var html=defs.map(function(d){
+    var k=d[0]; if(!p[k]||!p[k].length) return '';
+    return '<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:'+fs+';white-space:nowrap">'+
+      '<span style="background:'+d[1]+';color:#fff;border-radius:4px;padding:1px 6px;font-size:9px;font-weight:700;flex-shrink:0">'+k+'</span>'+
+      '<span style="color:#334155">'+p[k].join(' / ')+'</span></span>';
+  }).join('');
+  return html || ('<span style="color:#475569;font-size:'+fs+'">'+spec+'</span>');
+}
 
 const PROC_OPTIONS_HTML={
   版下:['─','未着手','進行中','完了'],
@@ -26047,7 +26079,7 @@ function renderProjects(){
       </td>
       <td onclick="event.stopPropagation()">
         <div style="font-size:12px;font-weight:600">${r.item||''}</div>
-        ${r.spec?`<div style="font-size:10px;color:#888;margin-top:1px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.spec}">${r.spec}</div>`:''}
+        ${r.spec?`<div style="margin-top:2px;max-width:320px;line-height:1.6" title="${r.spec}">${(typeof _specChipsHtml_==='function')?_specChipsHtml_(r.spec):r.spec}</div>`:''}
       </td>
       <td class="r" style="font-size:12px;white-space:nowrap">${r.exTax>0?fmt(r.exTax) + (r.qty>0?' <span style="color:#94a3b8;font-size:10px;font-weight:400">@'+fmt(Math.round(r.exTax/r.qty))+'</span>':''):''}</td>
       <td class="r" style="font-size:11px;white-space:nowrap;color:#92400e">${outsourceTotal>0?fmt(outsourceTotal):'-'}</td>
