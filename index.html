@@ -16813,9 +16813,11 @@ function showOutsourceSpecSheet(projectId){
           '<label style="font-weight:700;align-self:start">特記事項</label>' +
           '<textarea id="out-spec-note" rows="3" placeholder="外注先への指示・注意点等" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:inherit"></textarea>' +
         '</div>' +
-        '<div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px">' +
+        '<div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">' +
           '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
-          '<button class="btn btn-p" style="background:#7c2d12;border-color:#7c2d12" onclick="_generateOutsourceSheet_(\'' + projectId + '\')">📄 書き出し (印刷プレビュー)</button>' +
+          '<button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2" onclick="_sendOutsourceSheetAsEmail_(\'' + projectId + '\')" title="仕様書の内容をメール本文に入れて送信画面を開く">📧 メールで送る</button>' +
+          '<button class="btn" style="background:#059669;color:#fff;border-color:#059669" onclick="_copyOutsourceSheetText_(\'' + projectId + '\')" title="仕様書のテキストをクリップボードにコピー（メール本文に貼付け可）">📋 テキストをコピー</button>' +
+          '<button class="btn btn-p" style="background:#7c2d12;border-color:#7c2d12" onclick="_generateOutsourceSheet_(\'' + projectId + '\')">📄 書き出し (印刷・PDF)</button>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -16915,6 +16917,78 @@ function _generateOutsourceSheet_(projectId){
   if(typeof _addAuditLog_ === 'function'){
     _addAuditLog_('export', 'project:' + p.id, '外注用仕様書を書き出し: ' + vendor + (scope ? ' / ' + scope : ''));
   }
+}
+
+// KKKKKK-1: 外注仕様書の共通テキスト生成ヘルパー
+function _buildOutsourceSheetText_(projectId){
+  var p = (DB.projects||[]).find(function(x){ return x.id===projectId; });
+  if(!p) return null;
+  var vendor  = document.getElementById('out-spec-vendor')?.value?.trim() || '';
+  var scope   = document.getElementById('out-spec-scope')?.value?.trim() || '';
+  var due     = document.getElementById('out-spec-due')?.value || '';
+  var note    = document.getElementById('out-spec-note')?.value?.trim() || '';
+  var ourComp = (typeof currentAuth !== 'undefined' && currentAuth?.companyName) || (DB.conf&&DB.conf.name) || 'トキワ印刷';
+  var sections = Array.from(document.querySelectorAll('.out-spec-section')).filter(function(c){return c.checked;}).map(function(c){return c.value;});
+  var specChips = (typeof _specChipsHtml_==='function') ? '' : '';
+  var lines = [];
+  lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  lines.push('外注仕様書');
+  lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  if(vendor)     lines.push('外注先: ' + vendor);
+  lines.push('発行元: ' + ourComp);
+  lines.push('案件番号: ' + (p.id||''));
+  lines.push('');
+  lines.push('【品名・仕様】');
+  lines.push('品名: ' + (p.item||''));
+  if(sections.includes('spec') && p.spec) lines.push('仕様: ' + p.spec);
+  if(sections.includes('qty'))  lines.push('数量: ' + ((p.qty||0).toLocaleString()) + (p.unit||'部'));
+  if(sections.includes('due')&&due)   lines.push('希望納期: ' + due);
+  if(scope)      lines.push('外注範囲: ' + scope);
+  if(note)       { lines.push(''); lines.push('【特記事項・指示】'); lines.push(note); }
+  lines.push('');
+  lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  return { text: lines.join('\n'), p: p, vendor: vendor };
+}
+
+// メール本文として問い合わせ管理経由で送信
+function _sendOutsourceSheetAsEmail_(projectId){
+  var d = _buildOutsourceSheetText_(projectId);
+  if(!d){ alert('案件が見つかりません'); return; }
+  // 問い合わせ管理の新規送信モーダルを開く（本文プリセット）
+  window._outsourceDraftBody_ = d.text;
+  window._outsourceDraftSubject_ = '外注仕様書 ' + d.p.id + ' ' + (d.p.item||'');
+  window._outsourceDraftTo_ = d.vendor;
+  // 新規外部送信として開く
+  if(typeof showNewInquiryModal === 'function'){
+    document.querySelector('.proof-modal')?.remove();
+    showNewInquiryModal('gmail');
+    setTimeout(function(){
+      var subEl = document.getElementById('new-inq-subject'); if(subEl) subEl.value = window._outsourceDraftSubject_||'';
+      var bodyEl = document.getElementById('new-inq-body');   if(bodyEl) bodyEl.value = window._outsourceDraftBody_||'';
+      var toEl   = document.getElementById('new-inq-to');     if(toEl)   toEl.value  = window._outsourceDraftTo_||'';
+    }, 300);
+  } else {
+    // フォールバック: mailto: で開く
+    var mailto = 'mailto:' + encodeURIComponent(d.vendor) +
+      '?subject=' + encodeURIComponent(window._outsourceDraftSubject_||'') +
+      '&body='    + encodeURIComponent(d.text);
+    window.open(mailto);
+  }
+}
+
+// テキストをクリップボードにコピー
+function _copyOutsourceSheetText_(projectId){
+  var d = _buildOutsourceSheetText_(projectId);
+  if(!d){ alert('案件が見つかりません'); return; }
+  navigator.clipboard.writeText(d.text).then(function(){
+    alert('✅ 仕様書テキストをクリップボードにコピーしました\n\nメール本文に貼り付けてご利用ください。');
+  }).catch(function(){
+    // fallback
+    var ta = document.createElement('textarea');
+    ta.value = d.text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    alert('✅ コピーしました（メール本文に貼り付けてください）');
+  });
 }
 
 // ─────────────────────────────────────────────────────
@@ -31375,7 +31449,7 @@ var SOURCE_TYPE_META = {
   phone:        { label: '電話',        icon: '📞', color: '#0891b2', bg: '#cffafe' },
   manual:       { label: '手動',        icon: '✏️', color: '#6b7280', bg: '#f3f4f6' },
   internal_msg: { label: '社内連絡',     icon: '🏢', color: '#92400e', bg: '#fef3c7' },
-  interco:      { label: '社間依頼',     icon: '🔄', color: '#0e7490', bg: '#cffafe' },
+  interco:      { label: '社間依頼',     icon: '🏭', color: '#7c3aed', bg: '#ede9fe' },
   voice_memo:   { label: '音声メモ',    icon: '🎤', color: '#be185d', bg: '#fce7f3' }
 };
 var KIND_LABELS = {
@@ -31798,6 +31872,19 @@ function _inqKanbanCard_(inq, col){
   var kind = inq.kind || '';
   var kindBadge = kind && kindLabels[kind] ? '<span style="background:' + (kindColors[kind]||'#6b7280') + ';color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700">' + kindLabels[kind] + '</span> ' : '';
 
+  // KKKKKK-2: 顧客区分バッジ (社間 / 直接お客様 / 社内 を色で明確に区別)
+  var isInterco    = inq.source_type === 'interco' || inq.kind === 'order';
+  var isInternal   = inq.source_type === 'internal_msg';
+  var custTypeBadge = '';
+  if(isInterco){
+    // 社間: 送信元グループ会社名を表示 (どこから来たか)
+    var fromCo = inq.from_company || inq.channel_company || inq.company || company || '';
+    custTypeBadge = '<span style="background:#7c3aed;color:#fff;font-size:9px;padding:2px 7px;border-radius:4px;font-weight:700;white-space:nowrap">🏭 社間' + (fromCo?' / '+_escDiff(fromCo):'') + '</span> ';
+  } else if(isInternal){
+    custTypeBadge = '<span style="background:#92400e;color:#fff;font-size:9px;padding:2px 7px;border-radius:4px;font-weight:700">🏢 社内</span> ';
+  } else {
+    custTypeBadge = '<span style="background:#065f46;color:#fff;font-size:9px;padding:2px 7px;border-radius:4px;font-weight:700">👤 直接客</span> ';
+  }
   // 受信元バッジ (チャネル) — 色付き
   var srcBadge = '<span style="background:' + (srcMeta.bg||'#f3f4f6') + ';color:' + (srcMeta.color||'#6b7280') + ';font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700">' + (srcMeta.icon||'') + ' ' + _escDiff(srcMeta.label||'') + '</span>';
 
@@ -31821,8 +31908,8 @@ function _inqKanbanCard_(inq, col){
     'onclick="if(typeof openInquiryDetail===\'function\')openInquiryDetail(\'' + _escAttr_(inq.id) + '\')" ' +
     'style="background:#fff;border:1px solid #e5e7eb;border-left:5px solid ' + accent + ';border-radius:6px;padding:8px 10px;cursor:grab;box-shadow:0 1px 3px rgba(0,0,0,.08)" ' +
     'title="ドラッグで列を移動 / クリックで詳細">' +
-    // 上段: 種別・滞留・緊急 バッジ
-    ((kindBadge||stale||prio) ? '<div style="margin-bottom:4px">' + prio + stale + kindBadge + '</div>' : '') +
+    // 上段: 顧客区分（社間/直接客/社内）+ 種別・滞留・緊急 バッジ
+    '<div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px">' + custTypeBadge + prio + stale + kindBadge + '</div>' +
     // 件名
     '<div style="font-size:12px;font-weight:700;color:#1a1a1a;line-height:1.3;margin-bottom:3px">' + _escDiff(subj.slice(0,44)) + '</div>' +
     // 送信元 (会社 + 名前)
@@ -32039,6 +32126,17 @@ function renderInquiryList() {
         else if(linkedEst.status === '提出済') chips.push('<span class="inq-chip est-submitted">📤提出済</span>');
         else chips.push('<span class="inq-chip est-progress">📝見積中</span>');
       }
+    }
+    // KKKKKK-2: 顧客区分チップ (社間=送信元会社名付き / 直接客 / 社内)
+    var _isInterco2  = inq.source_type === 'interco' || inq.kind === 'order';
+    var _isInternal2 = inq.source_type === 'internal_msg';
+    if(_isInterco2){
+      var _fromCo2 = inq.from_company || inq.channel_company || inq.company || '';
+      chips.push('<span style="background:#7c3aed;color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700;white-space:nowrap">🏭 社間' + (_fromCo2?' '+_escDiff(_fromCo2):'') + '</span>');
+    } else if(_isInternal2){
+      chips.push('<span style="background:#92400e;color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700">🏢 社内</span>');
+    } else {
+      chips.push('<span style="background:#065f46;color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700">👤 直接客</span>');
     }
     // AI抽出
     if(inq.extracted_data) chips.push('<span class="inq-chip ai">🤖AI</span>');
