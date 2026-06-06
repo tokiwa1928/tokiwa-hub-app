@@ -2163,6 +2163,19 @@ setTimeout(_removeBootLoader_, 5000);
           <input type="date" id="pdm-stepdate-納品" style="margin-top:3px;font-size:11px"></div>
       </div>
     </div>
+    <!-- PPPPPP-9: 案件スケジュール (校正・打合せ等の予定 → ホームのカレンダーに表示) -->
+    <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:7px;padding:.75rem">
+      <div style="font-size:10px;font-weight:700;color:#0f766e;letter-spacing:.1em;margin-bottom:.6rem">📅 スケジュール（校正・打合せ等の予定 → ホームのカレンダーに反映）</div>
+      <div id="pdm-sched-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:8px"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input type="date" id="pdm-sched-date" style="font-size:12px;padding:4px">
+        <select id="pdm-sched-type" style="font-size:12px;padding:4px">
+          <option>校正</option><option>打合せ</option><option>入稿</option><option>確認</option><option>その他</option>
+        </select>
+        <input type="text" id="pdm-sched-label" placeholder="内容 (例: 初校出し)" style="font-size:12px;padding:4px;flex:1;min-width:120px" onkeydown="if(event.key==='Enter'){event.preventDefault();_pdmAddSched_();}">
+        <button class="btn" type="button" onclick="_pdmAddSched_()" style="font-size:12px;background:#14b8a6;color:#fff;border-color:#14b8a6">＋ 追加</button>
+      </div>
+    </div>
     <div class="f"><label>備考・メモ</label><textarea id="pdm-memo" rows="2"></textarea></div>
     <div style="display:flex;justify-content:flex-end;gap:8px">
       <button class="btn" onclick="document.getElementById('proj-detail-modal').style.display='none'">キャンセル</button>
@@ -21773,7 +21786,9 @@ var CAL_SOURCES = [
   { key:'sample',   label:'サンプル', color:'#10b981' },
   { key:'catalog',  label:'カタログ', color:'#8b5cf6' },
   { key:'pickup',   label:'集荷',     color:'#0891b2' },
-  { key:'other',    label:'その他',   color:'#6b7280' }
+  { key:'other',    label:'その他',   color:'#6b7280' },
+  // PPPPPP-9: 案件内に登録したスケジュール (校正・打合せ等)
+  { key:'sched',    label:'案件予定', color:'#14b8a6' }
 ];
 var _CAL_TT_ALIAS = { proof_pickup:'proof' };
 var _uniCal = { y:new Date().getFullYear(), m:new Date().getMonth(), view:(localStorage.getItem('uni_cal_view')||'month'), weekOffset:0, dayOffset:0, filters:null };
@@ -21782,6 +21797,8 @@ function _uniCalFilters_(){
   if(_uniCal.filters) return _uniCal.filters;
   var saved=null; try{ saved=JSON.parse(localStorage.getItem('uni_cal_filters')||'null'); }catch(e){}
   _uniCal.filters = new Set(Array.isArray(saved)?saved:CAL_SOURCES.map(function(s){return s.key;}));
+  // PPPPPP-9: 新ソース 'sched'(案件予定) を既存ユーザーにも1度だけ有効化
+  try{ if(!localStorage.getItem('uni_cal_sched_v1')){ _uniCal.filters.add('sched'); localStorage.setItem('uni_cal_sched_v1','1'); _uniCalSaveFilters_(); } }catch(e){}
   return _uniCal.filters;
 }
 function _uniCalSaveFilters_(){ try{ localStorage.setItem('uni_cal_filters', JSON.stringify(Array.from(_uniCalFilters_()))); }catch(e){} }
@@ -21816,6 +21833,15 @@ function _uniCalEvents_(){
     var nm=(proj&&(proj.cust||proj.item))?((proj.cust||'').slice(0,5)+(proj.item?' '+proj.item.slice(0,5):'')):(d.title||d.note||t.label);
     add(String(d.date||'').slice(0,10), { key:tt, color:t.color, text:t.icon+nm, title:t.label+': '+nm, click:"_jumpToPage_('delivery')", done:(d.status==='done') });
   });
+  // PPPPPP-9: 案件内に登録したスケジュール (校正・打合せ等)
+  if(f.has('sched')){
+    (DB.projects||[]).forEach(function(p,pi){
+      (p.schedules||[]).forEach(function(s){
+        if(!s || !s.date) return;
+        add(String(s.date).slice(0,10), { key:'sched', color:'#14b8a6', text:'📅'+(s.type||'')+(s.label?' '+s.label:'')+(p.cust?' ('+p.cust.slice(0,4)+')':''), title:(s.type||'予定')+': '+(s.label||'')+' / '+(p.cust||''), click:'editProjDetail('+pi+')' });
+      });
+    });
+  }
   return byDate;
 }
 
@@ -27896,9 +27922,39 @@ function editProjDetail(oi){
     const di=document.getElementById(`pdm-stepdate-${step}`);
     if(di) di.value=r.stepDates?.[step]||'';
   });
+  // PPPPPP-9: スケジュール欄を初期化
+  _pdmSchedules = ((r.schedules||[])).map(function(s){ return { date:s.date||'', type:s.type||'その他', label:s.label||'' }; });
+  _pdmRenderSched_();
   modal.dataset.oi=oi;
   modal.style.display='flex';
 }
+
+// PPPPPP-9: 案件スケジュール編集 (一時状態 → 保存時に r.schedules へ)
+var _pdmSchedules = [];
+function _pdmRenderSched_(){
+  var box=document.getElementById('pdm-sched-list'); if(!box) return;
+  if(!_pdmSchedules.length){ box.innerHTML='<div style="font-size:11px;color:#94a3b8">予定はまだありません</div>'; return; }
+  _pdmSchedules.sort(function(a,b){ return String(a.date).localeCompare(String(b.date)); });
+  box.innerHTML=_pdmSchedules.map(function(s,i){
+    return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;background:#fff;border:1px solid #e5e7eb;border-radius:5px;padding:4px 8px">'+
+      '<span style="font-weight:700;color:#0f766e;white-space:nowrap">'+(s.date||'(日付未設定)')+'</span>'+
+      '<span style="background:#ccfbf1;color:#0f766e;border-radius:4px;padding:0 6px;font-size:11px;white-space:nowrap">'+_escDiff(s.type||'予定')+'</span>'+
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_escDiff(s.label||'')+'</span>'+
+      '<button type="button" onclick="_pdmRemoveSched_('+i+')" title="削除" style="border:none;background:none;color:#dc2626;cursor:pointer;font-size:15px;line-height:1">×</button>'+
+    '</div>';
+  }).join('');
+}
+function _pdmAddSched_(){
+  var dEl=document.getElementById('pdm-sched-date'), tEl=document.getElementById('pdm-sched-type'), lEl=document.getElementById('pdm-sched-label');
+  if(!dEl) return;
+  var d=dEl.value;
+  if(!d){ alert('日付を入力してください'); return; }
+  _pdmSchedules.push({ date:d, type:(tEl?tEl.value:'その他'), label:(lEl?lEl.value.trim():'') });
+  dEl.value=''; if(lEl) lEl.value='';
+  _pdmRenderSched_();
+}
+function _pdmRemoveSched_(i){ _pdmSchedules.splice(i,1); _pdmRenderSched_(); }
+
 function saveProjDetail(){
   const modal=document.getElementById('proj-detail-modal');
   const oi=parseInt(modal.dataset.oi);
@@ -27913,6 +27969,7 @@ function saveProjDetail(){
   r.dueDate=document.getElementById('pdm-due-date').value;
   r.assignee=document.getElementById('pdm-assignee').value;
   r.memo=document.getElementById('pdm-memo').value;
+  r.schedules=_pdmSchedules.slice(); // PPPPPP-9: 案件スケジュールを保存
   if(!r.steps)r.steps={};
   if(!r.stepDates)r.stepDates={};
   PROC_STEPS.forEach(step=>{
