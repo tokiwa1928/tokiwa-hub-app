@@ -21202,6 +21202,8 @@ var WIDGET_CATALOG = {
   kpi_month_gross_rate:{ label: '今月の粗利率', category: 'KPI', size: 'small' },
   // PPPPPP-1: 今週の納品
   kpi_week_delivery:   { label: '今週の納品', category: 'KPI', size: 'small' },
+  // PPPPPP-8: 統合スケジュールカレンダー (配送/納期/校正等をフィルタ表示)
+  cal_unified:         { label: '📅 スケジュールカレンダー', category: 'カレンダー', size: 'medium', defaultHeight: 'XL' },
   // グラフ系 (中)
   chart_monthly_sales:{ label: '月次売上 (棒)', category: 'チャート', size: 'medium' },
   chart_status:       { label: '案件ステータス分布', category: 'チャート', size: 'medium' },
@@ -21221,6 +21223,7 @@ var WIDGET_CATALOG = {
 var DEFAULT_WIDGETS_OPS = [   // 📋 日常業務タブ
   'kpi_pending_inq', 'kpi_today_delivery', 'kpi_week_delivery',
   'kpi_active_projects', 'kpi_due_soon', 'kpi_proofing_active',
+  'cal_unified',
   'list_recent_inquiries', 'list_due_soon', 'list_today_delivery', 'list_proofing_active'
 ];
 var DEFAULT_WIDGETS_MGMT = [  // 📊 経営数字タブ
@@ -21300,6 +21303,15 @@ function _getEnabledWidgets_(){
         if(list.indexOf('kpi_week_delivery') < 0){ list.splice(2, 0, 'kpi_week_delivery'); }
         localStorage.setItem('rt_widgets_week_del_v1','1');
         try { localStorage.setItem(key, JSON.stringify(list)); } catch(e2){}
+      }
+      // PPPPPP-8: 統合カレンダーを日常業務タブに1度だけ追加
+      if(!localStorage.getItem('rt_widgets_cal_v1')){
+        if(list.indexOf('cal_unified') < 0){
+          var _ci = list.indexOf('kpi_proofing_active');
+          list.splice(_ci >= 0 ? _ci + 1 : list.length, 0, 'cal_unified');
+        }
+        localStorage.setItem('rt_widgets_cal_v1','1');
+        try { localStorage.setItem(key, JSON.stringify(list)); } catch(e3){}
       }
     } catch(e){}
   }
@@ -21535,7 +21547,7 @@ function renderRealtimeView(){
     // サイズ設定を読み込む
     var _wss = _getWidgetSizes_()[wId]||{};
     var _cols = _wss.cols || (w.size === 'small' ? 1 : 2);
-    var _h    = _wss.height || 'M';
+    var _h    = _wss.height || (w && w.defaultHeight) || 'M';
     var _hpx  = _widgetHeightPx_(_h);
     var span  = 'grid-column:span ' + _cols;
     // 幅・高さのサイズボタン生成
@@ -21751,6 +21763,142 @@ function _setupAutoRefresh_(){
   }catch(e){}
 }
 
+// ══════════════════════════════════════════════════════════════
+// PPPPPP-8: 統合スケジュールカレンダー (配送/納期/校正等をフィルタ表示)
+// ══════════════════════════════════════════════════════════════
+var CAL_SOURCES = [
+  { key:'due',      label:'納期',     color:'#4f46e5' },
+  { key:'delivery', label:'納品',     color:'#3b82f6' },
+  { key:'proof',    label:'校正出し', color:'#f59e0b' },
+  { key:'sample',   label:'サンプル', color:'#10b981' },
+  { key:'catalog',  label:'カタログ', color:'#8b5cf6' },
+  { key:'pickup',   label:'集荷',     color:'#0891b2' },
+  { key:'other',    label:'その他',   color:'#6b7280' }
+];
+var _CAL_TT_ALIAS = { proof_pickup:'proof' };
+var _uniCal = { y:new Date().getFullYear(), m:new Date().getMonth(), view:(localStorage.getItem('uni_cal_view')||'month'), weekOffset:0, filters:null };
+
+function _uniCalFilters_(){
+  if(_uniCal.filters) return _uniCal.filters;
+  var saved=null; try{ saved=JSON.parse(localStorage.getItem('uni_cal_filters')||'null'); }catch(e){}
+  _uniCal.filters = new Set(Array.isArray(saved)?saved:CAL_SOURCES.map(function(s){return s.key;}));
+  return _uniCal.filters;
+}
+function _uniCalSaveFilters_(){ try{ localStorage.setItem('uni_cal_filters', JSON.stringify(Array.from(_uniCalFilters_()))); }catch(e){} }
+function _uniCalToggleFilter_(k){ var f=_uniCalFilters_(); if(f.has(k)) f.delete(k); else f.add(k); _uniCalSaveFilters_(); _uniCalRerender_(); }
+function _uniCalSetView_(v){ _uniCal.view=v; try{ localStorage.setItem('uni_cal_view',v); }catch(e){} _uniCalRerender_(); }
+function _uniCalNav_(delta){
+  if(_uniCal.view==='week'){ _uniCal.weekOffset=(_uniCal.weekOffset||0)+delta; }
+  else { _uniCal.m+=delta; if(_uniCal.m<0){_uniCal.m=11;_uniCal.y--;} if(_uniCal.m>11){_uniCal.m=0;_uniCal.y++;} }
+  _uniCalRerender_();
+}
+function _uniCalToday_(){ var n=new Date(); _uniCal.y=n.getFullYear(); _uniCal.m=n.getMonth(); _uniCal.weekOffset=0; _uniCalRerender_(); }
+function _uniCalRerender_(){ var el=document.getElementById('rt-widget-content-cal_unified'); if(el) _renderUnifiedCalInto_(el); }
+function _uniCalAttr_(s){ return String(s||'').replace(/"/g,'&quot;'); }
+
+function _uniCalEvents_(){
+  var f=_uniCalFilters_(); var byDate={};
+  function add(ds,ev){ if(!ds) return; (byDate[ds]=byDate[ds]||[]).push(ev); }
+  if(f.has('due')){
+    (DB.projects||[]).forEach(function(p){
+      if(!p.dueDate) return;
+      var done=(p.status==='納品済'||p.status==='完了');
+      add(String(p.dueDate).slice(0,10), { key:'due', color:'#4f46e5', text:'🎯'+(p.cust?p.cust.slice(0,6):'')+(p.item?' '+p.item.slice(0,7):''), title:(p.cust||'')+' / '+(p.item||'')+' 納期', click:'editProjDetail('+(DB.projects||[]).indexOf(p)+')', done:done });
+    });
+  }
+  (DB.deliveryItems||[]).forEach(function(d){
+    var tt=_CAL_TT_ALIAS[d.taskType]||d.taskType||'delivery';
+    if(!TASK_TYPES[tt]) tt='other';
+    if(!f.has(tt)) return;
+    var t=TASK_TYPES[tt];
+    var proj=(DB.projects||[]).find(function(p){return p.id===d.projectId;});
+    var nm=(proj&&(proj.cust||proj.item))?((proj.cust||'').slice(0,5)+(proj.item?' '+proj.item.slice(0,5):'')):(d.title||d.note||t.label);
+    add(String(d.date||'').slice(0,10), { key:tt, color:t.color, text:t.icon+nm, title:t.label+': '+nm, click:"_jumpToPage_('delivery')", done:(d.status==='done') });
+  });
+  return byDate;
+}
+
+function _uniCalHeaderHtml_(){
+  var f=_uniCalFilters_();
+  var title = _uniCal.view==='week'
+    ? ('今週'+((_uniCal.weekOffset||0)?(' '+(_uniCal.weekOffset>0?'+':'')+_uniCal.weekOffset):''))
+    : (_uniCal.y+'年'+(_uniCal.m+1)+'月');
+  var chips = CAL_SOURCES.map(function(s){
+    var on=f.has(s.key);
+    return '<button onclick="event.stopPropagation();_uniCalToggleFilter_(\''+s.key+'\')" style="font-size:10px;padding:1px 7px;border-radius:10px;border:1px solid '+s.color+';cursor:pointer;background:'+(on?s.color:'transparent')+';color:'+(on?'#fff':s.color)+'">'+s.label+'</button>';
+  }).join('');
+  return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;flex-wrap:wrap">'+
+    '<div style="display:flex;align-items:center;gap:4px">'+
+      '<button onclick="event.stopPropagation();_uniCalNav_(-1)" style="border:none;background:#f1f5f9;border-radius:5px;width:22px;height:22px;cursor:pointer">‹</button>'+
+      '<strong style="font-size:13px;min-width:88px;text-align:center">'+title+'</strong>'+
+      '<button onclick="event.stopPropagation();_uniCalNav_(1)" style="border:none;background:#f1f5f9;border-radius:5px;width:22px;height:22px;cursor:pointer">›</button>'+
+      '<button onclick="event.stopPropagation();_uniCalToday_()" style="border:1px solid #e2e8f0;background:#fff;border-radius:5px;font-size:10px;padding:2px 6px;cursor:pointer">今日</button>'+
+    '</div>'+
+    '<div style="display:flex;background:#f1f5f9;border-radius:6px;padding:2px">'+
+      '<button onclick="event.stopPropagation();_uniCalSetView_(\'week\')" style="font-size:10px;padding:2px 9px;border:none;border-radius:4px;cursor:pointer;font-weight:700;background:'+(_uniCal.view==='week'?'#fff':'transparent')+'">週</button>'+
+      '<button onclick="event.stopPropagation();_uniCalSetView_(\'month\')" style="font-size:10px;padding:2px 9px;border:none;border-radius:4px;cursor:pointer;font-weight:700;background:'+(_uniCal.view==='month'?'#fff':'transparent')+'">月</button>'+
+    '</div>'+
+    '<div style="display:flex;gap:3px;flex-wrap:wrap">'+chips+'</div>'+
+  '</div>';
+}
+
+function _uniCalMonthHtml_(byDate){
+  var y=_uniCal.y, m=_uniCal.m;
+  var today=new Date(); today.setHours(0,0,0,0);
+  var firstDay=new Date(y,m,1).getDay();
+  var dim=new Date(y,m+1,0).getDate();
+  var h='<table style="width:100%;border-collapse:collapse;table-layout:fixed"><thead><tr>'+
+    ['日','月','火','水','木','金','土'].map(function(d,i){ return '<th style="padding:2px;font-size:10px;color:'+(i===0?'#ef4444':i===6?'#3b82f6':'#64748b')+'">'+d+'</th>'; }).join('')+
+    '</tr></thead><tbody><tr>';
+  for(var i=0;i<firstDay;i++) h+='<td style="background:#fafaf9;border:1px solid #eee"></td>';
+  var dow=firstDay;
+  for(var day=1;day<=dim;day++){
+    var ds=y+'-'+String(m+1).padStart(2,'0')+'-'+String(day).padStart(2,'0');
+    var isToday=(today.getFullYear()===y&&today.getMonth()===m&&today.getDate()===day);
+    var evs=byDate[ds]||[];
+    h+='<td style="border:1px solid #eee;height:52px;vertical-align:top;padding:2px;background:'+(isToday?'#eff6ff':'#fff')+'">'+
+      '<div style="font-size:10px;font-weight:'+(isToday?'700':'400')+';color:'+(isToday?'#1e40af':dow===0?'#ef4444':dow===6?'#3b82f6':'#334155')+'">'+day+'</div>'+
+      evs.slice(0,3).map(function(ev){ return '<div onclick="event.stopPropagation();'+ev.click+'" title="'+_uniCalAttr_(ev.title)+'" style="background:'+ev.color+';color:#fff;border-radius:2px;padding:0 3px;font-size:9px;line-height:1.45;margin-top:1px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer'+(ev.done?';opacity:.6;text-decoration:line-through':'')+'">'+_escDiff(ev.text)+'</div>'; }).join('')+
+      (evs.length>3?'<div style="font-size:8px;color:#94a3b8">+'+(evs.length-3)+'</div>':'')+
+    '</td>';
+    dow=(dow+1)%7;
+    if(dow===0&&day<dim) h+='</tr><tr>';
+  }
+  var rem=dow===0?0:7-dow;
+  for(var r=0;r<rem;r++) h+='<td style="background:#fafaf9;border:1px solid #eee"></td>';
+  h+='</tr></tbody></table>';
+  return h;
+}
+
+function _uniCalWeekHtml_(byDate){
+  var base=new Date(); base.setHours(0,0,0,0); base.setDate(base.getDate()+((_uniCal.weekOffset||0)*7));
+  var dowB=base.getDay(); var mon=new Date(base); mon.setDate(base.getDate()-((dowB+6)%7));
+  var today=new Date(); today.setHours(0,0,0,0);
+  var wd=['日','月','火','水','木','金','土'];
+  var h='<div style="display:flex;flex-direction:column;gap:3px">';
+  for(var i=0;i<7;i++){
+    var d=new Date(mon); d.setDate(mon.getDate()+i);
+    var ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    var isToday=d.getTime()===today.getTime();
+    var evs=byDate[ds]||[];
+    h+='<div style="display:flex;gap:6px;align-items:flex-start;padding:3px 4px;border-radius:5px;background:'+(isToday?'#eff6ff':'#fafaf9')+'">'+
+      '<div style="min-width:46px;font-size:11px;font-weight:'+(isToday?'700':'500')+';color:'+(d.getDay()===0?'#ef4444':d.getDay()===6?'#3b82f6':'#334155')+'">'+(d.getMonth()+1)+'/'+d.getDate()+'('+wd[d.getDay()]+')</div>'+
+      '<div style="flex:1;display:flex;flex-wrap:wrap;gap:3px">'+
+        (evs.length?evs.map(function(ev){ return '<span onclick="event.stopPropagation();'+ev.click+'" title="'+_uniCalAttr_(ev.title)+'" style="background:'+ev.color+';color:#fff;border-radius:3px;padding:1px 6px;font-size:10px;cursor:pointer'+(ev.done?';opacity:.6;text-decoration:line-through':'')+'">'+_escDiff(ev.text)+'</span>'; }).join(''):'<span style="font-size:10px;color:#cbd5e1">—</span>')+
+      '</div>'+
+    '</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+function _renderUnifiedCalInto_(el){
+  if(!el) return;
+  var byDate=_uniCalEvents_();
+  el.innerHTML=_uniCalHeaderHtml_() + (_uniCal.view==='week'?_uniCalWeekHtml_(byDate):_uniCalMonthHtml_(byDate));
+}
+function _renderUnifiedCalWidget_(el){ _renderUnifiedCalInto_(el); }
+
 function _renderWidget_(wId){
   var contentEl = document.getElementById('rt-widget-content-' + wId);
   if(!contentEl) return;
@@ -21768,6 +21916,8 @@ function _renderWidget_(wId){
   if(wId === 'kpi_month_projects') return _renderKpiMonthProjects_(contentEl);
   if(wId === 'kpi_month_gross')    return _renderKpiMonthGross_(contentEl);
   if(wId === 'kpi_month_gross_rate')return _renderKpiMonthGrossRate_(contentEl);
+  // カレンダー系
+  if(wId === 'cal_unified')        return _renderUnifiedCalWidget_(contentEl);
   // チャート系
   if(wId === 'chart_monthly_sales')return _renderChartMonthlySales_(contentEl);
   if(wId === 'chart_status')       return _renderChartStatus_(contentEl);
@@ -26267,6 +26417,15 @@ function renderCalendar(){
     byDate[d].push(p);
   });
 
+  // PPPPPP-8: 配送タスクを日付でグループ化 (配送タブのカレンダーに配送日程を表示)
+  const delByDate={};
+  (DB.deliveryItems||[]).forEach(d=>{
+    if(!d.date) return;
+    const ds=String(d.date).slice(0,10);
+    if(!delByDate[ds]) delByDate[ds]=[];
+    delByDate[ds].push(d);
+  });
+
   const today=new Date(); today.setHours(0,0,0,0);
   const firstDay=new Date(y,m,1).getDay(); // 0=Sun
   const daysInMonth=new Date(y,m+1,0).getDate();
@@ -26293,6 +26452,14 @@ function renderCalendar(){
         const isPast=new Date(dateStr)<today&&!isDone;
         const bg=isDone?'#065f46':isPast?'#78350f':'#1e40af';
         return `<div onclick="editProjDetail(${(DB.projects||[]).indexOf(p)})" style="background:${bg};color:#fff;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-bottom:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${p.cust} / ${p.item}">${p.cust?p.cust.slice(0,8)+'…':''}${p.item?p.item.slice(0,10):''}</div>`;
+      }).join('')}
+      ${(delByDate[dateStr]||[]).map(d=>{
+        var tt=(_CAL_TT_ALIAS&&_CAL_TT_ALIAS[d.taskType])||d.taskType||'delivery';
+        var t=(typeof TASK_TYPES!=='undefined'&&TASK_TYPES[tt])?TASK_TYPES[tt]:{label:'納品',icon:'🚚',color:'#3b82f6'};
+        var proj=(DB.projects||[]).find(x=>x.id===d.projectId);
+        var nm=(proj&&(proj.cust||proj.item))?((proj.cust||'').slice(0,6)+(proj.item?' '+proj.item.slice(0,6):'')):(d.title||d.note||t.label);
+        var done=d.status==='done';
+        return `<div onclick="_jumpToPage_&&_jumpToPage_('delivery')" style="background:${t.color};color:#fff;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-bottom:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis${done?';opacity:.6;text-decoration:line-through':''}" title="${t.label}: ${String(nm).replace(/"/g,'&quot;')}">${t.icon}${nm}</div>`;
       }).join('')}
     </td>`;
 
