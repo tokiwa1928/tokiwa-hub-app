@@ -6453,8 +6453,9 @@ function buildPanel(id,initData){
   const todayStr=today();
   const div=document.createElement('div');div.id='tp-'+id;div.style.display='none';
   div.innerHTML=`
-<!-- QPPPP-2: 種別バナー (この画面は見積・受注 兼用) -->
+<!-- QPPPP-2 / PPPPPP-10: 種別バナー (この画面は見積・受注 兼用 / 新規・リピート共通) -->
 <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;margin-bottom:10px">
+  <div id="entry-reg-title-${id}" style="font-size:13px;font-weight:800;color:#1e40af;margin-bottom:8px">🆕 新規登録（見積・受注）</div>
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <span style="font-size:12px;font-weight:700;color:#334155">種別:</span>
     <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;background:#fff;border:2px solid #0891b2;color:#0e7490;padding:8px 16px;border-radius:10px;white-space:nowrap" id="kind-quote-lbl-${id}">
@@ -15888,13 +15889,22 @@ function startNewEntry(){
   document.body.appendChild(m);
 }
 
+// PPPPPP-10: 登録画面のタイトルを新規/リピートで切替
+function _setEntryRegTitle_(id){
+  var el = document.getElementById('entry-reg-title-' + id);
+  if(!el) return;
+  el.textContent = (window._entryRegMode_ === 'repeat') ? '🔁 リピート登録（見積・受注）' : '🆕 新規登録（見積・受注）';
+}
+
 function _startNewEstimate_(){
+  window._entryRegMode_ = 'new';
   // WPPPP-3: 新規登録タブ廃止後も動くよう、ボタン無しでも swPage('est') を呼ぶ
   var btn = document.querySelector('.tb-btn[data-page="est"]');
   if(typeof swPage === 'function') swPage('est', btn || null);
-  // 空の新規タブを開く
-  if(typeof addTab === 'function') addTab();
+  // 空の新規タブを開く (addTab の戻り値でタブidを確実に取得)
+  var _newTid = (typeof addTab === 'function') ? addTab() : null;
   setTimeout(function(){
+    if(_newTid) _setEntryRegTitle_(_newTid);
     // 案内 (初回のみ表示。うるさくないよう localStorage で制御)
     try {
       if(!localStorage.getItem('tokiwa_newentry_hint_shown')){
@@ -15902,26 +15912,26 @@ function _startNewEstimate_(){
         alert('📝 新規登録 (見積作成)\n\n・得意先・品名を入れて、品目を選ぶと入力欄が出ます\n・見積だけの時は「採用単価」に概算金額を入れるだけでOK (用紙・印刷の積算は任意)\n・下部の「🔵見積書として保存」または「🟢受注案件として登録」で確定\n\n※ 全項目の入力は不要です');
       }
     } catch(e){}
-    var c = document.querySelector('.tab-btn.act')?.dataset?.tab;
-    if(c){ var el = document.getElementById('cust-'+c); if(el) el.focus(); }
+    if(_newTid){ var el = document.getElementById('cust-'+_newTid); if(el) el.focus(); }
   }, 250);
 }
 
 // MMMMMM-1: 新規登録 → 受注案件として登録 = 同じ詳細フォームを開き受注ラジオを自動選択
 function _startNewOrder_(){
+  window._entryRegMode_ = 'new';
   // 見積作成タブを開く（見積と同じ詳細フォーム）
   var btn = document.querySelector('.tb-btn[data-page="est"]');
   if(typeof swPage === 'function') swPage('est', btn || null);
-  if(typeof addTab === 'function') addTab();
+  var _newTid = (typeof addTab === 'function') ? addTab() : null;
   // 少し待ってから受注ラジオを自動選択
   setTimeout(function(){
-    var activeTabId = document.querySelector('.tab-btn.act')?.dataset?.tab;
-    if(!activeTabId) return;
-    var orderRadio = document.querySelector('input[name="entry-kind-' + activeTabId + '"][value="order"]');
+    if(!_newTid) return;
+    var orderRadio = document.querySelector('input[name="entry-kind-' + _newTid + '"][value="order"]');
     if(orderRadio){
       orderRadio.checked = true;
-      if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(activeTabId);
+      if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid);
     }
+    _setEntryRegTitle_(_newTid);
   }, 300);
 }
 
@@ -16256,84 +16266,36 @@ function _showRepeatChoiceInline_(r){
 function _doRepeatCreate_(mode){
   var r = window._repeatChoiceRow_;
   if(!r){ alert('対象が見つかりません'); return; }
-  var isEst = (mode === 'estimate');
-  var today = new Date().toISOString().slice(0,10);
-  var createdId = '';
-
-  if(isEst){
-    // 見積へのリピート → DB.estimates に登録 (案件管理の「🔵見積中」に表示)
-    DB.estimates = DB.estimates || [];
-    createdId = 'EST-' + Date.now();
-    DB.estimates.push({
-      id: createdId,
-      companyId: currentAuth?.companyId || 'COMP001',
-      companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
-      cust: r.cust || '', item: r.item || '', spec: r.spec || '',
-      qty: parseInt(r.qty) || 0, unit: r.unit || '部', exTax: parseInt(r.exTax) || 0,
-      status: '見積中',
-      source: 'repeat',
-      createdAt: new Date().toISOString(),
-      createdBy: currentAuth?.userName || '',
-      memo: (r.memo || '') + (r.id ? '\n[リピート元: ' + r.id + ']' : ''),
-      fromRepeatId: r.id || null
-    });
-    if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('create', 'estimate:' + createdId, 'リピート見積: ' + (r.cust||'') + '/' + (r.item||'')); } catch(e){}
-  } else {
-    // 受注へのリピート → DB.projects に登録 (従来動作)
-    if(!DB.projects) DB.projects = [];
-    createdId = (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now());
-    DB.projects.push({
-      id: createdId,
-      companyId: currentAuth?.companyId || 'COMP001',
-      companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
-      orderDate: today,
-      dueDate: '',
-      cust: r.cust || '', item: r.item || '', spec: r.spec || '',
-      qty: parseInt(r.qty) || 0, unit: r.unit || '部', exTax: parseInt(r.exTax) || 0,
-      grand: 0,
-      status: 'データ作成中',
-      assignee: currentAuth?.userName || '',
-      memo: (r.memo || '') + (r.id ? '\n[リピート元: ' + r.id + ']' : ''),
-      steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
-      stepDates: {},
-      createdAt: new Date().toISOString(),
-      fromRepeatId: r.id || null
-    });
-    if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('create', 'project:' + createdId, 'リピート受注: ' + (r.cust||'') + '/' + (r.item||'')); } catch(e){}
-  }
-
-  if(typeof saveDB === 'function') saveDB();
-  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
-
-  // リピートモーダルを閉じる + インライン選択パネルをリセット
+  // PPPPPP-10: リピートも新規と同じ登録画面(見積作成タブ)をプリフィルして開く
+  //   直接レコードを作らず、種別を引き継いで est 画面を開き、ユーザーが確認→確定する。
   document.querySelectorAll('.proof-modal').forEach(function(x){ x.remove(); });
   var choicePanel = document.getElementById('repeat-inline-choice');
   if(choicePanel) choicePanel.innerHTML = '';
-  window._repeatChoiceRow_ = null;
 
-  // IIIIII-1: リピート後は一度編集画面を開いて内容確認→保存を促す
-  var kindLabel = isEst ? '見積書' : '受注案件';
-  var numLabel = isEst ? '見積書番号: ' : '受注番号: ';
-  if(isEst){
-    // 見積書タブで編集モードとして開く
-    alert('✅ リピート' + kindLabel + 'を作成しました\n\n' + numLabel + createdId + '\n\n内容を確認・修正してから「見積書として保存」ボタンで確定してください。');
-    if(typeof editEstimateInTab === 'function') editEstimateInTab(createdId);
-  } else {
-    // 受注案件の詳細を開く
-    alert('✅ リピート' + kindLabel + 'を作成しました\n\n' + numLabel + createdId + '\n\n内容を確認・修正してから保存してください。');
-    try {
-      var pbtn = document.querySelector('.tb-btn[data-page="project"]');
-      if(typeof swPage === 'function') swPage('project', pbtn || null);
-      setTimeout(function(){
-        if(typeof setProjStage === 'function') setProjStage('orders');
-        // 該当行を展開する
-        setTimeout(function(){
-          var oi = (DB.projects||[]).findIndex(function(p){return p.id===createdId;});
-          if(oi>=0 && typeof toggleProjAcc === 'function') toggleProjAcc(oi, {stopPropagation:function(){}});
-        }, 200);
-      }, 80);
-    } catch(e){ if(typeof renderProjects === 'function') renderProjects(); }
-  }
+  window._entryRegMode_ = 'repeat';
+  var btn = document.querySelector('.tb-btn[data-page="est"]');
+  if(typeof swPage === 'function') swPage('est', btn || null);
+  var _newTid = (typeof addTab === 'function') ? addTab() : null;
+
+  setTimeout(function(){
+    // 過去案件の内容をプリフィル (新規登録の詳細見積引き継ぎと同じ仕組み)
+    if(typeof applyIngestToEstimate === 'function'){
+      applyIngestToEstimate({
+        cust: r.cust || '', item: r.item || '', spec: r.spec || '',
+        qty: parseInt(r.qty) || 0, unit: r.unit || '部', exTax: parseInt(r.exTax) || 0,
+        memo: (r.memo || '') + (r.id ? '\n[リピート元: ' + r.id + ']' : '')
+      });
+    }
+    if(_newTid){
+      // 種別ラジオを選択 (order=受注 / quote=見積)
+      var val = (mode === 'order') ? 'order' : 'quote';
+      var radio = document.querySelector('input[name="entry-kind-' + _newTid + '"][value="' + val + '"]');
+      if(radio){ radio.checked = true; if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid); }
+      _setEntryRegTitle_(_newTid);
+    }
+  }, 300);
+
+  window._repeatChoiceRow_ = null;
 }
 
 // ─────────────────────────────────────────────────────
