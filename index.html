@@ -242,6 +242,7 @@ body{font-family:'Hiragino Kaku Gothic ProN','Meiryo',sans-serif;font-size:13px;
 }
 .tb-btn.dragging{opacity:.4;cursor:grabbing}
 .tb-btn.drag-over{background:rgba(101,163,13,.3);border-left:2px solid #4d7c0f}
+.tb-group.drag-over{outline:2px dashed rgba(255,255,255,.7);outline-offset:1px}
 .tb-btn[draggable=true]{cursor:grab}
 .tb-btn[draggable=true]:active{cursor:grabbing}
 /* リアルタイムウィジェットの D&D */
@@ -4320,7 +4321,7 @@ function cloudSync(){
 // ═══════════════════ タブ並び替え (Drag & Drop) ════════════════
 
 const TAB_ORDER_KEY = 'tokiwa_hub_tab_order';
-const TAB_ORDER_VERSION = 'v12-2026-06-remove-est-tab'; // 新規登録(見積作成)タブも廃止 (案件管理から起動)
+const TAB_ORDER_VERSION = 'v13-2026-06-group-aware'; // グループ対応の並び替え (枠の出入り対応 / 構造保存) に刷新
 const TAB_ORDER_VERSION_KEY = 'tokiwa_hub_tab_order_version';
 
 // バージョンが古ければ localStorage の保存順序を破棄して HTML 順序を採用
@@ -4334,49 +4335,53 @@ const TAB_ORDER_VERSION_KEY = 'tokiwa_hub_tab_order_version';
   } catch(e){}
 })();
 
+// PPPPPP-7: ナビ項目の安定キー (data-page が無い onclick ボタンにも対応)
+function _navKey_(btn){
+  if(!btn) return '';
+  return btn.dataset.page || btn.getAttribute('onclick') || btn.getAttribute('title') || (btn.textContent || '').trim();
+}
+
+// PPPPPP-7: グループ構造ごと保存された並び順を復元 (枠の出入りを維持)
+function _restoreNavStructure_(scroll){
+  var struct;
+  try { struct = JSON.parse(localStorage.getItem(TAB_ORDER_KEY) || 'null'); } catch(e){ struct = null; }
+  if(!struct || !Array.isArray(struct) || !struct.length) return;
+
+  var btnMap = {}, groupMap = {}, used = {};
+  Array.from(scroll.querySelectorAll('.tb-btn')).forEach(function(b){ btnMap[_navKey_(b)] = b; });
+  Array.from(scroll.querySelectorAll('.tb-group')).forEach(function(g){ groupMap[g.getAttribute('data-label')] = g; });
+
+  struct.forEach(function(slot){
+    if(slot && slot.g !== undefined){
+      var g = groupMap[slot.g];
+      if(g){
+        scroll.appendChild(g); // グループ自体を順番通りに後ろへ
+        (slot.b || []).forEach(function(k){ var b = btnMap[k]; if(b){ g.appendChild(b); used[k] = 1; } });
+      } else {
+        // グループが無くなった場合は配下ボタンを単独で配置
+        (slot.b || []).forEach(function(k){ var b = btnMap[k]; if(b){ scroll.appendChild(b); used[k] = 1; } });
+      }
+    } else if(slot && slot.k !== undefined){
+      var b = btnMap[slot.k];
+      if(b){ scroll.appendChild(b); used[slot.k] = 1; }
+    }
+  });
+
+  // 保存に無い新規ボタンは元の所属グループ(あれば)末尾、無ければ scroll 末尾に残す
+  Array.from(scroll.querySelectorAll('.tb-btn')).forEach(function(b){
+    var k = _navKey_(b);
+    if(used[k]) return;
+    var grp = b.closest('.tb-group');
+    if(grp) grp.appendChild(b); else scroll.appendChild(b);
+  });
+}
+
 function initTabReorder(){
   const scroll = document.getElementById('tb-scroll');
   if(!scroll) return;
 
-  // 保存済みの順序を復元
-  try {
-    const htmlOrder = Array.from(scroll.querySelectorAll('.tb-btn')).map(t => t.dataset.page);
-    const tabMap = {};
-    Array.from(scroll.querySelectorAll('.tb-btn')).forEach(t => { tabMap[t.dataset.page] = t; });
-
-    const savedOrder = JSON.parse(localStorage.getItem(TAB_ORDER_KEY) || '[]');
-    if(savedOrder.length){
-      // 1. 保存順にあるタブを順番に追加 (現在も HTML に存在するもののみ)
-      savedOrder.forEach(page => {
-        if(tabMap[page]) scroll.appendChild(tabMap[page]);
-      });
-
-      // 2. 新規追加されたタブ (savedOrder に無いもの) を HTML 順序に基づいて適切な位置に挿入
-      htmlOrder.forEach((page, htmlIdx) => {
-        if(savedOrder.indexOf(page) >= 0) return; // 既に savedOrder で配置済
-        const tab = tabMap[page];
-        if(!tab) return;
-
-        // HTML 上で page の直後にあって savedOrder にも存在するタブの直前に挿入
-        let nextSavedTab = null;
-        for(let i = htmlIdx + 1; i < htmlOrder.length; i++){
-          if(savedOrder.indexOf(htmlOrder[i]) >= 0 && tabMap[htmlOrder[i]]){
-            nextSavedTab = tabMap[htmlOrder[i]];
-            break;
-          }
-        }
-        if(nextSavedTab){
-          scroll.insertBefore(tab, nextSavedTab);
-        } else {
-          scroll.appendChild(tab);
-        }
-      });
-
-      // 3. 新規タブを含む最終順序を保存
-      const finalOrder = Array.from(scroll.querySelectorAll('.tb-btn')).map(t => t.dataset.page);
-      try { localStorage.setItem(TAB_ORDER_KEY, JSON.stringify(finalOrder)); } catch(e){}
-    }
-  } catch(e){ console.warn('Tab order restore failed:', e); }
+  // 保存済みの順序(グループ構造含む)を復元
+  try { _restoreNavStructure_(scroll); } catch(e){ console.warn('Tab order restore failed:', e); }
 
   // ドラッグ&ドロップを各タブに設定
   let draggedEl = null;
@@ -4400,10 +4405,12 @@ function initTabReorder(){
   scroll.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    const target = e.target.closest('.tb-btn');
-    if(!target || target === draggedEl) return;
-    scroll.querySelectorAll('.tb-btn.drag-over').forEach(el => el.classList.remove('drag-over'));
-    target.classList.add('drag-over');
+    scroll.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    const targetBtn = e.target.closest('.tb-btn');
+    if(targetBtn && targetBtn !== draggedEl){ targetBtn.classList.add('drag-over'); return; }
+    // PPPPPP-7: グループの空き領域も drop 対象 (枠の中へ入れられるように)
+    const targetGroup = e.target.closest('.tb-group');
+    if(targetGroup){ targetGroup.classList.add('drag-over'); }
   });
 
   scroll.addEventListener('dragleave', (e) => {
@@ -4414,17 +4421,33 @@ function initTabReorder(){
 
   scroll.addEventListener('drop', (e) => {
     e.preventDefault();
-    const target = e.target.closest('.tb-btn');
-    if(!target || !draggedEl || target === draggedEl) return;
-    target.classList.remove('drag-over');
-    // ドラッグ要素を target の位置に挿入
-    const rect = target.getBoundingClientRect();
-    const insertAfter = e.clientX > (rect.left + rect.width / 2);
-    if(insertAfter){
-      target.parentNode.insertBefore(draggedEl, target.nextSibling);
-    } else {
-      target.parentNode.insertBefore(draggedEl, target);
+    if(!draggedEl) return;
+    scroll.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+
+    // 1. ボタン上にドロップ → その隣 (同じ親=グループ or scroll直下) に挿入。枠の出入りが可能
+    const targetBtn = e.target.closest('.tb-btn');
+    if(targetBtn && targetBtn !== draggedEl){
+      const rect = targetBtn.getBoundingClientRect();
+      const after = e.clientX > (rect.left + rect.width / 2);
+      targetBtn.parentNode.insertBefore(draggedEl, after ? targetBtn.nextSibling : targetBtn);
+      saveTabOrder();
+      return;
     }
+    // 2. グループの空き領域にドロップ → その枠の中へ (x位置に応じた位置に挿入)
+    const targetGroup = e.target.closest('.tb-group');
+    if(targetGroup){
+      const btns = Array.from(targetGroup.querySelectorAll('.tb-btn')).filter(b => b !== draggedEl);
+      let before = null;
+      for(const b of btns){ const r = b.getBoundingClientRect(); if(e.clientX < r.left + r.width / 2){ before = b; break; } }
+      targetGroup.insertBefore(draggedEl, before);
+      saveTabOrder();
+      return;
+    }
+    // 3. グループ間の余白にドロップ → 単独項目として scroll 直下に挿入 (枠の外へ)
+    const kids = Array.from(scroll.children).filter(c => c !== draggedEl && c.classList && (c.classList.contains('tb-btn') || c.classList.contains('tb-group')));
+    let beforeEl = null;
+    for(const c of kids){ const r = c.getBoundingClientRect(); if(e.clientX < r.left + r.width / 2){ beforeEl = c; break; } }
+    scroll.insertBefore(draggedEl, beforeEl);
     saveTabOrder();
   });
 }
@@ -4432,8 +4455,16 @@ function initTabReorder(){
 function saveTabOrder(){
   const scroll = document.getElementById('tb-scroll');
   if(!scroll) return;
-  const order = Array.from(scroll.querySelectorAll('.tb-btn')).map(t => t.dataset.page);
-  try { localStorage.setItem(TAB_ORDER_KEY, JSON.stringify(order)); } catch(e){}
+  // PPPPPP-7: グループ構造ごと保存 (各 scroll 直下の子=単独ボタン or グループ)
+  var struct = [];
+  Array.from(scroll.children).forEach(function(ch){
+    if(ch.classList && ch.classList.contains('tb-group')){
+      struct.push({ g: ch.getAttribute('data-label') || '', b: Array.from(ch.querySelectorAll('.tb-btn')).map(_navKey_) });
+    } else if(ch.classList && ch.classList.contains('tb-btn')){
+      struct.push({ k: _navKey_(ch) });
+    }
+  });
+  try { localStorage.setItem(TAB_ORDER_KEY, JSON.stringify(struct)); } catch(e){}
 }
 
 // タブバーを左右にスクロール
