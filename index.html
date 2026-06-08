@@ -2197,7 +2197,8 @@ setTimeout(_removeBootLoader_, 5000);
       </div>
     </div>
     <div class="f"><label>備考・メモ</label><textarea id="pdm-memo" rows="2"></textarea></div>
-    <div style="display:flex;justify-content:flex-end;gap:8px">
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
+      <button class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490;margin-right:auto" onclick="saveProjDetailAndPropagate()" title="保存して、受注内容を 配送/校正/仕入/外注 に反映 (変更点はコメントとして記録)">🔄 保存して後工程へ反映</button>
       <button class="btn" onclick="document.getElementById('proj-detail-modal').style.display='none'">キャンセル</button>
       <button class="btn btn-p" onclick="saveProjDetail()">保存</button>
     </div>
@@ -15904,6 +15905,10 @@ function startNewEntry(){
         '<button onclick="this.closest(\'.proof-modal\').remove();_startNewEstimate_()" style="display:flex;align-items:center;gap:10px;text-align:left;padding:12px 14px;border:2px solid #a855f7;background:#faf5ff;border-radius:8px;cursor:pointer;font-family:inherit" onmouseover="this.style.background=\'#f3e8ff\'" onmouseout="this.style.background=\'#faf5ff\'">' +
           '<span style="font-size:22px">📝</span><span><strong style="font-size:13px;color:#7c3aed;display:block">見積書として登録</strong><span style="font-size:11px;color:#64748b">まだ提出前の見積。受注案件として確定後に切替できる</span></span>' +
         '</button>' +
+        // PPPPPP-15: 別案件からのリピート (過去のどの案件・実績からでも流用して新規登録)
+        '<button onclick="this.closest(\'.proof-modal\').remove();if(typeof showRepeatProjectModal===\'function\')showRepeatProjectModal()" style="display:flex;align-items:center;gap:10px;text-align:left;padding:12px 14px;border:2px solid #0e7490;background:#ecfeff;border-radius:8px;cursor:pointer;font-family:inherit" onmouseover="this.style.background=\'#cffafe\'" onmouseout="this.style.background=\'#ecfeff\'">' +
+          '<span style="font-size:22px">🔁</span><span><strong style="font-size:13px;color:#0e7490;display:block">別案件から流用して登録</strong><span style="font-size:11px;color:#64748b">過去のどの案件・実績からでも選んで内容を引き継ぎ → 登録画面が開く</span></span>' +
+        '</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(m);
@@ -26184,7 +26189,19 @@ function openOrderConfirmModal(tabId){
       <label>納期</label>
       <input id="order-due-date" type="date">
     </div>
-    
+
+    <!-- PPPPPP-14: 後工程の半自動登録 (チェック済み → 承認で作成) -->
+    <div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;padding:12px 14px;margin:1rem 0">
+      <div style="font-size:12px;font-weight:700;color:#065f46;margin-bottom:8px">🔧 後工程の自動登録（チェックしたものを「確定」時に作成）</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:13px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="oc-make-paper" checked> 📦 紙仕入を登録</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="oc-make-print" ${outsourceTotal>0?'checked':''}> 🤝 印刷外注を登録${outsourceTotal>0?' (外注あり)':''}</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="oc-make-delivery" checked> 🚚 配送タスクを登録</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="oc-make-proof" checked> 📐 校正セッションを登録</label>
+      </div>
+      <div style="font-size:10px;color:#6b7280;margin-top:6px">受注内容(得意先・品名・数量・納期)が各後工程に引き継がれます。後から案件詳細の「🔄 後工程へ反映」で変更も反映できます。</div>
+    </div>
+
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:1.5rem">
       <button class="btn" onclick="this.closest('#order-confirm-modal').remove()">キャンセル</button>
       <button class="btn btn-p" style="background:#065f46;border-color:#065f46" onclick="executeOrderConfirm(${tabId})">受注案件として確定</button>
@@ -26308,9 +26325,36 @@ function executeOrderConfirm(tabId){
     if(!DB.intercoOrders) DB.intercoOrders = [];
     DB.intercoOrders.push(order);
   });
-  
+
+  // PPPPPP-14: 後工程の自動登録 (チェックされたものを作成・案件に紐付け)
+  var _ocCreated = [];
+  try {
+    var _now = new Date().toISOString();
+    if(document.getElementById('oc-make-delivery')?.checked){
+      if(!DB.deliveryItems) DB.deliveryItems = [];
+      DB.deliveryItems.push({ id:'DLV-'+Date.now(), projectId:proj.id, cust:proj.cust, item:proj.item, qty:proj.qty, unit:proj.unit, date:dueDate||'', taskType:'delivery', status:'planned', note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
+      _ocCreated.push('🚚 配送');
+    }
+    if(document.getElementById('oc-make-proof')?.checked){
+      if(!DB.proofings) DB.proofings = [];
+      DB.proofings.push({ id:'PRF-'+Date.now(), projectId:proj.id, cust:proj.cust, item:proj.item, status:'waiting', versions:[], note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
+      _ocCreated.push('📐 校正');
+    }
+    if(document.getElementById('oc-make-paper')?.checked){
+      if(!DB.purchaseOrders) DB.purchaseOrders = [];
+      DB.purchaseOrders.push({ id:'PUR-'+Date.now(), projectId:proj.id, cust:proj.cust, item:(proj.item||'')+' 用紙', qty:proj.qty, unit:proj.unit, amount:0, status:'planned', orderDate:_now.slice(0,10), note:'受注 '+proj.id+' より自動作成 (数量・単価は要入力)', createdAt:_now, _autoFromOrder:true });
+      _ocCreated.push('📦 紙仕入');
+    }
+    if(document.getElementById('oc-make-print')?.checked && !groupOrders.length){
+      if(!DB.outsourceOrders) DB.outsourceOrders = [];
+      DB.outsourceOrders.push({ id:'OUT-'+Date.now(), projectId:proj.id, cust:proj.cust, item:(proj.item||'')+' 印刷', qty:proj.qty, unit:proj.unit, amount:outsourceTotal||0, status:'planned', dueDate:dueDate||'', note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
+      _ocCreated.push('🤝 印刷外注');
+    }
+  } catch(e){ console.warn('後工程自動作成エラー:', e); }
+
   saveDB();
-  
+  if(_ocCreated.length && typeof _toastMsg === 'function'){ _toastMsg('✅ 受注確定 + 後工程を自動登録: ' + _ocCreated.join(' / ')); }
+
   document.getElementById('order-confirm-modal')?.remove();
   
   // 案件管理タブに切り替え
@@ -27936,6 +27980,43 @@ function _pdmAddSched_(){
   _pdmRenderSched_();
 }
 function _pdmRemoveSched_(i){ _pdmSchedules.splice(i,1); _pdmRenderSched_(); }
+
+// PPPPPP-14: 受注内容を後工程(配送/校正/仕入/外注)へ反映。変更点はレコードにコメント記録 + _hasUpdate フラグ
+function propagateProjectToDownstream(oi){
+  var p = DB.projects[oi]; if(!p) return;
+  var changes = [];
+  function syncRec(rec, label, map){
+    var recChanges = [];
+    Object.keys(map).forEach(function(srcField){
+      var dstField = map[srcField];
+      var nv = p[srcField];
+      if(nv === undefined) return;
+      var ov = rec[dstField];
+      if(String(ov == null ? '' : ov) !== String(nv == null ? '' : nv)){
+        rec[dstField] = nv;
+        recChanges.push({ at: new Date().toISOString(), field: dstField, from: ov, to: nv });
+        changes.push(label + '「' + dstField + '」' + (ov || '(空)') + ' → ' + (nv || '(空)'));
+      }
+    });
+    if(recChanges.length){ rec._changes = (rec._changes || []).concat(recChanges); rec._hasUpdate = true; }
+  }
+  (DB.deliveryItems   || []).filter(function(x){ return x.projectId === p.id; }).forEach(function(x){ syncRec(x, '配送', { cust:'cust', item:'item', qty:'qty', unit:'unit', dueDate:'date' }); });
+  (DB.proofings       || []).filter(function(x){ return x.projectId === p.id; }).forEach(function(x){ syncRec(x, '校正', { cust:'cust', item:'item' }); });
+  (DB.purchaseOrders  || []).filter(function(x){ return x.projectId === p.id; }).forEach(function(x){ syncRec(x, '仕入', { cust:'cust', qty:'qty', unit:'unit' }); });
+  (DB.outsourceOrders || []).filter(function(x){ return x.projectId === p.id; }).forEach(function(x){ syncRec(x, '外注', { cust:'cust', qty:'qty', unit:'unit', dueDate:'dueDate' }); });
+  if(typeof saveDB === 'function') saveDB();
+  if(changes.length){
+    alert('🔄 後工程へ反映しました（' + changes.length + '件の変更）\n\n' + changes.slice(0,15).join('\n') + (changes.length>15 ? '\n…ほか' : '') + '\n\n各レコードに変更履歴を残しました。');
+  } else {
+    alert('後工程に紐づくレコードは最新でした（変更なし）。');
+  }
+}
+function saveProjDetailAndPropagate(){
+  var modal = document.getElementById('proj-detail-modal');
+  var oi = parseInt(modal.dataset.oi);
+  saveProjDetail();          // 保存 (モーダルを閉じ renderProjects)
+  propagateProjectToDownstream(oi);
+}
 
 function saveProjDetail(){
   const modal=document.getElementById('proj-detail-modal');
