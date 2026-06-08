@@ -6833,20 +6833,20 @@ function buildPanel(id,initData){
     </div>
   </div>
   
-  <div class="brow">
+  <div class="brow" id="est-actions1-${id}">
     <button class="btn btn-p" onclick="showPV([${id}])">この見積書をプレビュー</button>
     <button class="btn" onclick="saveHist(${id})">実績として保存</button>
     <button class="btn" style="background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(${id})">⭐ テンプレート保存</button>
     <button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="clearTab(${id})" title="この見積書の入力内容をクリア">🗑 クリア</button>
   </div>
   <!-- PPPPPP-31: 数量違い/仕様違いの複製 (コピーして作成・元見積とリンク) -->
-  <div class="brow" style="margin-top:4px">
+  <div class="brow" style="margin-top:4px" id="est-actions2-${id}">
     <button class="btn" style="background:#ede9fe;border-color:#c4b5fd;color:#5b21b6;font-weight:700" onclick="_copyTabVariant_(${id},'qty')" title="この見積を複製して『数量違い』の見積書を作成 (得意先・品名・仕様はそのまま、数量だけ変更)">📋 数量違いで複製</button>
     <button class="btn" style="background:#ede9fe;border-color:#c4b5fd;color:#5b21b6;font-weight:700" onclick="_copyTabVariant_(${id},'spec')" title="この見積を複製して『仕様違い』の見積書を作成 (得意先・品名はそのまま、仕様を変更)">📋 仕様違いで複製</button>
   </div>
   
   <!-- 見積パターン保存・受注案件として確定セクション -->
-  <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:1rem;margin-top:.75rem">
+  <div id="est-qpm-box-${id}" style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:1rem;margin-top:.75rem">
     <!-- PPPPPP-33: 見積パターン管理 (一覧から開いた既存案件では非表示) -->
     <div id="qpm-mgr-${id}">
       <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:.75rem">📋 見積パターン管理</div>
@@ -16207,27 +16207,61 @@ function _renderEstInfoCard_(info){
 function _markEstViewMode_(tid, info){
   _setEstReadonly_(tid, true);
   if(typeof _renderEstInfoCard_ === 'function') _renderEstInfoCard_(info);
-  // PPPPPP-33: 一覧から開いた時は新規向け下部UIを隠す (パターン管理/ヒント/保存行は閲覧中は不要)
-  ['qpm-mgr-' + tid, 'qpm-hint-' + tid, 'est-save-row-' + tid].forEach(function(eid){
+  // PPPPPP-34: 一覧から開いた時は下部の作業UIを全て隠す (プレビュー/保存はヘッダーに集約)
+  ['est-actions1-' + tid, 'est-actions2-' + tid, 'est-qpm-box-' + tid].forEach(function(eid){
     var el = document.getElementById(eid); if(el) el.style.display = 'none';
   });
+  var s = (typeof ts === 'function') ? ts(tid) : null;
+  var isOrder = !!(s && s._editingProjId);
   var pg = document.getElementById('page-est'); var hb = pg && pg.querySelector('.page-header-big'); if(!hb) return;
   hb.querySelectorAll('.est-mode-ctrl').forEach(function(x){ x.remove(); });
+  // 受注案件=製造指示書プレビュー / 見積=見積書プレビュー
+  var prevLabel = isOrder ? '🏭 製造指示書プレビュー' : '🔍 見積書プレビュー';
+  var prevAction = isOrder ? ("showWorkInstructionView('" + String(s._editingProjId).replace(/'/g,'') + "')") : ("showPV([" + tid + "])");
   var wrap = document.createElement('div');
   wrap.className = 'est-mode-ctrl';
   wrap.style.cssText = 'position:absolute;top:10px;right:14px;display:flex;gap:8px;align-items:center;z-index:2';
   wrap.innerHTML =
-    '<span class="est-view-badge" style="font-size:11px;background:#64748b;color:#fff;padding:3px 10px;border-radius:6px">👁 閲覧モード（編集不可）</span>' +
-    '<button class="btn" style="font-size:12px;background:#1e293b;color:#fff;border-color:#1e293b" onclick="_enableEstEdit_(' + tid + ')">✏ 編集する</button>';
+    '<button class="btn" style="font-size:12px;background:#fff" onclick="' + prevAction + '">' + prevLabel + '</button>' +
+    '<span class="est-view-badge" style="font-size:11px;background:#64748b;color:#fff;padding:3px 10px;border-radius:6px">👁 閲覧モード</span>' +
+    '<button class="btn est-edit-btn" style="font-size:12px;background:#1e293b;color:#fff;border-color:#1e293b" onclick="_enableEstEdit_(' + tid + ')">✏ 編集する</button>';
   hb.appendChild(wrap);
 }
 function _enableEstEdit_(tid){
   _setEstReadonly_(tid, false);
-  // 編集時は保存行を表示 (パターン管理/ヒントは既存案件では不要なので隠したまま)
-  var sr = document.getElementById('est-save-row-' + tid); if(sr) sr.style.display = 'flex';
   var pg = document.getElementById('page-est'); var hb = pg && pg.querySelector('.page-header-big'); if(!hb) return;
   var badge = hb.querySelector('.est-view-badge'); if(badge){ badge.textContent = '✏ 編集中'; badge.style.background = '#16a34a'; }
-  var btn = hb.querySelector('.est-mode-ctrl .btn'); if(btn) btn.remove();
+  // 「編集する」→「保存」に切替 (既存案件を更新)
+  var eb = hb.querySelector('.est-edit-btn');
+  if(eb){ eb.textContent = '💾 保存'; eb.style.background = '#0891b2'; eb.style.borderColor = '#0891b2'; eb.setAttribute('onclick', '_saveEstEdit_(' + tid + ')'); }
+}
+// PPPPPP-34: 編集後の「保存」= 既存の受注案件/見積を更新
+function _saveEstEdit_(tid){
+  var s = (typeof ts === 'function') ? ts(tid) : null; if(!s) return;
+  var g = function(f){ var el = document.getElementById(f + '-' + tid); return el ? el.value : undefined; };
+  var qty = (s.qtyPats && s.qtyPats[0]) ? parseInt(s.qtyPats[0].v) : parseInt(g('qty'));
+  var adEl = document.getElementById('adopted-' + tid + '-0-0') || document.getElementById('adopted-' + tid + '-0');
+  var adopted = parseFloat(adEl && adEl.value) || 0;
+  function applyCommon(o){
+    var c = g('cust'), i = g('prod'), sp = g('spec'), m = g('memo'), u = g('unit');
+    if(c != null && c !== '') o.cust = c;
+    if(i != null && i !== '') o.item = i;
+    if(sp != null) o.spec = sp;
+    if(m != null) o.memo = m;
+    if(u != null && u !== '') o.unit = u;
+    if(qty) o.qty = qty;
+    if(adopted > 0 && o.qty) o.exTax = Math.round(o.qty * adopted);
+    o.updatedAt = new Date().toISOString();
+  }
+  if(s._editingProjId){
+    var p = (DB.projects || []).find(function(x){ return x.id === s._editingProjId; });
+    if(p){ applyCommon(p); if(typeof saveDB === 'function') saveDB(); if(typeof _toastMsg === 'function') _toastMsg('✅ 受注案件を保存しました (' + p.id + ')'); var b = document.querySelector('.tb-btn[data-page="project"]'); if(typeof swPage === 'function') swPage('project', b || null); if(typeof renderProjects === 'function') renderProjects(); return; }
+  }
+  if(s._editingEstId){
+    var e = (DB.estimates || []).find(function(x){ return x.id === s._editingEstId; });
+    if(e){ applyCommon(e); if(typeof saveDB === 'function') saveDB(); if(typeof _toastMsg === 'function') _toastMsg('✅ 見積書を保存しました (' + e.id + ')'); var b2 = document.querySelector('.tb-btn[data-page="project"]'); if(typeof swPage === 'function') swPage('project', b2 || null); if(typeof setProjStage === 'function') setProjStage('quote'); if(typeof renderProjects === 'function') renderProjects(); return; }
+  }
+  if(typeof saveEstimateAsQuote === 'function') saveEstimateAsQuote(tid);
 }
 
 function _startNewEstimate_(){
