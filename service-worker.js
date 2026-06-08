@@ -5,8 +5,8 @@
 // - キャッシュ名の version を上げると自動で旧キャッシュを掃除
 // ============================================================
 
-const CACHE_VERSION = 'tokiwa-hub-v1';
-const RUNTIME_CACHE = 'tokiwa-hub-runtime-v1';
+const CACHE_VERSION = 'tokiwa-hub-v2';
+const RUNTIME_CACHE = 'tokiwa-hub-runtime-v2';
 
 // 起動時に最低限プリキャッシュするアセット (任意で増やせる)
 const PRECACHE_URLS = [
@@ -80,7 +80,29 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 静的アセットは Cache First → 失敗時 Network → 同期で更新
+  // アプリ本体 (index.html / ナビゲーション) は Network First で常に最新を配信
+  //   → デプロイした変更がリロードで即反映される (Cache First だと旧版が出続ける)
+  const isAppShell =
+    req.mode === 'navigate' ||
+    url.pathname.endsWith('/index.html') ||
+    url.pathname.endsWith('/tokiwa-hub-app/') ||
+    url.pathname === '/' || url.pathname.endsWith('/');
+  if (isAppShell) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const clone = res.clone();
+            caches.open(CACHE_VERSION).then((cache) => cache.put('./index.html', clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then((c) => c || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // その他の静的アセット (アイコン等) は Cache First → 失敗時 Network → 同期で更新
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) {
@@ -111,7 +133,7 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// ─── message: アプリ側からの skipWaiting / バージョンチェック ───
+// ─── message: アプリ側からの skipWaiting / バージョンチェック / 通知代理 ───
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
@@ -119,4 +141,34 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'GET_VERSION') {
     event.ports[0]?.postMessage({ version: CACHE_VERSION });
   }
+  // sw.js から統合: メインスレッド → showNotification 代理
+  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+    self.registration.showNotification(event.data.title, event.data.options || {});
+  }
+});
+
+// ─── 通知 (sw.js から統合) ───
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/tokiwa-hub-app/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (let i = 0; i < clientList.length; i++) {
+        const c = clientList[i];
+        if (c.url.indexOf(url) >= 0 && 'focus' in c) return c.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
+});
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  try {
+    const data = event.data.json();
+    event.waitUntil(
+      self.registration.showNotification(data.title || 'TOKIWA-HUB', {
+        body: data.body || '', icon: data.icon || '/tokiwa-hub-app/icons/icon-192.png', data: data
+      })
+    );
+  } catch (e) {}
 });
