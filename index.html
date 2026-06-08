@@ -13460,6 +13460,38 @@ function editEstimateInTab(estId){
   })();
 }
 
+// PPPPPP-26: 受注案件を「見積作成フォーム(新規登録画面)」で開いて編集 (保存で元の案件を更新)
+function _openProjInEstForm_(oi){
+  var p = (DB.projects||[])[oi]; if(!p){ alert('案件が見つかりません'); return; }
+  window._entryRegMode_ = 'edit';
+  var btn = document.querySelector('.tb-btn[data-page="est"]');
+  if(typeof swPage === 'function') swPage('est', btn || null);
+  var _tid = (typeof addTab === 'function') ? addTab() : ((typeof activeTab !== 'undefined') ? activeTab : null);
+  var tries = 0;
+  (function fill(){
+    tries++;
+    var cEl = _tid ? document.getElementById('cust-' + _tid) : null;
+    if(!cEl){ if(tries < 30){ return setTimeout(fill, 80); } return; }
+    var setv = function(id, val){ var el = document.getElementById(id); if(el && val != null && val !== '') el.value = val; };
+    setv('cust-' + _tid, p.cust);
+    setv('prod-' + _tid, p.item);
+    setv('spec-' + _tid, p.spec);
+    setv('memo-' + _tid, p.memo);
+    setv('unit-' + _tid, p.unit);
+    if(p.qty){
+      if(typeof ts === 'function'){ var st = ts(_tid); if(st && st.qtyPats && st.qtyPats[0]) st.qtyPats[0].v = parseInt(p.qty) || st.qtyPats[0].v; }
+      var q = document.getElementById('qty-' + _tid); if(q) q.value = p.qty;
+    }
+    // 受注案件なので種別=受注
+    var radio = document.querySelector('input[name="entry-kind-' + _tid + '"][value="order"]');
+    if(radio){ radio.checked = true; if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_tid); }
+    // 編集中の案件IDを紐付け (受注確定の保存で元の案件を更新)
+    if(typeof ts === 'function'){ var s = ts(_tid); if(s){ s._editingProjId = p.id; s._editingEstId = null; } }
+    var t = document.getElementById('entry-reg-title-' + _tid); if(t) t.textContent = '📝 受注案件 編集（' + (p.id||'') + '）';
+    if(typeof calc === 'function'){ try { calc(_tid); } catch(e){} }
+  })();
+}
+
 function confirmEstimateAsProject(estId){
   var est = (DB.estimates || []).find(function(e){ return e.id === estId; });
   if(!est){ alert('見積が見つかりません'); return; }
@@ -26484,6 +26516,32 @@ function openOrderConfirmModal(tabId){
 
 // 受注案件として確定を実行
 function executeOrderConfirm(tabId){
+  // PPPPPP-26: 既存受注案件の「見積フォームで編集」中なら、新規作成せず元の案件を更新
+  var _editPid = (typeof ts === 'function' && ts(tabId)) ? ts(tabId)._editingProjId : null;
+  if(_editPid){
+    var _p = (DB.projects||[]).find(function(x){ return x.id === _editPid; });
+    if(_p){
+      var g = function(id){ var el = document.getElementById(id); return el ? el.value : undefined; };
+      var _c=g('cust-'+tabId), _i=g('prod-'+tabId), _s=g('spec-'+tabId), _m=g('memo-'+tabId), _u=g('unit-'+tabId);
+      if(_c!=null && _c!=='') _p.cust=_c;
+      if(_i!=null && _i!=='') _p.item=_i;
+      if(_s!=null) _p.spec=_s;
+      if(_m!=null) _p.memo=_m;
+      if(_u!=null && _u!=='') _p.unit=_u;
+      var _q = (ts(tabId).qtyPats && ts(tabId).qtyPats[0]) ? ts(tabId).qtyPats[0].v : parseInt(g('qty-'+tabId));
+      if(_q) _p.qty = parseInt(_q) || _p.qty;
+      var _due = document.getElementById('order-due-date')?.value; if(_due) _p.dueDate=_due;
+      var _adEl = document.getElementById('adopted-'+tabId+'-0-0') || document.getElementById('adopted-'+tabId+'-0');
+      var _ad = parseFloat(_adEl?.value)||0; if(_ad>0 && _p.qty) _p.exTax = Math.round(_p.qty*_ad);
+      _p.updatedAt = new Date().toISOString();
+      if(typeof saveDB==='function') saveDB();
+      document.getElementById('order-confirm-modal')?.remove();
+      if(typeof _toastMsg==='function') _toastMsg('✅ 受注案件を更新しました ('+_p.id+')');
+      var _pbtn = document.querySelector('.tb-btn[data-page="project"]'); if(typeof swPage==='function') swPage('project', _pbtn||null);
+      if(typeof renderProjects==='function') renderProjects();
+      return;
+    }
+  }
   const selected = document.querySelector('input[name="adopt-pattern"]:checked')?.value;
   if(!selected){
     alert('採用する見積パターンを選択してください');
@@ -27211,6 +27269,7 @@ function renderProjects(){
               ${proofBadge}
               ${deliveryBtn}
               <button class="use-btn" style="white-space:nowrap;background:#1e293b;color:#fff;border-color:#1e293b" onclick="editProjDetail(${oi})">✏ 編集</button>
+              <button class="use-btn" style="white-space:nowrap;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="_openProjInEstForm_(${oi})" title="見積作成フォーム(新規登録画面)で内容を編集">📝 見積フォームで開く</button>
             </div>
           </div>
         </div>
