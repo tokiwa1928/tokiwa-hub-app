@@ -11832,6 +11832,104 @@ function forwardInquiryToProofing(inqId){
   jumpToProofing(proofId);
 }
 
+// PPPPPP-17: 問い合わせを「既存の校正案件」に修正指示として挿入 (新規作成ではない)
+function _inqInsertToProofing_(inqId){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id===inqId; });
+  if(!inq){ alert('問い合わせが見つかりません'); return; }
+  var proofs = (DB.proofings||[]).slice();
+  if(!proofs.length){
+    if(confirm('既存の校正案件がありません。\n新しい校正セッションを作成して転記しますか?')){ forwardInquiryToProofing(inqId); }
+    return;
+  }
+  // 紐づく案件の校正を優先表示
+  var pid = inq.linked_project_id || '';
+  proofs.sort(function(a,b){
+    var am = (pid && a.projectId===pid)?1:0, bm = (pid && b.projectId===pid)?1:0;
+    if(am!==bm) return bm-am;
+    return String(b.createdAt||'').localeCompare(String(a.createdAt||''));
+  });
+  var rows = proofs.map(function(p){
+    var nm = p.custName || p.cust || '';
+    var prod = p.prodName || p.item || '校正案件';
+    var proj = p.projectId ? ('案件 '+p.projectId) : '案件未リンク';
+    var vc = (p.versions||[]).length;
+    var hit = (pid && p.projectId===pid);
+    var dataText = ((p.id||'')+' '+nm+' '+prod+' '+(p.projectId||'')).toLowerCase();
+    return '<div class="inq-proof-pick" data-text="'+dataText.replace(/"/g,'&quot;')+'" onclick="_doInsertInquiryToProofing_(\''+inqId+'\',\''+p.id+'\')" style="padding:10px 12px;border:1px solid '+(hit?'#67e8f9':'#e5e7eb')+';border-radius:6px;margin-bottom:6px;cursor:pointer;background:'+(hit?'#ecfeff':'#fff')+'" onmouseover="this.style.background=\'#f0fdfa\'" onmouseout="this.style.background=\''+(hit?'#ecfeff':'#fff')+'\'">'+
+      '<div style="display:flex;justify-content:space-between;gap:8px">'+
+        '<div style="min-width:0"><div style="font-weight:700;font-size:12px">'+(hit?'⭐ ':'')+_escDiff(prod)+'</div>'+
+        '<div style="font-size:11px;color:#555;margin-top:2px">'+_escDiff(nm)+' · '+proj+'</div></div>'+
+        '<div style="text-align:right;font-size:10px;color:#888;white-space:nowrap">'+(p.status||'')+'<br>'+vc+' 版</div>'+
+      '</div></div>';
+  }).join('');
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:620px;max-height:88vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">'+
+      '<div style="padding:14px 20px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center">'+
+        '<div><strong>📐 既存の校正案件に「先方の指示」を転記</strong><div style="font-size:11px;opacity:.85;margin-top:2px">挿入先の校正セッションを選択 (本文＋添付を修正指示として追加)</div></div>'+
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>'+
+      '</div>'+
+      '<div style="padding:12px 20px 0"><input id="inq-proof-search" placeholder="🔍 校正案件を絞り込み (得意先・品名・案件番号)" oninput="document.querySelectorAll(\'.inq-proof-pick\').forEach(function(el){el.style.display=(!this.value||el.dataset.text.indexOf(this.value.toLowerCase())>=0)?\'\':\'none\'}.bind(this))" style="width:100%;font-size:12px;padding:8px 10px;border:1px solid #ccc;border-radius:6px"></div>'+
+      '<div style="overflow-y:auto;flex:1;padding:12px 20px">'+rows+'</div>'+
+      '<div style="padding:10px 20px;border-top:1px solid #eee;text-align:right">'+
+        '<button class="btn" onclick="var id=\''+inqId+'\';this.closest(\'.proof-modal\').remove();forwardInquiryToProofing(id)" style="font-size:12px">＋ 新規校正として作成</button>'+
+      '</div>'+
+    '</div>';
+  document.body.appendChild(modal);
+  setTimeout(function(){ document.getElementById('inq-proof-search')?.focus(); }, 100);
+}
+
+function _doInsertInquiryToProofing_(inqId, proofId){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id===inqId; });
+  var p = (DB.proofings||[]).find(function(x){ return x.id===proofId; });
+  if(!inq || !p){ alert('対象が見つかりません'); return; }
+  if(!p.versions) p.versions = [];
+  var when = new Date().toISOString();
+  var commentText = '【先方からの指示 (問い合わせ ' + inq.id + ' より)】\n' +
+    (inq.received_at ? new Date(inq.received_at).toLocaleString('ja-JP') + ' / ' : '') +
+    (inq.from_name||'') + (inq.from_company ? ' ('+inq.from_company+')' : '') + '\n' +
+    '──────────────\n' + (inq.body || '(本文なし)');
+  var atts = (inq.attachments || []);
+  function rv(){ try { return _calcCurrentProofRound_(p, 'instruction'); } catch(e){ return {round:1, subVersion:1}; } }
+  var added = 0;
+  if(atts.length){
+    atts.forEach(function(a, i){
+      var url = a.driveUrl || a.url || a.shareLink || a.link || '';
+      var fid = a.driveFileId || a.fileId || '';
+      var r = rv();
+      p.versions.push({
+        id: 'VER'+Date.now()+'-'+i, fileName: (a.name||a.fileName||('先方指示'+(i+1))),
+        kind: 'instruction', round: r.round, subVersion: r.subVersion,
+        driveFileId: fid, driveUrl: url, drivePreviewUrl: fid?('https://drive.google.com/file/d/'+fid+'/preview'):url,
+        shareLink: url, data: (a.data||''), mimeType: (a.mimeType||a.type||''),
+        uploadedAt: when, feedback: (i===0 ? commentText : ''), annotations: [], fromInquiry: true
+      });
+      added++;
+    });
+  } else {
+    var r = rv();
+    p.versions.push({
+      id: 'VER'+Date.now(), fileName: '先方指示', kind: 'instruction', round: r.round, subVersion: r.subVersion,
+      uploadedAt: when, feedback: commentText, annotations: [], fromInquiry: true
+    });
+    added++;
+  }
+  p.status = 'feedback'; // 修正指示が入った状態
+  // 連絡側に紐付け + タイムライン
+  inq.linked_proofing_id = inq.linked_proofing_id || proofId;
+  if(!inq.timeline) inq.timeline = [];
+  inq.timeline.push({ type:'forward', date: when, by: (currentAuth&&currentAuth.userName)||'', text: '校正案件 '+proofId+' に先方指示を転記 ('+added+'件)' });
+  if(typeof _addAuditLog_==='function') try { _addAuditLog_('forward','inquiry:'+inqId,'校正 '+proofId+' に指示転記'); } catch(e){}
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try { saveToCloud(); } catch(e){}
+  document.querySelectorAll('.proof-modal').forEach(function(x){ x.remove(); });
+  if(typeof closeInquiryDetail==='function') closeInquiryDetail();
+  alert('✅ 校正案件 '+proofId+' に先方の指示を転記しました ('+added+'件を修正指示として追加)');
+  if(typeof jumpToProofing==='function') jumpToProofing(proofId);
+}
+
 // 校正セッションへジャンプ (案件画面ボタンから)
 function jumpToProofing(proofingId){
   const btn = document.querySelector('.tb-btn[onclick*="proofing"]');
@@ -33269,7 +33367,7 @@ function openInquiryDetail(id) {
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;padding:10px 12px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;align-items:center">
       <span style="font-size:11px;font-weight:700;color:#15803d;white-space:nowrap">📋 この問い合わせを転記:</span>
       <button class="btn" style="background:#15803d;color:#fff;border-color:#15803d;font-size:13px;font-weight:700;padding:6px 16px" onclick="_inqAiExtractAndTransfer_('${inq.id}')" title="内容を自動で読み取り、見積作成画面へ転記 → 種別(見積/受注)は登録画面で選択">📝 見積・受注へ転記</button>
-      <button class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490;font-size:13px;font-weight:700;padding:6px 16px" onclick="forwardInquiryToProofing('${inq.id}')" title="この問い合わせ(本文+添付)を校正BOXへ。添付資料はそのまま原稿として登録され、紐づく案件の校正になります">📐 校正へ転記 (添付も)</button>
+      <button class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490;font-size:13px;font-weight:700;padding:6px 16px" onclick="_inqInsertToProofing_('${inq.id}')" title="既存の校正案件を選び、先方の指示(本文+添付)を修正指示として挿入します">📐 校正へ転記 (既存に指示)</button>
       ${inq.linked_project_id ? `<span style="font-size:11px;color:#15803d;margin-left:auto">✅ 案件 ${inq.linked_project_id} に転記済</span>` : ''}
     </div>
 
