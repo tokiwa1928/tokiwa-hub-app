@@ -5256,24 +5256,11 @@ function switchTab(id){
 }
 function renderTabbar(){
   const bar=document.getElementById('est-tabbar');
-  const addB=bar.querySelector('.tab-add-btn');
+  if(!bar) return;
+  // PPPPPP-31: タブ管理UI(見積タブ/＋新規見積/合冊印刷)は廃止し「複製」ボタンに統一。検索ボタンは残す。
   bar.querySelectorAll('.est-tab,.tab-merge-btn').forEach(b=>b.remove());
-  tabs.forEach(t=>{
-    const b=document.createElement('div');b.className='est-tab'+(t.id===activeTab?' act':'');
-    b.innerHTML=`<span onclick="switchTab(${t.id})" style="cursor:pointer">${t.label}</span>`
-      +`<span title="この見積をコピー" onclick="event.stopPropagation();copyTab(${t.id})" style="cursor:pointer;opacity:.5;font-size:12px;margin-left:2px" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.5">⧉</span>`
-      +`<span class="et-x" onclick="event.stopPropagation();removeTab(${t.id})">×</span>`;
-    bar.insertBefore(b,addB);
-  });
-  // 2枚以上あれば「合冊」ボタンを表示
-  if(tabs.length>1){
-    const mb=document.createElement('button');
-    mb.className='tab-merge-btn';
-    mb.textContent='合冊印刷';
-    mb.title='選択した見積書を1枚にまとめて印刷';
-    mb.onclick=()=>openMergeModal();
-    bar.insertBefore(mb,addB);
-  }
+  const addB=bar.querySelector('.tab-add-btn'); // 先頭=「＋新規見積」
+  if(addB) addB.style.display='none';
 }
 
 // ── タブのコピー ──
@@ -5298,6 +5285,34 @@ function copyTab(srcId){
   buildPanel(newId,null);
   restoreTabDOM(newId,domVals,window._ts[newId]);
   switchTab(newId);
+}
+
+// PPPPPP-31: 数量違い/仕様違いで複製 (コピーして作成 + 元見積とリンク)
+function _copyTabVariant_(srcId, mode){
+  const newId = ++tabCnt;
+  const srcT = tabs.find(t=>t.id===srcId);
+  const variantLabel = (mode==='qty') ? '(数量違い)' : '(仕様違い)';
+  tabs.push({ id:newId, label:(srcT?.label||'見積')+variantLabel });
+  const fields = ['cust','prod','date','spec','memo','estno','unit','valid','erate','trate',
+    'finish-sel','finish-w','finish-h','expand-sel','expand-w','expand-h','job-type','spec-change','plate-change'];
+  const domVals = {};
+  fields.forEach(f=>{ const el=document.getElementById(`${f}-${srcId}`); if(el) domVals[f]=el.value; });
+  var srcEstNo = domVals['estno'] || (srcT?.label||'');
+  domVals['estno'] = ''; // 変種は新しい見積番号を採番
+  window._ts[newId] = JSON.parse(JSON.stringify(ts(srcId)));
+  window._ts[newId]._variantOf = srcId;
+  window._ts[newId]._variantMode = mode;
+  renderTabbar();
+  buildPanel(newId,null);
+  restoreTabDOM(newId,domVals,window._ts[newId]);
+  // メモに複製元のリンク注記
+  var memoEl = document.getElementById('memo-'+newId);
+  if(memoEl){ var note = '[' + (mode==='qty'?'数量違い':'仕様違い') + ' 複製元: ' + (srcEstNo||'元見積') + ']'; memoEl.value = (memoEl.value ? memoEl.value+'\n' : '') + note; }
+  switchTab(newId);
+  if(typeof _setEstPageTitle_ === 'function') _setEstPageTitle_(mode==='qty' ? '📝 数量違い見積（複製）' : '📝 仕様違い見積（複製）', '#0891b2');
+  // 変更すべき項目にフォーカス
+  setTimeout(function(){ var f=document.getElementById((mode==='qty'?'qty-':'spec-')+newId); if(f){ try{ f.focus(); }catch(e){} } }, 200);
+  if(typeof _toastMsg==='function') _toastMsg('📋 ' + (mode==='qty'?'数量違い':'仕様違い') + 'の見積を複製しました。' + (mode==='qty'?'数量':'仕様') + 'を変更して保存してください');
 }
 
 // ── 合冊選択モーダル ──
@@ -6820,14 +6835,14 @@ function buildPanel(id,initData){
   
   <div class="brow">
     <button class="btn btn-p" onclick="showPV([${id}])">この見積書をプレビュー</button>
-    <button class="btn" onclick="openMergeModal()">合冊印刷（タブ選択）</button>
     <button class="btn" onclick="saveHist(${id})">実績として保存</button>
     <button class="btn" style="background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(${id})">⭐ テンプレート保存</button>
     <button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="clearTab(${id})" title="この見積書の入力内容をクリア">🗑 クリア</button>
   </div>
+  <!-- PPPPPP-31: 数量違い/仕様違いの複製 (コピーして作成・元見積とリンク) -->
   <div class="brow" style="margin-top:4px">
-    <button class="btn" onclick="copyTab(${id})" title="この見積書を複製して仕様違いを別タブで作成">⧉ この見積をコピー（仕様違い用）</button>
-    <button class="btn" onclick="splitQtyToTabs(${id})" title="数量パターンをそれぞれ別タブの見積書に分割">↗ 数量パターンをタブに分割</button>
+    <button class="btn" style="background:#ede9fe;border-color:#c4b5fd;color:#5b21b6;font-weight:700" onclick="_copyTabVariant_(${id},'qty')" title="この見積を複製して『数量違い』の見積書を作成 (得意先・品名・仕様はそのまま、数量だけ変更)">📋 数量違いで複製</button>
+    <button class="btn" style="background:#ede9fe;border-color:#c4b5fd;color:#5b21b6;font-weight:700" onclick="_copyTabVariant_(${id},'spec')" title="この見積を複製して『仕様違い』の見積書を作成 (得意先・品名はそのまま、仕様を変更)">📋 仕様違いで複製</button>
   </div>
   
   <!-- 見積パターン保存・受注案件として確定セクション -->
