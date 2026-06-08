@@ -25389,6 +25389,66 @@ function parseTiers(str){
 // HHHHHH-1: ステータス体系を刷新 (データ作成→校正サイクル→印刷→加工→納品)
 const PROJ_STATUSES=['データ作成中','初校提出待','初校中','2校提出待','2校中','校了作業待','印刷中','加工中','納品済','完了'];
 const PROC_STEPS=['版下','校了','印刷','加工','納品'];
+
+// PPPPPP-20 (#6): ステータス変更ガード — 逆行/飛び越し選択は確認 (誤操作防止)
+function _changeProjStatus_(oi, newStatus, sel){
+  var p = (DB.projects||[])[oi]; if(!p) return;
+  var old = p.status || PROJ_STATUSES[0];
+  if(newStatus === old) return;
+  var io = PROJ_STATUSES.indexOf(old), inu = PROJ_STATUSES.indexOf(newStatus);
+  if(io >= 0 && inu >= 0){
+    var risky = (inu < io) || (inu > io + 1);
+    if(risky){
+      var dir = (inu < io) ? ('前の段階へ戻します ('+(io-inu)+'段階)') : (((inu-io))+'段階 飛び越して進めます');
+      if(!confirm('⚠️ ステータスを大きく変更します\n\n「'+old+'」→「'+newStatus+'」\n'+dir+'\n\n本当によろしいですか?')){
+        if(sel) sel.value = old; // 取り消し
+        return;
+      }
+    }
+  }
+  p.status = newStatus; p.updatedAt = new Date().toISOString();
+  if(typeof saveDB==='function') saveDB();
+  if(typeof renderProjects==='function') renderProjects();
+}
+// PPPPPP-21 (#8): 案件削除は「申請→承認」フロー (誤削除防止)
+function _requestDeleteProj_(oi){
+  var p=(DB.projects||[])[oi]; if(!p) return;
+  var reason = prompt('この案件の削除を申請します。理由 (任意):', '');
+  if(reason===null) return; // キャンセル
+  p._deleteRequested = { by:(currentAuth&&currentAuth.userName)||'', at:new Date().toISOString(), reason:reason||'' };
+  if(typeof _addAuditLog_==='function') try{ _addAuditLog_('delete_request','project:'+p.id, (p.cust||'')+'/'+(p.item||'')+' 削除申請'); }catch(e){}
+  if(typeof saveDB==='function') saveDB();
+  if(typeof renderProjects==='function') renderProjects();
+  if(typeof _toastMsg==='function') _toastMsg('🗑 削除を申請しました（管理者の承認後に削除されます）');
+}
+function _approveDeleteProj_(oi){
+  if(!(currentAuth&&currentAuth.role==='admin')){ alert('削除の承認は管理者のみ可能です'); return; }
+  var p=(DB.projects||[])[oi]; if(!p) return;
+  if(!confirm('⚠️ この案件を完全に削除します（元に戻せません）\n\n'+(p.id||'')+'  '+(p.cust||'')+' / '+(p.item||'')+'\n申請者: '+((p._deleteRequested&&p._deleteRequested.by)||'-')+'\n理由: '+((p._deleteRequested&&p._deleteRequested.reason)||'(なし)')+'\n\n削除を承認しますか?')) return;
+  if(typeof _addAuditLog_==='function') try{ _addAuditLog_('delete','project:'+p.id, (p.cust||'')+'/'+(p.item||'')+' 削除承認'); }catch(e){}
+  DB.projects.splice(oi,1);
+  if(typeof saveDB==='function') saveDB();
+  if(typeof renderProjects==='function') renderProjects();
+  if(typeof _toastMsg==='function') _toastMsg('案件を削除しました');
+}
+function _cancelDeleteProj_(oi){
+  var p=(DB.projects||[])[oi]; if(!p) return;
+  delete p._deleteRequested;
+  if(typeof saveDB==='function') saveDB();
+  if(typeof renderProjects==='function') renderProjects();
+  if(typeof _toastMsg==='function') _toastMsg('削除申請を取り消しました');
+}
+// 工程進捗からステータスを自動算出 (完了した工程に応じて) — #7の工程更新時に利用
+function _statusFromSteps_(p){
+  if(!p || !p.steps) return p && p.status;
+  var done = function(k){ return p.steps[k]==='完了' || p.steps[k]==='納品済' || p.steps[k]==='OK' || p.steps[k]==='発送済'; };
+  if(done('納品')) return '納品済';
+  if(done('加工')) return '加工中';
+  if(done('印刷')) return '印刷中';
+  if(done('校了')) return '校了作業待';
+  if(done('版下')) return '初校提出待';
+  return p.status || 'データ作成中';
+}
 // 各ステータスの色 (見積/保留/失注 + 旧ステータス互換も含む)
 const STATUS_COLORS={
   'データ作成中':'#2563eb','初校提出待':'#fbbf24','初校中':'#f59e0b','2校提出待':'#fb923c','2校中':'#ea580c',
@@ -27157,7 +27217,7 @@ function renderProjects(){
       </td>
       <td onclick="event.stopPropagation()">
         <select style="font-size:11px;padding:2px 8px;color:#fff;font-weight:700;border:1px solid ${sc};border-radius:10px;background:${sc};cursor:pointer"
-          onchange="DB.projects[${oi}].status=this.value;saveDB();renderProjects()">
+          onchange="_changeProjStatus_(${oi}, this.value, this)">
           ${PROJ_STATUSES.map(s=>`<option value="${s}"${r.status===s?' selected':''} style="color:#1a1a1a;background:#fff">${s}</option>`).join('')}
         </select>
       </td>
@@ -27169,7 +27229,12 @@ function renderProjects(){
           onchange="DB.projects[${oi}].assignee=this.value;saveDB()">
       </td>
       <td style="white-space:nowrap" onclick="event.stopPropagation()">
-        <button class="del-btn" onclick="if(confirm('削除？')){DB.projects.splice(${oi},1);saveDB();renderProjects()}">×</button>
+        ${r._deleteRequested
+          ? `<span title="${String(r._deleteRequested.reason||'').replace(/"/g,'&quot;')}" style="font-size:10px;color:#b91c1c;background:#fee2e2;border-radius:4px;padding:2px 6px;white-space:nowrap">🗑 削除申請中</span>`
+            + ((currentAuth&&currentAuth.role==='admin')
+                ? ` <button class="btn" style="font-size:10px;background:#dc2626;color:#fff;border-color:#dc2626" onclick="_approveDeleteProj_(${oi})" title="承認して削除">承認</button> <button class="btn" style="font-size:10px" onclick="_cancelDeleteProj_(${oi})" title="申請を却下">却下</button>`
+                : ` <button class="btn" style="font-size:10px" onclick="_cancelDeleteProj_(${oi})" title="申請を取消">取消</button>`)
+          : `<button class="del-btn" onclick="_requestDeleteProj_(${oi})" title="削除申請 (承認後に削除)">×</button>`}
       </td>
     </tr>`;
 
