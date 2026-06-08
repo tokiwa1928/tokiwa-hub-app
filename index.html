@@ -4782,6 +4782,8 @@ function _injectPageHeader_(id, pageEl){
   // 既存のヘッダーを除去
   var existing = pageEl.querySelector(':scope > .page-header-big');
   if(existing) existing.remove();
+  // PPPPPP-30: 基本情報サマリーカードも除去 (閲覧モードを開いた時のみ再表示)
+  var oldCard = pageEl.querySelector(':scope > #est-info-card'); if(oldCard) oldCard.remove();
 
   var header = document.createElement('div');
   header.className = 'page-header-big';
@@ -13458,7 +13460,11 @@ function editEstimateInTab(estId){
     if(typeof _hideEntryKindBanner_ === 'function') _hideEntryKindBanner_(_tid);
     if(typeof _setEstPageTitle_ === 'function') _setEstPageTitle_('📝 見積書 詳細', '#0891b2');
     if(typeof calc === 'function'){ try { calc(_tid); } catch(e){} }
-    if(typeof _markEstViewMode_ === 'function') _markEstViewMode_(_tid); // 閲覧モードで開く
+    if(typeof _markEstViewMode_ === 'function') _markEstViewMode_(_tid, { // 閲覧モードで開く + 基本情報
+      seiban: est.id, quoteNo: est.id, cust: est.cust, item: est.item,
+      qty: (est.qty ? (est.qty + (est.unit||'部')) : ''),
+      amount: (est.exTax ? '¥' + Number(est.exTax).toLocaleString() : ''), status: '見積中'
+    });
   })();
 }
 
@@ -13493,7 +13499,12 @@ function _openProjInEstForm_(oi){
     if(typeof _hideEntryKindBanner_ === 'function') _hideEntryKindBanner_(_tid);
     if(typeof _setEstPageTitle_ === 'function') _setEstPageTitle_('📝 受注案件 詳細', '#7c3aed');
     if(typeof calc === 'function'){ try { calc(_tid); } catch(e){} }
-    if(typeof _markEstViewMode_ === 'function') _markEstViewMode_(_tid); // 閲覧モードで開く
+    if(typeof _markEstViewMode_ === 'function') _markEstViewMode_(_tid, { // 閲覧モードで開く + 基本情報
+      seiban: p.id, quoteNo: p.quotationId, quoteNoLink: !!p.quotationId,
+      cust: p.cust, enduser: (p.enduser || p.endUser || ''), item: p.item,
+      qty: (p.qty ? (p.qty + (p.unit||'部')) : ''), due: p.dueDate,
+      amount: (p.exTax ? '¥' + Number(p.exTax).toLocaleString() : ''), status: p.status
+    });
   })();
 }
 
@@ -16143,8 +16154,29 @@ function _setEstReadonly_(tid, ro){
     el.style.cursor = ro ? 'default' : '';
   });
 }
-function _markEstViewMode_(tid){
+// PPPPPP-30: 詳細(閲覧)上部に基本情報サマリーを表示
+function _renderEstInfoCard_(info){
+  var pg = document.getElementById('page-est'); if(!pg) return;
+  var old = pg.querySelector('#est-info-card'); if(old) old.remove();
+  if(!info) return;
+  var card = document.createElement('div'); card.id = 'est-info-card';
+  card.style.cssText = 'margin:0 12px 12px;padding:10px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;display:flex;flex-wrap:wrap;gap:18px';
+  var items = [
+    ['製番', info.seiban], ['見積番号', info.quoteNo], ['得意先', info.cust], ['エンドユーザー', info.enduser],
+    ['商品名', info.item], ['数量', info.qty], ['納期', info.due], ['金額', info.amount], ['ステータス', info.status]
+  ];
+  card.innerHTML = items.filter(function(x){ return x[1]; }).map(function(x){
+    var val = (x[0] === '見積番号' && info.quoteNoLink)
+      ? '<a href="#" onclick="event.preventDefault();_jumpToQuote_(\'' + String(x[1]).replace(/\'/g,'') + '\')" style="color:#1e40af;text-decoration:underline">' + _pdmEsc_(x[1]) + '</a>'
+      : _pdmEsc_(x[1]);
+    return '<div style="min-width:80px"><div style="font-size:10px;color:#94a3b8">' + x[0] + '</div><div style="font-size:13px;font-weight:700">' + val + '</div></div>';
+  }).join('');
+  var hb = pg.querySelector('.page-header-big');
+  if(hb && hb.nextSibling) pg.insertBefore(card, hb.nextSibling); else pg.insertBefore(card, pg.firstChild);
+}
+function _markEstViewMode_(tid, info){
   _setEstReadonly_(tid, true);
+  if(typeof _renderEstInfoCard_ === 'function') _renderEstInfoCard_(info);
   var pg = document.getElementById('page-est'); var hb = pg && pg.querySelector('.page-header-big'); if(!hb) return;
   hb.querySelectorAll('.est-mode-ctrl').forEach(function(x){ x.remove(); });
   var wrap = document.createElement('div');
