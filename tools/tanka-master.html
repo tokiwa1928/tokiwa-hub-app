@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📚 単価マスタ構築 | Tokiwa Hub Tools</title>
+<!-- SheetJS full: xlsx / xls / Lotus 1-2-3 (wk1/wk3/wk4/123) / csv 読込対応 -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; --amber:#f59e0b; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:1000px; margin:16px auto; padding:0 14px; }
+  .tabs{ display:flex; gap:6px; margin-bottom:10px; }
+  .tab{ padding:8px 18px; border:1px solid var(--line); border-radius:8px 8px 0 0; background:#e9e7e2; cursor:pointer; font-weight:700; font-size:13.5px; }
+  .tab.act{ background:#fff; border-bottom-color:#fff; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.5rem; text-transform:uppercase; }
+  .btn{ padding:8px 14px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .btn-c{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  .hint{ background:#ecfeff; border:1px solid #67e8f9; border-radius:7px; padding:9px 13px; font-size:12.5px; color:#155e75; line-height:1.7; }
+  #drop{ border:2.5px dashed #94a3b8; border-radius:10px; padding:30px 16px; text-align:center; color:#64748b; font-size:14px; cursor:pointer; background:#fff; }
+  #drop.over{ border-color:var(--cyan); background:#ecfeff; color:var(--cyan); }
+  table{ width:100%; border-collapse:collapse; }
+  th{ background:#f4f3f0; font-size:10.5px; padding:5px 6px; border:1px solid var(--line); text-align:left; white-space:nowrap; }
+  td{ font-size:12.5px; padding:3px 5px; border:1px solid var(--line); vertical-align:middle; }
+  td input[type=text], td input[type=number]{ width:100%; padding:4px 6px; border:1px solid #e2e0da; border-radius:4px; font-size:12.5px; font-family:inherit; }
+  td.num, input.num{ text-align:right; font-variant-numeric:tabular-nums; }
+  .b-kakutei{ background:#dcfce7; color:#166534; font-size:10px; font-weight:800; padding:2px 8px; border-radius:10px; }
+  .b-kari{ background:#fef3c7; color:#92400e; font-size:10px; font-weight:800; padding:2px 8px; border-radius:10px; }
+  .prev{ font-size:10.5px; color:#64748b; }
+  .up{ color:#b91c1c; } .down{ color:#166534; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🧰</span>
+  <span class="tname">📚 単価マスタ構築</span>
+  <span class="user" id="hub-user"></span>
+</header>
+<main>
+  <div class="tabs">
+    <div class="tab act" id="tab-in" onclick="swTab('in')">📥 過去見積の取込</div>
+    <div class="tab" id="tab-ms" onclick="swTab('ms')">📚 単価マスタ <span id="ms-count"></span></div>
+  </div>
+
+  <!-- ───── 取込タブ ───── -->
+  <div id="pane-in">
+    <div class="hint" style="margin-bottom:10px">
+      過去の見積書・見積計算書を入れると、<b>品名・数量・単価</b>の明細行を自動で拾います。<br>
+      対応形式: <b>Excel (.xlsx / .xls)</b>・<b>ロータス 1-2-3 (.wk1 / .wk3 / .wk4 / .123)</b>・CSV。Googleドライブ(PC版)のフォルダからそのままドラッグ&ドロップOK。<br>
+      拾った行を手直し → ✔ を付けて<b>マスタへ登録</b>。同じ品名は<b>前回単価として履歴に残り、新しい単価で更新</b>されます。
+    </div>
+    <div class="sec">
+      <div id="drop" onclick="document.getElementById('fi').click()">📂 過去見積ファイルをドラッグ&ドロップ または クリックして選択（複数OK）</div>
+      <input id="fi" type="file" accept=".xlsx,.xls,.wk1,.wk3,.wk4,.123,.wks,.csv" multiple style="display:none" onchange="readFiles(this.files)">
+      <div id="read-log" style="margin-top:6px"></div>
+    </div>
+    <div class="sec" id="ext-sec" style="display:none">
+      <div class="st">抽出された明細（手直しできます）</div>
+      <table>
+        <thead><tr><th style="width:30px"><input type="checkbox" checked onchange="rows.forEach(function(r){r.use=this.checked},this);renderRows()" title="全選択"></th>
+          <th>品名・仕様（マスタのキーになります）</th><th style="width:70px">数量</th><th style="width:55px">単位</th><th style="width:75px">単価</th><th style="width:90px">金額</th><th style="width:120px">得意先</th><th style="width:55px">年</th><th style="width:130px">出典</th></tr></thead>
+        <tbody id="ext-body"></tbody>
+      </table>
+      <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-g" style="font-size:14.5px" onclick="registerToMaster()">📚 ✔の行を単価マスタへ登録</button>
+        <span class="muted">同じ品名は単価を更新（前回単価は履歴へ）。新しい品名は「仮」で追加されます。</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── マスタタブ ───── -->
+  <div id="pane-ms" style="display:none">
+    <div class="hint" style="margin-bottom:10px">
+      <b>前回単価ありき</b>の単価表です。取込のたびに単価が更新され（履歴つき）、内容が固まったら<b>「確定」</b>にします。<br>
+      例: 「A4 無線綴じ 20P 冊子」= @100/冊。確定したマスタが今後の見積の基礎単価になります（Tokiwa Hub 本体と共有済み）。
+    </div>
+    <div class="sec">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <input type="text" id="ms-q" placeholder="🔍 品名で検索…" style="flex:1;min-width:180px;padding:7px 10px;border:1px solid #d0cec8;border-radius:6px;font-size:13px" oninput="renderMaster()">
+        <select id="ms-f" style="padding:7px;border:1px solid #d0cec8;border-radius:6px;font-size:12.5px" onchange="renderMaster()">
+          <option value="">すべて</option><option value="仮">仮のみ</option><option value="確定">確定のみ</option>
+        </select>
+        <button class="btn" onclick="exportMaster('xlsx')">⬇ Excel出力</button>
+        <button class="btn" onclick="exportMaster('csv')">⬇ CSV出力</button>
+      </div>
+      <table>
+        <thead><tr><th>品名・仕様</th><th style="width:55px">単位</th><th style="width:85px">現単価</th><th style="width:150px">前回単価・履歴</th><th style="width:110px">出典</th><th style="width:60px">状態</th><th style="width:110px">操作</th></tr></thead>
+        <tbody id="ms-body"></tbody>
+      </table>
+      <div class="muted" style="margin-top:6px">単価をクリックで直接修正できます。「確定」で基礎単価としてロック（再取込でも自動では変わらず、履歴にのみ追記）。</div>
+    </div>
+  </div>
+
+  <p class="muted">💾 マスタは Tokiwa Hub 本体データ（このブラウザ）に保存され、日次バックアップにも含まれます。🔒 ファイルはPC内だけで処理されます。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+// ═════════ Tokiwa Hub 共有ヘルパー ═════════
+var HUB_DBKEY = 'murayama_v15';
+var HUB_AUTHKEY = 'murayama_auth';
+var HUB_TOOL_ID = 'tanka-master';
+function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ return null; } }
+function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
+function hubSave(mutator){
+  var db = hubLoad();
+  if(!db){ toast('❌ 本体データ無し。先に本体アプリへログインしてください'); return false; }
+  try { mutator(db); } catch(e){ toast('❌ 変更失敗: ' + e); return false; }
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); } catch(e){ toast('❌ 保存失敗: ' + e); return false; }
+  try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
+  return true;
+}
+function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2800); }
+function yen(n){ return '¥' + Number(n||0).toLocaleString(); }
+(function(){ var a=hubAuth(); document.getElementById('hub-user').textContent = a.loggedIn ? ('👤 '+(a.userName||'')+' / '+(a.companyName||'')) : '⚠ 本体未ログイン'; })();
+// ═════════ ここからツール本体 ═════════
+
+var rows = [];   // 抽出明細
+function swTab(t){
+  document.getElementById('tab-in').classList.toggle('act', t==='in');
+  document.getElementById('tab-ms').classList.toggle('act', t==='ms');
+  document.getElementById('pane-in').style.display = t==='in' ? '' : 'none';
+  document.getElementById('pane-ms').style.display = t==='ms' ? '' : 'none';
+  if(t==='ms') renderMaster();
+}
+
+// ── ファイル読込 (SheetJS: xlsx/xls/Lotus/csv) ──
+var drop = document.getElementById('drop');
+['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add('over'); }); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove('over'); }); });
+drop.addEventListener('drop', function(e){ readFiles(e.dataTransfer.files); });
+
+function readFiles(fl){
+  var arr = [].slice.call(fl);
+  if(!arr.length) return;
+  var log = document.getElementById('read-log');
+  arr.forEach(function(f){
+    var r = new FileReader();
+    r.onload = function(){
+      try {
+        var wb = XLSX.read(r.result, { type:'array', codepage:932, cellNF:false });
+        var found = 0;
+        var meta = guessMeta(f.name, wb);
+        wb.SheetNames.forEach(function(sn){
+          var aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'' });
+          var ext = extractRows(aoa);
+          ext.forEach(function(x){
+            rows.push({ use:true, item:x.item, qty:x.qty, unit:x.unit||meta.unit||'', price:x.price, amount:x.amount||Math.round(x.qty*x.price), cust:meta.cust, year:meta.year, src:f.name + (wb.SheetNames.length>1 ? ' / '+sn : '') });
+            found++;
+          });
+        });
+        log.innerHTML += '<div style="font-size:12px;font-weight:600;color:' + (found?'#166534':'#b45309') + '">' + (found?'✅':'⚠') + ' ' + esc(f.name) + ' — 明細 ' + found + ' 行' + (found?'':' (自動で拾えず。形式は読めています→手動で行追加してください)') + '</div>';
+        renderRows();
+      } catch(e){
+        log.innerHTML += '<div style="font-size:12px;color:#b91c1c">❌ ' + esc(f.name) + ' 読込失敗: ' + esc(String(e.message||e)) + '</div>';
+      }
+    };
+    r.readAsArrayBuffer(f);
+  });
+}
+
+function guessMeta(fname, wb){
+  var year = '', cust = '', unit = '';
+  var m = fname.match(/令和(\d{1,2})/); if(m) year = '令和' + m[1];
+  if(!year){ m = fname.match(/20[12][0-9]/); if(m) year = m[0]; }
+  if(!year){ m = fname.match(/[RrＲ](\d{1,2})[^0-9]/); if(m) year = 'R' + m[1]; }
+  // 先頭シートの上部から 御中 を探す
+  try {
+    var aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
+    for(var r2 = 0; r2 < Math.min(aoa.length, 12) && !cust; r2++){
+      (aoa[r2]||[]).forEach(function(c){
+        var s = String(c||'');
+        if(!cust && /御中/.test(s)) cust = s.replace(/御中|様/g,'').trim();
+        if(!year){ var ym = s.match(/令和(\d{1,2})年|20[12][0-9]年/); if(ym) year = ym[0].replace('年',''); }
+      });
+    }
+  } catch(e){}
+  return { year: year, cust: cust, unit: unit };
+}
+
+// 明細抽出: ①数量/単価ヘッダー方式 ②「文字 + q×p≈金額」パターン方式
+function extractRows(aoa){
+  var out = [];
+  var hQty=-1, hPrice=-1, hAmt=-1, hItem=-1, hUnit=-1, headerRow=-1;
+  for(var r = 0; r < Math.min(aoa.length, 40); r++){
+    var row = aoa[r] || [];
+    for(var c = 0; c < row.length; c++){
+      var s = String(row[c]||'');
+      if(/数\s*量/.test(s) && hQty<0){ hQty=c; headerRow=r; }
+      if(/単\s*価/.test(s) && hPrice<0){ hPrice=c; headerRow=r; }
+      if(/金\s*額/.test(s) && hAmt<0) hAmt=c;
+      if(/品\s*名|品目|名\s*称|内容|摘要|件名/.test(s) && hItem<0) hItem=c;
+      if(/単\s*位/.test(s) && hUnit<0) hUnit=c;
+    }
+    if(hQty>=0 && hPrice>=0) break;
+  }
+  function num(v){ if(typeof v==='number') return v; var s=String(v||'').replace(/[,¥￥\s]/g,''); var n=parseFloat(s); return isNaN(n)?0:n; }
+  function firstText(row, skip){ for(var i=0;i<row.length;i++){ if(skip.indexOf(i)>=0) continue; var s=String(row[i]||'').trim(); if(s.length>=2 && !/^[\d,.\-¥￥\s%]+$/.test(s)) return s; } return ''; }
+  if(hQty >= 0 && hPrice >= 0){
+    for(var r1 = headerRow+1; r1 < aoa.length; r1++){
+      var row1 = aoa[r1] || [];
+      var qty = num(row1[hQty]), price = num(row1[hPrice]);
+      var amt = hAmt >= 0 ? num(row1[hAmt]) : 0;
+      var item = hItem >= 0 ? String(row1[hItem]||'').trim() : firstText(row1, [hQty,hPrice,hAmt]);
+      var unit = hUnit >= 0 ? String(row1[hUnit]||'').trim() : '';
+      if(item && qty > 0 && price > 0 && !/合計|小計|消費税|税/.test(item)) out.push({ item:item, qty:qty, price:price, amount:amt, unit:unit });
+    }
+  }
+  if(!out.length){
+    // パターン方式: テキスト + 数値3つ以上で q×p≈amt
+    for(var r3 = 0; r3 < aoa.length; r3++){
+      var row3 = aoa[r3] || [];
+      var nums = [], text = '';
+      for(var c3 = 0; c3 < row3.length; c3++){
+        var v = row3[c3];
+        if(typeof v === 'number' && v !== 0) nums.push(v);
+        else { var sv = String(v||'').trim(); var nv = num(sv); if(sv && nv && /^[\d,.\s¥￥]+$/.test(sv)) nums.push(nv); else if(sv.length >= 2 && !text && !/^[\d,.\-\s%]+$/.test(sv)) text = sv; }
+      }
+      if(!text || nums.length < 3 || /合計|小計|消費税|税込|税抜/.test(text)) continue;
+      var hit = null;
+      outer:
+      for(var i = 0; i < nums.length; i++){
+        for(var j = 0; j < nums.length; j++){
+          if(i === j) continue;
+          var q = nums[i], p = nums[j];
+          if(q >= 1 && q <= 1000000 && q === Math.round(q) && p > 0 && p <= 1000000){
+            for(var k = 0; k < nums.length; k++){
+              if(k === i || k === j) continue;
+              if(Math.abs(q * p - nums[k]) <= Math.max(2, q * p * 0.01)){ hit = { item:text, qty:q, price:p, amount:nums[k] }; break outer; }
+            }
+          }
+        }
+      }
+      if(hit) out.push(hit);
+    }
+  }
+  return out;
+}
+
+function renderRows(){
+  var sec = document.getElementById('ext-sec');
+  sec.style.display = rows.length ? '' : 'none';
+  document.getElementById('ext-body').innerHTML = rows.map(function(r, i){
+    return '<tr>'
+      + '<td style="text-align:center"><input type="checkbox" ' + (r.use?'checked':'') + ' onchange="rows[' + i + '].use=this.checked"></td>'
+      + '<td><input type="text" value="' + esc(r.item) + '" onchange="rows[' + i + '].item=this.value"></td>'
+      + '<td><input type="number" class="num" value="' + r.qty + '" onchange="rows[' + i + '].qty=parseFloat(this.value)||0"></td>'
+      + '<td><input type="text" value="' + esc(r.unit) + '" placeholder="冊/枚" onchange="rows[' + i + '].unit=this.value"></td>'
+      + '<td><input type="number" class="num" step="0.01" value="' + r.price + '" onchange="rows[' + i + '].price=parseFloat(this.value)||0"></td>'
+      + '<td class="num">' + yen(r.amount) + '</td>'
+      + '<td><input type="text" value="' + esc(r.cust) + '" onchange="rows[' + i + '].cust=this.value"></td>'
+      + '<td><input type="text" value="' + esc(r.year) + '" onchange="rows[' + i + '].year=this.value"></td>'
+      + '<td style="font-size:10.5px;color:#64748b">' + esc(r.src) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+// ── マスタ登録 (前回単価ありき: 同キーは履歴を残して単価更新) ──
+function normKey(s){ return String(s||'').replace(/[\s　]+/g,' ').trim(); }
+function registerToMaster(){
+  var sel = rows.filter(function(r){ return r.use && r.item && r.price > 0; });
+  if(!sel.length){ toast('登録対象がありません'); return; }
+  var added = 0, updated = 0, skippedLocked = 0;
+  var ok = hubSave(function(db){
+    if(!Array.isArray(db.tankaMaster)) db.tankaMaster = [];
+    sel.forEach(function(r){
+      var key = normKey(r.item);
+      var ex = db.tankaMaster.find(function(m){ return normKey(m.item) === key; });
+      var now = new Date().toISOString();
+      if(ex){
+        if(ex.status === '確定' ){
+          // 確定済は自動では変えない。履歴にだけ追記
+          ex.prevPrices = ex.prevPrices || [];
+          ex.prevPrices.push({ price: r.price, year: r.year, src: r.src, at: now, note: '取込(確定中のため未反映)' });
+          skippedLocked++;
+        } else {
+          ex.prevPrices = ex.prevPrices || [];
+          if(ex.price !== r.price) ex.prevPrices.push({ price: ex.price, year: ex.year, src: ex.src, at: now });
+          ex.price = r.price; ex.qty = r.qty; ex.unit = r.unit || ex.unit;
+          ex.cust = r.cust || ex.cust; ex.year = r.year || ex.year; ex.src = r.src;
+          ex.updatedAt = now;
+          updated++;
+        }
+      } else {
+        db.tankaMaster.push({
+          id: 'TM-' + Date.now() + '-' + Math.floor(Math.random()*10000),
+          item: r.item, unit: r.unit || '', qty: r.qty, price: r.price,
+          cust: r.cust || '', year: r.year || '', src: r.src,
+          status: '仮', prevPrices: [], createdAt: now, updatedAt: now
+        });
+        added++;
+      }
+    });
+  });
+  if(ok){
+    toast('✅ 新規 ' + added + ' 件 / 更新 ' + updated + ' 件' + (skippedLocked ? ' / 確定済スキップ ' + skippedLocked + ' 件(履歴のみ)' : ''));
+    rows = rows.filter(function(r){ return !r.use; });
+    renderRows();
+    updateMsCount();
+    swTab('ms');
+  }
+}
+
+// ── マスタ表示・編集 ──
+function getMaster(){ var db = hubLoad(); return (db && db.tankaMaster) || []; }
+function updateMsCount(){ document.getElementById('ms-count').textContent = '(' + getMaster().length + ')'; }
+function renderMaster(){
+  updateMsCount();
+  var q = (document.getElementById('ms-q').value||'').toLowerCase();
+  var f = document.getElementById('ms-f').value;
+  var list = getMaster().filter(function(m){
+    if(f && m.status !== f) return false;
+    if(q && (m.item||'').toLowerCase().indexOf(q) < 0) return false;
+    return true;
+  }).sort(function(a,b){ return (b.updatedAt||'').localeCompare(a.updatedAt||''); });
+  document.getElementById('ms-body').innerHTML = list.length ? list.map(function(m){
+    var prev = (m.prevPrices||[]).slice(-1)[0];
+    var diff = prev ? (m.price > prev.price ? '<span class="up">↑</span>' : m.price < prev.price ? '<span class="down">↓</span>' : '→') : '';
+    var hist = (m.prevPrices||[]).slice(-4).reverse().map(function(p){ return yen(p.price) + (p.year ? '('+p.year+')' : ''); }).join(' ← ');
+    return '<tr>'
+      + '<td><b>' + esc(m.item) + '</b><div class="muted">' + esc(m.cust||'') + (m.qty ? ' / 基準数量 ' + Number(m.qty).toLocaleString() : '') + '</div></td>'
+      + '<td>' + esc(m.unit||'') + '</td>'
+      + '<td class="num"><input type="number" class="num" step="0.01" value="' + m.price + '" style="width:80px" onchange="editPrice(\'' + m.id + '\', this.value)"></td>'
+      + '<td class="prev">' + diff + ' ' + (hist || '—') + '</td>'
+      + '<td style="font-size:10.5px;color:#64748b">' + esc(m.year||'') + '<br>' + esc((m.src||'').slice(0,22)) + '</td>'
+      + '<td style="text-align:center"><span class="' + (m.status==='確定'?'b-kakutei':'b-kari') + '">' + m.status + '</span></td>'
+      + '<td style="white-space:nowrap">'
+      +   (m.status==='確定'
+            ? '<button class="btn" style="font-size:11px;padding:3px 8px" onclick="setStatus(\'' + m.id + '\',\'仮\')">解除</button>'
+            : '<button class="btn" style="font-size:11px;padding:3px 8px;background:#dcfce7;border-color:#86efac;color:#166534" onclick="setStatus(\'' + m.id + '\',\'確定\')">✔ 確定</button>')
+      +   ' <button class="btn" style="font-size:11px;padding:3px 8px;color:#b91c1c" onclick="delEntry(\'' + m.id + '\')">削除</button>'
+      + '</td></tr>';
+  }).join('') : '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:20px">まだマスタがありません。「📥 過去見積の取込」から始めてください。</td></tr>';
+}
+function editPrice(id, v){
+  var p = parseFloat(v); if(isNaN(p)) return;
+  hubSave(function(db){
+    var m = (db.tankaMaster||[]).find(function(x){ return x.id === id; }); if(!m) return;
+    if(m.price !== p){ m.prevPrices = m.prevPrices||[]; m.prevPrices.push({ price:m.price, year:m.year, src:'手修正', at:new Date().toISOString() }); m.price = p; m.updatedAt = new Date().toISOString(); }
+  });
+  renderMaster();
+}
+function setStatus(id, st){
+  hubSave(function(db){ var m=(db.tankaMaster||[]).find(function(x){return x.id===id;}); if(m){ m.status=st; m.updatedAt=new Date().toISOString(); } });
+  renderMaster();
+}
+function delEntry(id){
+  if(!confirm('このマスタ項目を削除しますか?')) return;
+  hubSave(function(db){ db.tankaMaster = (db.tankaMaster||[]).filter(function(x){ return x.id !== id; }); });
+  renderMaster();
+}
+
+// ── 出力 ──
+function exportMaster(fmt){
+  var list = getMaster();
+  if(!list.length){ toast('マスタが空です'); return; }
+  var aoa = [['品名・仕様','単位','現単価','状態','基準数量','得意先','年','出典','前回単価履歴']];
+  list.forEach(function(m){
+    aoa.push([m.item, m.unit||'', m.price, m.status, m.qty||'', m.cust||'', m.year||'', m.src||'',
+      (m.prevPrices||[]).map(function(p){ return p.price + (p.year?'('+p.year+')':''); }).join(' / ')]);
+  });
+  var ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:42},{wch:6},{wch:10},{wch:6},{wch:10},{wch:18},{wch:8},{wch:26},{wch:30}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '単価マスタ');
+  XLSX.writeFile(wb, '単価マスタ_' + new Date().toISOString().slice(0,10) + (fmt==='csv'?'.csv':'.xlsx'));
+}
+
+updateMsCount();
+
+// テスト用フック
+window.__test_read = function(name, buf){ readFiles([new File([buf], name)]); };
+</script>
+</body>
+</html>
