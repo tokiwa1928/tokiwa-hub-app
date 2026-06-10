@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🏦 入金消込 | Tokiwa Hub Tools</title>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --grn:#16a34a; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:900px; margin:18px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.5rem; text-transform:uppercase; }
+  textarea{ width:100%; min-height:120px; padding:9px 11px; border:1px solid #d0cec8; border-radius:6px; font-size:13px; font-family:Consolas,'BIZ UDゴシック',monospace; }
+  textarea:focus{ outline:none; border-color:#1a1a1a; }
+  .btn{ padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:14px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  table{ width:100%; border-collapse:collapse; }
+  th{ background:#f4f3f0; font-size:11px; padding:6px; border:1px solid var(--line); text-align:left; }
+  td{ font-size:13px; padding:6px; border:1px solid var(--line); vertical-align:middle; }
+  td.num{ text-align:right; font-variant-numeric:tabular-nums; font-weight:700; }
+  select{ width:100%; padding:5px 7px; border:1px solid #d0cec8; border-radius:5px; font-size:12px; font-family:inherit; }
+  .ok{ color:#16a34a; font-weight:800; } .ng{ color:#b91c1c; font-weight:700; }
+  .hint{ background:#fffbeb; border:1px solid #fde68a; border-radius:7px; padding:8px 12px; font-size:12px; color:#78350f; line-height:1.6; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🧰</span>
+  <span class="tname">🏦 入金消込</span>
+  <span class="user" id="hub-user"></span>
+</header>
+<main>
+  <div class="sec">
+    <div class="st">① 銀行明細を貼り付け（1行 = 1入金）</div>
+    <div class="hint" style="margin-bottom:8px">
+      ネットバンキングの入金明細をそのままコピペでOK。各行から <b>金額</b>（カンマ付き数字）と <b>振込名義</b>（カタカナ等）と <b>日付</b> を自動で拾います。<br>
+      例: <code>06/09 振込 ﾂｼﾏｼﾖｳｺｳｶｲｷﾞｼﾖ 138,600</code>
+    </div>
+    <textarea id="src" placeholder="06/09 振込 ﾂｼﾏｼﾖｳｺｳｶｲｷﾞｼﾖ 138,600&#10;06/09 振込 ｶ)ﾌｼﾞｼﾖｸﾋﾝ 55,000"></textarea>
+    <div style="margin-top:8px"><button class="btn" onclick="parseAndMatch()">🔍 解析して請求書と突合</button></div>
+  </div>
+
+  <div class="sec" id="result-sec" style="display:none">
+    <div class="st">② 突合結果を確認（消込先はプルダウンで変更可能）</div>
+    <div id="result"></div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-g" style="font-size:15px" onclick="commitAll()">💰 チェック済をまとめて消込登録</button>
+      <span class="muted">→ 本体の入金管理に記録され、請求書は「入金済」になります</span>
+    </div>
+  </div>
+
+  <p class="muted">💾 保存先は本体データ（このブラウザ）。本体アプリを開くと自動でクラウド同期・日次バックアップされます。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+// ═════════ Tokiwa Hub 共有ヘルパー ═════════
+var HUB_DBKEY = 'murayama_v15';
+var HUB_AUTHKEY = 'murayama_auth';
+var HUB_TOOL_ID = 'nyukin-check';
+function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ return null; } }
+function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
+function hubSave(mutator){
+  var db = hubLoad();
+  if(!db){ hubToast('❌ 本体データが見つかりません'); return false; }
+  try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); } catch(e){ hubToast('❌ 保存失敗: ' + e); return false; }
+  try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
+  return true;
+}
+function hubEsc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function hubToast(msg){ var t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2800); }
+function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
+(function(){ var a=hubAuth(); document.getElementById('hub-user').textContent = a.loggedIn ? ('👤 '+(a.userName||'')+' / '+(a.companyName||'')) : '⚠ 本体未ログイン'; })();
+// ═════════ ここからツール本体 ═════════
+
+// 半角カナ→全角カナ + 法人格・記号除去で名寄せ
+var HK = 'ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ';
+var ZK = 'ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン';
+function normName(s){
+  s = String(s||'');
+  var out = '';
+  for(var i=0;i<s.length;i++){
+    var c = s[i], n = s[i+1];
+    var idx = HK.indexOf(c);
+    if(idx >= 0){
+      var z = ZK[idx];
+      if(n === 'ﾞ'){ z = String.fromCharCode(z.charCodeAt(0)+1); i++; }
+      else if(n === 'ﾟ'){ z = String.fromCharCode(z.charCodeAt(0)+2); i++; }
+      out += z;
+    } else out += c;
+  }
+  return out
+    .replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|㈱|㈲|カ\)|ユ\)|ｶ\)|ﾕ\)|カブシキガイシャ|ユウゲンガイシャ/g, '')
+    .replace(/[\s　・．.\-ー]/g, '')
+    .toUpperCase();
+}
+// 得意先名 → カナ読みの簡易辞書は持たない。漢字社名とカナ名義の照合は「金額一致」を主、名義は補助スコア。
+
+var lines = [];
+
+function parseAndMatch(){
+  var db = hubLoad();
+  if(!db){ hubToast('❌ 本体データ無し。先に本体アプリへログインしてください'); return; }
+  var invs = (db.invoices||[]).filter(function(v){ return v.status !== 'paid'; });
+  var raw = document.getElementById('src').value.split(/\r?\n/).map(function(l){ return l.trim(); }).filter(Boolean);
+  if(!raw.length){ hubToast('明細を貼り付けてください'); return; }
+  lines = raw.map(function(l, li){
+    // 金額: 行内の最大の数値 (カンマ許容, 3桁以上)
+    var amts = (l.match(/[0-9][0-9,]{2,}/g) || []).map(function(x){ return parseInt(x.replace(/,/g,'')); }).filter(function(n){ return n >= 100; });
+    var amount = amts.length ? Math.max.apply(null, amts) : 0;
+    // 日付: MM/DD or YYYY-MM-DD or MM月DD日
+    var dm = l.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/) || l.match(/(\d{1,2})[\/月](\d{1,2})/);
+    var date;
+    var Y = new Date().getFullYear();
+    if(dm && dm.length === 4) date = dm[1] + '-' + String(dm[2]).padStart(2,'0') + '-' + String(dm[3]).padStart(2,'0');
+    else if(dm) date = Y + '-' + String(dm[1]).padStart(2,'0') + '-' + String(dm[2]).padStart(2,'0');
+    else date = new Date().toISOString().slice(0,10);
+    // 名義: 数字/記号を除いた最長のカナ・文字列トークン
+    var name = '';
+    l.replace(/[0-9,\/\-:年月日円]/g, ' ').split(/\s+/).forEach(function(tk){
+      if(tk.length > name.length && !/^(振込|振り込み|入金|普通|当座|取引|明細|ﾌﾘｺﾐ)$/.test(tk)) name = tk;
+    });
+    // 候補スコアリング: 金額一致を最優先、名義の部分一致を加点
+    var nn = normName(name);
+    var cands = invs.map(function(v){
+      var score = 0;
+      if(v.total === amount) score += 100;
+      else if(Math.abs(v.total - amount) <= 880) score += 40;  // 手数料控除差 (~880円) を許容
+      if(v.subtotal === amount) score += 60;                    // 税抜で振り込まれるケース
+      var cn = normName(v.cust);
+      if(nn && cn && (cn.indexOf(nn) >= 0 || nn.indexOf(cn) >= 0)) score += 50;
+      return { inv: v, score: score };
+    }).filter(function(c){ return c.score > 0; }).sort(function(a,b){ return b.score - a.score; });
+    return { raw: l, amount: amount, date: date, name: name, cands: cands.slice(0,5), pick: cands.length ? 0 : -1, use: cands.length > 0 && amount > 0 };
+  });
+  renderResult(invs);
+}
+
+function renderResult(invs){
+  var sec = document.getElementById('result-sec');
+  var el = document.getElementById('result');
+  sec.style.display = 'block';
+  if(!lines.length){ el.innerHTML = '<div class="muted">解析できる行がありません</div>'; return; }
+  el.innerHTML = '<table><tr><th style="width:30px"></th><th>明細行</th><th style="width:90px">金額</th><th style="width:34%">消込先の請求書</th><th style="width:70px">判定</th></tr>'
+    + lines.map(function(ln, i){
+      var sel;
+      if(ln.cands.length){
+        sel = '<select onchange="lines[' + i + '].pick=parseInt(this.value)">'
+          + ln.cands.map(function(c, ci){
+              var v = c.inv;
+              return '<option value="' + ci + '">' + hubEsc(v.id) + ' / ' + hubEsc(v.cust) + ' / ' + hubYen(v.total) + (c.score >= 100 ? ' ◎' : c.score >= 50 ? ' ○' : ' △') + '</option>';
+            }).join('')
+          + '<option value="-1">（消込しない）</option></select>';
+      } else {
+        sel = '<span class="muted">該当する未入金請求書なし</span>';
+      }
+      var badge = ln.cands.length && ln.cands[0].score >= 150 ? '<span class="ok">◎ 一致</span>'
+                : ln.cands.length && ln.cands[0].score >= 100 ? '<span class="ok">○ 金額一致</span>'
+                : ln.cands.length ? '<span style="color:#f59e0b;font-weight:700">△ 要確認</span>'
+                : '<span class="ng">✕ 不明</span>';
+      return '<tr>'
+        + '<td style="text-align:center"><input type="checkbox" ' + (ln.use ? 'checked' : '') + ' onchange="lines[' + i + '].use=this.checked"></td>'
+        + '<td style="font-size:11px;font-family:Consolas,monospace">' + hubEsc(ln.raw.slice(0,48)) + '<br><span class="muted">' + hubEsc(ln.date) + ' / 名義: ' + hubEsc(ln.name||'—') + '</span></td>'
+        + '<td class="num">' + hubYen(ln.amount) + '</td>'
+        + '<td>' + sel + '</td>'
+        + '<td>' + badge + '</td>'
+        + '</tr>';
+    }).join('') + '</table>';
+}
+
+function commitAll(){
+  var auth = hubAuth();
+  if(!auth.loggedIn){ hubToast('⚠ 本体アプリで先にログインしてください'); return; }
+  var targets = lines.filter(function(ln){ return ln.use && ln.pick >= 0 && ln.cands[ln.pick]; });
+  if(!targets.length){ hubToast('消込対象がありません（チェックと消込先を確認）'); return; }
+  var summary = targets.map(function(ln){ return '・' + ln.cands[ln.pick].inv.cust + ' ' + hubYen(ln.amount) + ' → ' + ln.cands[ln.pick].inv.id; }).join('\n');
+  if(!confirm('以下を消込登録します:\n\n' + summary + '\n\n続行?')) return;
+  var done = 0;
+  var ok = hubSave(function(db){
+    targets.forEach(function(ln){
+      var invId = ln.cands[ln.pick].inv.id;
+      var inv = (db.invoices||[]).find(function(v){ return v.id === invId; });
+      if(!inv || inv.status === 'paid') return; // 二重消込防止
+      var pay = {
+        id: 'PAY-' + Date.now() + '-' + Math.floor(Math.random()*1000),
+        projectId: inv.projectId || '',
+        cust: inv.cust,
+        amount: ln.amount,
+        receivedAt: ln.date,
+        method: '銀行振込',
+        memo: '入金消込ツール: ' + (ln.name || '') + (ln.amount !== inv.total ? ' (請求' + hubYen(inv.total) + 'との差額あり)' : ''),
+        matchedInvoiceId: inv.id,
+        matchedAt: new Date().toISOString()
+      };
+      if(!Array.isArray(db.payments)) db.payments = [];
+      db.payments.push(pay);
+      inv.status = 'paid';
+      inv.paidAt = new Date().toISOString();
+      inv.matchedPaymentId = pay.id;
+      done++;
+    });
+  });
+  if(ok){
+    hubToast('✅ ' + done + '件を消込登録しました');
+    document.getElementById('src').value = '';
+    document.getElementById('result-sec').style.display = 'none';
+    lines = [];
+  }
+}
+</script>
+</body>
+</html>

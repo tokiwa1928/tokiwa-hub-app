@@ -871,6 +871,7 @@ setTimeout(_removeBootLoader_, 5000);
     <div class="tb-group" data-label="情報">
       <button class="tb-btn" data-page="wiki" onclick="swPage('wiki',this)" draggable="true" title="📖 Wiki">📖 Wiki</button>
       <button class="tb-btn" draggable="true" onclick="showUsageGuide()" title="使い方ガイド">📗 ガイド</button>
+      <button class="tb-btn" data-page="tools" onclick="swPage('tools',this)" draggable="true" title="🧰 業務効率化ツール (試作→運用→統合)">🧰 ツール</button>
     </div>
 
     <!-- 【管理】グループ -->
@@ -1544,6 +1545,20 @@ setTimeout(_removeBootLoader_, 5000);
       <button class="btn btn-p" style="background:#16a34a;border-color:#16a34a" onclick="loadTestData()">🧪 テストデータを投入</button>
       <button class="btn" style="background:#fee;border-color:#fca5a5;color:#b91c1c" onclick="clearTestData()">🗑 テストデータを削除</button>
     </div>
+  </div>
+</div>
+
+<!-- 🧰 ツールランチャー (TLPF-1: 小アプリを試作→運用→統合のサイクルで回す置き場) -->
+<div class="page" id="page-tools">
+  <div style="max-width:860px">
+    <div class="sec" style="background:#ecfeff;border:1px solid #67e8f9">
+      <div class="st" style="color:#155e75">🧰 業務効率化ツール</div>
+      <div style="font-size:12px;color:#155e75;line-height:1.7">
+        単機能の小さなツール置き場です。<strong>データは本体と共通</strong>（ツールで作った見積・入金はそのまま本体に反映されます）。<br>
+        サイクル: 🧪試作 → ✅運用中 → 必要なら本体へ統合。使わないツールは削除します。
+      </div>
+    </div>
+    <div id="tools-list"></div>
   </div>
 </div>
 
@@ -5237,6 +5252,7 @@ function swPage(id,btn){
     finance:   function(){ renderFinancePage(); },
     realtime:  function(){ renderRealtimeView(); },
     settings:  function(){ initConfPage(); if(typeof _updateBackupStatus_==='function') _updateBackupStatus_(); },
+    tools:     function(){ renderToolsPage(); },
     calendar:  function(){ renderCalendar(); },
     companies: function(){ renderCompanies(); renderSystemUsers(); },
     schedule:  function(){ initSchedulePage(); },
@@ -14947,6 +14963,54 @@ function _updateBackupStatus_(){
 // 起動12秒後 + 30分毎にチェック (日付ゲートで実際の実行は1日1回)
 setTimeout(function(){ autoDailyBackup(false); }, 12000);
 setInterval(function(){ autoDailyBackup(false); }, 30*60*1000);
+
+// ═════════════ TLPF-1: 🧰 ツールランチャー ═════════════
+// 小さな単機能アプリ (tools/*.html) の置き場。データは本体DB (localStorage) を共有。
+var TOOLS_REGISTRY = [
+  { href: 'tools/quick-quote.html',  icon: '⚡', name: '見積クイック発行',
+    desc: '得意先を選ぶ→過去パターンをタップ→数量だけ入れて即「見積中」登録。定型見積を数十秒で。',
+    status: '試作', tag: '見積' },
+  { href: 'tools/nyukin-check.html', icon: '🏦', name: '入金消込',
+    desc: '銀行明細を貼り付け→金額・名義で請求書と自動突合→まとめて消込。月初の照合作業を短縮。',
+    status: '試作', tag: '経理' }
+];
+function renderToolsPage(){
+  var el = document.getElementById('tools-list'); if(!el) return;
+  var stBadge = function(s){
+    var c = s === '運用中' ? '#16a34a' : s === '試作' ? '#f59e0b' : '#94a3b8';
+    return '<span style="font-size:10px;font-weight:800;color:#fff;background:' + c + ';padding:2px 8px;border-radius:10px">' + s + '</span>';
+  };
+  el.innerHTML = TOOLS_REGISTRY.map(function(t){
+    return '<a href="' + t.href + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'
+      + '<div class="sec" style="display:flex;align-items:center;gap:14px;cursor:pointer" '
+      + 'onmouseover="this.style.borderColor=\'#0891b2\'" onmouseout="this.style.borderColor=\'#e0ddd6\'">'
+      + '<div style="font-size:30px">' + t.icon + '</div>'
+      + '<div style="flex:1;min-width:0">'
+      +   '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><strong style="font-size:15px">' + t.name + '</strong>' + stBadge(t.status)
+      +   '<span style="font-size:10px;color:#94a3b8;border:1px solid #e2e8f0;border-radius:4px;padding:1px 6px">' + t.tag + '</span></div>'
+      +   '<div style="font-size:12px;color:#666;margin-top:3px;line-height:1.5">' + t.desc + '</div>'
+      + '</div>'
+      + '<div style="font-size:18px;color:#94a3b8">↗</div>'
+      + '</div></a>';
+  }).join('');
+}
+// ツール側の保存を本体へ即反映 (同一オリジンの BroadcastChannel 経由)
+try {
+  var _toolsBC = new BroadcastChannel('tokiwa-hub-tools');
+  _toolsBC.onmessage = function(ev){
+    if(!ev.data || ev.data.type !== 'db-updated') return;
+    try {
+      var raw = localStorage.getItem(DBKEY);
+      if(!raw) return;
+      DB = JSON.parse(raw);
+      // 見えているページを軽く再描画
+      ['renderProjects','renderEstimates','renderInvoices','renderPayments','renderHistory','renderRealtimeView']
+        .forEach(function(fn){ try { if(typeof window[fn] === 'function') window[fn](); } catch(_){} });
+      if(typeof toast === 'function') toast('🧰 ツールでデータが更新されました');
+      else console.log('[Tools] DB reloaded from tool update:', ev.data.tool || '');
+    } catch(e){ console.warn('[Tools] DB reload failed', e); }
+  };
+} catch(e){ /* BroadcastChannel 非対応ブラウザは無視 */ }
 
 function exportAllDataJSON(){
   var snapshot = {
