@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>🖨 面付計算・面付PDF | Quote Tools</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
   :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; }
   *{ box-sizing:border-box; }
@@ -168,6 +169,17 @@
           <button class="btn btn-p" id="me-impose-btn" style="margin-top:8px;width:100%;background:#1e40af;border-color:#1e40af" onclick="meExecuteImposition()">📄 面付した PDF をダウンロード</button>
           <div id="me-impose-status" style="font-size:10px;color:#666;margin-top:4px;text-align:center"></div>
         </div>
+        <!-- MNTU-6: 一括面付 (台割り) -->
+        <div style="margin-top:12px;padding:10px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px">
+          <div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px">🗂 一括面付（台割り — 最大10件まとめて出力）</div>
+          <div style="font-size:10px;color:#3f6212;margin-bottom:6px">上でPDFを読み込み、面付①②…に「パターン＋対象ページ」を割当てて一括出力。例: 面付①=表紙パターン+1,2,39-40 / 面付②=本文パターン+3-38</div>
+          <div id="me-jobs"></div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="btn" style="font-size:11px;padding:4px 10px" onclick="meAddJob()">＋ 面付を追加</button>
+            <button class="btn" style="font-size:12px;padding:4px 12px;background:#16a34a;border-color:#16a34a;color:#fff;flex:1" onclick="meRunBatch()">⬇ 一括出力 (2件以上はZIP)</button>
+          </div>
+          <div id="me-batch-status" style="font-size:10px;color:#666;margin-top:4px"></div>
+        </div>
       </div>
       <div class="me-preview" id="me-canvas-area">
         <canvas id="me-canvas"></canvas>
@@ -200,7 +212,7 @@ function meSavePattern(){
   else list.push({name:name,vals:vals});
   mePatSave(list);
   document.getElementById('me-pat-name').value='';
-  meRenderPatterns();
+  meRenderPatterns(); meRenderJobs();
 }
 function meApplyPattern(i){
   var p=mePatterns()[i]; if(!p) return;
@@ -423,170 +435,239 @@ async function _loadPdfLib_(){
     document.head.appendChild(s);
   });
 }
+// ═════ MNTU-6: 面付コア (単発出力と一括台割りの共通エンジン) ═════
+// opts: pw,ph,pgw,pgh,kw,sh,ml,mr,dv,dh (mm), rot,mirror,trim,pnum (bool),
+//       mode 'same'|'multi', pages '1,2,39-40' 形式
+async function meImposeCore(PDFLib, allBytes, o){
+  var MM=2.83465;
+  var aW=o.pw-o.ml-o.mr, aH=o.ph-o.kw-o.sh;
+  function fit(aw,ah,w,h,dbh,dbv){
+    var cols=Math.max(0,Math.floor((aw+dbh)/(w+dbh)));
+    var rows=Math.max(0,Math.floor((ah+dbv)/(h+dbv)));
+    return {cols:cols,rows:rows,total:cols*rows};
+  }
+  var normal=fit(aW,aH,o.pgw,o.pgh,o.dh,o.dv); normal.rotated=false;
+  var best=normal;
+  if(o.rot){ var rotated=fit(aW,aH,o.pgh,o.pgw,o.dv,o.dh); rotated.rotated=true; if(rotated.total>normal.total) best=rotated; }
+  if(best.total===0) throw new Error('面付できません (用紙に対して仕上がりが大きすぎ)');
+
+  var outDoc=await PDFLib.PDFDocument.create();
+  var sheetW=o.pw*MM, sheetH=o.ph*MM;
+  var pgUsedW=(best.rotated?o.pgh:o.pgw)*MM, pgUsedH=(best.rotated?o.pgw:o.pgh)*MM;
+  var dhUsed=(best.rotated?o.dv:o.dh)*MM, dvUsed=(best.rotated?o.dh:o.dv)*MM;
+  var marginL=o.ml*MM, marginT=o.kw*MM;
+
+  var sheets=[];
+  if(o.mode==='multi'){
+    var pool=[];
+    for(var bi=0; bi<allBytes.length; bi++){
+      var tmpDoc=await PDFLib.PDFDocument.load(allBytes[bi]);
+      var pageSel=meParsePages(o.pages, tmpDoc.getPageCount());
+      var embArr=pageSel ? await outDoc.embedPdf(allBytes[bi], pageSel) : await outDoc.embedPdf(allBytes[bi]);
+      for(var ei=0; ei<embArr.length; ei++) pool.push(embArr[ei]);
+    }
+    if(!pool.length) throw new Error('対象ページがありません');
+    var perSheet=best.total;
+    var sheetCount=Math.max(1, Math.ceil(pool.length/perSheet));
+    for(var si=0; si<sheetCount; si++){
+      var emb=[];
+      for(var pi=0; pi<perSheet; pi++){
+        var poolIdx=si*perSheet+pi;
+        emb.push(pool[poolIdx<pool.length ? poolIdx : poolIdx%pool.length]);
+      }
+      sheets.push({embeds:emb});
+    }
+  } else {
+    var srcDoc0=await PDFLib.PDFDocument.load(allBytes[0]);
+    var pageSel2=meParsePages(o.pages, srcDoc0.getPageCount()) || srcDoc0.getPages().map(function(_,i){return i;});
+    var copiedPages=await outDoc.copyPages(srcDoc0, pageSel2);
+    if(!copiedPages.length) throw new Error('対象ページがありません');
+    for(var cp=0; cp<copiedPages.length; cp++){
+      var one=await outDoc.embedPage(copiedPages[cp]);
+      var emb2=[]; for(var pi2=0; pi2<best.total; pi2++) emb2.push(one);
+      sheets.push({embeds:emb2});
+    }
+  }
+
+  for(var pageIdx=0; pageIdx<sheets.length; pageIdx++){
+    var sheet=outDoc.addPage([sheetW,sheetH]);
+    var embeds=sheets[pageIdx].embeds;
+    for(var r=0;r<best.rows;r++){
+      for(var c=0;c<best.cols;c++){
+        var x = o.mirror
+          ? (sheetW - marginL - (best.cols-1-c)*(pgUsedW+dhUsed) - pgUsedW)
+          : (marginL + c*(pgUsedW+dhUsed));
+        var embedded=embeds[r*best.cols+c];
+        var srcW=embedded.width, srcH=embedded.height;
+        var scale=Math.min(pgUsedW/srcW, pgUsedH/srcH);
+        var drawW=srcW*scale, drawH=srcH*scale;
+        var yTop=sheetH - marginT - r*(pgUsedH+dvUsed);
+        var y=yTop - pgUsedH;
+        var ox=x+(pgUsedW-drawW)/2, oy=y+(pgUsedH-drawH)/2;
+        if(best.rotated){
+          sheet.drawPage(embedded,{ x:ox+drawW, y:oy, xScale:scale, yScale:scale, rotate:PDFLib.degrees(90) });
+        } else {
+          sheet.drawPage(embedded,{ x:ox, y:oy, xScale:scale, yScale:scale });
+        }
+        if(o.pnum){
+          sheet.drawText(String(r*best.cols+c+1),{ x:x+pgUsedW/2-4, y:y+pgUsedH/2, size:10, opacity:0.4 });
+        }
+        if(o.trim){
+          var b=3*MM, len=10, cl=7, col=PDFLib.rgb(0,0,0);
+          var ln=function(x1,y1,x2,y2){ sheet.drawLine({ start:{x:x1,y:y1}, end:{x:x2,y:y2}, thickness:0.4, color:col }); };
+          var X0=x, Y0=y, X1=x+pgUsedW, Y1=y+pgUsedH;
+          ln(X0-b-len,Y0, X0-b,Y0);  ln(X0-b-len,Y0-b, X0,Y0-b);
+          ln(X0,Y0-b-len, X0,Y0-b);  ln(X0-b,Y0-b-len, X0-b,Y0);
+          ln(X1+b,Y0, X1+b+len,Y0);  ln(X1,Y0-b, X1+b+len,Y0-b);
+          ln(X1,Y0-b-len, X1,Y0-b);  ln(X1+b,Y0-b-len, X1+b,Y0);
+          ln(X0-b-len,Y1, X0-b,Y1);  ln(X0-b-len,Y1+b, X0,Y1+b);
+          ln(X0,Y1+b, X0,Y1+b+len);  ln(X0-b,Y1, X0-b,Y1+b+len);
+          ln(X1+b,Y1, X1+b+len,Y1);  ln(X1,Y1+b, X1+b+len,Y1+b);
+          ln(X1,Y1+b, X1,Y1+b+len);  ln(X1+b,Y1, X1+b,Y1+b+len);
+          var cx2=(X0+X1)/2, cy2=(Y0+Y1)/2;
+          ln(cx2,Y0-b-cl, cx2,Y0);   ln(cx2-cl,Y0-b, cx2+cl,Y0-b);
+          ln(cx2,Y1, cx2,Y1+b+cl);   ln(cx2-cl,Y1+b, cx2+cl,Y1+b);
+          ln(X0-b-cl,cy2, X0,cy2);   ln(X0-b,cy2-cl, X0-b,cy2+cl);
+          ln(X1,cy2, X1+b+cl,cy2);   ln(X1+b,cy2-cl, X1+b,cy2+cl);
+        }
+      }
+    }
+  }
+  return { bytes: await outDoc.save(), sheetCount: sheets.length, cols: best.cols, rows: best.rows, total: best.total, rotated: best.rotated };
+}
+function meDomOpts(){
+  return {
+    pw:parseFloat(document.getElementById('me-pw').value)||0,
+    ph:parseFloat(document.getElementById('me-ph').value)||0,
+    pgw:parseFloat(document.getElementById('me-pgw').value)||0,
+    pgh:parseFloat(document.getElementById('me-pgh').value)||0,
+    kw:parseFloat(document.getElementById('me-kw').value)||0,
+    sh:parseFloat(document.getElementById('me-sh').value)||0,
+    ml:parseFloat(document.getElementById('me-ml').value)||0,
+    mr:parseFloat(document.getElementById('me-mr').value)||0,
+    dv:parseFloat(document.getElementById('me-dv').value)||0,
+    dh:parseFloat(document.getElementById('me-dh').value)||0,
+    rot:document.getElementById('me-rot').checked,
+    trim:document.getElementById('me-trim-marks').checked,
+    pnum:document.getElementById('me-page-numbers').checked,
+    mode:document.getElementById('me-mode').value||'same',
+    mirror:document.getElementById('me-mirror').checked,
+    pages:document.getElementById('me-pages').value||''
+  };
+}
 async function meExecuteImposition(){
   var status=document.getElementById('me-impose-status');
   var btn=document.getElementById('me-impose-btn');
   var fileInput=document.getElementById('me-pdf-file');
   if(!fileInput.files || !fileInput.files[0]){ alert('面付する PDF ファイルを選択してください'); return; }
   var files=[].slice.call(fileInput.files);
-  var file=files[0];
-  var impMode=document.getElementById('me-mode').value||'same';
-  var mirror=document.getElementById('me-mirror').checked;
   if(files.some(function(f){ return /\.eps$/i.test(f.name); })){
     alert('EPS は直接読めません。\nデスクトップの「EPSをPDFに変換」にドラッグして PDF にしてから入れてください。');
     return;
   }
-  var pw=parseFloat(document.getElementById('me-pw').value)||0;
-  var ph=parseFloat(document.getElementById('me-ph').value)||0;
-  var pgw=parseFloat(document.getElementById('me-pgw').value)||0;
-  var pgh=parseFloat(document.getElementById('me-pgh').value)||0;
-  var kw=parseFloat(document.getElementById('me-kw').value)||0;
-  var sh=parseFloat(document.getElementById('me-sh').value)||0;
-  var ml=parseFloat(document.getElementById('me-ml').value)||0;
-  var mr=parseFloat(document.getElementById('me-mr').value)||0;
-  var dv=parseFloat(document.getElementById('me-dv').value)||0;
-  var dh=parseFloat(document.getElementById('me-dh').value)||0;
-  var tryRot=document.getElementById('me-rot').checked;
-  var trimMarks=document.getElementById('me-trim-marks').checked;
-  var pageNumbers=document.getElementById('me-page-numbers').checked;
-  if(!pw||!ph||!pgw||!pgh){ alert('用紙・仕上がりサイズを入力してください'); return; }
+  var o=meDomOpts();
+  if(!o.pw||!o.ph||!o.pgw||!o.pgh){ alert('用紙・仕上がりサイズを入力してください'); return; }
   if(btn){ btn.disabled=true; btn.textContent='⏳ 処理中...'; }
-  if(status) status.textContent='pdf-lib を読込中...';
+  if(status) status.textContent='処理中...';
   try{
     var PDFLib=await _loadPdfLib_();
-    if(status) status.textContent='入力 PDF を解析中...';
-    var inputBytes=await file.arrayBuffer();
-    var srcDoc=await PDFLib.PDFDocument.load(inputBytes);
-    var srcPages=srcDoc.getPages();
-    var allBytes=[inputBytes];
-    if(impMode==='multi'){ for(var fi=1; fi<files.length; fi++) allBytes.push(await files[fi].arrayBuffer()); }
-
-    var MM=2.83465;
-    var aW=pw-ml-mr, aH=ph-kw-sh;
-    function fit(aw,ah,w,h,dbh,dbv){
-      var cols=Math.max(0,Math.floor((aw+dbh)/(w+dbh)));
-      var rows=Math.max(0,Math.floor((ah+dbv)/(h+dbv)));
-      return {cols:cols,rows:rows,total:cols*rows};
-    }
-    var normal=fit(aW,aH,pgw,pgh,dh,dv); normal.rotated=false;
-    var best=normal;
-    if(tryRot){ var rotated=fit(aW,aH,pgh,pgw,dv,dh); rotated.rotated=true; if(rotated.total>normal.total) best=rotated; }
-    if(best.total===0){ alert('面付できません (用紙に対して仕上がりサイズが大きすぎる可能性)'); throw new Error('no_fit'); }
-    if(status) status.textContent=best.total+' 面を配置中...';
-
-    var outDoc=await PDFLib.PDFDocument.create();
-    var sheetW=pw*MM, sheetH=ph*MM;
-    var pgUsedW=(best.rotated?pgh:pgw)*MM, pgUsedH=(best.rotated?pgw:pgh)*MM;
-    var dhUsed=(best.rotated?dv:dh)*MM, dvUsed=(best.rotated?dh:dv)*MM;
-    var marginL=ml*MM, marginT=kw*MM;
-
-    // MNTU-5: 対象ページ指定 (例 "1,2,39-40" / 空欄=全ページ)
-    var pagesSpec=document.getElementById('me-pages') ? document.getElementById('me-pages').value : '';
-
-    // シート構成 (same: 1ページ→1シート全面同 / multi: 対象ページを面へ順に)
-    var sheets=[];
-    if(impMode==='multi'){
-      var pool=[];
-      for(var bi=0; bi<allBytes.length; bi++){
-        var tmpDoc=await PDFLib.PDFDocument.load(allBytes[bi]);
-        var pageSel=meParsePages(pagesSpec, tmpDoc.getPageCount());
-        var embArr=pageSel ? await outDoc.embedPdf(allBytes[bi], pageSel) : await outDoc.embedPdf(allBytes[bi]);
-        for(var ei=0; ei<embArr.length; ei++) pool.push(embArr[ei]);
-      }
-      if(!pool.length) throw new Error('対象ページがありません (ページ指定を確認)');
-      var perSheet=best.total;
-      var sheetCount=Math.max(1, Math.ceil(pool.length/perSheet));
-      for(var si=0; si<sheetCount; si++){
-        var emb=[];
-        for(var pi=0; pi<perSheet; pi++){
-          var poolIdx=si*perSheet+pi;
-          emb.push(pool[poolIdx<pool.length ? poolIdx : poolIdx%pool.length]);
-        }
-        sheets.push({embeds:emb});
-      }
-    } else {
-      var pageSel2=meParsePages(pagesSpec, srcPages.length) || srcPages.map(function(_,i){return i;});
-      var copiedPages=await outDoc.copyPages(srcDoc, pageSel2);
-      if(!copiedPages.length) throw new Error('対象ページがありません (ページ指定を確認)');
-      for(var cp=0; cp<copiedPages.length; cp++){
-        var one=await outDoc.embedPage(copiedPages[cp]);
-        var emb2=[]; for(var pi2=0; pi2<best.total; pi2++) emb2.push(one);
-        sheets.push({embeds:emb2});
-      }
-    }
-
-    for(var pageIdx=0; pageIdx<sheets.length; pageIdx++){
-      var sheet=outDoc.addPage([sheetW,sheetH]);
-      var embeds=sheets[pageIdx].embeds;
-      for(var r=0;r<best.rows;r++){
-        for(var c=0;c<best.cols;c++){
-          var x = mirror
-            ? (sheetW - marginL - (best.cols-1-c)*(pgUsedW+dhUsed) - pgUsedW)
-            : (marginL + c*(pgUsedW+dhUsed));
-          var embedded=embeds[r*best.cols+c];
-          var srcW=embedded.width, srcH=embedded.height;
-          var scale=Math.min(pgUsedW/srcW, pgUsedH/srcH);
-          var drawW=srcW*scale, drawH=srcH*scale;
-          var yTop=sheetH - marginT - r*(pgUsedH+dvUsed);
-          var y=yTop - pgUsedH;
-          var ox=x+(pgUsedW-drawW)/2, oy=y+(pgUsedH-drawH)/2;
-          if(best.rotated){
-            sheet.drawPage(embedded,{ x:ox+drawW, y:oy, xScale:scale, yScale:scale, rotate:PDFLib.degrees(90) });
-          } else {
-            sheet.drawPage(embedded,{ x:ox, y:oy, xScale:scale, yScale:scale });
-          }
-          if(pageNumbers){
-            sheet.drawText(String(r*best.cols+c+1),{ x:x+pgUsedW/2-4, y:y+pgUsedH/2, size:10, opacity:0.4 });
-          }
-          if(trimMarks){
-            // 日本式トンボ: 角=二重かぎ型(四角マーク, 内3mm) + 各辺センタートンボ(十字)
-            var b=3*MM, len=10, cl=7, col=PDFLib.rgb(0,0,0);
-            var ln=function(x1,y1,x2,y2){ sheet.drawLine({ start:{x:x1,y:y1}, end:{x:x2,y:y2}, thickness:0.4, color:col }); };
-            var X0=x, Y0=y, X1=x+pgUsedW, Y1=y+pgUsedH;
-            // 左下
-            ln(X0-b-len,Y0, X0-b,Y0);  ln(X0-b-len,Y0-b, X0,Y0-b);
-            ln(X0,Y0-b-len, X0,Y0-b);  ln(X0-b,Y0-b-len, X0-b,Y0);
-            // 右下
-            ln(X1+b,Y0, X1+b+len,Y0);  ln(X1,Y0-b, X1+b+len,Y0-b);
-            ln(X1,Y0-b-len, X1,Y0-b);  ln(X1+b,Y0-b-len, X1+b,Y0);
-            // 左上
-            ln(X0-b-len,Y1, X0-b,Y1);  ln(X0-b-len,Y1+b, X0,Y1+b);
-            ln(X0,Y1+b, X0,Y1+b+len);  ln(X0-b,Y1, X0-b,Y1+b+len);
-            // 右上
-            ln(X1+b,Y1, X1+b+len,Y1);  ln(X1,Y1+b, X1+b+len,Y1+b);
-            ln(X1,Y1+b, X1,Y1+b+len);  ln(X1+b,Y1, X1+b,Y1+b+len);
-            // センタートンボ (各辺中央の十字)
-            var cx=(X0+X1)/2, cy2=(Y0+Y1)/2;
-            ln(cx,Y0-b-cl, cx,Y0);      ln(cx-cl,Y0-b, cx+cl,Y0-b);   // 下
-            ln(cx,Y1, cx,Y1+b+cl);      ln(cx-cl,Y1+b, cx+cl,Y1+b);   // 上
-            ln(X0-b-cl,cy2, X0,cy2);    ln(X0-b,cy2-cl, X0-b,cy2+cl); // 左
-            ln(X1,cy2, X1+b+cl,cy2);    ln(X1+b,cy2-cl, X1+b,cy2+cl); // 右
-          }
-        }
-      }
-    }
-
-    if(status) status.textContent='PDF を生成中...';
-    var outBytes=await outDoc.save();
-    var blob=new Blob([outBytes],{type:'application/pdf'});
+    var allBytes=[await files[0].arrayBuffer()];
+    if(o.mode==='multi'){ for(var fi=1; fi<files.length; fi++) allBytes.push(await files[fi].arrayBuffer()); }
+    var res=await meImposeCore(PDFLib, allBytes, o);
+    var blob=new Blob([res.bytes],{type:'application/pdf'});
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
     a.href=url;
-    a.download=file.name.replace(/\.pdf$/i,'')+'_面付_'+best.cols+'x'+best.rows+'_'+best.total+'面'+(mirror?'_裏':'')+'.pdf';
+    a.download=files[0].name.replace(/\.pdf$/i,'')+'_面付_'+res.cols+'x'+res.rows+'_'+res.total+'面'+(o.mirror?'_裏':'')+'.pdf';
     a.click();
     setTimeout(function(){ URL.revokeObjectURL(url); },5000);
-    if(status) status.textContent='✅ 完了 ('+sheets.length+' シート × '+best.total+' 面'+(mirror?' / 裏面ミラー':'')+(impMode==='multi'?' / 他面付け':'')+')';
+    if(status) status.textContent='✅ 完了 ('+res.sheetCount+' シート × '+res.total+' 面'+(o.mirror?' / 裏面ミラー':'')+(o.mode==='multi'?' / 他面付け':'')+')';
   }catch(e){
     console.error(e);
     if(status) status.textContent='⚠ エラー: '+e.message;
-    if(e.message!=='no_fit') alert('面付に失敗しました: '+e.message);
+    alert('面付に失敗しました: '+e.message);
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='📄 面付した PDF をダウンロード'; }
   }
 }
+
+// ═════ MNTU-6: 一括面付 (台割り・最大10件) ═════
+var ME_JOBS=[];
+function meAddJob(){
+  if(ME_JOBS.length>=10){ alert('面付は10件までです'); return; }
+  ME_JOBS.push({ pat:-1, pages:'', multi:false, mirror:false });
+  meRenderJobs();
+}
+function meRenderJobs(){
+  var box=document.getElementById('me-jobs'); if(!box) return;
+  var pats=mePatterns();
+  var CIRC=['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+  box.innerHTML=ME_JOBS.map(function(j,i){
+    var opts='<option value="-1">現在の設定</option>'+pats.map(function(p,pi){ return '<option value="'+pi+'"'+(j.pat===pi?' selected':'')+'>⭐ '+String(p.name).replace(/</g,'&lt;')+'</option>'; }).join('');
+    return '<div style="display:flex;gap:4px;align-items:center;margin-top:4px;font-size:11px;flex-wrap:wrap">'
+      + '<b style="white-space:nowrap">面付'+(CIRC[i]||(i+1))+'</b>'
+      + '<select style="flex:1.2;min-width:110px;font-size:10.5px;padding:3px" onchange="ME_JOBS['+i+'].pat=parseInt(this.value)">'+opts+'</select>'
+      + '<input type="text" placeholder="ページ 例:1,2,39-40" value="'+String(j.pages||'').replace(/"/g,'&quot;')+'" style="flex:1;min-width:110px;padding:3px 6px;font-size:10.5px;border:1px solid #d0cec8;border-radius:4px;font-family:Consolas,monospace" onchange="ME_JOBS['+i+'].pages=this.value">'
+      + '<label style="white-space:nowrap;cursor:pointer"><input type="checkbox" '+(j.multi?'checked':'')+' onchange="ME_JOBS['+i+'].multi=this.checked"> 複数面付</label>'
+      + '<label style="white-space:nowrap;cursor:pointer"><input type="checkbox" '+(j.mirror?'checked':'')+' onchange="ME_JOBS['+i+'].mirror=this.checked"> 裏</label>'
+      + '<span style="color:#b91c1c;cursor:pointer;font-weight:800;padding:0 3px" onclick="ME_JOBS.splice('+i+',1);meRenderJobs()">✕</span>'
+      + '</div>';
+  }).join('') || '<div style="font-size:10.5px;color:#94a3b8">「＋ 面付を追加」で行を作ってください</div>';
+}
+function meOptsFromPattern(p){
+  var v=p.vals||{};
+  function n(id){ var x=parseFloat(v[id]); return isNaN(x)?0:x; }
+  return { pw:n('me-pw'), ph:n('me-ph'), pgw:n('me-pgw'), pgh:n('me-pgh'),
+    kw:n('me-kw'), sh:n('me-sh'), ml:n('me-ml'), mr:n('me-mr'), dv:n('me-dv'), dh:n('me-dh'),
+    rot:!!v.rot, trim:v.trim!==false, pnum:!!v.pnum, mode:v.mode||'same', mirror:!!v.mirror, pages:v.pages||'' };
+}
+async function meRunBatch(){
+  var st=document.getElementById('me-batch-status');
+  var fileInput=document.getElementById('me-pdf-file');
+  if(!fileInput.files || !fileInput.files[0]){ alert('先に上でPDFを読み込んでください'); return; }
+  if(!ME_JOBS.length){ alert('「＋ 面付を追加」で面付を作ってください'); return; }
+  var files=[].slice.call(fileInput.files);
+  st.textContent='処理中...';
+  try{
+    var PDFLib=await _loadPdfLib_();
+    var allBytesAll=[]; for(var fi=0; fi<files.length; fi++) allBytesAll.push(await files[fi].arrayBuffer());
+    var pats=mePatterns();
+    var outs=[];
+    for(var i=0;i<ME_JOBS.length;i++){
+      var j=ME_JOBS[i];
+      var o = (j.pat>=0 && pats[j.pat]) ? meOptsFromPattern(pats[j.pat]) : meDomOpts();
+      o.pages=(j.pages||'').trim() || o.pages || '';
+      o.mode=j.multi?'multi':'same';
+      o.mirror=!!j.mirror;
+      if(!o.pw||!o.ph||!o.pgw||!o.pgh) throw new Error('面付'+(i+1)+': 用紙/仕上がり寸法がありません (パターンを確認)');
+      var bytesList = o.mode==='multi' ? allBytesAll : [allBytesAll[0]];
+      st.textContent='面付'+(i+1)+'/'+ME_JOBS.length+' を生成中...';
+      var res=await meImposeCore(PDFLib, bytesList, o);
+      var pname=(j.pat>=0&&pats[j.pat])?pats[j.pat].name:'現在設定';
+      outs.push({ name:'面付'+(i+1)+'_'+String(pname).replace(/[\\\/:*?"<>|]/g,'')+'_'+res.cols+'x'+res.rows+(o.mirror?'_裏':'')+'.pdf',
+        bytes:res.bytes, info:res.sheetCount+'シート×'+res.total+'面' });
+    }
+    if(outs.length===1){
+      var b1=new Blob([outs[0].bytes],{type:'application/pdf'});
+      var u1=URL.createObjectURL(b1); var a1=document.createElement('a'); a1.href=u1; a1.download=outs[0].name; a1.click();
+      setTimeout(function(){URL.revokeObjectURL(u1);},5000);
+    } else {
+      var zip=new JSZip();
+      outs.forEach(function(o2){ zip.file(o2.name, o2.bytes); });
+      var zb=await zip.generateAsync({type:'blob'});
+      var u2=URL.createObjectURL(zb); var a2=document.createElement('a'); a2.href=u2;
+      a2.download='面付一括_'+new Date().toISOString().slice(0,10)+'.zip'; a2.click();
+      setTimeout(function(){URL.revokeObjectURL(u2);},5000);
+    }
+    st.textContent='✅ 完了: '+outs.map(function(o2,i2){ return '面付'+(i2+1)+'('+o2.info+')'; }).join(' / ');
+    window.__batch_outs=outs;
+  }catch(e){ console.error(e); st.textContent='⚠ エラー: '+e.message; alert('一括面付に失敗: '+e.message); }
+}
 meCalc();
 meRenderPatterns();
 meRenderCustomSizes();
+meRenderJobs();
+meAddJob();
 </script>
 </body>
 </html>
