@@ -1520,10 +1520,12 @@ setTimeout(_removeBootLoader_, 5000);
   <div class="sec" style="max-width:560px;margin-top:1rem;background:#dbeafe;border:1px solid #93c5fd">
     <div class="st" style="color:#1e3a8a">💾 データのバックアップ・復元</div>
     <div style="font-size:12px;color:#1e3a8a;line-height:1.6;margin-bottom:10px">
-      全データを <strong>JSON ファイル</strong>として書き出し・読み込みできます。週1回程度のバックアップ推奨。<br>
-      クラウド同期エラー時の保険になります。
+      <strong>毎日1回、自動で全データをバックアップします</strong>（Drive の TokiwaHub_Backups へ保存。未接続時はJSONを自動ダウンロード）。<br>
+      復元するときは、バックアップJSONを「📥 JSONをインポート」で読み込んでください。
     </div>
+    <div id="backup-status-label" style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:8px">最終バックアップ: 確認中…</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-p" style="background:#0369a1;border-color:#0369a1" onclick="autoDailyBackup(true)">☁️ 今すぐバックアップ</button>
       <button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="exportAllDataJSON()">💾 全データをエクスポート (JSON)</button>
       <button class="btn" style="background:#fff;border-color:#1e40af;color:#1e40af" onclick="document.getElementById('import-data-file').click()">📥 JSONをインポート</button>
       <input type="file" id="import-data-file" accept="application/json,.json" style="display:none" onchange="importDataJSON(event)">
@@ -5234,7 +5236,7 @@ function swPage(id,btn){
     payouts:   function(){ renderPayouts(); },
     finance:   function(){ renderFinancePage(); },
     realtime:  function(){ renderRealtimeView(); },
-    settings:  function(){ initConfPage(); },
+    settings:  function(){ initConfPage(); if(typeof _updateBackupStatus_==='function') _updateBackupStatus_(); },
     calendar:  function(){ renderCalendar(); },
     companies: function(){ renderCompanies(); renderSystemUsers(); },
     schedule:  function(){ initSchedulePage(); },
@@ -14897,6 +14899,55 @@ function exportMonthlySalesCSV(){
 // ─────────────────────────────────────────────────────
 // 💾 全データバックアップ・復元
 // ─────────────────────────────────────────────────────
+// ═════════════ BBBBB-2: 日次自動バックアップ ═════════════
+// 1日1回、全DBを GAS 経由で Drive (TokiwaHub_Backups) へ保存。
+// GAS 未対応/失敗時は JSON 自動ダウンロードにフォールバック。
+async function autoDailyBackup(force){
+  try{
+    if(!currentAuth || !currentAuth.loggedIn) return;
+    var ymd = _backupYmd_();
+    var last = localStorage.getItem('tokiwa_last_backup') || '';
+    if(!force && last.slice(0,10) === ymd) return; // 今日は実施済み
+    // 中身が空に近いDBはバックアップしない (新規ブラウザ等での空上書き防止)
+    var meaningful = (DB.projects||[]).length + (DB.history||[]).length + (DB.inquiries||[]).length + (DB.estimates||[]).length;
+    if(meaningful === 0){ console.log('[Backup] データ無しのためスキップ'); return; }
+    var payload = { _backupAt: new Date().toISOString(), _by: (currentAuth.userName||''), DB: DB };
+    var res = null;
+    try { res = await callCloudAPI('backupAll', {}, { data: payload }); } catch(e){ res = { error: String(e) }; }
+    var hhmm = new Date().toTimeString().slice(0,5);
+    if(res && res.success){
+      localStorage.setItem('tokiwa_last_backup', ymd + ' ' + hhmm + ' ☁️ Drive (' + Math.round((res.bytes||0)/1024) + 'KB)');
+      console.log('[Backup] Drive 保存 OK:', res.file, res.bytes + 'B');
+    } else {
+      console.warn('[Backup] Drive 保存不可 → ローカルDLフォールバック:', res && res.error);
+      _localBackupDownload_();
+      localStorage.setItem('tokiwa_last_backup', ymd + ' ' + hhmm + ' 💾 ローカルDL (Drive保存は未接続)');
+    }
+    _updateBackupStatus_();
+    if(force) alert('✅ バックアップ完了\n' + (localStorage.getItem('tokiwa_last_backup')||''));
+  }catch(e){ console.warn('[Backup] 失敗', e); if(force) alert('❌ バックアップ失敗: ' + e); }
+}
+function _backupYmd_(){
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function _localBackupDownload_(){
+  var snapshot = { _exportedAt: new Date().toISOString(), _exportedBy: currentAuth?.userName || '自動', _company: currentAuth?.companyName || '', _version: '1.0', DB: DB };
+  var blob = new Blob([JSON.stringify(snapshot)], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'tokiwa-hub-backup-' + _backupYmd_() + '.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function _updateBackupStatus_(){
+  var el = document.getElementById('backup-status-label');
+  if(el) el.textContent = '最終バックアップ: ' + (localStorage.getItem('tokiwa_last_backup') || 'まだ実行されていません');
+}
+// 起動12秒後 + 30分毎にチェック (日付ゲートで実際の実行は1日1回)
+setTimeout(function(){ autoDailyBackup(false); }, 12000);
+setInterval(function(){ autoDailyBackup(false); }, 30*60*1000);
+
 function exportAllDataJSON(){
   var snapshot = {
     _exportedAt: new Date().toISOString(),
@@ -14955,11 +15006,19 @@ function importDataJSON(event){
 function clearTestData(){
   if(!confirm('⚠️ テストデータをすべて削除します。\n\n_testData: true のフラグが付いているレコードのみ削除。\n本番データは残ります。続行?')) return;
   var removed = 0;
+  // _testData フラグに加え、id / projectId が TEST- 始まりのレコードも対象 (フラグ漏れの保険)
+  var _isTest = function(r){
+    if(!r) return false;
+    if(r._testData) return true;
+    if(typeof r.id === 'string' && r.id.indexOf('TEST-') === 0) return true;
+    if(typeof r.projectId === 'string' && r.projectId.indexOf('TEST-') === 0) return true;
+    return false;
+  };
   ['projects','estimates','history','inquiries','proofings','deliveryItems','intercoRequests',
    'invoices','receipts','payments','purchaseOrders','outsourceOrders','payouts'].forEach(function(key){
     if(!Array.isArray(DB[key])) return;
     var before = DB[key].length;
-    DB[key] = DB[key].filter(function(r){ return !r._testData; });
+    DB[key] = DB[key].filter(function(r){ return !_isTest(r); });
     removed += before - DB[key].length;
   });
   if(typeof saveDB === 'function') saveDB();
