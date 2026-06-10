@@ -69,10 +69,34 @@
   <div class="sec">
     <div class="st">② 基本情報　<span class="muted" style="text-transform:none">過去ファイルや単価マスタから流し込めます（下の③）</span></div>
     <div class="g4">
+      <div><label>発行会社（見積書の差出名）</label>
+        <div style="display:flex;gap:5px">
+          <select id="company" style="flex:1"></select>
+          <button class="btn" style="padding:6px 10px;font-size:12px" onclick="toggleCompanyEdit()" title="住所・TELを設定">✎</button>
+        </div>
+      </div>
       <div><label>得意先名</label><input id="cust" list="cust-dl" placeholder="○○株式会社"><datalist id="cust-dl"></datalist></div>
       <div><label>見積番号</label><input id="qno"></div>
       <div><label>発行日</label><input id="qdate"></div>
+    </div>
+    <div id="company-edit" style="display:none;background:#f8fafc;border:1px solid #cbd5e1;border-radius:7px;padding:8px 12px;margin-top:8px">
+      <div class="g3">
+        <div><label>住所（見積書に記載）</label><input id="co-addr"></div>
+        <div><label>TEL</label><input id="co-tel"></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn" style="font-size:12px" onclick="saveCompanyEdit()">💾 この会社の情報を保存</button></div>
+      </div>
+    </div>
+    <div class="g4" style="margin-top:8px">
       <div><label>有効期限</label><select id="valid"><option>発行日より1ヶ月</option><option>発行日より2ヶ月</option><option>発行日より3ヶ月</option></select></div>
+      <div><label>データ作成</label>
+        <select id="dtmk" onchange="onDataMakeChange()">
+          <option value="">無（支給データそのまま）</option>
+          <option value="new">有 — 新規データ作成</option>
+          <option value="reuse">有 — 前回データ流用・修正</option>
+          <option value="fix">有 — 支給データ修正</option>
+        </select>
+      </div>
+      <div style="grid-column:span 2"><label>　</label><span class="muted" id="dtmk-note">「有」を選ぶと④の原価表に「データ作成」行が自動で入ります</span></div>
     </div>
     <div class="g4" style="margin-top:8px">
       <div><label>品名・件名</label><input id="item" placeholder="例: 令和8年度 事業報告書"></div>
@@ -124,9 +148,8 @@
     <div class="st">⑤ 出力</div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-g" style="font-size:15px" onclick="generate()">⬇ 見積書＋見積計算書 をダウンロード (Excel)</button>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#334155;margin:0"><input type="checkbox" id="reg-hub" checked style="width:auto">Tokiwa Hub に「見積中」として登録</label>
     </div>
-    <div class="muted" style="margin-top:6px">標準テンプレート（A4印刷対応・社判欄付き）で 見積書.xlsx と 見積計算書.xlsx の2ファイルを生成します。</div>
+    <div class="muted" style="margin-top:6px">標準テンプレートで 見積書.xlsx と 見積計算書.xlsx を生成。発行と同時に<b>見積記録と単価マスタへ自動で蓄積</b>されます（Tokiwa Hubとは分離保存・のちのち一括移管可）。</div>
     <div id="gen-log" style="margin-top:6px"></div>
   </div>
 
@@ -134,18 +157,31 @@
 <div id="toast"></div>
 
 <script>
-// ═════════ Tokiwa Hub 共有ヘルパー ═════════
-var HUB_DBKEY='murayama_v15', HUB_AUTHKEY='murayama_auth', HUB_TOOL_ID='quote-builder';
-function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ return null; } }
-function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
-function hubSave(mut){ var db=hubLoad(); if(!db){ toast('❌ 本体データ無し'); return false; }
-  try{ mut(db); localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){ toast('❌ 保存失敗: '+e); return false; }
-  try{ new BroadcastChannel('tokiwa-hub-tools').postMessage({type:'db-updated', tool:HUB_TOOL_ID}); }catch(e){}
-  return true; }
+// ═════════ 独立ストア (Tokiwa Hub と分離) ═════════
+var TQ_KEY='tokiwa_quote_tools_v1';
+var DEFAULT_COMPANIES=[
+  { id:'tokiwa', name:'トキワ印刷株式会社', addr:'', tel:'' },
+  { id:'artes',  name:'有限会社アート・エス', addr:'', tel:'' },
+  { id:'tsushima', name:'株式会社津島プリント社', addr:'', tel:'' },
+  { id:'kitakami', name:'北上プリント株式会社', addr:'', tel:'' },
+  { id:'nakao',  name:'中尾印刷株式会社', addr:'', tel:'' }
+];
+function qtLoad(){ try { var st=JSON.parse(localStorage.getItem(TQ_KEY))||{}; st.master=st.master||[]; st.quotes=st.quotes||[]; if(!Array.isArray(st.companies)||!st.companies.length) st.companies=JSON.parse(JSON.stringify(DEFAULT_COMPANIES)); return st; } catch(e){ return { master:[], quotes:[], companies:JSON.parse(JSON.stringify(DEFAULT_COMPANIES)) }; } }
+function qtSave(st){ st.updatedAt=new Date().toISOString(); try{ localStorage.setItem(TQ_KEY, JSON.stringify(st)); return true; }catch(e){ toast('❌ 保存失敗: '+e); return false; } }
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2800); }
 function yen(n){ return '¥' + Number(n||0).toLocaleString(); }
-(function(){ var a=hubAuth(); document.getElementById('hub-user').textContent = a.loggedIn ? ('👤 '+(a.userName||'')+' / '+(a.companyName||'')) : '⚠ 本体未ログイン'; })();
+// SJIS 文字化け修復 (ロータス由来)
+var _sjisDec=(function(){ try{ return new TextDecoder('shift_jis'); }catch(e){ return null; } })();
+function fixStr(s){
+  if(typeof s!=='string'||!s) return s;
+  s=s.replace(/^[\^'"\\]+/,'');
+  var needs=false;
+  for(var i=0;i<s.length;i++){ var c=s.charCodeAt(i); if(c>0xFF) return s.trim(); if(c>=0x80) needs=true; }
+  if(!needs||!_sjisDec) return s.trim();
+  try{ var b=new Uint8Array(s.length); for(var j=0;j<s.length;j++) b[j]=s.charCodeAt(j)&0xFF; return _sjisDec.decode(b).replace(/�/g,'').trim(); }catch(e){ return s.trim(); }
+}
+document.getElementById('hub-user').textContent='🔒 独立保存（Hubとは分離・のちのち一括移管可）';
 
 // ═════════ 初期化 ═════════
 var TYPE='pera';
@@ -158,11 +194,43 @@ var TYPE_DEFS={
   var d=new Date();
   document.getElementById('qdate').value = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
   document.getElementById('qno').value = 'M'+String(d.getFullYear()-2018).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0')+'-Q'+String(d.getHours())+String(d.getMinutes());
-  var db=hubLoad(), set={};
-  if(db){ ['history','estimates','projects'].forEach(function(k){ (db[k]||[]).forEach(function(r){ if(r.cust) set[r.cust]=1; }); }); }
+  var st=qtLoad(), set={};
+  st.quotes.forEach(function(r){ if(r.cust) set[r.cust]=1; });
+  st.master.forEach(function(r){ if(r.cust) set[r.cust]=1; });
   document.getElementById('cust-dl').innerHTML = Object.keys(set).sort().map(function(c){ return '<option value="'+esc(c)+'">'; }).join('');
+  document.getElementById('company').innerHTML = st.companies.map(function(c){ return '<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>'; }).join('');
   setType('pera');
 })();
+// ── 発行会社の住所/TEL 設定 ──
+function toggleCompanyEdit(){
+  var box=document.getElementById('company-edit');
+  if(box.style.display==='none'){
+    var st=qtLoad(); var c=st.companies.find(function(x){return x.id===document.getElementById('company').value;})||{};
+    document.getElementById('co-addr').value=c.addr||'';
+    document.getElementById('co-tel').value=c.tel||'';
+    box.style.display='block';
+  } else box.style.display='none';
+}
+function saveCompanyEdit(){
+  var st=qtLoad(); var c=st.companies.find(function(x){return x.id===document.getElementById('company').value;});
+  if(c){ c.addr=document.getElementById('co-addr').value.trim(); c.tel=document.getElementById('co-tel').value.trim(); qtSave(st); toast('✅ '+c.name+' の情報を保存しました'); }
+  document.getElementById('company-edit').style.display='none';
+}
+// ── データ作成 有無/種類 → 原価行を自動管理 ──
+var DTMK_LABELS={ new:'データ作成（新規）', reuse:'データ作成（前回流用・修正）', fix:'データ作成（支給データ修正）' };
+function onDataMakeChange(){
+  var v=document.getElementById('dtmk').value;
+  // 既存のデータ作成行を探す
+  var found=null;
+  document.querySelectorAll('#cost-body tr').forEach(function(tr){
+    var ins=tr.querySelectorAll('input');
+    if(/^データ作成/.test(ins[0].value)) found=tr;
+  });
+  if(!v){ if(found){ found.remove(); recalc(); } return; }
+  if(found){ found.querySelectorAll('input')[0].value=DTMK_LABELS[v]; }
+  else { addCostRow(DTMK_LABELS[v], '', '', ''); }
+  recalc();
+}
 function setType(t){
   TYPE=t;
   ['pera','sasshi','gaichu'].forEach(function(x){ document.getElementById('tc-'+x).classList.toggle('sel', x===t); });
@@ -220,9 +288,12 @@ function readPast(fl){
         var picks=[];
         wb.SheetNames.forEach(function(sn){
           var aoa=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''});
+          aoa=aoa.map(function(row){ return row.map(function(c){ return typeof c==='string' ? fixStr(c) : c; }); });
           extractRows(aoa).forEach(function(x){ x.src=f.name; picks.push(x); });
-          // 得意先
-          for(var i=0;i<Math.min(aoa.length,12);i++) (aoa[i]||[]).forEach(function(c){ var s=String(c||''); if(/御中/.test(s)&&!document.getElementById('cust').value) document.getElementById('cust').value=s.replace(/御中|様/g,'').trim(); });
+          // 得意先 (ファイル名 M{yymm}.{得意先}･… 形式 or セルの御中)
+          var fm=f.name.match(/^M\d{4}\.(.+?)[･・]/);
+          if(fm && !document.getElementById('cust').value) document.getElementById('cust').value=fm[1];
+          for(var i=0;i<Math.min(aoa.length,12);i++) (aoa[i]||[]).forEach(function(c){ var s=String(c||''); if(/(御中|様)\s*$/.test(s)&&!document.getElementById('cust').value) document.getElementById('cust').value=s.replace(/御中|様/g,'').trim(); });
         });
         if(!picks.length){ toast('⚠ '+f.name+': 明細を自動で拾えませんでした'); return; }
         var box=document.getElementById('picks');
@@ -243,11 +314,11 @@ function searchMaster(){
   var box=document.getElementById('picks');
   box.querySelectorAll('.pick.tm').forEach(function(n){ n.remove(); });
   if(q.length<1) return;
-  var db=hubLoad(); var ms=(db&&db.tankaMaster)||[];
-  ms.filter(function(m){ return (m.item||'').toLowerCase().indexOf(q)>=0; }).slice(0,6).forEach(function(m){
+  var ms=qtLoad().master;
+  ms.filter(function(m){ return ((m.item||'')+' '+(m.cust||'')+' '+(m.spec||'')).toLowerCase().indexOf(q)>=0; }).slice(0,6).forEach(function(m){
     var d=document.createElement('div'); d.className='pick tm';
-    d.innerHTML='<span>'+(m.status==='確定'?'✔':'📚')+'</span><span><b>'+esc(m.item)+'</b><br><span class="muted">'+esc(m.year||'')+' '+esc(m.cust||'')+'</span></span><span class="pr">@'+m.price+'/'+esc(m.unit||'')+'</span>';
-    d.onclick=function(){ applyPick({ item:m.item, qty:m.qty||parseFloat(document.getElementById('qty').value)||0, price:m.price, unit:m.unit, cust:m.cust }); };
+    d.innerHTML='<span>'+(m.status==='確定'?'✔':'📚')+'</span><span><b>'+esc(m.rawItem||m.item)+'</b><br><span class="muted">'+esc(m.year||'')+' '+esc(m.cust||'')+' '+esc((m.spec||'').slice(0,26))+'</span></span><span class="pr">@'+m.price+'/'+esc(m.unit||'')+'</span>';
+    d.onclick=function(){ applyPick({ item:m.rawItem||m.item, spec:m.spec, qty:m.qty||parseFloat(document.getElementById('qty').value)||0, price:m.price, unit:m.unit, cust:m.cust }); };
     box.appendChild(d);
   });
 }
@@ -363,7 +434,8 @@ async function buildCalcWB(d){
   C('E4','種別',{f:{bold:true}});    C('F4',d.typeLabel);
   C('B5','得意先',{f:{bold:true}});  C('C5',d.cust);
   C('E5','数量',{f:{bold:true}});    C('F5',Number(d.qty).toLocaleString()+' '+d.unit);
-  C('B6','件名',{f:{bold:true}});    ws.mergeCells('C6:F6'); C('C6',d.item+(d.spec?(' / '+d.spec):''));
+  C('B6','件名',{f:{bold:true}});    ws.mergeCells('C6:D6'); C('C6',d.item+(d.spec?(' / '+d.spec):''));
+  C('E6','データ作成',{f:{bold:true}}); C('F6',d.dataMake||'—');
   var hr=8;
   [['B','項目'],['C','内容・仕様'],['D','数量'],['E','単価'],['F','金額']].forEach(function(x){ C(x[0]+hr,x[1],{f:{bold:true,size:10},a:{horizontal:'center'},b:B_ALL,fill:'FFEFEFEA'}); });
   d.costRows.forEach(function(r,ri){
@@ -400,8 +472,8 @@ function collectData(){
   var qty=parseFloat(document.getElementById('qty').value)||0;
   var sell=parseFloat(document.getElementById('sell').value)||0;
   var cost=costTotal();
-  var db=hubLoad(); var conf=(db&&db.conf)||{};
-  var auth=hubAuth();
+  var st=qtLoad();
+  var co=st.companies.find(function(x){ return x.id===document.getElementById('company').value; }) || st.companies[0] || { name:'' };
   var costRows=[];
   document.querySelectorAll('#cost-body tr').forEach(function(tr){
     var ins=tr.querySelectorAll('input');
@@ -421,7 +493,8 @@ function collectData(){
     subtotal:sell, tax:Math.round(sell*0.1), total:sell+Math.round(sell*0.1),
     cost:cost, costRows:costRows,
     typeLabel:TYPE_DEFS[TYPE].label,
-    company:conf.name||'トキワ印刷株式会社', rep:(auth.userName||conf.rep||''), addr:conf.addr||'', tel:conf.tel||'',
+    dataMake:(function(){ var v=document.getElementById('dtmk').value; return v ? DTMK_LABELS[v] : 'データ作成なし（支給）'; })(),
+    company:co.name, companyId:co.id, rep:'', addr:co.addr||'', tel:co.tel||'',
     memo:''
   };
 }
@@ -436,20 +509,29 @@ async function generate(){
     await dl(wb1,'見積書_'+d.cust+'_'+d.qno+'.xlsx');
     await dl(wb2,'見積計算書_'+d.qno+'.xlsx');
     document.getElementById('gen-log').innerHTML='<div style="font-size:13px;font-weight:700;color:#166534">✅ 2ファイルをダウンロードしました（'+yen(d.subtotal)+' 税抜 / 原価率 '+(d.subtotal?Math.round(d.cost/d.subtotal*100):0)+'%）</div>';
-    // Hub 登録
-    if(document.getElementById('reg-hub').checked){
-      var auth=hubAuth();
-      if(auth.loggedIn){
-        hubSave(function(db){
-          if(!Array.isArray(db.estimates)) db.estimates=[];
-          db.estimates.push({ id:'EST-'+Date.now(), companyId:auth.companyId||'COMP001', companyCode:auth.companyCode||'',
-            cust:d.cust, item:d.item, spec:d.spec, endUser:'', qty:d.qty, unit:d.unit, exTax:d.subtotal,
-            estCost:d.cost, status:'sent', source:'quote-builder', quoteNo:d.qno,
-            createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), createdBy:auth.userName||'' });
-        });
-        toast('✅ 出力＋Hubに見積中として登録しました');
-      } else { toast('⚠ Hub未ログインのため登録はスキップ（ファイルは出力済み）'); }
-    } else { toast('✅ 出力しました'); }
+    // 自動保存: 見積記録 + 単価マスタ更新 (前回単価ありき・確定はロック)
+    var st=qtLoad();
+    st.quotes.push({ id:'Q-'+Date.now(), qno:d.qno, company:d.company, cust:d.cust, item:d.item, spec:d.spec,
+      qty:d.qty, unit:d.unit, unitp:d.unitp, exTax:d.subtotal, cost:d.cost, type:TYPE, dataMake:d.dataMake,
+      qdate:d.qdate, createdAt:new Date().toISOString() });
+    var key=(d.cust+' '+d.item+' '+(d.spec||'')).replace(/[\s　]+/g,' ').trim();
+    var ex=st.master.find(function(m){ return ((m.cust||'')+' '+(m.rawItem||m.item)+' '+(m.spec||'')).replace(/[\s　]+/g,' ').trim()===key; });
+    var now=new Date().toISOString();
+    if(ex){
+      if(ex.status!=='確定'){
+        ex.prevPrices=ex.prevPrices||[];
+        if(ex.price!==d.unitp) ex.prevPrices.push({ price:ex.price, year:ex.year, src:ex.src, at:now });
+        ex.price=d.unitp; ex.qty=d.qty; ex.unit=d.unit; ex.year='令和'+(new Date().getFullYear()-2018); ex.src='見積書ビルダー '+d.qno; ex.updatedAt=now;
+      } else {
+        ex.prevPrices=(ex.prevPrices||[]); ex.prevPrices.push({ price:d.unitp, src:'見積書ビルダー '+d.qno, at:now, note:'発行(確定中のため未反映)' });
+      }
+    } else {
+      st.master.push({ id:'TM-'+Date.now(), item:d.cust+' '+d.item+(d.spec?' / '+d.spec:''), rawItem:d.item, spec:d.spec||'',
+        unit:d.unit, qty:d.qty, price:d.unitp, cust:d.cust, year:'令和'+(new Date().getFullYear()-2018),
+        src:'見積書ビルダー '+d.qno, status:'仮', prevPrices:[], createdAt:now, updatedAt:now });
+    }
+    qtSave(st);
+    toast('✅ 出力＋見積記録・単価マスタを自動更新しました');
   }catch(e){ toast('❌ 生成失敗: '+(e.message||e)); console.error(e); }
 }
 
