@@ -44,12 +44,12 @@
   <div class="sec">
     <div class="drops">
       <div>
-        <div class="dz" id="dz-old" onclick="document.getElementById('fi-old').click()">📄 <b>修正前</b>（指示を入れた版/旧データ）<br><span class="muted">PDFをドラッグ&ドロップ</span></div>
-        <input type="file" id="fi-old" accept="application/pdf" style="display:none">
+        <div class="dz" id="dz-old" onclick="document.getElementById('fi-old').click()">📄 <b>修正前</b>（指示を入れた版/旧データ）<br><span class="muted">PDF または 画像(PNG/JPG) をドラッグ&ドロップ（画像は複数=複数ページ）</span></div>
+        <input type="file" id="fi-old" accept="application/pdf,image/*" multiple style="display:none">
       </div>
       <div>
-        <div class="dz" id="dz-new" onclick="document.getElementById('fi-new').click()">📄 <b>修正後</b>（戻ってきた校正データ）<br><span class="muted">PDFをドラッグ&ドロップ</span></div>
-        <input type="file" id="fi-new" accept="application/pdf" style="display:none">
+        <div class="dz" id="dz-new" onclick="document.getElementById('fi-new').click()">📄 <b>修正後</b>（戻ってきた校正データ）<br><span class="muted">PDF または 画像(PNG/JPG) をドラッグ&ドロップ（PDFと画像の組合せもOK）</span></div>
+        <input type="file" id="fi-new" accept="application/pdf,image/*" multiple style="display:none">
       </div>
     </div>
     <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">
@@ -79,7 +79,8 @@
     <div id="checklist"></div>
     <div id="chk-summary" style="font-size:13px;font-weight:800;margin-top:8px"></div>
   </div>
-  <p class="muted">使い方: ①前回入稿(または赤字指示入り)PDFと、戻ってきた修正版PDFを入れて比較 → 🔴ページで修正箇所を目視確認 → ②指示リストにチェック。全✔=校了判断の材料に。</p>
+  <p class="muted">使い方: ①前回入稿(または赤字指示入り)と、戻ってきた修正版を入れて比較（PDF・PNG/JPG画像どちらもOK、画像は複数枚=複数ページ）→ 🔴ページで修正箇所を目視確認 → ②指示リストにチェック。全✔=校了判断の材料に。<br>
+  ※ 位置ズレ・書き出しの微差は自動で無視します。なお「PDFと画像」など別ソフトで作り直したデータ同士は、フォント描画の差を変更として拾うことがあります（同じ元データからの書き出し同士の比較が確実）。</p>
 </main>
 <div id="toast"></div>
 
@@ -95,24 +96,56 @@ function wireDz(dzId, fiId, key){
   var dz=document.getElementById(dzId), fi=document.getElementById(fiId);
   ['dragover','dragenter'].forEach(function(ev){ dz.addEventListener(ev,function(e){e.preventDefault();dz.classList.add('over');}); });
   ['dragleave','drop'].forEach(function(ev){ dz.addEventListener(ev,function(e){e.preventDefault();dz.classList.remove('over');}); });
-  dz.addEventListener('drop',function(e){ if(e.dataTransfer.files[0]) loadPdf(e.dataTransfer.files[0], key, dz); });
-  fi.addEventListener('change',function(){ if(fi.files[0]) loadPdf(fi.files[0], key, dz); });
+  dz.addEventListener('drop',function(e){ if(e.dataTransfer.files[0]) loadAny([].slice.call(e.dataTransfer.files), key, dz); });
+  fi.addEventListener('change',function(){ if(fi.files[0]) loadAny([].slice.call(fi.files), key, dz); });
 }
-function loadPdf(file, key, dz){
-  if(!/\.pdf$/i.test(file.name)){ toast('PDFを入れてください (EPSはデスクトップの変換batでPDF化)'); return; }
-  file.arrayBuffer().then(function(buf){
-    return pdfjsLib.getDocument({data:buf}).promise;
-  }).then(function(doc){
-    docs[key]=doc; names[key]=file.name;
-    dz.classList.add('ok');
-    dz.innerHTML='✅ '+esc(file.name)+'<br><span class="muted">'+doc.numPages+' ページ</span>';
-  }).catch(function(e){ toast('読込失敗: '+e.message); });
+// KNSA-4: PDF/画像どちらも読める。画像を複数入れたら複数ページ扱い
+function loadAny(files, key, dz){
+  var pdf=files.find(function(f){ return /\.pdf$/i.test(f.name); });
+  var imgs=files.filter(function(f){ return /\.(png|jpe?g|gif|bmp|webp)$/i.test(f.name); }).sort(function(a,b){ return a.name.localeCompare(b.name,'ja'); });
+  if(pdf){
+    pdf.arrayBuffer().then(function(buf){
+      return pdfjsLib.getDocument({data:buf}).promise;
+    }).then(function(doc){
+      docs[key]={ kind:'pdf', doc:doc, numPages:doc.numPages }; names[key]=pdf.name;
+      dz.classList.add('ok');
+      dz.innerHTML='✅ '+esc(pdf.name)+'<br><span class="muted">'+doc.numPages+' ページ (PDF)</span>';
+    }).catch(function(e){ toast('読込失敗: '+e.message); });
+    return;
+  }
+  if(imgs.length){
+    Promise.all(imgs.map(function(f){
+      return new Promise(function(res,rej){
+        var im=new Image();
+        im.onload=function(){ res(im); };
+        im.onerror=function(){ rej(new Error(f.name+' を読めません')); };
+        im.src=URL.createObjectURL(f);
+      });
+    })).then(function(arr){
+      docs[key]={ kind:'imgs', imgs:arr, numPages:arr.length };
+      names[key]=imgs.map(function(f){return f.name;}).join(', ');
+      dz.classList.add('ok');
+      dz.innerHTML='✅ '+esc(imgs.length===1?imgs[0].name:imgs.length+' 枚の画像')+'<br><span class="muted">'+arr.length+' ページ (画像)</span>';
+    }).catch(function(e){ toast(String(e.message||e)); });
+    return;
+  }
+  toast('PDF か 画像(PNG/JPG等) を入れてください (EPSはデスクトップの変換batでPDF化)');
 }
 wireDz('dz-old','fi-old','old');
 wireDz('dz-new','fi-new','neu');
 
-async function renderPage(doc, pno, scale){
-  var page=await doc.getPage(pno);
+async function renderPage(src, pno, scale){
+  if(src.kind==='imgs'){
+    var im=src.imgs[Math.min(pno,src.numPages)-1];
+    var MAXD=1400, sc=Math.min(1, MAXD/Math.max(im.naturalWidth, im.naturalHeight));
+    var cv0=document.createElement('canvas');
+    cv0.width=Math.max(1,Math.round(im.naturalWidth*sc));
+    cv0.height=Math.max(1,Math.round(im.naturalHeight*sc));
+    var cx0=cv0.getContext('2d'); cx0.fillStyle='#fff'; cx0.fillRect(0,0,cv0.width,cv0.height);
+    cx0.drawImage(im,0,0,cv0.width,cv0.height);
+    return cv0;
+  }
+  var page=await src.doc.getPage(pno);
   var vp=page.getViewport({scale:scale||1.2});
   var cv=document.createElement('canvas');
   cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
@@ -155,6 +188,13 @@ function findOffset(a, b){
 async function comparePage(pno){
   var a=await renderPage(docs.old, Math.min(pno, docs.old.numPages));
   var b0=await renderPage(docs.neu, Math.min(pno, docs.neu.numPages));
+  // KNSA-4: 解像度正規化 — サイズが違う場合 (PDF×画像など) は b を a と同寸に
+  if(b0.width!==a.width || b0.height!==a.height){
+    var bn=document.createElement('canvas'); bn.width=a.width; bn.height=a.height;
+    var bnx=bn.getContext('2d'); bnx.fillStyle='#fff'; bnx.fillRect(0,0,bn.width,bn.height);
+    bnx.drawImage(b0,0,0,bn.width,bn.height);
+    b0=bn;
+  }
   // 位置補正: b を最適オフセットで再配置
   var off=findOffset(a,b0);
   var b=b0;
