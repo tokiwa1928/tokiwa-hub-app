@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🧾 見積書ビルダー | Tokiwa Hub Tools</title>
+<!-- 読込: SheetJS (xlsx/xls/ロータス) ・ 出力: ExcelJS (書式付きテンプレート生成) -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:920px; margin:16px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.5rem; text-transform:uppercase; }
+  label{ font-size:11px; color:#888; display:block; margin-bottom:2px; }
+  input,select,textarea{ width:100%; padding:7px 9px; border:1px solid #d0cec8; border-radius:6px; font-size:13.5px; font-family:inherit; background:#fff; }
+  input:focus,select:focus{ outline:none; border-color:#1a1a1a; }
+  .btn{ padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  .g3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:9px; }
+  .g4{ display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:9px; }
+  /* 種別カード */
+  .types{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .tcard{ border:2px solid var(--line); border-radius:9px; padding:10px 12px; cursor:pointer; background:#fff; }
+  .tcard.sel{ border-color:var(--cyan); background:#ecfeff; }
+  .tcard b{ font-size:14.5px; } .tcard div{ font-size:11px; color:#777; margin-top:3px; line-height:1.5; }
+  /* 原価表 */
+  table{ width:100%; border-collapse:collapse; }
+  th{ background:#f4f3f0; font-size:10.5px; padding:5px 6px; border:1px solid var(--line); text-align:left; }
+  td{ padding:3px 4px; border:1px solid var(--line); }
+  td input{ border:1px solid #eceae5; border-radius:4px; padding:4px 6px; font-size:12.5px; }
+  td input.num{ text-align:right; }
+  .cost-bar{ background:#1a1a1a; color:#fff; border-radius:8px; padding:10px 16px; display:flex; gap:22px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .cost-bar .k{ font-size:10px; color:#94a3b8; display:block; }
+  .cost-bar .v{ font-size:17px; font-weight:800; }
+  .cost-bar .v.green{ color:#a3e635; }
+  #drop2{ border:2px dashed #94a3b8; border-radius:8px; padding:14px; text-align:center; color:#64748b; font-size:12.5px; cursor:pointer; background:#fff; }
+  #drop2.over{ border-color:var(--cyan); background:#ecfeff; }
+  .pick{ border:1px solid var(--line); border-radius:7px; padding:6px 10px; margin-top:5px; cursor:pointer; display:flex; gap:10px; align-items:center; font-size:12.5px; background:#fff; }
+  .pick:hover{ border-color:var(--cyan); background:#f0fdff; }
+  .pick .pr{ margin-left:auto; white-space:nowrap; font-weight:700; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🧰</span>
+  <span class="tname">🧾 見積書ビルダー</span>
+  <span class="user" id="hub-user"></span>
+</header>
+<main>
+
+  <div class="sec">
+    <div class="st">① 種別を選ぶ（見積計算書の構成が変わります）</div>
+    <div class="types">
+      <div class="tcard sel" id="tc-pera" onclick="setType('pera')"><b>📃 ペラもの</b><div>チラシ・伝票・封筒など1枚もの。用紙＋印刷＋断裁の積算。</div></div>
+      <div class="tcard" id="tc-sasshi" onclick="setType('sasshi')"><b>📖 冊子もの</b><div>報告書・パンフ等。表紙/本文の用紙・印刷＋製本の積算。</div></div>
+      <div class="tcard" id="tc-gaichu" onclick="setType('gaichu')"><b>🤝 完全外注</b><div>外注見積額に管理費・マージンを乗せる方式。</div></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="st">② 基本情報　<span class="muted" style="text-transform:none">過去ファイルや単価マスタから流し込めます（下の③）</span></div>
+    <div class="g4">
+      <div><label>得意先名</label><input id="cust" list="cust-dl" placeholder="○○株式会社"><datalist id="cust-dl"></datalist></div>
+      <div><label>見積番号</label><input id="qno"></div>
+      <div><label>発行日</label><input id="qdate"></div>
+      <div><label>有効期限</label><select id="valid"><option>発行日より1ヶ月</option><option>発行日より2ヶ月</option><option>発行日より3ヶ月</option></select></div>
+    </div>
+    <div class="g4" style="margin-top:8px">
+      <div><label>品名・件名</label><input id="item" placeholder="例: 令和8年度 事業報告書"></div>
+      <div><label>数量</label><input id="qty" type="number" class="num" placeholder="1000" oninput="recalc()"></div>
+      <div><label>単位</label><select id="unit"><option>枚</option><option>部</option><option>冊</option><option>セット</option><option>箱</option><option>式</option></select></div>
+      <div><label>納期・受渡</label><input id="due" placeholder="例: 校了後 2週間"></div>
+    </div>
+    <div style="margin-top:8px"><label>仕様（見積書に記載）</label><input id="spec" placeholder="例: A4 / 40P / 無線綴じ / 表紙 色上質特厚口・本文 上質70K / 1C"></div>
+  </div>
+
+  <div class="sec">
+    <div class="st">③ 流し込み（任意）— 過去見積ファイル または 単価マスタ</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div id="drop2" onclick="document.getElementById('fi2').click()">📂 過去見積 (Excel/ロータス) をドロップ<br><span class="muted">明細を拾って下に候補表示</span></div>
+        <input id="fi2" type="file" accept=".xlsx,.xls,.wk1,.wk3,.wk4,.123,.wks,.csv" multiple style="display:none" onchange="readPast(this.files)">
+      </div>
+      <div>
+        <input id="tm-q" placeholder="🔍 単価マスタを検索（例: A4 無線綴じ）" oninput="searchMaster()">
+        <div class="muted" style="margin-top:3px">確定済マスタは ✔ 付きで表示</div>
+      </div>
+    </div>
+    <div id="picks"></div>
+  </div>
+
+  <div class="sec">
+    <div class="st">④ 見積計算書（原価積算）<span class="muted" id="type-label" style="text-transform:none"></span></div>
+    <table>
+      <thead><tr><th>項目</th><th style="width:26%">内容</th><th style="width:11%">数量</th><th style="width:12%">単価</th><th style="width:14%">金額</th><th style="width:34px"></th></tr></thead>
+      <tbody id="cost-body"></tbody>
+    </table>
+    <button class="btn" style="font-size:12px;padding:4px 12px;margin-top:6px" onclick="addCostRow('','' ,'','')">＋ 行を追加</button>
+    <div class="cost-bar">
+      <div><span class="k">原価合計</span><span class="v" id="cb-cost">¥0</span></div>
+      <div><span class="k">目標原価率</span>
+        <select id="trate" style="width:84px;padding:3px 6px;font-size:13px" onchange="recalc()">
+          <option value="0.6">60%</option><option value="0.65">65%</option><option value="0.7" selected>70%</option>
+          <option value="0.75">75%</option><option value="0.8">80%</option><option value="0.85">85%</option>
+        </select>
+      </div>
+      <div><span class="k">提案売価 (税抜)</span><span class="v" id="cb-sug">¥0</span></div>
+      <div><span class="k">採用売価 (税抜)</span><input id="sell" type="number" class="num" style="width:120px;padding:4px 8px;font-size:15px;font-weight:800" oninput="recalc(true)"></div>
+      <div><span class="k">粗利 / 原価率</span><span class="v green" id="cb-gp">—</span></div>
+      <div><span class="k">単価</span><span class="v" id="cb-unitp">—</span></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="st">⑤ 出力</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-g" style="font-size:15px" onclick="generate()">⬇ 見積書＋見積計算書 をダウンロード (Excel)</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#334155;margin:0"><input type="checkbox" id="reg-hub" checked style="width:auto">Tokiwa Hub に「見積中」として登録</label>
+    </div>
+    <div class="muted" style="margin-top:6px">標準テンプレート（A4印刷対応・社判欄付き）で 見積書.xlsx と 見積計算書.xlsx の2ファイルを生成します。</div>
+    <div id="gen-log" style="margin-top:6px"></div>
+  </div>
+
+</main>
+<div id="toast"></div>
+
+<script>
+// ═════════ Tokiwa Hub 共有ヘルパー ═════════
+var HUB_DBKEY='murayama_v15', HUB_AUTHKEY='murayama_auth', HUB_TOOL_ID='quote-builder';
+function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ return null; } }
+function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
+function hubSave(mut){ var db=hubLoad(); if(!db){ toast('❌ 本体データ無し'); return false; }
+  try{ mut(db); localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){ toast('❌ 保存失敗: '+e); return false; }
+  try{ new BroadcastChannel('tokiwa-hub-tools').postMessage({type:'db-updated', tool:HUB_TOOL_ID}); }catch(e){}
+  return true; }
+function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2800); }
+function yen(n){ return '¥' + Number(n||0).toLocaleString(); }
+(function(){ var a=hubAuth(); document.getElementById('hub-user').textContent = a.loggedIn ? ('👤 '+(a.userName||'')+' / '+(a.companyName||'')) : '⚠ 本体未ログイン'; })();
+
+// ═════════ 初期化 ═════════
+var TYPE='pera';
+var TYPE_DEFS={
+  pera:   { label:'📃 ペラもの', rows:[['用紙代',''],['製版・CTP',''],['印刷代',''],['断裁・加工',''],['配送・梱包',''],['その他','']] },
+  sasshi: { label:'📖 冊子もの', rows:[['表紙 用紙',''],['本文 用紙',''],['製版・CTP',''],['印刷(表紙)',''],['印刷(本文)',''],['製本・加工','無線綴じ/中綴じ'],['配送・梱包',''],['その他','']] },
+  gaichu: { label:'🤝 完全外注', rows:[['外注費(仕入)','外注先見積額'],['検品・管理費',''],['配送・梱包',''],['その他','']] }
+};
+(function init(){
+  var d=new Date();
+  document.getElementById('qdate').value = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  document.getElementById('qno').value = 'M'+String(d.getFullYear()-2018).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0')+'-Q'+String(d.getHours())+String(d.getMinutes());
+  var db=hubLoad(), set={};
+  if(db){ ['history','estimates','projects'].forEach(function(k){ (db[k]||[]).forEach(function(r){ if(r.cust) set[r.cust]=1; }); }); }
+  document.getElementById('cust-dl').innerHTML = Object.keys(set).sort().map(function(c){ return '<option value="'+esc(c)+'">'; }).join('');
+  setType('pera');
+})();
+function setType(t){
+  TYPE=t;
+  ['pera','sasshi','gaichu'].forEach(function(x){ document.getElementById('tc-'+x).classList.toggle('sel', x===t); });
+  document.getElementById('type-label').textContent='　'+TYPE_DEFS[t].label+' 構成';
+  var tb=document.getElementById('cost-body'); tb.innerHTML='';
+  TYPE_DEFS[t].rows.forEach(function(r){ addCostRow(r[0], r[1], '', ''); });
+  recalc();
+}
+function addCostRow(label, note, q, p){
+  var tb=document.getElementById('cost-body');
+  var tr=document.createElement('tr');
+  tr.innerHTML = '<td><input value="'+esc(label)+'" placeholder="項目"></td>'
+    + '<td><input value="'+esc(note)+'" placeholder="内容・仕様"></td>'
+    + '<td><input type="number" class="num cq" value="'+esc(q)+'" oninput="rowCalc(this)"></td>'
+    + '<td><input type="number" class="num cp" step="0.01" value="'+esc(p)+'" oninput="rowCalc(this)"></td>'
+    + '<td><input type="number" class="num ca" oninput="recalc()"></td>'
+    + '<td style="text-align:center;cursor:pointer;color:#b91c1c" onclick="this.parentNode.remove();recalc()">✕</td>';
+  tb.appendChild(tr);
+}
+function rowCalc(el){
+  var tr=el.closest('tr');
+  var q=parseFloat(tr.querySelector('.cq').value)||0, p=parseFloat(tr.querySelector('.cp').value)||0;
+  if(q&&p) tr.querySelector('.ca').value = Math.round(q*p);
+  recalc();
+}
+function costTotal(){
+  var s=0; document.querySelectorAll('#cost-body .ca').forEach(function(i){ s+=parseFloat(i.value)||0; });
+  return Math.round(s);
+}
+function recalc(keepSell){
+  var c=costTotal(), r=parseFloat(document.getElementById('trate').value)||0.7;
+  var sug = c>0 ? Math.ceil(c/r/100)*100 : 0;
+  document.getElementById('cb-cost').textContent=yen(c);
+  document.getElementById('cb-sug').textContent=yen(sug);
+  var sellEl=document.getElementById('sell');
+  if(!keepSell && (!sellEl.value || sellEl.dataset.auto==='1')){ if(sug){ sellEl.value=sug; sellEl.dataset.auto='1'; } }
+  if(keepSell) sellEl.dataset.auto='';
+  var s=parseFloat(sellEl.value)||0, qty=parseFloat(document.getElementById('qty').value)||0;
+  document.getElementById('cb-gp').textContent = s? (yen(s-c)+' / '+(c&&s?Math.round(c/s*100):0)+'%') : '—';
+  document.getElementById('cb-unitp').textContent = (s&&qty)? ('@'+(Math.round(s/qty*100)/100).toLocaleString()) : '—';
+}
+
+// ═════════ ③ 流し込み: 過去ファイル / 単価マスタ ═════════
+var drop2=document.getElementById('drop2');
+['dragover','dragenter'].forEach(function(ev){ drop2.addEventListener(ev,function(e){e.preventDefault();drop2.classList.add('over');}); });
+['dragleave','drop'].forEach(function(ev){ drop2.addEventListener(ev,function(e){e.preventDefault();drop2.classList.remove('over');}); });
+drop2.addEventListener('drop',function(e){ readPast(e.dataTransfer.files); });
+
+function readPast(fl){
+  [].slice.call(fl).forEach(function(f){
+    var r=new FileReader();
+    r.onload=function(){
+      try{
+        var wb=XLSX.read(r.result,{type:'array',codepage:932});
+        var picks=[];
+        wb.SheetNames.forEach(function(sn){
+          var aoa=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''});
+          extractRows(aoa).forEach(function(x){ x.src=f.name; picks.push(x); });
+          // 得意先
+          for(var i=0;i<Math.min(aoa.length,12);i++) (aoa[i]||[]).forEach(function(c){ var s=String(c||''); if(/御中/.test(s)&&!document.getElementById('cust').value) document.getElementById('cust').value=s.replace(/御中|様/g,'').trim(); });
+        });
+        if(!picks.length){ toast('⚠ '+f.name+': 明細を自動で拾えませんでした'); return; }
+        var box=document.getElementById('picks');
+        picks.slice(0,8).forEach(function(x){
+          var d=document.createElement('div'); d.className='pick';
+          d.innerHTML='<span>📄</span><span><b>'+esc(x.item)+'</b><br><span class="muted">'+esc(x.src)+'</span></span><span class="pr">'+Number(x.qty).toLocaleString()+' × '+x.price+'円 = '+yen(x.amount||x.qty*x.price)+'</span>';
+          d.onclick=function(){ applyPick(x); };
+          box.appendChild(d);
+        });
+        toast('✅ '+f.name+' から '+picks.length+' 件抽出。クリックで流し込み');
+      }catch(e){ toast('❌ '+f.name+': '+(e.message||e)); }
+    };
+    r.readAsArrayBuffer(f);
+  });
+}
+function searchMaster(){
+  var q=(document.getElementById('tm-q').value||'').toLowerCase();
+  var box=document.getElementById('picks');
+  box.querySelectorAll('.pick.tm').forEach(function(n){ n.remove(); });
+  if(q.length<1) return;
+  var db=hubLoad(); var ms=(db&&db.tankaMaster)||[];
+  ms.filter(function(m){ return (m.item||'').toLowerCase().indexOf(q)>=0; }).slice(0,6).forEach(function(m){
+    var d=document.createElement('div'); d.className='pick tm';
+    d.innerHTML='<span>'+(m.status==='確定'?'✔':'📚')+'</span><span><b>'+esc(m.item)+'</b><br><span class="muted">'+esc(m.year||'')+' '+esc(m.cust||'')+'</span></span><span class="pr">@'+m.price+'/'+esc(m.unit||'')+'</span>';
+    d.onclick=function(){ applyPick({ item:m.item, qty:m.qty||parseFloat(document.getElementById('qty').value)||0, price:m.price, unit:m.unit, cust:m.cust }); };
+    box.appendChild(d);
+  });
+}
+function applyPick(x){
+  if(x.item && !document.getElementById('item').value) document.getElementById('item').value=x.item;
+  if(x.cust && !document.getElementById('cust').value) document.getElementById('cust').value=x.cust;
+  if(x.qty) document.getElementById('qty').value=x.qty;
+  if(x.unit) document.getElementById('unit').value=x.unit;
+  // 前回単価ありき: 採用売価 = 数量 × 前回単価
+  if(x.price && x.qty){ var s=document.getElementById('sell'); s.value=Math.round(x.qty*x.price); s.dataset.auto=''; }
+  recalc(true);
+  toast('⬇ 流し込みました（採用売価=前回単価ベース）');
+}
+// 明細抽出 (tanka-master と同方式)
+function extractRows(aoa){
+  var out=[], hQty=-1,hPrice=-1,hAmt=-1,hItem=-1,headerRow=-1;
+  for(var r=0;r<Math.min(aoa.length,40);r++){ var row=aoa[r]||[];
+    for(var c=0;c<row.length;c++){ var s=String(row[c]||'');
+      if(/数\s*量/.test(s)&&hQty<0){hQty=c;headerRow=r;} if(/単\s*価/.test(s)&&hPrice<0){hPrice=c;headerRow=r;}
+      if(/金\s*額/.test(s)&&hAmt<0)hAmt=c; if(/品\s*名|品目|名\s*称|内容|摘要|件名/.test(s)&&hItem<0)hItem=c; }
+    if(hQty>=0&&hPrice>=0)break; }
+  function num(v){ if(typeof v==='number')return v; var n=parseFloat(String(v||'').replace(/[,¥￥\s]/g,'')); return isNaN(n)?0:n; }
+  function ftext(row,skip){ for(var i=0;i<row.length;i++){ if(skip.indexOf(i)>=0)continue; var s=String(row[i]||'').trim(); if(s.length>=2&&!/^[\d,.\-¥￥\s%]+$/.test(s))return s; } return ''; }
+  if(hQty>=0&&hPrice>=0){ for(var r1=headerRow+1;r1<aoa.length;r1++){ var row1=aoa[r1]||[];
+    var q=num(row1[hQty]),p=num(row1[hPrice]),a=hAmt>=0?num(row1[hAmt]):0;
+    var it=hItem>=0?String(row1[hItem]||'').trim():ftext(row1,[hQty,hPrice,hAmt]);
+    if(it&&q>0&&p>0&&!/合計|小計|消費税|税/.test(it)) out.push({item:it,qty:q,price:p,amount:a}); } }
+  if(!out.length){ for(var r3=0;r3<aoa.length;r3++){ var row3=aoa[r3]||[], nums=[], text='';
+    for(var c3=0;c3<row3.length;c3++){ var v=row3[c3];
+      if(typeof v==='number'&&v!==0)nums.push(v);
+      else{ var sv=String(v||'').trim(); var nv=num(sv); if(sv&&nv&&/^[\d,.\s¥￥]+$/.test(sv))nums.push(nv); else if(sv.length>=2&&!text&&!/^[\d,.\-\s%]+$/.test(sv))text=sv; } }
+    if(!text||nums.length<3||/合計|小計|消費税|税込|税抜/.test(text))continue;
+    outer: for(var i=0;i<nums.length;i++)for(var j=0;j<nums.length;j++){ if(i===j)continue;
+      var q2=nums[i],p2=nums[j];
+      if(q2>=1&&q2<=1000000&&q2===Math.round(q2)&&p2>0&&p2<=1000000){
+        for(var k=0;k<nums.length;k++){ if(k!==i&&k!==j&&Math.abs(q2*p2-nums[k])<=Math.max(2,q2*p2*0.01)){ out.push({item:text,qty:q2,price:p2,amount:nums[k]}); break outer; } } } } } }
+  return out;
+}
+
+// ═════════ ⑤ 生成 (ExcelJS 標準テンプレート) ═════════
+var THIN={style:'thin',color:{argb:'FF555555'}};
+var B_ALL={top:THIN,left:THIN,bottom:THIN,right:THIN};
+function jpDate(iso){ var p=(iso||'').split('-'); if(p.length<3)return iso||''; return p[0]+'年'+parseInt(p[1])+'月'+parseInt(p[2])+'日'; }
+
+async function buildQuoteWB(d){
+  var wb=new ExcelJS.Workbook();
+  var ws=wb.addWorksheet('見積書',{ pageSetup:{ paperSize:9, orientation:'portrait', fitToPage:true, fitToWidth:1, fitToHeight:1, margins:{left:.6,right:.6,top:.7,bottom:.7,header:.3,footer:.3} } });
+  ws.columns=[{width:3},{width:5},{width:34},{width:9},{width:6},{width:11},{width:13},{width:3}];
+  var F='游ゴシック';
+  function C(addr,val,opt){ var c=ws.getCell(addr); c.value=val; c.font=Object.assign({name:F,size:10.5},(opt&&opt.f)||{}); if(opt&&opt.a)c.alignment=opt.a; if(opt&&opt.b)c.border=opt.b; if(opt&&opt.fill)c.fill={type:'pattern',pattern:'solid',fgColor:{argb:opt.fill}}; if(opt&&opt.nf)c.numFmt=opt.nf; return c; }
+  // タイトル
+  ws.mergeCells('B2:G2'); C('B2','御　見　積　書',{f:{size:20,bold:true},a:{horizontal:'center'}});
+  ws.getCell('B2').border={bottom:{style:'double',color:{argb:'FF222222'}}};
+  // 番号・日付
+  C('F4','見積番号'); C('G4',d.qno,{a:{horizontal:'right'}});
+  C('F5','発行日');   C('G5',jpDate(d.qdate),{a:{horizontal:'right'}});
+  // 宛名
+  ws.mergeCells('B5:D5'); C('B5',(d.cust||'')+'　御中',{f:{size:14,bold:true}});
+  ws.getCell('B5').border={bottom:{style:'thin',color:{argb:'FF222222'}}};
+  C('B7','下記の通りお見積り申し上げます。');
+  // 金額(税込)
+  ws.mergeCells('B9:C9'); C('B9','御見積金額 (税込)',{f:{size:11,bold:true}});
+  ws.mergeCells('D9:G9'); C('D9',d.total,{f:{size:16,bold:true},a:{horizontal:'right'},nf:'"¥"#,##0"-"'});
+  ws.getCell('D9').border={bottom:{style:'double',color:{argb:'FF222222'}}};
+  // 条件
+  C('B11','件名');     ws.mergeCells('C11:D11'); C('C11',d.item);
+  C('E11','納期・受渡'); ws.mergeCells('F11:G11'); C('F11',d.due||'別途ご相談');
+  C('B12','有効期限');  ws.mergeCells('C12:D12'); C('C12',d.valid);
+  C('E12','取引方法');  ws.mergeCells('F12:G12'); C('F12','従来通り');
+  // 明細
+  var hr=14;
+  [['B','No'],['C','品名・仕様'],['D','数量'],['E','単位'],['F','単価'],['G','金額']].forEach(function(x){
+    C(x[0]+hr,x[1],{f:{bold:true,size:10},a:{horizontal:'center'},b:B_ALL,fill:'FFEFEFEA'});
+  });
+  var rows=[[1, d.item + (d.spec?('\n'+d.spec):''), d.qty, d.unit, d.unitp, d.subtotal]];
+  for(var i=0;i<5;i++) rows.push(['','','','','','']); // 空行
+  rows.forEach(function(r,ri){
+    var rw=hr+1+ri;
+    C('B'+rw,r[0],{a:{horizontal:'center'},b:B_ALL});
+    C('C'+rw,r[1],{a:{wrapText:true,vertical:'middle'},b:B_ALL});
+    C('D'+rw,r[2],{a:{horizontal:'right'},b:B_ALL,nf:'#,##0'});
+    C('E'+rw,r[3],{a:{horizontal:'center'},b:B_ALL});
+    C('F'+rw,r[4],{a:{horizontal:'right'},b:B_ALL,nf:'#,##0.##'});
+    C('G'+rw,r[5],{a:{horizontal:'right'},b:B_ALL,nf:'#,##0'});
+    if(ri===0) ws.getRow(rw).height=30;
+  });
+  var sr=hr+rows.length+1;
+  ws.mergeCells('E'+sr+':F'+sr);     C('E'+sr,'小計 (税抜)',{a:{horizontal:'center'},b:B_ALL,fill:'FFF7F6F2'}); C('G'+sr,d.subtotal,{a:{horizontal:'right'},b:B_ALL,nf:'#,##0'});
+  ws.mergeCells('E'+(sr+1)+':F'+(sr+1)); C('E'+(sr+1),'消費税 (10%)',{a:{horizontal:'center'},b:B_ALL,fill:'FFF7F6F2'}); C('G'+(sr+1),d.tax,{a:{horizontal:'right'},b:B_ALL,nf:'#,##0'});
+  ws.mergeCells('E'+(sr+2)+':F'+(sr+2)); C('E'+(sr+2),'合計 (税込)',{f:{bold:true},a:{horizontal:'center'},b:B_ALL,fill:'FFEFEFEA'}); C('G'+(sr+2),d.total,{f:{bold:true},a:{horizontal:'right'},b:B_ALL,nf:'#,##0'});
+  // 備考
+  var br=sr+4;
+  C('B'+br,'備考',{f:{bold:true,size:10}});
+  ws.mergeCells('B'+(br+1)+':G'+(br+2));
+  C('B'+(br+1),d.memo||'',{a:{wrapText:true,vertical:'top'},b:B_ALL});
+  // 社名 (右下)
+  var cr=br+4;
+  ws.mergeCells('E'+cr+':G'+cr);     C('E'+cr,d.company,{f:{size:12,bold:true}});
+  ws.mergeCells('E'+(cr+1)+':G'+(cr+1)); C('E'+(cr+1),d.addr||'');
+  ws.mergeCells('E'+(cr+2)+':G'+(cr+2)); C('E'+(cr+2),(d.tel?('TEL: '+d.tel+'　'):'')+'担当: '+(d.rep||''));
+  return wb;
+}
+
+async function buildCalcWB(d){
+  var wb=new ExcelJS.Workbook();
+  var ws=wb.addWorksheet('見積計算書',{ pageSetup:{ paperSize:9, orientation:'portrait', fitToPage:true, fitToWidth:1, fitToHeight:1 } });
+  ws.columns=[{width:3},{width:18},{width:30},{width:10},{width:11},{width:13},{width:3}];
+  var F='游ゴシック';
+  function C(addr,val,opt){ var c=ws.getCell(addr); c.value=val; c.font=Object.assign({name:F,size:10.5},(opt&&opt.f)||{}); if(opt&&opt.a)c.alignment=opt.a; if(opt&&opt.b)c.border=opt.b; if(opt&&opt.fill)c.fill={type:'pattern',pattern:'solid',fgColor:{argb:opt.fill}}; if(opt&&opt.nf)c.numFmt=opt.nf; return c; }
+  ws.mergeCells('B2:F2'); C('B2','見 積 計 算 書（社内用）',{f:{size:15,bold:true},a:{horizontal:'center'}});
+  ws.getCell('B2').border={bottom:{style:'double',color:{argb:'FF222222'}}};
+  C('B4','見積番号',{f:{bold:true}}); C('C4',d.qno);
+  C('E4','種別',{f:{bold:true}});    C('F4',d.typeLabel);
+  C('B5','得意先',{f:{bold:true}});  C('C5',d.cust);
+  C('E5','数量',{f:{bold:true}});    C('F5',Number(d.qty).toLocaleString()+' '+d.unit);
+  C('B6','件名',{f:{bold:true}});    ws.mergeCells('C6:F6'); C('C6',d.item+(d.spec?(' / '+d.spec):''));
+  var hr=8;
+  [['B','項目'],['C','内容・仕様'],['D','数量'],['E','単価'],['F','金額']].forEach(function(x){ C(x[0]+hr,x[1],{f:{bold:true,size:10},a:{horizontal:'center'},b:B_ALL,fill:'FFEFEFEA'}); });
+  d.costRows.forEach(function(r,ri){
+    var rw=hr+1+ri;
+    C('B'+rw,r.label,{b:B_ALL});
+    C('C'+rw,r.note,{b:B_ALL});
+    C('D'+rw,r.q||'',{a:{horizontal:'right'},b:B_ALL,nf:'#,##0.##'});
+    C('E'+rw,r.p||'',{a:{horizontal:'right'},b:B_ALL,nf:'#,##0.##'});
+    C('F'+rw,r.a||0,{a:{horizontal:'right'},b:B_ALL,nf:'#,##0'});
+  });
+  var tr=hr+d.costRows.length+1;
+  ws.mergeCells('B'+tr+':E'+tr); C('B'+tr,'原価合計',{f:{bold:true},a:{horizontal:'center'},b:B_ALL,fill:'FFEFEFEA'});
+  C('F'+tr,d.cost,{f:{bold:true},a:{horizontal:'right'},b:B_ALL,nf:'#,##0'});
+  var sr=tr+2;
+  C('B'+sr,'採用売価 (税抜)',{f:{bold:true}}); C('C'+sr,d.subtotal,{f:{size:13,bold:true},nf:'"¥"#,##0'});
+  C('B'+(sr+1),'粗利');   C('C'+(sr+1),d.subtotal-d.cost,{nf:'"¥"#,##0'});
+  C('B'+(sr+2),'原価率'); C('C'+(sr+2),d.subtotal?d.cost/d.subtotal:0,{nf:'0.0%'});
+  C('B'+(sr+3),'売単価'); C('C'+(sr+3),d.qty?d.subtotal/d.qty:0,{nf:'"@"#,##0.00'});
+  C('E'+sr,'作成',{f:{bold:true}}); C('F'+sr,d.rep||'');
+  C('E'+(sr+1),'作成日'); C('F'+(sr+1),jpDate(d.qdate));
+  return wb;
+}
+
+async function dl(wb, name){
+  var buf=await wb.xlsx.writeBuffer();
+  var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a'); a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); },4000);
+}
+
+function collectData(){
+  var qty=parseFloat(document.getElementById('qty').value)||0;
+  var sell=parseFloat(document.getElementById('sell').value)||0;
+  var cost=costTotal();
+  var db=hubLoad(); var conf=(db&&db.conf)||{};
+  var auth=hubAuth();
+  var costRows=[];
+  document.querySelectorAll('#cost-body tr').forEach(function(tr){
+    var ins=tr.querySelectorAll('input');
+    var a=parseFloat(ins[4].value)||0;
+    if(ins[0].value||a) costRows.push({ label:ins[0].value, note:ins[1].value, q:parseFloat(ins[2].value)||'', p:parseFloat(ins[3].value)||'', a:a });
+  });
+  return {
+    cust:document.getElementById('cust').value.trim(),
+    qno:document.getElementById('qno').value.trim(),
+    qdate:document.getElementById('qdate').value,
+    valid:document.getElementById('valid').value,
+    item:document.getElementById('item').value.trim(),
+    spec:document.getElementById('spec').value.trim(),
+    due:document.getElementById('due').value.trim(),
+    qty:qty, unit:document.getElementById('unit').value,
+    unitp: qty? Math.round(sell/qty*100)/100 : sell,
+    subtotal:sell, tax:Math.round(sell*0.1), total:sell+Math.round(sell*0.1),
+    cost:cost, costRows:costRows,
+    typeLabel:TYPE_DEFS[TYPE].label,
+    company:conf.name||'トキワ印刷株式会社', rep:(auth.userName||conf.rep||''), addr:conf.addr||'', tel:conf.tel||'',
+    memo:''
+  };
+}
+
+async function generate(){
+  var d=collectData();
+  if(!d.cust||!d.item){ toast('得意先と品名を入れてください'); return; }
+  if(!d.qty||!d.subtotal){ toast('数量と採用売価を入れてください'); return; }
+  try{
+    var wb1=await buildQuoteWB(d);
+    var wb2=await buildCalcWB(d);
+    await dl(wb1,'見積書_'+d.cust+'_'+d.qno+'.xlsx');
+    await dl(wb2,'見積計算書_'+d.qno+'.xlsx');
+    document.getElementById('gen-log').innerHTML='<div style="font-size:13px;font-weight:700;color:#166534">✅ 2ファイルをダウンロードしました（'+yen(d.subtotal)+' 税抜 / 原価率 '+(d.subtotal?Math.round(d.cost/d.subtotal*100):0)+'%）</div>';
+    // Hub 登録
+    if(document.getElementById('reg-hub').checked){
+      var auth=hubAuth();
+      if(auth.loggedIn){
+        hubSave(function(db){
+          if(!Array.isArray(db.estimates)) db.estimates=[];
+          db.estimates.push({ id:'EST-'+Date.now(), companyId:auth.companyId||'COMP001', companyCode:auth.companyCode||'',
+            cust:d.cust, item:d.item, spec:d.spec, endUser:'', qty:d.qty, unit:d.unit, exTax:d.subtotal,
+            estCost:d.cost, status:'sent', source:'quote-builder', quoteNo:d.qno,
+            createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), createdBy:auth.userName||'' });
+        });
+        toast('✅ 出力＋Hubに見積中として登録しました');
+      } else { toast('⚠ Hub未ログインのため登録はスキップ（ファイルは出力済み）'); }
+    } else { toast('✅ 出力しました'); }
+  }catch(e){ toast('❌ 生成失敗: '+(e.message||e)); console.error(e); }
+}
+
+// テスト用フック
+window.__test_build = async function(){
+  var d=collectData();
+  var wb1=await buildQuoteWB(d), wb2=await buildCalcWB(d);
+  var b1=await wb1.xlsx.writeBuffer(), b2=await wb2.xlsx.writeBuffer();
+  return { quoteBytes:b1.byteLength, calcBytes:b2.byteLength, d:d };
+};
+</script>
+</body>
+</html>
