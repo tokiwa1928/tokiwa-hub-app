@@ -330,6 +330,8 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 #page-est .est-2col .m-tbl th{padding:2px 4px;font-size:9.5px}
 #page-est .est-2col .m-tbl td{padding:1px 3px}
 @media(max-width:1000px){ #page-est .est-2col{grid-template-columns:1fr} }
+/* TLPF-2: ツールページ埋め込み時は 旧Wiki用ツールバー (←一覧) を隠す */
+#tool-embed-content .wiki-toolbar{display:none}
 /* ページヘッダー（受注/見積詳細）を薄型化・説明文は非表示で1行節約 */
 #page-est .page-header-big{padding:5px 1.1rem;margin-bottom:.4rem}
 #page-est .page-header-big .icon-big{font-size:22px}
@@ -1559,6 +1561,14 @@ setTimeout(_removeBootLoader_, 5000);
       </div>
     </div>
     <div id="tools-list"></div>
+    <!-- TLPF-2: 内蔵ツール (面付/電卓/ひらがな) の埋め込み先 -->
+    <div id="tool-embed" style="display:none">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <button class="btn" onclick="closeInternalTool()">← ツール一覧</button>
+        <strong id="tool-embed-title" style="font-size:15px"></strong>
+      </div>
+      <div id="tool-embed-content" class="sec" style="padding:.9rem 1.1rem"></div>
+    </div>
   </div>
 </div>
 
@@ -2191,9 +2201,7 @@ setTimeout(_removeBootLoader_, 5000);
         <div style="font-weight:700;font-size:15px;margin-bottom:6px">社内ナレッジWiki</div>
         <div>左のメニューから記事を選択、または「＋」で新規作成</div>
         <div style="margin-top:1.5rem;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-          <button class="btn" onclick="wikiOpenTool('mentu')">🖨 面付計算ツール</button>
-          <button class="btn" onclick="wikiOpenTool('calc')">🔢 電卓</button>
-          <button class="btn" onclick="wikiOpenTool('hiragana')">📝 ひらがな変換ツール</button>
+          <button class="btn" onclick="swPage('tools', document.querySelector('.tb-btn[data-page=tools]'))">🧰 ツール (面付計算・電卓・ひらがな変換 はこちらへ移動しました)</button>
         </div>
       </div>
     </div>
@@ -14972,17 +14980,27 @@ var TOOLS_REGISTRY = [
     status: '試作', tag: '見積' },
   { href: 'tools/nyukin-check.html', icon: '🏦', name: '入金消込',
     desc: '銀行明細を貼り付け→金額・名義で請求書と自動突合→まとめて消込。月初の照合作業を短縮。',
-    status: '試作', tag: '経理' }
+    status: '試作', tag: '経理' },
+  // TLPF-2: Wiki から移管した内蔵ツール
+  { internal: 'mentu', icon: '🖨', name: '面付計算ツール',
+    desc: '用紙サイズと製品サイズから面付数・配置を自動計算。PDF面付出力対応。',
+    status: '運用中', tag: '制作' },
+  { internal: 'calc', icon: '🔢', name: '電卓',
+    desc: '印刷見積用の電卓。税込計算・用紙枚数計算に対応。',
+    status: '運用中', tag: '共通' },
+  { internal: 'hiragana', icon: '📝', name: 'ひらがな変換ツール (Excel)',
+    desc: 'Excel(.xlsx) の漢字を一括ひらがな化（書式保持）。',
+    status: '運用中', tag: '制作' }
 ];
 function renderToolsPage(){
   var el = document.getElementById('tools-list'); if(!el) return;
+  closeInternalTool(true);
   var stBadge = function(s){
     var c = s === '運用中' ? '#16a34a' : s === '試作' ? '#f59e0b' : '#94a3b8';
     return '<span style="font-size:10px;font-weight:800;color:#fff;background:' + c + ';padding:2px 8px;border-radius:10px">' + s + '</span>';
   };
-  el.innerHTML = TOOLS_REGISTRY.map(function(t){
-    return '<a href="' + t.href + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">'
-      + '<div class="sec" style="display:flex;align-items:center;gap:14px;cursor:pointer" '
+  el.innerHTML = TOOLS_REGISTRY.map(function(t, i){
+    var inner = '<div class="sec" style="display:flex;align-items:center;gap:14px;cursor:pointer" '
       + 'onmouseover="this.style.borderColor=\'#0891b2\'" onmouseout="this.style.borderColor=\'#e0ddd6\'">'
       + '<div style="font-size:30px">' + t.icon + '</div>'
       + '<div style="flex:1;min-width:0">'
@@ -14990,9 +15008,31 @@ function renderToolsPage(){
       +   '<span style="font-size:10px;color:#94a3b8;border:1px solid #e2e8f0;border-radius:4px;padding:1px 6px">' + t.tag + '</span></div>'
       +   '<div style="font-size:12px;color:#666;margin-top:3px;line-height:1.5">' + t.desc + '</div>'
       + '</div>'
-      + '<div style="font-size:18px;color:#94a3b8">↗</div>'
-      + '</div></a>';
+      + '<div style="font-size:18px;color:#94a3b8">' + (t.internal ? '▶' : '↗') + '</div>'
+      + '</div>';
+    return t.internal
+      ? '<div onclick="openInternalTool(\'' + t.internal + '\')">' + inner + '</div>'
+      : '<a href="' + t.href + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">' + inner + '</a>';
   }).join('');
+}
+// TLPF-2: 内蔵ツール (Wiki から移管) の開閉
+function openInternalTool(kind){
+  var t = TOOLS_REGISTRY.find(function(x){ return x.internal === kind; });
+  var list = document.getElementById('tools-list');
+  var emb = document.getElementById('tool-embed');
+  if(!emb) return;
+  if(list) list.style.display = 'none';
+  emb.style.display = 'block';
+  document.getElementById('tool-embed-title').textContent = t ? (t.icon + ' ' + t.name) : '';
+  if(kind === 'mentu' && typeof renderMentuTool === 'function') renderMentuTool();
+  else if(kind === 'calc' && typeof renderCalcTool === 'function') renderCalcTool();
+  else if(kind === 'hiragana' && typeof renderHiraganaTool === 'function') renderHiraganaTool();
+}
+function closeInternalTool(skipRender){
+  var list = document.getElementById('tools-list');
+  var emb = document.getElementById('tool-embed');
+  if(emb){ emb.style.display = 'none'; var c = document.getElementById('tool-embed-content'); if(c) c.innerHTML=''; }
+  if(list) list.style.display = '';
 }
 // ツール側の保存を本体へ即反映 (同一オリジンの BroadcastChannel 経由)
 try {
@@ -36320,14 +36360,11 @@ DIC番号で指定するのが一般的（例: DIC156 = 赤）。`, createdAt:'2
 function initWikiPage() {
   if(!DB) return;
   if(!DB.wikiArticles || !Array.isArray(DB.wikiArticles)) DB.wikiArticles = [];
-  // ツール記事がなければ追加
+  // TLPF-2: ツール (面付/電卓/ひらがな) は 🧰 ツールページへ移管 → Wiki からは撤去
   const toolIds = ['WIKI_TOOL_MENTU','WIKI_TOOL_CALC','WIKI_TOOL_HIRAGANA'];
-  toolIds.forEach(tid => {
-    if(!DB.wikiArticles.find(a=>a.id===tid)) {
-      const init = WIKI_INIT_ARTICLES.find(a=>a.id===tid);
-      if(init) DB.wikiArticles.unshift(JSON.parse(JSON.stringify(init)));
-    }
-  });
+  const beforeLen = DB.wikiArticles.length;
+  DB.wikiArticles = DB.wikiArticles.filter(a => toolIds.indexOf(a.id) < 0 && String(a.type||'').indexOf('tool-') !== 0);
+  if(DB.wikiArticles.length !== beforeLen && typeof saveDB === 'function') saveDB();
   // 初期記事がなければ追加
   if(DB.wikiArticles.filter(a=>a.type==='article').length === 0) {
     WIKI_INIT_ARTICLES.filter(a=>a.type==='article').forEach(a => {
@@ -36388,9 +36425,7 @@ function showWikiHome() {
       <div style="font-weight:700;font-size:15px;margin-bottom:6px">社内ナレッジWiki</div>
       <div>左のメニューから記事を選択、または「＋」で新規作成</div>
       <div style="margin-top:1.5rem;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-        <button class="btn" onclick="wikiOpenTool('mentu')">🖨 面付計算ツール</button>
-        <button class="btn" onclick="wikiOpenTool('calc')">🔢 電卓</button>
-        <button class="btn" onclick="wikiOpenTool('hiragana')">📝 ひらがな変換ツール</button>
+        <button class="btn" onclick="swPage('tools', document.querySelector('.tb-btn[data-page=tools]'))">🧰 ツール (面付計算・電卓・ひらがな変換 はこちらへ移動しました)</button>
       </div>
       <div style="margin-top:2rem;text-align:left;max-width:500px;margin-left:auto;margin-right:auto">
         <div style="font-size:12px;font-weight:700;color:#aaa;margin-bottom:8px">📊 Wiki統計</div>
@@ -36414,10 +36449,10 @@ function wikiOpenArticle(id) {
   renderWikiSidebar();
 }
 
+// TLPF-2: ツールは 🧰 ツールページへ移管。旧リンク互換のためリダイレクト
 function wikiOpenTool(tool) {
-  if(tool === 'mentu') wikiOpenArticle('WIKI_TOOL_MENTU');
-  if(tool === 'calc') wikiOpenArticle('WIKI_TOOL_CALC');
-  if(tool === 'hiragana') wikiOpenArticle('WIKI_TOOL_HIRAGANA');
+  swPage('tools', document.querySelector('.tb-btn[data-page="tools"]'));
+  setTimeout(function(){ if(typeof openInternalTool === 'function') openInternalTool(tool); }, 150);
 }
 
 function renderWikiArticle(article) {
@@ -36540,8 +36575,17 @@ function wikiDeleteArticle(id) {
 
 // ═══════════════════ 面付計算ツール（Wiki埋込版）═══════════════════
 
+// TLPF-2: ツールページ(#tool-embed-content)がアクティブならそこへ、でなければ Wiki へ描画
+function _toolHost_(){
+  var pg = document.getElementById('page-tools');
+  if(pg && pg.classList.contains('act')){
+    var host = document.getElementById('tool-embed-content');
+    if(host) return host;
+  }
+  return document.getElementById('wiki-content');
+}
 function renderMentuTool() {
-  const content = document.getElementById('wiki-content');
+  const content = _toolHost_();
   content.innerHTML = `
     <div class="wiki-toolbar">
       <button class="btn" onclick="showWikiHome()">← 一覧</button>
@@ -36750,7 +36794,7 @@ function meDrawPreview(p){
 
 // ═══════════════════ ひらがな変換ツール (Wiki埋込版) ═══════════════════
 function renderHiraganaTool() {
-  const content = document.getElementById('wiki-content');
+  const content = _toolHost_();
   // iframe で完全分離 (JSZip + kuromoji + 自前 localStorage を別 origin context で隔離)
   // tools/hiragana_v10.html を埋込
   content.innerHTML = `
@@ -36940,7 +36984,7 @@ async function meExecuteImposition(){
 let calcExpr='', calcDisplay='0', calcHistory=[];
 
 function renderCalcTool() {
-  const content = document.getElementById('wiki-content');
+  const content = _toolHost_();
   content.innerHTML = `
     <div class="wiki-toolbar">
       <button class="btn" onclick="showWikiHome()">← 一覧</button>
