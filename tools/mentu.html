@@ -153,8 +153,11 @@
           <input type="file" id="me-pdf-file" accept="application/pdf" multiple style="display:none" onchange="meShowFiles()">
           <div id="me-file-list" style="font-size:10.5px;color:#334155;margin-bottom:4px"></div>
           <div style="margin:5px 0">
-            <label style="font-size:10.5px;color:#374151;display:block;margin-bottom:2px">対象ページ <span style="color:#94a3b8">空欄=全ページ。例: 表紙→「1,2,39-40」/ 本文→「3-38」</span></label>
-            <input type="text" id="me-pages" placeholder="例: 1,2,39-40" style="width:100%;padding:5px 8px;border:1px solid #d0cec8;border-radius:5px;font-size:12px;font-family:Consolas,monospace">
+            <label style="font-size:10.5px;color:#374151;display:block;margin-bottom:2px">対象ページ <span style="color:#94a3b8">空欄=全ページ</span> <span id="me-pgcnt" style="color:#0e7490;font-weight:700"></span></label>
+            <div style="display:flex;gap:4px">
+              <input type="text" id="me-pages" placeholder="例: 1,2,39-40" style="flex:1;padding:5px 8px;border:1px solid #d0cec8;border-radius:5px;font-size:12px;font-family:Consolas,monospace">
+              <button class="btn" style="font-size:11px;padding:4px 10px;white-space:nowrap" onclick="mePickPages('me-pages')">📑 選択</button>
+            </div>
           </div>
           <div style="font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:3px 7px;margin-top:2px">EPS はデスクトップの「EPSをPDFに変換」にドラッグしてPDF化してから入れてください。<br>冊子は「表紙パターン＋対象ページ1,2,39-40」→出力、「本文パターン＋3-38」→出力 の2回で台ごとに作れます。</div>
           <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#374151;margin-top:6px;cursor:pointer">
@@ -290,6 +293,17 @@ function meShowFiles(){
   var el=document.getElementById('me-file-list');
   var fl=[].slice.call(fi.files||[]);
   el.innerHTML=fl.length ? fl.map(function(f,i){ return '📄 '+(i+1)+'. '+f.name.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }).join('<br>') : '';
+  // MNTU-7: 先頭ファイルのページ数を取得 (ページ選択UI用)
+  ME_PAGECOUNT=0;
+  var cnt=document.getElementById('me-pgcnt'); if(cnt) cnt.textContent='';
+  if(fl.length){
+    _loadPdfLib_().then(function(PDFLib){
+      return fl[0].arrayBuffer().then(function(buf){ return PDFLib.PDFDocument.load(buf); });
+    }).then(function(doc){
+      ME_PAGECOUNT=doc.getPageCount();
+      if(cnt) cnt.textContent='（全 '+ME_PAGECOUNT+' ページ）';
+    }).catch(function(){});
+  }
 }
 (function(){
   var dz=document.getElementById('me-pdf-drop');
@@ -306,6 +320,83 @@ function meShowFiles(){
     meShowFiles();
   });
 })();
+// ═════ MNTU-7: ビジュアルページ選択 ═════
+var ME_PAGECOUNT = 0;
+function meCompressRanges(nums){
+  if(!nums.length) return '';
+  nums=nums.slice().sort(function(a,b){return a-b;}).filter(function(v,i,a){return !i||v!==a[i-1];});
+  var out=[], s=nums[0], e=nums[0];
+  for(var i=1;i<=nums.length;i++){
+    if(i<nums.length && nums[i]===e+1){ e=nums[i]; continue; }
+    out.push(s===e ? String(s) : (e===s+1 ? s+','+e : s+'-'+e));
+    if(i<nums.length){ s=nums[i]; e=nums[i]; }
+  }
+  return out.join(',');
+}
+function mePickPages(target){
+  var N = ME_PAGECOUNT;
+  if(!N){ alert('先にPDFを読み込んでください（ページ数を取得します）'); return; }
+  var cur = (target==='me-pages') ? document.getElementById('me-pages').value : (ME_JOBS[target]&&ME_JOBS[target].pages)||'';
+  var selIdx = meParsePages(cur, N) || [];
+  var sel = {}; selIdx.forEach(function(i){ sel[i+1]=true; });
+  var ov=document.createElement('div');
+  ov.id='me-pgpick';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px';
+  function chipHtml(){
+    var h='';
+    for(var p=1;p<=N;p++) h+='<button data-p="'+p+'" style="width:44px;height:34px;border-radius:6px;border:1px solid '+(sel[p]?'#0e7490':'#d0cec8')+';background:'+(sel[p]?'#0891b2':'#fff')+';color:'+(sel[p]?'#fff':'#333')+';font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+p+'</button>';
+    return h;
+  }
+  ov.innerHTML='<div style="background:#fff;border-radius:10px;max-width:560px;width:100%;max-height:86vh;display:flex;flex-direction:column;overflow:hidden">'
+    + '<div style="padding:10px 16px;background:#1a1a1a;color:#fff;font-weight:800;font-size:14px;display:flex;justify-content:space-between"><span>📑 ページ選択（全'+N+'ページ・タップで切替）</span><span style="cursor:pointer" onclick="document.getElementById(\'me-pgpick\').remove()">✕</span></div>'
+    + '<div style="padding:8px 14px;display:flex;gap:5px;flex-wrap:wrap;border-bottom:1px solid #eee">'
+    +   '<button class="btn" style="font-size:11px;padding:3px 9px" data-q="all">全部</button>'
+    +   '<button class="btn" style="font-size:11px;padding:3px 9px" data-q="none">クリア</button>'
+    +   '<button class="btn" style="font-size:11px;padding:3px 9px" data-q="cover">表紙 (1,2,'+(N-1)+','+N+')</button>'
+    +   '<button class="btn" style="font-size:11px;padding:3px 9px" data-q="body">本文 (3-'+(N-2)+')</button>'
+    +   '<button class="btn" style="font-size:11px;padding:3px 9px" data-q="odd">奇数</button>'
+    +   '<button class="btn" style="font-size:11px;padding:3px 9px" data-q="even">偶数</button>'
+    +   '<button class="btn" style="font-size:11px;padding:3px 9px" data-q="inv">反転</button>'
+    + '</div>'
+    + '<div id="me-pgchips" style="padding:10px 14px;overflow-y:auto;display:flex;gap:5px;flex-wrap:wrap">'+chipHtml()+'</div>'
+    + '<div style="padding:10px 14px;border-top:1px solid #eee;display:flex;gap:8px;align-items:center">'
+    +   '<span id="me-pgsel-disp" style="flex:1;font-size:12px;font-family:Consolas,monospace;color:#0e7490;font-weight:700"></span>'
+    +   '<button class="btn btn-p" id="me-pgok" style="font-size:13px">✔ 決定</button>'
+    + '</div></div>';
+  document.body.appendChild(ov);
+  function refresh(){
+    document.getElementById('me-pgchips').innerHTML=chipHtml();
+    var arr=Object.keys(sel).filter(function(k){return sel[k];}).map(Number);
+    document.getElementById('me-pgsel-disp').textContent = arr.length ? (meCompressRanges(arr)+'　('+arr.length+'ページ)') : '(未選択=全ページ)';
+    bindChips();
+  }
+  function bindChips(){
+    document.getElementById('me-pgchips').querySelectorAll('button[data-p]').forEach(function(b){
+      b.onclick=function(){ var p=parseInt(b.dataset.p); sel[p]=!sel[p]; if(!sel[p]) delete sel[p]; refresh(); };
+    });
+  }
+  ov.querySelectorAll('button[data-q]').forEach(function(b){
+    b.onclick=function(){
+      var q=b.dataset.q; var p;
+      if(q==='all'){ sel={}; for(p=1;p<=N;p++) sel[p]=true; }
+      else if(q==='none'){ sel={}; }
+      else if(q==='cover'){ sel={}; sel[1]=true; sel[2]=true; if(N>2){ sel[N-1]=true; sel[N]=true; } }
+      else if(q==='body'){ sel={}; for(p=3;p<=N-2;p++) sel[p]=true; }
+      else if(q==='odd'){ sel={}; for(p=1;p<=N;p+=2) sel[p]=true; }
+      else if(q==='even'){ sel={}; for(p=2;p<=N;p+=2) sel[p]=true; }
+      else if(q==='inv'){ var ns={}; for(p=1;p<=N;p++) if(!sel[p]) ns[p]=true; sel=ns; }
+      refresh();
+    };
+  });
+  document.getElementById('me-pgok').onclick=function(){
+    var arr=Object.keys(sel).filter(function(k){return sel[k];}).map(Number);
+    var str=meCompressRanges(arr);
+    if(target==='me-pages') document.getElementById('me-pages').value=str;
+    else { ME_JOBS[target].pages=str; meRenderJobs(); }
+    ov.remove();
+  };
+  refresh();
+}
 // ═════ MNTU-5: 対象ページ解析 ("1,2,39-40" → 0始まり index 配列 / 空=null=全部) ═════
 function meParsePages(str, max){
   str=(str||'').trim();
@@ -607,7 +698,8 @@ function meRenderJobs(){
     return '<div style="display:flex;gap:4px;align-items:center;margin-top:4px;font-size:11px;flex-wrap:wrap">'
       + '<b style="white-space:nowrap">面付'+(CIRC[i]||(i+1))+'</b>'
       + '<select style="flex:1.2;min-width:110px;font-size:10.5px;padding:3px" onchange="ME_JOBS['+i+'].pat=parseInt(this.value)">'+opts+'</select>'
-      + '<input type="text" placeholder="ページ 例:1,2,39-40" value="'+String(j.pages||'').replace(/"/g,'&quot;')+'" style="flex:1;min-width:110px;padding:3px 6px;font-size:10.5px;border:1px solid #d0cec8;border-radius:4px;font-family:Consolas,monospace" onchange="ME_JOBS['+i+'].pages=this.value">'
+      + '<input type="text" placeholder="ページ 例:1,2,39-40" value="'+String(j.pages||'').replace(/"/g,'&quot;')+'" style="flex:1;min-width:90px;padding:3px 6px;font-size:10.5px;border:1px solid #d0cec8;border-radius:4px;font-family:Consolas,monospace" onchange="ME_JOBS['+i+'].pages=this.value">'
+      + '<button class="btn" style="font-size:10px;padding:3px 7px" onclick="mePickPages('+i+')" title="ページをタップで選択">📑</button>'
       + '<label style="white-space:nowrap;cursor:pointer"><input type="checkbox" '+(j.multi?'checked':'')+' onchange="ME_JOBS['+i+'].multi=this.checked"> 複数面付</label>'
       + '<label style="white-space:nowrap;cursor:pointer"><input type="checkbox" '+(j.mirror?'checked':'')+' onchange="ME_JOBS['+i+'].mirror=this.checked"> 裏</label>'
       + '<span style="color:#b91c1c;cursor:pointer;font-weight:800;padding:0 3px" onclick="ME_JOBS.splice('+i+',1);meRenderJobs()">✕</span>'

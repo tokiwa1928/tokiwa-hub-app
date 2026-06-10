@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🔍 校正チェック (検版) | Quote Tools</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:1240px; margin:14px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; margin-bottom:.6rem; }
+  .btn{ padding:8px 14px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13px; font-family:inherit; font-weight:700; }
+  .btn-p{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  .drops{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .dz{ border:2.5px dashed #94a3b8; border-radius:9px; padding:18px 10px; text-align:center; color:#64748b; font-size:13px; cursor:pointer; background:#fff; }
+  .dz.over{ border-color:var(--cyan); background:#ecfeff; }
+  .dz.ok{ border-style:solid; border-color:#16a34a; color:#166534; background:#f0fdf4; }
+  .views{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .vbox{ background:#fff; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .vbox .vh{ font-size:11px; font-weight:800; padding:4px 8px; background:#f4f3f0; border-bottom:1px solid var(--line); }
+  .vbox canvas{ width:100%; display:block; }
+  .pgchip{ padding:3px 10px; border:1px solid #d0cec8; border-radius:12px; font-size:11.5px; cursor:pointer; background:#fff; font-family:inherit; font-weight:700; }
+  .pgchip.diff{ background:#fee2e2; border-color:#fca5a5; color:#b91c1c; }
+  .pgchip.act{ outline:2px solid var(--cyan); }
+  .chk{ display:flex; gap:8px; align-items:flex-start; padding:6px 8px; border:1px solid var(--line); border-radius:6px; margin-top:5px; font-size:13px; background:#fff; }
+  .chk.done{ background:#f0fdf4; border-color:#86efac; text-decoration:line-through; color:#6b7280; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">QUOTE <b>TOOLS</b> 🔍</span>
+  <span class="tname">校正チェック（検版・修正確認）</span>
+  <span class="user">🔒 PC内処理・ログイン不要</span>
+</header>
+<main>
+  <div class="sec">
+    <div class="drops">
+      <div>
+        <div class="dz" id="dz-old" onclick="document.getElementById('fi-old').click()">📄 <b>修正前</b>（指示を入れた版/旧データ）<br><span class="muted">PDFをドラッグ&ドロップ</span></div>
+        <input type="file" id="fi-old" accept="application/pdf" style="display:none">
+      </div>
+      <div>
+        <div class="dz" id="dz-new" onclick="document.getElementById('fi-new').click()">📄 <b>修正後</b>（戻ってきた校正データ）<br><span class="muted">PDFをドラッグ&ドロップ</span></div>
+        <input type="file" id="fi-new" accept="application/pdf" style="display:none">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">
+      <button class="btn btn-p" style="font-size:14px" onclick="runCompare()">🔍 全ページ比較する</button>
+      <span id="cmp-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="sec" id="result-sec" style="display:none">
+    <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center" id="page-chips"></div>
+    <div class="muted" style="margin:4px 0 8px">🔴=変更を検出したページ（クリックで表示）。修正指示が入った箇所が変わっていれば「直っている」、変化が無ければ「直っていない」可能性。</div>
+    <div class="views">
+      <div class="vbox"><div class="vh">修正前</div><canvas id="cv-old"></canvas></div>
+      <div class="vbox"><div class="vh">修正後</div><canvas id="cv-new"></canvas></div>
+      <div class="vbox"><div class="vh" style="background:#fee2e2;color:#b91c1c">差分（変わった所がマゼンタ）</div><canvas id="cv-diff"></canvas></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div style="font-size:11px;font-weight:700;color:#888;letter-spacing:.08em;margin-bottom:5px">📋 修正指示チェックリスト（1行=1項目で貼り付け）</div>
+    <textarea id="inst-src" rows="3" placeholder="例:&#10;P2 電話番号を 042-xxx に修正&#10;P5 ロゴ差し替え&#10;P12 誤字「印刷」→「印字」" style="width:100%;padding:8px 10px;border:1px solid #d0cec8;border-radius:6px;font-size:13px;font-family:inherit"></textarea>
+    <button class="btn" style="font-size:12px;margin-top:5px" onclick="makeChecklist()">→ チェックリスト化</button>
+    <div id="checklist"></div>
+    <div id="chk-summary" style="font-size:13px;font-weight:800;margin-top:8px"></div>
+  </div>
+  <p class="muted">使い方: ①前回入稿(または赤字指示入り)PDFと、戻ってきた修正版PDFを入れて比較 → 🔴ページで修正箇所を目視確認 → ②指示リストにチェック。全✔=校了判断の材料に。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2600); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+var docs={ old:null, neu:null }, names={ old:'', neu:'' };
+var diffPages=[], curPage=1, pageCount=0;
+
+function wireDz(dzId, fiId, key){
+  var dz=document.getElementById(dzId), fi=document.getElementById(fiId);
+  ['dragover','dragenter'].forEach(function(ev){ dz.addEventListener(ev,function(e){e.preventDefault();dz.classList.add('over');}); });
+  ['dragleave','drop'].forEach(function(ev){ dz.addEventListener(ev,function(e){e.preventDefault();dz.classList.remove('over');}); });
+  dz.addEventListener('drop',function(e){ if(e.dataTransfer.files[0]) loadPdf(e.dataTransfer.files[0], key, dz); });
+  fi.addEventListener('change',function(){ if(fi.files[0]) loadPdf(fi.files[0], key, dz); });
+}
+function loadPdf(file, key, dz){
+  if(!/\.pdf$/i.test(file.name)){ toast('PDFを入れてください (EPSはデスクトップの変換batでPDF化)'); return; }
+  file.arrayBuffer().then(function(buf){
+    return pdfjsLib.getDocument({data:buf}).promise;
+  }).then(function(doc){
+    docs[key]=doc; names[key]=file.name;
+    dz.classList.add('ok');
+    dz.innerHTML='✅ '+esc(file.name)+'<br><span class="muted">'+doc.numPages+' ページ</span>';
+  }).catch(function(e){ toast('読込失敗: '+e.message); });
+}
+wireDz('dz-old','fi-old','old');
+wireDz('dz-new','fi-new','neu');
+
+async function renderPage(doc, pno, scale){
+  var page=await doc.getPage(pno);
+  var vp=page.getViewport({scale:scale||1.2});
+  var cv=document.createElement('canvas');
+  cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+  await page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
+  return cv;
+}
+async function comparePage(pno){
+  var a=await renderPage(docs.old, Math.min(pno, docs.old.numPages));
+  var b=await renderPage(docs.neu, Math.min(pno, docs.neu.numPages));
+  var w=Math.min(a.width,b.width), h=Math.min(a.height,b.height);
+  var da=a.getContext('2d').getImageData(0,0,w,h).data;
+  var db=b.getContext('2d').getImageData(0,0,w,h).data;
+  var diff=document.createElement('canvas'); diff.width=w; diff.height=h;
+  var dctx=diff.getContext('2d');
+  dctx.drawImage(b,0,0);
+  var id=dctx.getImageData(0,0,w,h), dd=id.data;
+  var changed=0;
+  for(var i=0;i<da.length;i+=4){
+    var delta=Math.abs(da[i]-db[i])+Math.abs(da[i+1]-db[i+1])+Math.abs(da[i+2]-db[i+2]);
+    if(delta>60){ dd[i]=255; dd[i+1]=0; dd[i+2]=144; dd[i+3]=255; changed++; }
+    else { // 薄く
+      dd[i]=Math.round(dd[i]*0.35+255*0.65); dd[i+1]=Math.round(dd[i+1]*0.35+255*0.65); dd[i+2]=Math.round(dd[i+2]*0.35+255*0.65);
+    }
+  }
+  dctx.putImageData(id,0,0);
+  return { a:a, b:b, diff:diff, ratio:changed/(w*h) };
+}
+async function runCompare(){
+  if(!docs.old || !docs.neu){ alert('修正前と修正後の両方のPDFを入れてください'); return; }
+  var st=document.getElementById('cmp-status');
+  pageCount=Math.max(docs.old.numPages, docs.neu.numPages);
+  diffPages=[];
+  window.__pageRatios={};
+  for(var p=1;p<=pageCount;p++){
+    st.textContent='比較中... '+p+'/'+pageCount;
+    var r=await comparePage(p);
+    window.__pageRatios[p]=r.ratio;
+    if(r.ratio>0.0004 || docs.old.numPages!==docs.neu.numPages && p>Math.min(docs.old.numPages,docs.neu.numPages)) diffPages.push(p);
+    if(p===1) showResult(p, r);
+  }
+  st.textContent='✅ 完了: 変更検出 '+diffPages.length+' / '+pageCount+' ページ'+(docs.old.numPages!==docs.neu.numPages?'（⚠ページ数が違います: '+docs.old.numPages+'→'+docs.neu.numPages+'）':'');
+  renderChips();
+  if(diffPages.length) gotoPage(diffPages[0]);
+}
+function renderChips(){
+  var el=document.getElementById('page-chips');
+  var h='<b style="font-size:12px">ページ:</b> ';
+  for(var p=1;p<=pageCount;p++){
+    h+='<button class="pgchip'+(diffPages.indexOf(p)>=0?' diff':'')+(p===curPage?' act':'')+'" onclick="gotoPage('+p+')">'+p+(diffPages.indexOf(p)>=0?' 🔴':'')+'</button>';
+  }
+  el.innerHTML=h;
+}
+async function gotoPage(p){
+  curPage=p;
+  var r=await comparePage(p);
+  showResult(p, r);
+  renderChips();
+}
+function showResult(p, r){
+  document.getElementById('result-sec').style.display='block';
+  ['cv-old','cv-new','cv-diff'].forEach(function(id,i){
+    var src=[r.a,r.b,r.diff][i];
+    var cv=document.getElementById(id);
+    cv.width=src.width; cv.height=src.height;
+    cv.getContext('2d').drawImage(src,0,0);
+  });
+}
+// ── 指示チェックリスト ──
+var checks=[];
+function makeChecklist(){
+  var lines=(document.getElementById('inst-src').value||'').split(/\r?\n/).map(function(s){return s.trim();}).filter(Boolean);
+  if(!lines.length){ toast('指示を1行ずつ貼り付けてください'); return; }
+  checks=lines.map(function(l){ return { text:l, done:false }; });
+  renderChecks();
+}
+function renderChecks(){
+  document.getElementById('checklist').innerHTML=checks.map(function(c,i){
+    return '<label class="chk'+(c.done?' done':'')+'"><input type="checkbox" '+(c.done?'checked':'')+' onchange="checks['+i+'].done=this.checked;renderChecks()" style="margin-top:2px">'
+      + '<span>'+esc(c.text)+'</span></label>';
+  }).join('');
+  var done=checks.filter(function(c){return c.done;}).length;
+  document.getElementById('chk-summary').innerHTML = checks.length
+    ? (done===checks.length
+        ? '<span style="color:#166534">✅ 全 '+checks.length+' 件 確認済み — 校了OKの材料が揃いました</span>'
+        : '<span style="color:#b45309">進捗 '+done+' / '+checks.length+' 件（未確認 '+(checks.length-done)+' 件）</span>')
+    : '';
+}
+</script>
+</body>
+</html>
