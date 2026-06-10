@@ -36641,15 +36641,24 @@ function renderMentuTool() {
           <div class="me-field"><label>ドブ天地</label><input type="number" id="me-dv" value="3" oninput="meCalc()"><input type="number" id="me-dh" value="3" oninput="meCalc()" placeholder="ドブ左右"></div>
           <div style="margin-top:4px"><label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px"><input type="checkbox" id="me-rot" onchange="meCalc()"> 回転配置も試す</label></div>
           <button class="btn btn-p" style="margin-top:8px;width:100%" onclick="meCalc()">▶ 計算する</button>
-          <!-- 実 PDF 面付出力 -->
+          <!-- 実 PDF 面付出力 (MNTU-2: 同一多面/他面付け・裏面ミラー対応) -->
           <div style="margin-top:12px;padding:10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px">
             <div style="font-size:11px;font-weight:700;color:#1e3a8a;margin-bottom:6px">📄 実 PDF 面付出力</div>
-            <input type="file" id="me-pdf-file" accept="application/pdf" style="font-size:11px;width:100%">
+            <select id="me-mode" style="width:100%;font-size:11px;padding:4px" onchange="document.getElementById('me-mode-hint').textContent = this.value==='multi' ? '複数PDFを選択 → 面1=ファイル1, 面2=ファイル2… の順に並べます (繰り返し)' : '1面データ(1ファイル)を全面に並べます。複数ページPDFは1ページ=1シート。';">
+              <option value="same">同一データ 多面付け（1面データ → 全面同じ）</option>
+              <option value="multi">他面付け（異なるデータを面ごとに配置）</option>
+            </select>
+            <div id="me-mode-hint" style="font-size:10px;color:#64748b;margin:3px 0 5px">1面データ(1ファイル)を全面に並べます。複数ページPDFは1ページ=1シート。</div>
+            <input type="file" id="me-pdf-file" accept="application/pdf" multiple style="font-size:11px;width:100%">
+            <div style="font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:3px 7px;margin-top:5px">EPS はデスクトップの「EPSをPDFに変換」にドラッグしてPDF化してから入れてください</div>
             <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#374151;margin-top:6px;cursor:pointer">
               <input type="checkbox" id="me-trim-marks" checked> トンボ (トリムマーク) を入れる
             </label>
             <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#374151;margin-top:4px;cursor:pointer">
               <input type="checkbox" id="me-page-numbers"> ページ番号を入れる
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#374151;margin-top:4px;cursor:pointer" title="両面物の裏面用: 配置を左右反転し、左右余白も入れ替えて表と刷り合わせます">
+              <input type="checkbox" id="me-mirror"> 裏面モード（左右ミラー配置）
             </label>
             <button class="btn btn-p" id="me-impose-btn" style="margin-top:8px;width:100%;background:#1e40af;border-color:#1e40af" onclick="meExecuteImposition()">📄 面付した PDF をダウンロード</button>
             <div id="me-impose-status" style="font-size:10px;color:#666;margin-top:4px;text-align:center"></div>
@@ -36839,7 +36848,15 @@ async function meExecuteImposition(){
     alert('面付する PDF ファイルを選択してください');
     return;
   }
-  var file = fileInput.files[0];
+  var files = [].slice.call(fileInput.files);
+  var file = files[0];
+  // MNTU-2: モード (same=同一多面 / multi=他面付け) と 裏面ミラー
+  var impMode = document.getElementById('me-mode')?.value || 'same';
+  var mirror = document.getElementById('me-mirror')?.checked;
+  if(files.some(function(f){ return /\.eps$/i.test(f.name); })){
+    alert('EPS は直接読めません。\nデスクトップの「EPSをPDFに変換」にドラッグして PDF にしてから入れてください。');
+    return;
+  }
 
   // 計算結果を取得
   var pw = parseFloat(document.getElementById('me-pw')?.value) || 0;
@@ -36867,6 +36884,11 @@ async function meExecuteImposition(){
     var inputBytes = await file.arrayBuffer();
     var srcDoc = await PDFLib.PDFDocument.load(inputBytes);
     var srcPages = srcDoc.getPages();
+    // MNTU-2: 他面付け用に全ファイルのバイト列も読む
+    var allBytes = [inputBytes];
+    if(impMode === 'multi'){
+      for(var fi = 1; fi < files.length; fi++) allBytes.push(await files[fi].arrayBuffer());
+    }
 
     // 面付グリッド計算 (mm → pt 変換: 1mm ≈ 2.83465pt)
     var MM = 2.83465;
@@ -36898,24 +36920,53 @@ async function meExecuteImposition(){
     var dvUsed = (best.rotated ? dh : dv) * MM;
     var marginL = ml * MM, marginT = kw * MM;
 
-    // ソース PDF をコピー
-    var copiedPages = await outDoc.copyPages(srcDoc, srcPages.map(function(_, i){ return i; }));
+    // MNTU-2: シートのリスト = [{embeds:[面0のEmbedded,面1,…]}] を組み立て
+    //  same  : 入力1ページ → 1シート (全面同じ)
+    //  multi : 全ファイルのページを順に面へ割当て → 1シート (面数を超えたら次シート)
+    var sheets = [];
+    if(impMode === 'multi'){
+      var pool = [];
+      for(var bi = 0; bi < allBytes.length; bi++){
+        var embArr = await outDoc.embedPdf(allBytes[bi]); // 全ページ分の EmbeddedPage[]
+        for(var ei = 0; ei < embArr.length; ei++) pool.push(embArr[ei]);
+      }
+      if(!pool.length) throw new Error('読み込めるページがありません');
+      // 面数ぶんずつシートに割当て (足りない分はプールを繰り返して全面を埋める)
+      var perSheet = best.total;
+      var sheetCount = Math.max(1, Math.ceil(pool.length / perSheet));
+      for(var si = 0; si < sheetCount; si++){
+        var emb = [];
+        for(var pi = 0; pi < perSheet; pi++){
+          var poolIdx = si * perSheet + pi;
+          emb.push(pool[poolIdx < pool.length ? poolIdx : poolIdx % pool.length]);
+        }
+        sheets.push({ embeds: emb });
+      }
+    } else {
+      var copiedPages = await outDoc.copyPages(srcDoc, srcPages.map(function(_, i){ return i; }));
+      for(var cp = 0; cp < copiedPages.length; cp++){
+        var one = await outDoc.embedPage(copiedPages[cp]);
+        var emb2 = []; for(var pi2 = 0; pi2 < best.total; pi2++) emb2.push(one);
+        sheets.push({ embeds: emb2 });
+      }
+    }
 
-    // 各ソースページを 1 シートに面付 (= 入力1ページ → 出力1シート)
-    for(var pageIdx = 0; pageIdx < copiedPages.length; pageIdx++){
+    // 各シートへ配置
+    for(var pageIdx = 0; pageIdx < sheets.length; pageIdx++){
       var sheet = outDoc.addPage([sheetW, sheetH]);
-      var srcPage = copiedPages[pageIdx];
-      var srcW = srcPage.getWidth(), srcH = srcPage.getHeight();
-      var embedded = await outDoc.embedPage(srcPage);
-
-      // スケール: ソースを pgUsedW × pgUsedH に収める
-      var scale = Math.min(pgUsedW / srcW, pgUsedH / srcH);
-      var drawW = srcW * scale, drawH = srcH * scale;
+      var embeds = sheets[pageIdx].embeds;
 
       // 面ごとに配置 (PDF は左下原点なので Y を反転)
       for(var r = 0; r < best.rows; r++){
         for(var c = 0; c < best.cols; c++){
-          var x = marginL + c * (pgUsedW + dhUsed);
+          // 裏面ミラー: 列順を左右反転し余白も入れ替え (表と刷り合わせ)
+          var x = mirror
+            ? (sheetW - marginL - (best.cols - 1 - c) * (pgUsedW + dhUsed) - pgUsedW)
+            : (marginL + c * (pgUsedW + dhUsed));
+          var embedded = embeds[r * best.cols + c];
+          var srcW = embedded.width, srcH = embedded.height;
+          var scale = Math.min(pgUsedW / srcW, pgUsedH / srcH);
+          var drawW = srcW * scale, drawH = srcH * scale;
           // Y は PDF 座標系 (左下原点) — 上から r 行目を計算
           var yTop = sheetH - marginT - r * (pgUsedH + dvUsed);
           var y = yTop - pgUsedH;
@@ -36978,7 +37029,7 @@ async function meExecuteImposition(){
     a.click();
     setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
 
-    if(status) status.textContent = '✅ 完了 (' + copiedPages.length + ' ページ × ' + best.total + ' 面)';
+    if(status) status.textContent = '✅ 完了 (' + sheets.length + ' シート × ' + best.total + ' 面' + (mirror ? ' / 裏面ミラー' : '') + (impMode==='multi' ? ' / 他面付け' : '') + ')';
   } catch(e){
     console.error(e);
     if(status) status.textContent = '⚠ エラー: ' + e.message;

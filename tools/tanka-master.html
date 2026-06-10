@@ -300,15 +300,29 @@ function importJSON(ev){
       if(!arr.length){ toast('❌ master 配列が見つかりません'); return; }
       if(!confirm('JSONから ' + arr.length + ' 件をマスタへ取り込みます。\n既存と同じ品名は「前回単価ありき」で更新されます。続行?')) return;
       var st = qtLoad(); var a=0,u=0,l=0;
+      // 大量取込用: 既存キーを Map 化して O(n) でマージ
+      var idx = {};
+      st.master.forEach(function(m){ idx[normKey((m.cust||'')+' '+(m.rawItem||m.item)+' '+(m.spec||''))] = m; });
+      var now = new Date().toISOString();
       arr.forEach(function(m){
-        var res = upsertMaster(st, { item:m.rawItem||m.item, spec:m.spec||'', unit:m.unit||'', qty:m.qty||0, price:m.price||0, cust:m.cust||'', year:m.year||'' }, m.src||'JSON取込');
-        // 取込元の履歴も引き継ぐ
-        if(res==='added' && Array.isArray(m.prevPrices) && m.prevPrices.length){
-          var added = st.master[st.master.length-1]; added.prevPrices = m.prevPrices.slice(-8);
+        var item = m.rawItem || m.item || ''; if(!item || !(m.price > 0)) return;
+        var key = normKey((m.cust||'')+' '+item+' '+(m.spec||''));
+        var ex = idx[key];
+        if(ex){
+          if(ex.status === '確定'){ (ex.prevPrices=ex.prevPrices||[]).push({ price:m.price, year:m.year||'', src:m.src||'JSON取込', at:now, note:'取込(確定中のため未反映)' }); l++; return; }
+          ex.prevPrices = ex.prevPrices||[];
+          if(ex.price !== m.price) ex.prevPrices.push({ price:ex.price, year:ex.year, src:ex.src, at:now });
+          ex.price=m.price; ex.qty=m.qty||ex.qty; ex.unit=m.unit||ex.unit; ex.spec=m.spec||ex.spec;
+          ex.year=m.year||ex.year; ex.src=m.src||'JSON取込'; ex.updatedAt=now; u++;
+        } else {
+          var rec = { id:'TM-J'+(Date.now())+'-'+(a+1), item:(m.cust?m.cust+' ':'')+item+(m.spec?' / '+m.spec:''), rawItem:item,
+            spec:m.spec||'', unit:m.unit||'', qty:m.qty||0, price:m.price, cust:m.cust||'', year:m.year||'',
+            src:m.src||'JSON取込', status:'仮', prevPrices:(Array.isArray(m.prevPrices)?m.prevPrices.slice(-8):[]),
+            createdAt:now, updatedAt:now };
+          st.master.push(rec); idx[key]=rec; a++;
         }
-        if(res==='added')a++; else if(res==='updated')u++; else l++;
       });
-      if(qtSave(st)){ toast('✅ JSON取込: 新規 '+a+' / 更新 '+u+(l?' / 確定スキップ '+l:'')); renderMaster(); }
+      if(qtSave(st)){ toast('✅ JSON取込: 新規 '+a+' / 更新 '+u+(l?' / 確定スキップ '+l:'')); MS_PAGE=0; renderMaster(); }
     } catch(e){ toast('❌ JSON読込失敗: '+e); }
     ev.target.value='';
   };
