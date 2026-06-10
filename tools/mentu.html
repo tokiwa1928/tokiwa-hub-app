@@ -104,6 +104,8 @@
         <div class="me-field"><label>用紙</label>
           <input type="number" id="me-pw" value="625" oninput="meCalc()"><input type="number" id="me-ph" value="880" oninput="meCalc()">
         </div>
+        <div class="me-preset-row" id="me-paper-custom" style="margin-top:3px"></div>
+        <button class="btn" style="font-size:10.5px;padding:3px 9px;margin-top:2px" onclick="meAddCustom('paper')">＋ 今の用紙寸法をプリセット登録</button>
         <div style="font-size:11px;font-weight:700;color:#888;margin:4px 0 2px">📋 仕上がりプリセット</div>
         <div class="me-preset-row" id="me-page-presets">
           <button class="me-preset" onclick="mePagePreset(this,297,420)">A3</button>
@@ -120,6 +122,8 @@
         <div class="me-field"><label>仕上がり</label>
           <input type="number" id="me-pgw" value="148" oninput="meCalc()"><input type="number" id="me-pgh" value="210" oninput="meCalc()">
         </div>
+        <div class="me-preset-row" id="me-finish-custom" style="margin-top:3px"></div>
+        <button class="btn" style="font-size:10.5px;padding:3px 9px;margin-top:2px" onclick="meAddCustom('finish')">＋ 今の仕上がり寸法をプリセット登録</button>
         <!-- MNTU-4: 面付パターンの保存・呼び出し -->
         <div style="font-size:11px;font-weight:700;color:#888;margin:6px 0 2px">💾 面付パターン（よく使う設定を保存）</div>
         <div class="me-preset-row" id="me-pat-chips"></div>
@@ -141,8 +145,17 @@
             <option value="multi">他面付け（異なるデータを面ごとに配置）</option>
           </select>
           <div id="me-mode-hint" style="font-size:10px;color:#64748b;margin:3px 0 5px">1面データ(1ファイル)を全面に並べます。複数ページPDFは1ページ=1シート。</div>
-          <input type="file" id="me-pdf-file" accept="application/pdf" multiple style="font-size:11px;width:100%">
-          <div style="font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:3px 7px;margin-top:5px">EPS はデスクトップの「EPSをPDFに変換」にドラッグしてPDF化してから入れてください</div>
+          <div id="me-pdf-drop" style="border:2px dashed #93c5fd;border-radius:6px;padding:10px 8px;text-align:center;font-size:11px;color:#1e3a8a;background:#fff;cursor:pointer;margin-bottom:5px"
+               onclick="document.getElementById('me-pdf-file').click()">
+            📂 ここにPDFをドラッグ&ドロップ（複数可）<br><span style="color:#64748b">またはクリックして選択</span>
+          </div>
+          <input type="file" id="me-pdf-file" accept="application/pdf" multiple style="display:none" onchange="meShowFiles()">
+          <div id="me-file-list" style="font-size:10.5px;color:#334155;margin-bottom:4px"></div>
+          <div style="margin:5px 0">
+            <label style="font-size:10.5px;color:#374151;display:block;margin-bottom:2px">対象ページ <span style="color:#94a3b8">空欄=全ページ。例: 表紙→「1,2,39-40」/ 本文→「3-38」</span></label>
+            <input type="text" id="me-pages" placeholder="例: 1,2,39-40" style="width:100%;padding:5px 8px;border:1px solid #d0cec8;border-radius:5px;font-size:12px;font-family:Consolas,monospace">
+          </div>
+          <div style="font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:3px 7px;margin-top:2px">EPS はデスクトップの「EPSをPDFに変換」にドラッグしてPDF化してから入れてください。<br>冊子は「表紙パターン＋対象ページ1,2,39-40」→出力、「本文パターン＋3-38」→出力 の2回で台ごとに作れます。</div>
           <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#374151;margin-top:6px;cursor:pointer">
             <input type="checkbox" id="me-trim-marks" checked> トンボ (トリムマーク) を入れる
           </label>
@@ -180,6 +193,7 @@ function meSavePattern(){
   vals.mirror=document.getElementById('me-mirror').checked;
   vals.trim=document.getElementById('me-trim-marks').checked;
   vals.pnum=document.getElementById('me-page-numbers').checked;
+  vals.pages=document.getElementById('me-pages') ? document.getElementById('me-pages').value : '';
   var list=mePatterns();
   var ex=list.findIndex(function(p){ return p.name===name; });
   if(ex>=0){ if(!confirm('「'+name+'」を上書きしますか?')) return; list[ex]={name:name,vals:vals}; }
@@ -196,6 +210,7 @@ function meApplyPattern(i){
   document.getElementById('me-mirror').checked=!!p.vals.mirror;
   document.getElementById('me-trim-marks').checked=p.vals.trim!==false;
   document.getElementById('me-page-numbers').checked=!!p.vals.pnum;
+  if(document.getElementById('me-pages')) document.getElementById('me-pages').value=p.vals.pages||'';
   meCalc();
 }
 function meDeletePattern(i, ev){
@@ -214,6 +229,83 @@ function meRenderPatterns(){
           + ' <span style="color:#b91c1c;font-weight:800" onclick="meDeletePattern('+i+',event)" title="削除">✕</span></button>';
       }).join('')
     : '<span style="font-size:10.5px;color:#94a3b8">まだ保存されていません。設定を作って名前を付けて保存→次回ワンクリックで呼出し。</span>';
+}
+// ═════ MNTU-5: 自作プリセット (用紙/仕上がり) ═════
+var ME_CUSTOM_KEY='tokiwa_mentu_custom_sizes_v1';
+function meCustom(){ try { var c=JSON.parse(localStorage.getItem(ME_CUSTOM_KEY))||{}; c.paper=c.paper||[]; c.finish=c.finish||[]; return c; } catch(e){ return {paper:[],finish:[]}; } }
+function meCustomSave(c){ try { localStorage.setItem(ME_CUSTOM_KEY, JSON.stringify(c)); } catch(e){} }
+function meAddCustom(kind){
+  var w, h;
+  if(kind==='paper'){ w=document.getElementById('me-pw').value; h=document.getElementById('me-ph').value; }
+  else { w=document.getElementById('me-pgw').value; h=document.getElementById('me-pgh').value; }
+  if(!parseFloat(w)||!parseFloat(h)){ alert('寸法を入力してから登録してください'); return; }
+  var name=prompt((kind==='paper'?'用紙':'仕上がり')+'プリセット名を入力\n(寸法: '+w+'×'+h+'mm)', '');
+  if(!name) return;
+  var c=meCustom();
+  c[kind]=c[kind].filter(function(p){ return p.name!==name; });
+  c[kind].push({ name:name.trim(), w:parseFloat(w), h:parseFloat(h) });
+  meCustomSave(c); meRenderCustomSizes();
+}
+function meDelCustom(kind, i, ev){
+  ev.stopPropagation();
+  var c=meCustom();
+  if(!confirm('「'+c[kind][i].name+'」を削除しますか?')) return;
+  c[kind].splice(i,1); meCustomSave(c); meRenderCustomSizes();
+}
+function meApplyCustom(kind, i){
+  var p=meCustom()[kind][i]; if(!p) return;
+  if(kind==='paper'){ document.getElementById('me-pw').value=p.w; document.getElementById('me-ph').value=p.h;
+    document.querySelectorAll('#me-paper-presets .me-preset').forEach(function(b){b.classList.remove('act');}); }
+  else { document.getElementById('me-pgw').value=p.w; document.getElementById('me-pgh').value=p.h;
+    document.querySelectorAll('#me-page-presets .me-preset').forEach(function(b){b.classList.remove('act');}); }
+  meCalc();
+}
+function meRenderCustomSizes(){
+  var c=meCustom();
+  ['paper','finish'].forEach(function(kind){
+    var box=document.getElementById(kind==='paper'?'me-paper-custom':'me-finish-custom');
+    if(!box) return;
+    box.innerHTML=c[kind].map(function(p,i){
+      return '<button class="me-preset" style="background:#ecfeff;border-color:#67e8f9" onclick="meApplyCustom(\''+kind+'\','+i+')" title="'+p.w+'×'+p.h+'mm">'
+        + String(p.name).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        + ' <span style="color:#b91c1c;font-weight:800" onclick="meDelCustom(\''+kind+'\','+i+',event)">✕</span></button>';
+    }).join('');
+  });
+}
+// ═════ MNTU-5: PDF複数選択の表示 + D&D ═════
+function meShowFiles(){
+  var fi=document.getElementById('me-pdf-file');
+  var el=document.getElementById('me-file-list');
+  var fl=[].slice.call(fi.files||[]);
+  el.innerHTML=fl.length ? fl.map(function(f,i){ return '📄 '+(i+1)+'. '+f.name.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }).join('<br>') : '';
+}
+(function(){
+  var dz=document.getElementById('me-pdf-drop');
+  ['dragover','dragenter'].forEach(function(ev){ dz.addEventListener(ev,function(e){ e.preventDefault(); dz.style.background='#dbeafe'; }); });
+  ['dragleave','drop'].forEach(function(ev){ dz.addEventListener(ev,function(e){ e.preventDefault(); dz.style.background='#fff'; }); });
+  dz.addEventListener('drop',function(e){
+    var pdfs=[].slice.call(e.dataTransfer.files).filter(function(f){ return /\.pdf$/i.test(f.name); });
+    var eps=[].slice.call(e.dataTransfer.files).filter(function(f){ return /\.eps$/i.test(f.name); });
+    if(eps.length){ alert('EPSはデスクトップの「EPSをPDFに変換」でPDF化してから入れてください'); }
+    if(!pdfs.length) return;
+    var dt=new DataTransfer();
+    pdfs.forEach(function(f){ dt.items.add(f); });
+    document.getElementById('me-pdf-file').files=dt.files;
+    meShowFiles();
+  });
+})();
+// ═════ MNTU-5: 対象ページ解析 ("1,2,39-40" → 0始まり index 配列 / 空=null=全部) ═════
+function meParsePages(str, max){
+  str=(str||'').trim();
+  if(!str) return null;
+  var out=[];
+  str.split(/[,、\s]+/).forEach(function(tk){
+    if(!tk) return;
+    var m=tk.match(/^(\d+)\s*[-〜~]\s*(\d+)$/);
+    if(m){ var a=parseInt(m[1]), b=parseInt(m[2]); for(var p=Math.min(a,b); p<=Math.max(a,b); p++) if(p>=1&&p<=max) out.push(p-1); }
+    else { var n=parseInt(tk); if(n>=1&&n<=max) out.push(n-1); }
+  });
+  return out.length ? out : null;
 }
 function mePaperSel(sel){
   if(!sel.value) return;
@@ -388,15 +480,20 @@ async function meExecuteImposition(){
     var dhUsed=(best.rotated?dv:dh)*MM, dvUsed=(best.rotated?dh:dv)*MM;
     var marginL=ml*MM, marginT=kw*MM;
 
-    // シート構成 (same: 1ページ→1シート全面同 / multi: 全ファイル全ページを面へ順に)
+    // MNTU-5: 対象ページ指定 (例 "1,2,39-40" / 空欄=全ページ)
+    var pagesSpec=document.getElementById('me-pages') ? document.getElementById('me-pages').value : '';
+
+    // シート構成 (same: 1ページ→1シート全面同 / multi: 対象ページを面へ順に)
     var sheets=[];
     if(impMode==='multi'){
       var pool=[];
       for(var bi=0; bi<allBytes.length; bi++){
-        var embArr=await outDoc.embedPdf(allBytes[bi]);
+        var tmpDoc=await PDFLib.PDFDocument.load(allBytes[bi]);
+        var pageSel=meParsePages(pagesSpec, tmpDoc.getPageCount());
+        var embArr=pageSel ? await outDoc.embedPdf(allBytes[bi], pageSel) : await outDoc.embedPdf(allBytes[bi]);
         for(var ei=0; ei<embArr.length; ei++) pool.push(embArr[ei]);
       }
-      if(!pool.length) throw new Error('読み込めるページがありません');
+      if(!pool.length) throw new Error('対象ページがありません (ページ指定を確認)');
       var perSheet=best.total;
       var sheetCount=Math.max(1, Math.ceil(pool.length/perSheet));
       for(var si=0; si<sheetCount; si++){
@@ -408,7 +505,9 @@ async function meExecuteImposition(){
         sheets.push({embeds:emb});
       }
     } else {
-      var copiedPages=await outDoc.copyPages(srcDoc, srcPages.map(function(_,i){return i;}));
+      var pageSel2=meParsePages(pagesSpec, srcPages.length) || srcPages.map(function(_,i){return i;});
+      var copiedPages=await outDoc.copyPages(srcDoc, pageSel2);
+      if(!copiedPages.length) throw new Error('対象ページがありません (ページ指定を確認)');
       for(var cp=0; cp<copiedPages.length; cp++){
         var one=await outDoc.embedPage(copiedPages[cp]);
         var emb2=[]; for(var pi2=0; pi2<best.total; pi2++) emb2.push(one);
@@ -487,6 +586,7 @@ async function meExecuteImposition(){
 }
 meCalc();
 meRenderPatterns();
+meRenderCustomSizes();
 </script>
 </body>
 </html>
