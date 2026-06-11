@@ -63,11 +63,12 @@
   <div id="pane-in">
     <div class="sec">
       <div class="st">新しい仕訳（摘要を入れると過去の仕訳から候補が出ます）</div>
+      <div id="k-edit-banner" style="display:none;background:#fef3c7;border:2px solid #f59e0b;border-radius:7px;padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:700;color:#92400e"></div>
       <div class="g4">
         <div><label>日付</label><input type="date" id="e-date"></div>
         <div><label>摘要</label><input id="e-tekiyo" placeholder="例: 売上 振込 ○○商事" oninput="kSuggest()" autocomplete="off"></div>
         <div><label>金額</label><input id="e-amt" type="number" style="text-align:right;font-weight:800;font-size:15px"></div>
-        <div style="display:flex;align-items:flex-end"><button class="btn btn-g" style="width:100%" onclick="kAdd()">＋ 追加</button></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn btn-g" id="k-add-btn" style="width:100%" onclick="kAdd()">＋ 追加</button></div>
       </div>
       <div id="sug-box"></div>
       <div class="g2a" style="margin-top:8px">
@@ -352,10 +353,27 @@ function kAdd(){
   if(!date||!t||!a){ toast('日付・摘要・金額を入れてください'); return; }
   if(!dk||!kk){ toast('借方・貸方の科目を選んでください（候補をクリックすると自動）'); return; }
   var s=kLoad();
-  s.entries.push({ id:'J-'+Date.now()+'-'+Math.floor(Math.random()*1000), date:date, t:t, a:a,
+  var vals={ date:date, t:t, a:a,
     dk:dk, dh:document.getElementById('e-dh').value, dz:document.getElementById('e-dz').value, dr:document.getElementById('e-dr').value,
-    kk:kk, kh:document.getElementById('e-kh').value, kz:document.getElementById('e-kz').value, kr:document.getElementById('e-kr').value,
-    status:'approved', createdAt:new Date().toISOString(), src:'手入力' });
+    kk:kk, kh:document.getElementById('e-kh').value, kz:document.getElementById('e-kz').value, kr:document.getElementById('e-kr').value };
+  if(K_EDIT_ID){
+    // 修正モード: 元の仕訳をその場で上書き（IDと作成日時は維持）
+    var ex=s.entries.find(function(x){return x.id===K_EDIT_ID;});
+    if(ex){
+      Object.keys(vals).forEach(function(k){ ex[k]=vals[k]; });
+      ex.status='approved'; ex.updatedAt=new Date().toISOString();
+      ex.src=(ex.src||'手入力').replace(/・修正済$/,'')+'・修正済';
+      kSave(s);
+      kCancelEdit(); kBadges();
+      toast('💾 修正を保存しました（承認済み）');
+      return;
+    }
+    // 元が見つからない場合は通常追加にフォールバック
+    kCancelEdit();
+  }
+  vals.id='J-'+Date.now()+'-'+Math.floor(Math.random()*1000);
+  vals.status='approved'; vals.createdAt=new Date().toISOString(); vals.src='手入力';
+  s.entries.push(vals);
   kSave(s);
   document.getElementById('e-tekiyo').value=''; document.getElementById('e-amt').value='';
   document.getElementById('sug-box').innerHTML='';
@@ -385,17 +403,21 @@ function kRenderEntries(){
   document.getElementById('entry-list').innerHTML = list.length ? '<table><tr><th style="width:78px">日付</th><th>摘要</th><th style="width:170px">借方 / 貸方</th><th style="width:92px">金額</th><th style="width:120px">状態</th><th style="width:120px">操作</th></tr>'
     + list.map(function(e){
       var noAcc = !e.dk || !e.kk;
+      var editing = (typeof K_EDIT_ID!=='undefined' && K_EDIT_ID && e.id===K_EDIT_ID);
       var badge = e.exportedAt ? '<span class="b-exp">🏷 出力済</span>' : (e.status==='approved' ? '<span class="b-ok">承認済</span>' : '<span class="b-draft">下書き</span>');
-      if(noAcc && !e.exportedAt) badge += ' <span style="color:#b91c1c;font-size:10px;font-weight:800">⚠科目未定</span>';
+      if(editing) badge = '<span style="background:#f59e0b;color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:4px">✏ 修正中</span>';
+      if(noAcc && !e.exportedAt && !editing) badge += ' <span style="color:#b91c1c;font-size:10px;font-weight:800">⚠科目未定</span>';
       var src = e.src && e.src!=='手入力' ? '<div class="muted">'+esc(e.src)+'</div>' : '';
-      return '<tr'+(noAcc&&!e.exportedAt?' style="background:#fff7ed"':'')+'>'
+      var rowStyle = editing ? ' style="background:#fef3c7;outline:2px solid #f59e0b"' : (noAcc&&!e.exportedAt?' style="background:#fff7ed"':'');
+      return '<tr'+rowStyle+'>'
         + '<td>'+e.date.slice(0,4)+'/'+e.date.slice(4,6)+'/'+e.date.slice(6,8)+'</td>'
         + '<td>'+esc(e.t)+src+'</td>'
         + '<td style="font-size:11px">'+(noAcc?'<span style="color:#b91c1c">未設定</span>':esc(kAccName(e.dk,e.dh))+'<br>'+esc(kAccName(e.kk,e.kh)))+'</td>'
         + '<td class="num">'+yen(e.a)+'</td>'
         + '<td>'+badge+'</td>'
         + '<td style="white-space:nowrap">'
-        +   (!e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="kEdit(\''+e.id+'\')">✎ 修正</button> ' : '')
+        +   (editing ? '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="kCancelEdit()">✖ 修正をやめる</button> '
+            : (!e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="kEdit(\''+e.id+'\')">✎ 修正</button> ' : ''))
         +   (e.status!=='approved' && !noAcc ? '<button class="btn" style="font-size:11px;padding:2px 8px;background:#dcfce7;border-color:#86efac" onclick="kSetStatus(\''+e.id+'\',\'approved\')">✔ 承認</button> ' : '')
         +   (e.status==='approved' && !e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px;background:#fef3c7;border-color:#fcd34d;color:#92400e" onclick="kSetStatus(\''+e.id+'\',\'draft\')">↩ 承認戻す</button> ' : '')
         +   (e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px;background:#fef3c7;border-color:#fcd34d;color:#92400e" onclick="kUnexport(\''+e.id+'\')">↩ 出力取消</button> ' : '')
@@ -431,7 +453,8 @@ function kApproveAll(){
   kSave(s); kRenderEntries(); kBadges();
   toast((n ? '✅ '+n+' 件を承認' : '承認対象なし') + (skip ? ' / ⚠ 科目未定 '+skip+' 件はスキップ (修正してください)' : ''));
 }
-// 下書きをフォームに呼び出して修正
+// 仕訳をフォームに呼び出して修正（元の行は消さず「✏修正中」マークを付ける）
+var K_EDIT_ID=null;
 function kEdit(id){
   var s=kLoad(); var e=s.entries.find(function(x){return x.id===id;});
   if(!e) return;
@@ -442,17 +465,37 @@ function kEdit(id){
   document.getElementById('e-dz').value=e.dz||''; document.getElementById('e-dr').value=e.dr||'';
   document.getElementById('e-kk').value=e.kk; kFillHojo('k'); document.getElementById('e-kh').value=e.kh;
   document.getElementById('e-kz').value=e.kz||''; document.getElementById('e-kr').value=e.kr||'';
-  // 元の下書きは削除して入力フォームから再追加してもらう
-  s.entries=s.entries.filter(function(x){return x.id!==id;});
-  kSave(s); kRenderEntries(); kBadges();
+  K_EDIT_ID=id;
+  var bn=document.getElementById('k-edit-banner');
+  if(bn){
+    bn.style.display='block';
+    bn.innerHTML='✏ <b>修正中:</b> '+e.date.slice(0,4)+'/'+e.date.slice(4,6)+'/'+e.date.slice(6,8)+'　'+esc(e.t)+'　'+yen(e.a)
+      +'　— 内容を直して「💾 修正を保存」を押してください '
+      +'<button class="btn" style="font-size:11px;padding:2px 10px;margin-left:8px" onclick="kCancelEdit()">✖ キャンセル</button>';
+  }
+  var ab=document.getElementById('k-add-btn');
+  if(ab){ ab.textContent='💾 修正を保存'; ab.style.background='#f59e0b'; ab.style.borderColor='#d97706'; }
+  kRenderEntries();
   kSuggest(); kSw('in');
   window.scrollTo(0,0);
-  toast('✏ フォームに呼び出しました。科目を確認して「＋追加」');
+  toast('✏ 修正中（一覧の黄色い行が対象）。保存するまで元の仕訳は残ります');
+}
+// 修正モードを解除（フォームを通常の追加モードに戻す）
+function kCancelEdit(){
+  K_EDIT_ID=null;
+  var bn=document.getElementById('k-edit-banner'); if(bn){ bn.style.display='none'; bn.innerHTML=''; }
+  var ab=document.getElementById('k-add-btn');
+  if(ab){ ab.textContent='＋ 追加'; ab.style.background=''; ab.style.borderColor=''; }
+  document.getElementById('e-tekiyo').value=''; document.getElementById('e-amt').value='';
+  document.getElementById('sug-box').innerHTML='';
+  kRenderEntries();
 }
 function kDel(id){
   if(!confirm('この仕訳を削除しますか?')) return;
   var s=kLoad(); s.entries=s.entries.filter(function(x){return x.id!==id;});
-  kSave(s); kRenderEntries(); kBadges();
+  kSave(s);
+  if(K_EDIT_ID===id) kCancelEdit();
+  kRenderEntries(); kBadges();
 }
 
 // ═════ 明細貼り付け → 下書き ═════
