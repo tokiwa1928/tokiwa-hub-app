@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📎 PDF 連結・分割 | Quote Tools</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:820px; margin:14px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.5rem; text-transform:uppercase; }
+  .btn{ padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .btn-c{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  #drop{ border:2.5px dashed #94a3b8; border-radius:10px; padding:26px 16px; text-align:center; color:#64748b; font-size:14px; cursor:pointer; background:#fff; }
+  #drop.over{ border-color:var(--cyan); background:#ecfeff; }
+  .frow{ display:flex; gap:8px; align-items:center; padding:6px 9px; border:1px solid var(--line); border-radius:7px; margin-top:5px; background:#fff; font-size:13px; }
+  .frow .nm{ flex:1; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .frow .mv{ cursor:pointer; padding:2px 8px; border:1px solid #d0cec8; border-radius:5px; font-size:12px; background:#fff; }
+  input[type=text]{ padding:7px 9px; border:1px solid #d0cec8; border-radius:6px; font-size:13.5px; font-family:Consolas,monospace; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">QUOTE <b>TOOLS</b> 📎</span>
+  <span class="tname">PDF 連結・分割・回転</span>
+  <span class="user">🔒 PC内処理・ログイン不要</span>
+</header>
+<main>
+  <div class="sec">
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 PDFをドラッグ&ドロップ（複数OK・順番は下で入替できます）</div>
+    <input type="file" id="fi" accept="application/pdf" multiple style="display:none" onchange="addFiles(this.files)">
+    <div id="flist"></div>
+  </div>
+
+  <div class="sec">
+    <div class="st">🔗 連結（上の順番で1本のPDFに）</div>
+    <button class="btn btn-g" onclick="mergeAll()">⬇ 連結してダウンロード</button>
+    <span class="muted" id="merge-info" style="margin-left:8px"></span>
+  </div>
+
+  <div class="sec">
+    <div class="st">✂ 分割（1ファイル目が対象）</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" id="split-range" placeholder="例: 1-4,9 (空欄=不可)" style="width:200px">
+      <button class="btn btn-c" onclick="splitRange()">⬇ 指定ページを抜き出し</button>
+      <button class="btn" onclick="splitEach()">⬇ 全ページ1枚ずつ (ZIP)</button>
+      <button class="btn" onclick="splitHalf()">⬇ 前半/後半に2分割 (ZIP)</button>
+      <span class="muted" id="split-info"></span>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="st">🔄 回転（1ファイル目が対象・全ページ）</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" onclick="rotateAll(90)">↻ 右90°</button>
+      <button class="btn" onclick="rotateAll(-90)">↺ 左90°</button>
+      <button class="btn" onclick="rotateAll(180)">↕ 180°</button>
+    </div>
+  </div>
+
+  <div class="sec" style="background:#fffbeb;border-color:#fde68a">
+    <div class="st" style="color:#92400e">🗜 容量の縮小（圧縮）</div>
+    <div style="font-size:12.5px;color:#78350f;line-height:1.7">
+      画像の再圧縮を伴う本格的なPDF圧縮は、デスクトップの <b>「PDFを圧縮.bat」</b> を使ってください。<br>
+      PDFをドラッグ&ドロップするだけで <b>印刷用(300dpi)／標準(150dpi)／メール用(96dpi)</b> の3種類が作られます。
+    </div>
+  </div>
+  <p class="muted">🔒 すべてPC内で処理（どこにも送信されません）。EPSはデスクトップの「EPSをPDFに変換」でPDF化してから。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2600); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function kb(n){ return n>1048576 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB'; }
+
+var files=[]; // {name, buf, pages}
+var drop=document.getElementById('drop');
+['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('over');}); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('over');}); });
+drop.addEventListener('drop',function(e){ addFiles(e.dataTransfer.files); });
+
+function addFiles(fl){
+  var arr=[].slice.call(fl).filter(function(f){ return /\.pdf$/i.test(f.name); });
+  if(!arr.length){ toast('PDFを入れてください'); return; }
+  arr.forEach(function(f){
+    f.arrayBuffer().then(function(buf){
+      return PDFLib.PDFDocument.load(buf, { ignoreEncryption:true }).then(function(d){
+        files.push({ name:f.name, buf:buf, pages:d.getPageCount() });
+        render();
+      });
+    }).catch(function(e){ toast('❌ '+f.name+': '+(e.message||e)); });
+  });
+}
+function render(){
+  document.getElementById('flist').innerHTML=files.map(function(f,i){
+    return '<div class="frow"><span>📄</span><span class="nm">'+(i+1)+'. '+esc(f.name)+'</span>'
+      + '<span class="muted">'+f.pages+'p / '+kb(f.buf.byteLength)+'</span>'
+      + '<span class="mv" onclick="mv('+i+',-1)" title="上へ">↑</span>'
+      + '<span class="mv" onclick="mv('+i+',1)" title="下へ">↓</span>'
+      + '<span class="mv" style="color:#b91c1c" onclick="files.splice('+i+',1);render()">✕</span></div>';
+  }).join('');
+  var tp=files.reduce(function(s,f){return s+f.pages;},0);
+  document.getElementById('merge-info').textContent=files.length?(files.length+'ファイル / 計'+tp+'ページ'):'';
+  document.getElementById('split-info').textContent=files.length?('対象: '+files[0].name+' ('+files[0].pages+'p)'):'';
+}
+function mv(i,d){
+  var j=i+d; if(j<0||j>=files.length) return;
+  var t=files[i]; files[i]=files[j]; files[j]=t; render();
+}
+function dl(bytes, name){
+  var blob=new Blob([bytes],{type:'application/pdf'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a'); a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url);},4000);
+}
+function parseRange(str, max){
+  var out=[];
+  String(str||'').split(/[,、\s]+/).forEach(function(tk){
+    if(!tk) return;
+    var m=tk.match(/^(\d+)\s*[-〜~]\s*(\d+)$/);
+    if(m){ for(var p=Math.min(+m[1],+m[2]); p<=Math.max(+m[1],+m[2]); p++) if(p>=1&&p<=max) out.push(p-1); }
+    else { var n=parseInt(tk); if(n>=1&&n<=max) out.push(n-1); }
+  });
+  return out;
+}
+
+// 連結
+async function mergeAll(){
+  if(files.length<2){ toast('2ファイル以上入れてください'); return; }
+  try{
+    var out=await PDFLib.PDFDocument.create();
+    for(var i=0;i<files.length;i++){
+      var src=await PDFLib.PDFDocument.load(files[i].buf, { ignoreEncryption:true });
+      var pages=await out.copyPages(src, src.getPageIndices());
+      pages.forEach(function(p){ out.addPage(p); });
+    }
+    var bytes=await out.save();
+    dl(bytes, '連結_'+files[0].name.replace(/\.pdf$/i,'')+'_他'+(files.length-1)+'件.pdf');
+    toast('✅ 連結完了 ('+out.getPageCount()+'ページ / '+kb(bytes.byteLength)+')');
+  }catch(e){ toast('❌ 連結失敗: '+(e.message||e)); }
+}
+// 分割: 範囲抜き出し
+async function splitRange(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0];
+  var idx=parseRange(document.getElementById('split-range').value, f.pages);
+  if(!idx.length){ toast('ページを指定してください (例: 1-4,9)'); return; }
+  try{
+    var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true});
+    var out=await PDFLib.PDFDocument.create();
+    var pages=await out.copyPages(src, idx);
+    pages.forEach(function(p){ out.addPage(p); });
+    var bytes=await out.save();
+    dl(bytes, f.name.replace(/\.pdf$/i,'')+'_p'+document.getElementById('split-range').value.replace(/[^\d\-,]/g,'')+'.pdf');
+    toast('✅ '+idx.length+'ページを抜き出しました');
+  }catch(e){ toast('❌ 失敗: '+(e.message||e)); }
+}
+// 分割: 1ページずつZIP
+async function splitEach(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0];
+  if(!confirm(f.name+' を '+f.pages+' 個のPDFに分割してZIPでダウンロードします。続行?')) return;
+  try{
+    var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true});
+    var zip=new JSZip();
+    var base=f.name.replace(/\.pdf$/i,'');
+    for(var p=0;p<f.pages;p++){
+      var out=await PDFLib.PDFDocument.create();
+      var pg=await out.copyPages(src,[p]);
+      out.addPage(pg[0]);
+      zip.file(base+'_p'+String(p+1).padStart(3,'0')+'.pdf', await out.save());
+    }
+    var zb=await zip.generateAsync({type:'blob'});
+    var url=URL.createObjectURL(zb);
+    var a=document.createElement('a'); a.href=url; a.download=base+'_分割.zip'; a.click();
+    setTimeout(function(){URL.revokeObjectURL(url);},4000);
+    toast('✅ '+f.pages+'ファイルに分割しました (ZIP)');
+  }catch(e){ toast('❌ 失敗: '+(e.message||e)); }
+}
+// 分割: 前半後半
+async function splitHalf(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0];
+  if(f.pages<2){ toast('2ページ以上のPDFが対象です'); return; }
+  try{
+    var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true});
+    var half=Math.ceil(f.pages/2);
+    var zip=new JSZip(); var base=f.name.replace(/\.pdf$/i,'');
+    var ranges=[[0,half],[half,f.pages]];
+    for(var r=0;r<2;r++){
+      var out=await PDFLib.PDFDocument.create();
+      var idx=[]; for(var p=ranges[r][0];p<ranges[r][1];p++) idx.push(p);
+      var pgs=await out.copyPages(src, idx);
+      pgs.forEach(function(pg){ out.addPage(pg); });
+      zip.file(base+(r===0?'_前半':'_後半')+'.pdf', await out.save());
+    }
+    var zb=await zip.generateAsync({type:'blob'});
+    var url=URL.createObjectURL(zb);
+    var a=document.createElement('a'); a.href=url; a.download=base+'_2分割.zip'; a.click();
+    setTimeout(function(){URL.revokeObjectURL(url);},4000);
+    toast('✅ 前半'+half+'p / 後半'+(f.pages-half)+'p に分割しました');
+  }catch(e){ toast('❌ 失敗: '+(e.message||e)); }
+}
+// 回転
+async function rotateAll(deg){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0];
+  try{
+    var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true});
+    src.getPages().forEach(function(p){
+      var cur=p.getRotation().angle||0;
+      p.setRotation(PDFLib.degrees(((cur+deg)%360+360)%360));
+    });
+    var bytes=await src.save();
+    dl(bytes, f.name.replace(/\.pdf$/i,'')+'_回転.pdf');
+    toast('✅ 回転しました');
+  }catch(e){ toast('❌ 失敗: '+(e.message||e)); }
+}
+window.__test={ addBuf:function(name,buf,pages){ files.push({name:name,buf:buf,pages:pages}); render(); } };
+</script>
+</body>
+</html>
