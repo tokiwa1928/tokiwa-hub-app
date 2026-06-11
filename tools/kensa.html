@@ -61,7 +61,12 @@
 
   <div class="sec" id="result-sec" style="display:none">
     <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center" id="page-chips"></div>
-    <div class="muted" style="margin:4px 0 8px">🔴=変更を検出したページ（クリックで表示）。修正指示が入った箇所が変わっていれば「直っている」、変化が無ければ「直っていない」可能性。</div>
+    <div class="muted" style="margin:4px 0 8px">🔴=変更を検出したページ（クリックで表示）。画素比較は「どこが」変わったかを検出。<b>「何が」変わったかはAIが読み取れます↓</b></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <button class="btn" style="font-size:12.5px;background:#ede9fe;border-color:#c4b5fd;color:#5b21b6;font-weight:800" onclick="aiDiff()">🤖 AIで変更点を読み取る（高精度・変更ページを文章で一覧）</button>
+      <span id="aidiff-status" class="muted"></span>
+    </div>
+    <div id="aidiff-result"></div>
     <div class="views">
       <div class="vbox"><div class="vh">修正前</div><canvas id="cv-old"></canvas></div>
       <div class="vbox"><div class="vh">修正後</div><canvas id="cv-new"></canvas></div>
@@ -342,6 +347,30 @@ function showResult(p, r){
 }
 // ── KNSA-3: AI判定 (Claude Haiku / 手動ボタンのみ・自動課金なし) ──
 // KNSA-3: AI判定はGAS経由 (tqAiVision in _ai.js) — 個人キー不要
+// KNSA-5: AIで変更点を文章で読み取る (指示リスト不要・高精度)
+async function aiDiff(){
+  if(!docs.old || !docs.neu){ alert('修正前後のデータを入れて「全ページ比較」を実行してください'); return; }
+  var targets = diffPages.length ? diffPages.slice(0,8) : (pageCount ? [curPage] : []);
+  if(!targets.length){ alert('先に「🔍 全ページ比較」を実行してください'); return; }
+  if(!confirm('🤖 AIで変更点を読み取ります\n\n対象: 変更検出ページ '+targets.join(', ')+'（各ページ 修正前後2枚を送信）\n費用目安: 約'+targets.length+'〜'+(targets.length*3)+'円\n\n続行?')) return;
+  var st=document.getElementById('aidiff-status');
+  var box=document.getElementById('aidiff-result');
+  box.innerHTML=''; st.textContent='🤖 読み取り中...';
+  try{
+    for(var t=0;t<targets.length;t++){
+      var pno=targets[t];
+      st.textContent='🤖 P'+pno+' を読み取り中... ('+(t+1)+'/'+targets.length+')';
+      var r=await comparePage(pno);
+      var prompt='印刷物の校正です。画像1=修正前、画像2=修正後（同じページ）。\n2つを比べて「変わった点」だけを日本語で箇条書きにしてください。\n- 文字/数字の変更は「旧→新」で具体的に（例: 電話番号 042-111-1111 → 042-999-9999）\n- 文字の追加・削除、色や位置・サイズの変更も記載\n- 変化が無ければ「変更なし」とだけ書く\n- 前置き・説明は不要、箇条書きのみ';
+      var txt=await tqAiVision(prompt, [r.a, r.b], 1200);
+      box.innerHTML += '<div style="border:1px solid #e0ddd6;border-radius:7px;padding:8px 12px;margin-bottom:6px">'
+        + '<div style="font-weight:800;font-size:13px;color:#b91c1c;margin-bottom:3px">📄 ページ '+pno+'</div>'
+        + '<div style="font-size:13px;white-space:pre-wrap;line-height:1.7">'+esc(txt)+'</div></div>';
+    }
+    st.textContent='✅ 完了（'+targets.length+'ページ）。最終確認は人の目で。';
+  }catch(e){ console.error(e); st.textContent='⚠ '+e.message; box.innerHTML='<div style="color:#b91c1c;font-size:13px">'+esc(e.message)+'</div>'; }
+}
+
 async function aiJudge(){
   if(!checks.length){ alert('先に修正指示を「チェックリスト化」してください'); return; }
   if(!docs.old || !docs.neu){ alert('修正前後のPDFを入れて比較を実行してください'); return; }
