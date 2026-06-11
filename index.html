@@ -1569,6 +1569,27 @@ setTimeout(_removeBootLoader_, 5000);
         サイクル: 🧪試作 → ✅運用中 → 必要なら本体へ統合。使わないツールは削除します。
       </div>
     </div>
+    <!-- AIKEY-1: AI設定 (各PCにキーを入れて文字起こし/検版/経理AIを有効化) -->
+    <div class="sec" style="background:#faf5ff;border:1px solid #e9d5ff">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="st" style="color:#7c3aed;margin:0">🔑 AI設定（このPC）</span>
+        <span id="aikey-status" style="font-size:12px;font-weight:700"></span>
+        <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="toggleAiKeyBox()">設定する ▾</button>
+      </div>
+      <div id="aikey-box" style="display:none;margin-top:8px">
+        <div style="font-size:12px;color:#6b21a8;line-height:1.6;margin-bottom:6px">
+          文字起こし・校正チェック・経理の「🤖AI」機能を使うには、Anthropic APIキーが必要です。<strong>このPC（ブラウザ）にのみ保存</strong>され、サーバーには送りません。<br>
+          キー取得: <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#7c3aed">console.anthropic.com</a> → Create Key
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="password" id="aikey-input" placeholder="sk-ant-..." style="flex:1;min-width:240px;padding:7px 10px;border:1px solid #d0cec8;border-radius:6px;font-size:13px;font-family:monospace">
+          <button class="btn btn-p" onclick="saveAiKey()">💾 保存</button>
+          <button class="btn" onclick="testAiKey()">🧪 接続テスト</button>
+          <button class="btn" style="color:#b91c1c" onclick="clearAiKey()">🗑 削除</button>
+        </div>
+        <div id="aikey-test" style="font-size:12px;margin-top:6px"></div>
+      </div>
+    </div>
     <div id="tools-list"></div>
     <!-- TLPF-2: 内蔵ツール (面付/電卓/ひらがな) の埋め込み先 -->
     <div id="tool-embed" style="display:none">
@@ -15123,7 +15144,51 @@ var TOOLS_REGISTRY = [
     desc: 'Excel(.xlsx) の漢字を一括ひらがな化（書式保持）。',
     status: '運用中', tag: '制作' }
 ];
+// AIKEY-1: AIキー設定 (各ツールと同じ localStorage キー 'tokiwa_ai_key' を共有)
+function updateAiKeyStatus(){
+  var el = document.getElementById('aikey-status'); if(!el) return;
+  var has = !!(localStorage.getItem('tokiwa_ai_key')||'').trim();
+  el.innerHTML = has ? '<span style="color:#16a34a">✅ 設定済み（AI機能が使えます）</span>' : '<span style="color:#b45309">⚠ 未設定（AI機能は使えません）</span>';
+}
+function toggleAiKeyBox(){
+  var b = document.getElementById('aikey-box');
+  b.style.display = b.style.display==='none' ? '' : 'none';
+  if(b.style.display==='') document.getElementById('aikey-input').value = localStorage.getItem('tokiwa_ai_key')||'';
+}
+function saveAiKey(){
+  var v = (document.getElementById('aikey-input').value||'').trim();
+  if(!v){ alert('キーを入力してください'); return; }
+  if(!/^sk-ant-/.test(v) && !confirm('「sk-ant-」で始まらないキーです。このまま保存しますか?')) return;
+  localStorage.setItem('tokiwa_ai_key', v);
+  updateAiKeyStatus();
+  document.getElementById('aikey-test').innerHTML='<span style="color:#16a34a">💾 保存しました。「🧪接続テスト」で確認できます。</span>';
+}
+function clearAiKey(){
+  if(!confirm('このPCに保存したAPIキーを削除しますか?')) return;
+  localStorage.removeItem('tokiwa_ai_key');
+  document.getElementById('aikey-input').value='';
+  updateAiKeyStatus();
+  document.getElementById('aikey-test').textContent='';
+}
+async function testAiKey(){
+  var key = (document.getElementById('aikey-input').value||'').trim() || localStorage.getItem('tokiwa_ai_key');
+  var out = document.getElementById('aikey-test');
+  if(!key){ out.innerHTML='<span style="color:#b91c1c">キーを入力してください</span>'; return; }
+  out.innerHTML='🧪 接続中...';
+  try{
+    var res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{ 'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+      body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens:8, messages:[{role:'user',content:'OKとだけ返して'}] })
+    });
+    if(res.ok){ out.innerHTML='<span style="color:#16a34a">✅ 接続成功！AI機能が使えます（このキーで文字起こし・検版・経理AIが動きます）</span>'; if((document.getElementById('aikey-input').value||'').trim()) localStorage.setItem('tokiwa_ai_key', key); updateAiKeyStatus(); }
+    else if(res.status===401){ out.innerHTML='<span style="color:#b91c1c">❌ キーが無効です（コピー間違いか、無効化されたキー）</span>'; }
+    else if(res.status===400){ out.innerHTML='<span style="color:#16a34a">✅ キーは有効です（モデル指定の調整は不要）</span>'; }
+    else { out.innerHTML='<span style="color:#b45309">⚠ 応答コード '+res.status+'（残高不足や権限の可能性）</span>'; }
+  }catch(e){ out.innerHTML='<span style="color:#b91c1c">❌ 通信エラー: '+e.message+'</span>'; }
+}
 function renderToolsPage(){
+  if(typeof updateAiKeyStatus==='function') updateAiKeyStatus();
   var el = document.getElementById('tools-list'); if(!el) return;
   closeInternalTool(true);
   var stBadge = function(s){
