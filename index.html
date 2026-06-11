@@ -5629,7 +5629,7 @@ function openMasterModal(masterType, btn, tabId){
     if(tabId!=null){ calc(tabId); updateSpecField(tabId); }
     closeMasterModal();
   };
-  buildMasterModal(masterType);
+  buildMasterModal(masterType, tabId);
   document.getElementById('master-modal').style.display='flex';
 }
 
@@ -5709,13 +5709,14 @@ function applyTierPrice(tr, qty){
 function closeMasterModal(){document.getElementById('master-modal').style.display='none';}
 
 // ── ドリルダウンモーダル構築 ──
-function buildMasterModal(masterType){
+function buildMasterModal(masterType, tabId){
   const modal=document.getElementById('master-modal');
   const title={paper:'用紙マスター',envelope:'封筒マスター',print:'印刷単価',printOption:'印刷オプション',plate:'製版・CTP',data:'データ作成',bind:'製本・加工'}[masterType]||masterType;
   const panel=document.getElementById('mm-panel');
   panel.innerHTML='';
   modal.querySelector('#mm-title').textContent=title;
   _mmType=masterType;
+  if(tabId!=null) window._mmTabId_=tabId;
   const srch=document.getElementById('mm-search');
   if(srch){ srch.value=''; }
   const sr=document.getElementById('mm-search-results');
@@ -5723,7 +5724,11 @@ function buildMasterModal(masterType){
   panel.style.display='flex';
 
   if(masterType==='paper')    buildPaperDrill(panel);
-  else if(masterType==='envelope') buildEnvDrill(panel);
+  else if(masterType==='envelope'){
+    // 種類(長3等)を選択済みなら、その種類だけに絞って直接表示
+    const sub=(tabId!=null&&typeof ts==='function')?(ts(tabId).sub||''):'';
+    buildEnvDrill(panel, sub);
+  }
   else                          buildSimpleDrill(panel, masterType);
 }
 
@@ -5827,8 +5832,40 @@ function getPaperColorBadge(color){
 }
 
 // ── 封筒：形状 → サイズ ──
-function buildEnvDrill(panel){
+// sub (種類: 長3/長40/窓付き等) が選択済みなら、その種類の封筒だけを直接表示
+function _envSubMatch_(nm, sub){
+  nm=String(nm||'');
+  // 属性系の種類はキーワードで判定
+  const attr={'窓付き':/窓/,'テープ付':/テープ/,'スチック':/スチック/,'クラフト':/クラフト/,
+    'カラー':/パステル|カラー|ブルー|ピンク|グリーン|クリーム|グレー|若草|水色|桜|藤/,
+    'パステル':/パステル/,'印刷なし':/印刷無|印刷なし/};
+  if(attr[sub]) return attr[sub].test(nm);
+  // サイズ系 (長3/長4/長40/長30/洋長3/角0〜角8/洋0〜洋7): 名前の先頭サイズが一致
+  // 「長3」指定で「長30」「長3窓」等を誤ヒットさせない: 直後が数字なら不一致
+  if(nm.indexOf(sub)!==0) return false;
+  const next=nm.charAt(sub.length);
+  return !/[0-9]/.test(next);
+}
+function buildEnvDrill(panel, sub){
   const data=DB.master.envelope;
+  if(sub){
+    const hit=data.filter(r=>_envSubMatch_(r.nm, sub));
+    if(hit.length){
+      const qty=hit[0]?.qty||1000;
+      panel.innerHTML='<div style="display:flex;align-items:center;gap:10px;font-size:12px;color:#5b21b6;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:7px;padding:6px 12px">'
+        + '🔎 種類「<b>'+sub+'</b>」で絞り込み中 ('+hit.length+'件)'
+        + '<button class="btn" style="font-size:11px;padding:2px 10px;margin-left:auto" onclick="buildEnvDrill(document.getElementById(\'mm-panel\'))">すべて表示</button></div>'
+        + mkStep('品名・規格を選択（基準'+qty+'枚単価）',
+          hit.map(r=>`<button class="dd-item" onclick="selMasterItem({label:'${escQ(r.nm||'')}',p:${r.p!=null?r.p:'null'},sp:'${escQ(r.sp||'')}'})">
+            <span class="ddi-name">${r.nm||''}</span>
+            <span class="ddi-sub">${r.sp||''}</span>
+            <span class="ddi-price">${r.p!=null?'¥'+r.p+'/枚':''}</span>
+          </button>`).join(''));
+      return;
+    }
+  }
+  // 一致なし or 種類未選択 → 通常ドリル（注記つき）
+  var pre = sub ? '<div style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:5px 10px">⚠ 種類「'+sub+'」に一致する封筒マスターがないため全サイズを表示します</div>' : '';
   // STEP1: 封筒サイズ（長3/長4/長40/洋長3/角1/角2/角3）
   function getEnvSize(nm){
     const m=nm.match(/^(長3窓|長3スチック|長3テープスチック|長3|長4テープスチック|長4|長40|洋長3|角2テープスチック|角1|角2|角3)/);
@@ -5838,7 +5875,7 @@ function buildEnvDrill(panel){
   // 並び順を固定
   const order=['長3','長3スチック','長3テープスチック','長3窓','長4','長4テープスチック','長40','洋長3','角1','角2','角2テープスチック','角3'];
   sizes.sort((a,b)=>{const ai=order.indexOf(a);const bi=order.indexOf(b);return (ai<0?99:ai)-(bi<0?99:bi);});
-  panel.innerHTML=mkStep('① 封筒サイズを選択',
+  panel.innerHTML=pre+mkStep('① 封筒サイズを選択',
     sizes.map(s=>`<button class="dd-btn" onclick="envStep2(this,'${escQ(s)}')">${s}</button>`).join('')
     +`<button class="dd-btn dd-all" onclick="envStep2(this,'')">すべて表示</button>`
   );
@@ -23260,11 +23297,24 @@ function _renderListRecentInquiries_(el){
   if(!list.length){ el.innerHTML = '<div style="color:#888;text-align:center;padding:1rem;font-size:12px">問い合わせなし</div>'; return; }
   el.innerHTML = list.map(function(i){
     var src = (typeof SOURCE_TYPE_META !== 'undefined' && SOURCE_TYPE_META[i.source_type]) ? SOURCE_TYPE_META[i.source_type] : { icon:'📋', color:'#888' };
-    return '<div style="padding:6px 8px;border-bottom:1px solid #f0f0f0;cursor:pointer;font-size:12px" onclick="openInquiryDetail(\'' + i.id + '\')">' +
-      '<div style="display:flex;gap:6px;align-items:center"><span style="color:' + src.color + '">' + src.icon + '</span><strong>' + (i.subject || '無題').substring(0,30) + '</strong></div>' +
+    return '<div style="padding:6px 8px;border-bottom:1px solid #f0f0f0;cursor:pointer;font-size:12px" onmouseover="this.style.background=\'#f0f9ff\'" onmouseout="this.style.background=\'\'" onclick="event.stopPropagation();_homeOpenInquiry_(\'' + String(i.id).replace(/'/g,'') + '\')" title="クリックでこの問合せを開く">' +
+      '<div style="display:flex;gap:6px;align-items:center"><span style="color:' + src.color + '">' + src.icon + '</span><strong style="color:#1e40af;text-decoration:underline">' + (i.subject || '無題').substring(0,30) + '</strong></div>' +
       '<div style="font-size:10px;color:#888;margin-left:18px">' + (i.from_name||i.custName||'') + '</div>' +
     '</div>';
   }).join('');
+}
+// ホームの「直近の問い合わせ」→ 問い合わせページに移動して該当メールの詳細を開く
+function _homeOpenInquiry_(id){
+  _jumpToPage_('inquiry');
+  var tries = 0;
+  (function open(){
+    tries++;
+    if(typeof openInquiryDetail === 'function' && document.getElementById('inq-detail-panel')){
+      openInquiryDetail(id);
+    } else if(tries < 20){
+      setTimeout(open, 100);
+    }
+  })();
 }
 function _renderListDueSoon_(el){
   var soon = new Date(); soon.setDate(soon.getDate() + 14);
