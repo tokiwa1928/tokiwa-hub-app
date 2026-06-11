@@ -5706,6 +5706,12 @@ function buildMasterModal(masterType){
   const panel=document.getElementById('mm-panel');
   panel.innerHTML='';
   modal.querySelector('#mm-title').textContent=title;
+  _mmType=masterType;
+  const srch=document.getElementById('mm-search');
+  if(srch){ srch.value=''; }
+  const sr=document.getElementById('mm-search-results');
+  if(sr){ sr.style.display='none'; sr.innerHTML=''; }
+  panel.style.display='flex';
 
   if(masterType==='paper')    buildPaperDrill(panel);
   else if(masterType==='envelope') buildEnvDrill(panel);
@@ -5941,9 +5947,47 @@ function initMasterModal(){
       <div id="mm-title" style="font-size:14px;font-weight:700"></div>
       <button onclick="closeMasterModal()" style="font-size:20px;background:none;border:none;cursor:pointer;color:#aaa;line-height:1">×</button>
     </div>
+    <div style="position:relative">
+      <input id="mm-search" type="text" placeholder="🔍 名前で検索（例: 上質 70 / コート 73.3 …）" autocomplete="off"
+        oninput="mmSearch(this.value)" style="width:100%;padding:8px 10px;border:1.5px solid #d0cdc6;border-radius:7px;font-size:13px">
+    </div>
+    <div id="mm-search-results" style="display:none;overflow-y:auto;flex:1;flex-direction:column;gap:2px"></div>
     <div id="mm-panel" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:.65rem"></div>
   </div>`;
   document.body.appendChild(modal);
+}
+
+// ── マスター検索（フラット・ドリル不要） ──
+let _mmType='';
+function mmSearch(q){
+  q=(q||'').trim().toLowerCase();
+  const results=document.getElementById('mm-search-results');
+  const panel=document.getElementById('mm-panel');
+  if(!q){ results.style.display='none'; results.innerHTML=''; panel.style.display='flex'; return; }
+  panel.style.display='none'; results.style.display='flex';
+  const terms=q.split(/\s+/).filter(Boolean);
+  const mt=_mmType;
+  let items=[];
+  if(mt==='paper'){
+    items=DB.master.paper.filter(r=>r.active!==false).map(r=>{
+      const label=`${r.nm||''}${r.wt?' '+r.wt:''}${r.cl&&r.cl!=='白'?' '+r.cl:''}`;
+      const hay=`${r.nm||''} ${r.wt||''} ${r.cl||''} ${r.sz||''} ${r.mk||''}`.toLowerCase();
+      return {hay,html:`${getPaperColorBadge(r.cl||'白')}<span class="ddi-name">${r.nm||''} ${r.wt||''}</span><span class="ddi-sub">${(r.sz||'')+' '+(r.mk||'')}</span><span class="ddi-price">${r.p!=null?'¥'+r.p:''}</span>`,
+        item:{label,p:r.p!=null?r.p:null,sz:r.sz||'',nm:r.nm||'',cl:r.cl||'白'}};
+    });
+  } else if(mt==='envelope'){
+    items=DB.master.envelope.map(r=>({hay:`${r.nm||''} ${r.sp||''}`.toLowerCase(),
+      html:`<span class="ddi-name">${r.nm||''}</span><span class="ddi-sub">${r.sp||''}</span><span class="ddi-price">${r.p!=null?'¥'+r.p+'/枚':''}</span>`,
+      item:{label:r.nm||'',p:r.p!=null?r.p:null,sp:r.sp||''}}));
+  } else {
+    const data=DB.master[mt]||[];
+    items=data.map(r=>({hay:`${r.n||''} ${r.note||''}`.toLowerCase(),
+      html:`<span class="ddi-name">${r.n||''}</span><span class="ddi-sub">${r.note||''}</span><span class="ddi-price">${r.p!=null?'¥'+r.p:''}${r.mc?' 最低¥'+r.mc:''}</span>`,
+      item:{label:r.n||'',p:r.p!=null?r.p:null,mc:r.mc||0,tiers:r.tiers||null}}));
+  }
+  const hit=items.filter(o=>terms.every(t=>o.hay.includes(t))).slice(0,80);
+  if(!hit.length){ results.innerHTML='<div style="color:#bbb;font-size:12px;padding:1rem;text-align:center">該当なし</div>'; return; }
+  results.innerHTML=hit.map((o,i)=>`<button class="dd-item" onclick='selMasterItem(${JSON.stringify(o.item).replace(/'/g,"&#39;")})'>${o.html}</button>`).join('');
 }
 
 // applyPaperSel の互換（旧select用のフォールバック）
@@ -6605,20 +6649,19 @@ function buildPanel(id,initData){
   const div=document.createElement('div');div.id='tp-'+id;div.style.display='none';
   div.innerHTML=`
 <!-- QPPPP-2 / PPPPPP-10: 種別バナー (この画面は見積・受注 兼用 / 新規・リピート共通。編集時は非表示) -->
+<!-- ①種別は前画面で選択済み。ラジオを廃止し、選択内容を表示（必要時のみ切替） -->
 <div id="entry-kind-banner-${id}" style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;margin-bottom:10px">
-  <div id="entry-reg-title-${id}" style="font-size:13px;font-weight:800;color:#1e40af;margin-bottom:8px">🆕 新規登録（見積・受注）</div>
-  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span style="font-size:12px;font-weight:700;color:#334155">種別:</span>
-    <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;background:#fff;border:2px solid #0891b2;color:#0e7490;padding:8px 16px;border-radius:10px;white-space:nowrap" id="kind-quote-lbl-${id}">
-      <input type="radio" name="entry-kind-${id}" value="quote" checked onchange="_updateEntryKind_(${id})" style="accent-color:#0891b2;width:16px;height:16px">
-      <span style="display:flex;flex-direction:column;line-height:1.15"><span style="font-size:14px;font-weight:700">🔵 見積</span><span style="font-size:10px;color:#64748b;font-weight:500">まだ受注前</span></span>
-    </label>
-    <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;background:#fff;border:2px solid #e5e7eb;color:#6b7280;padding:8px 16px;border-radius:10px;white-space:nowrap" id="kind-order-lbl-${id}">
-      <input type="radio" name="entry-kind-${id}" value="order" onchange="_updateEntryKind_(${id})" style="accent-color:#065f46;width:16px;height:16px">
-      <span style="display:flex;flex-direction:column;line-height:1.15"><span style="font-size:14px;font-weight:700">🟢 受注</span><span style="font-size:10px;color:#64748b;font-weight:500">案件にする</span></span>
-    </label>
-    <span style="font-size:11px;color:#64748b;margin-left:auto">この画面で見積も受注も登録できます。完成したら下部のボタンで確定。</span>
+    <span id="entry-kind-chip-${id}" style="display:inline-flex;align-items:center;gap:6px;font-size:15px;font-weight:800;background:#fff;border:2px solid #0891b2;color:#0e7490;padding:7px 18px;border-radius:10px">🔵 新規 見積書</span>
+    <button type="button" onclick="_toggleEntryKind_(${id})" style="font-size:11px;background:#fff;border:1px solid #cbd5e1;color:#64748b;padding:5px 12px;border-radius:8px;cursor:pointer">⇄ 種別を切替</button>
+    <span id="entry-reg-title-${id}" style="display:none"></span>
+    <input type="radio" name="entry-kind-${id}" value="quote" checked style="display:none">
+    <input type="radio" name="entry-kind-${id}" value="order" style="display:none">
+    <span style="font-size:11px;color:#94a3b8;margin-left:auto">前画面で選んだ種別です。違う場合のみ切替してください。</span>
   </div>
+  <!-- ③リピート元リンク（リピート時のみ表示） -->
+  <div id="repeat-src-banner-${id}" style="display:none;margin-top:8px;font-size:12px"></div>
 </div>
 <div class="sec">
   <div class="st" style="display:flex;align-items:center;justify-content:space-between">
@@ -6945,7 +6988,7 @@ function buildPanel(id,initData){
   </div><!-- /est-2col -->
 
   <div class="brow" id="est-actions1-${id}">
-    <button class="btn btn-p" onclick="showPV([${id}])">この見積書をプレビュー</button>
+    <button class="btn btn-p" id="est-preview-btn-${id}" onclick="showPV([${id}])">🔍 この見積書をプレビュー</button>
     <button class="btn" onclick="saveHist(${id})">実績として保存</button>
     <button class="btn" style="background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(${id})">⭐ テンプレート保存</button>
     <button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="clearTab(${id})" title="この見積書の入力内容をクリア">🗑 クリア</button>
@@ -6966,6 +7009,19 @@ function buildPanel(id,initData){
         <button class="btn" onclick="saveQuotationPattern(${id})">💾 見積パターンを保存</button>
       </div>
       <div id="saved-patterns-${id}" style="margin-top:.75rem"></div>
+    </div>
+    <!-- ⑪見積書の区別：予算見積書／本見積書 -->
+    <div id="est-budget-box-${id}" style="border-top:1px solid #93c5fd;margin-top:.75rem;padding-top:.75rem">
+      <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px">見積書の種類</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:#fff;border:2px solid #0891b2;color:#0e7490;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:700" id="estkind-final-lbl-${id}">
+          <input type="radio" name="est-doc-kind-${id}" value="final" checked style="width:14px;height:14px" onchange="_updateEstDocKind_(${id})">本見積書
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:#fff;border:2px solid #e5e7eb;color:#6b7280;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:700" id="estkind-budget-lbl-${id}">
+          <input type="radio" name="est-doc-kind-${id}" value="budget" style="width:14px;height:14px" onchange="_updateEstDocKind_(${id})">予算見積書（概算）
+        </label>
+        <span style="font-size:10px;color:#64748b;align-self:center">予算見積書は「概算・予算用」と明記して出力されます。</span>
+      </div>
     </div>
     <div style="border-top:1px solid #93c5fd;margin-top:.75rem;padding-top:.75rem;display:flex;gap:8px;flex-wrap:wrap" id="est-save-row-${id}">
       <button id="save-quote-btn-${id}" class="btn" style="flex:1;min-width:200px;background:#0891b2;color:#fff;border-color:#0891b2;font-weight:700" onclick="saveEstimateAsQuote(${id})" title="見積中として保存。案件管理の「🔵見積中」に表示され、後で受注/失注を選べます">🔵 見積書として保存 (案件管理へ)</button>
@@ -6992,6 +7048,10 @@ function buildPanel(id,initData){
   if(qtyEl) qtyEl.value=ts(id).qtyPats[0]?.v||1000;
   renderQtyGrid(id);
   if(initData)applyHistData(id,initData);
+  // 種別チップ・保存ボタン・案件区分の初期状態を反映
+  try { if(typeof onJobTypeChange==='function') onJobTypeChange(id); } catch(e){}
+  try { if(typeof _updateEntryKind_==='function') _updateEntryKind_(id); } catch(e){}
+  try { if(typeof _updateEstDocKind_==='function') _updateEstDocKind_(id); } catch(e){}
 }
 function buildSubRow(id,cat){
   const sw=document.getElementById(`sub-wrap-${id}`);const row=document.getElementById(`sub-row-${id}`);row.innerHTML='';
@@ -7129,7 +7189,38 @@ function buildFormArea(id,data){
   else if(s.type==='form') area.innerHTML=fForm(id,data);
   else if(s.type==='book') area.innerHTML=fBook(id,data);
   else                     area.innerHTML=fOther(id,data);
+  stackCostPanels(area,id);
   calc(id);
+}
+// ⑤ タブ表示を廃止し全項目を縦並びに（入力漏れ防止）＋④製版CTPオプションを製版CTPへ
+function stackCostPanels(area,id){
+  if(!area) return;
+  // タブバーを非表示
+  const bar=area.querySelector('.ctab-bar'); if(bar) bar.style.display='none';
+  // ④ 印刷パネル内の「印刷オプション(組付け・色替え・シルバーCTP)」ブロックを製版CTPパネルへ移動
+  const plPanel=area.querySelector(`#cp-pl-${id}`);
+  const optTb=area.querySelector(`#epo-${id},#fpo-${id},#bpo-${id}`);
+  if(optTb && plPanel){
+    const wrap=optTb.closest('div[style*="border-top"]')||optTb.closest('div');
+    if(wrap && wrap.parentElement && wrap.parentElement.id===`cp-pr-${id}`){
+      plPanel.appendChild(wrap);
+    }
+  }
+  // 各パネルを常時表示＋セクション見出し
+  const TITLES={p:'📄 用紙',pr:'🖨️ 印刷',pl:'🎯 製版・CTP',dt:'💻 データ作成',b:'📚 製本・加工'};
+  Object.keys(TITLES).forEach(k=>{
+    const pn=area.querySelector(`#cp-${k}-${id}`);
+    if(!pn) return;
+    pn.classList.add('show');
+    pn.style.cssText='display:block;margin-bottom:14px;padding-top:4px';
+    if(!pn.querySelector('.cost-sec-h')){
+      const h=document.createElement('div');
+      h.className='cost-sec-h';
+      h.style.cssText='font-size:12px;font-weight:800;color:#1a1a1a;border-left:4px solid #6b7adb;padding:3px 0 3px 8px;margin:0 0 8px';
+      h.textContent=TITLES[k];
+      pn.insertBefore(h,pn.firstChild);
+    }
+  });
 }
 // 封筒フォーム
 // ═══ 共通フォームHTMLヘルパー ═══
@@ -8189,14 +8280,36 @@ function onJobTypeChange(id){
   const jobType=document.getElementById(`job-type-${id}`)?.value||'new';
   const scLabel=document.getElementById(`spec-change-label-${id}`);
   const pcLabel=document.getElementById(`plate-change-label-${id}`);
+  const scSel=document.getElementById(`spec-change-${id}`);
+  const pcSel=document.getElementById(`plate-change-${id}`);
   if(jobType==='new'){
-    if(scLabel) scLabel.textContent='仕様（新規）';
-    if(pcLabel) pcLabel.textContent='版下（新規）';
+    // ⑥新規＝仕様変更・版下変更は必ず「無」で固定（変更不可）
+    if(scLabel) scLabel.textContent='仕様（新規=変更なし）';
+    if(pcLabel) pcLabel.textContent='版下（新規=変更なし）';
+    if(scSel){ scSel.value='no'; scSel.disabled=true; scSel.style.background='#f1f5f9'; scSel.style.color='#94a3b8'; }
+    if(pcSel){ pcSel.value='no'; pcSel.disabled=true; pcSel.style.background='#f1f5f9'; pcSel.style.color='#94a3b8'; }
   } else {
-    if(scLabel) scLabel.textContent='仕様変更';
-    if(pcLabel) pcLabel.textContent='版下変更';
+    // ⑦リピート＝仕様変更は自動判定（後で仕様が変わればON）、版下は手動
+    if(scLabel) scLabel.textContent='仕様変更（自動判定）';
+    if(pcLabel) pcLabel.textContent='版下変更（手動）';
+    if(scSel){ scSel.disabled=true; scSel.style.background='#fefce8'; scSel.style.color='#92400e'; } // 自動制御
+    if(pcSel){ pcSel.disabled=false; pcSel.style.background=''; pcSel.style.color=''; }
   }
   updatePlateRowLabels(id);
+  // ①チップ表示を新規/リピートに追従
+  if(typeof _updateEntryKind_==='function') _updateEntryKind_(id);
+}
+// ⑦リピート時：実際に仕様が変わったら仕様変更を自動ON
+function _autoDetectSpecChange_(id){
+  const jobType=document.getElementById(`job-type-${id}`)?.value||'new';
+  if(jobType!=='repeat') return;
+  const scSel=document.getElementById(`spec-change-${id}`);
+  if(!scSel) return;
+  const s=ts(id);
+  const baseSpec=s._repeatBaseSpec||'';
+  const curSpec=(()=>{ try{ return (s.lines||[]).map(l=>[l.item,l.spec].filter(Boolean).join(' ')).filter(Boolean).join(' / '); }catch(e){ return ''; } })();
+  if(baseSpec && curSpec && curSpec!==baseSpec){ scSel.value='yes'; }
+  else if(baseSpec){ scSel.value='no'; }
 }
 function updatePlateRowLabels(id){
   const jobType=document.getElementById(`job-type-${id}`)?.value||'new';
@@ -8383,11 +8496,15 @@ function showPV(idArr){
     const rep=entries[0];
     const multiTab=group.ids.length>1;
 
+    // ⑪予算見積書/本見積書の区別
+    const _docKind=(typeof _estDocKind_==='function')?_estDocKind_(rep.id):'final';
+    const _titleTxt=(_docKind==='budget')?'予算御見積書':'御　見　積　書';
+    const _budgetTag=(_docKind==='budget')?`<span style="font-size:12px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:2px 10px;margin-left:10px;vertical-align:middle">概算・予算用</span>`:'';
     // ── ヘッダー（1グループ1ヘッダー） ──
     html+=`<div class="pv-page">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.25rem">
         <div>
-          <div style="font-size:22px;font-weight:700;letter-spacing:.08em">御　見　積　書</div>
+          <div style="font-size:22px;font-weight:700;letter-spacing:.08em">${_titleTxt}${_budgetTag}</div>
           <div style="font-size:11px;color:#888;margin-top:5px">発行日：${rep.date}　見積番号：${rep.estno}</div>
         </div>
         <div style="text-align:right;font-size:12px;color:#777;line-height:1.8">
@@ -17089,7 +17206,22 @@ function _doRepeatCreate_(mode){
       // 種別ラジオを選択 (order=受注 / quote=見積)
       var val = (mode === 'order') ? 'order' : 'quote';
       var radio = document.querySelector('input[name="entry-kind-' + _newTid + '"][value="' + val + '"]');
-      if(radio){ radio.checked = true; if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid); }
+      if(radio){ radio.checked = true; }
+      // ⑦リピート＝案件区分を「リピート」に固定
+      var jt = document.getElementById('job-type-' + _newTid);
+      if(jt){ jt.value = 'repeat'; }
+      // ③リピート元情報をタブ状態に保存
+      try {
+        var st = ts(_newTid);
+        st._repeatFrom = r.id || '';
+        st._repeatBaseSpec = r.spec || '';
+        var qn = parseInt(r.qty) || 0, ex = parseInt(r.exTax) || 0;
+        st._repeatBaseUnitp = (qn > 0) ? Math.round(ex / qn * 100) / 100 : (r.unitp || null);
+        st._repeatBaseUnit = r.unit || '枚';
+      } catch(e){}
+      if(typeof onJobTypeChange === 'function') onJobTypeChange(_newTid);
+      if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid);
+      if(typeof _renderRepeatSrcBanner_ === 'function') _renderRepeatSrcBanner_(_newTid);
       _setEntryRegTitle_(_newTid);
     }
   }, 300);
@@ -24400,6 +24532,15 @@ function showWorkInstructionView(projectId){
 
         <!-- 現場操作（印刷対象外） -->
         <div style="max-width:794px;margin:16px auto 0">
+          ${project._provisional ? `
+          <div style="background:#fff7ed;border:2px solid #fb923c;border-radius:8px;padding:14px;margin-bottom:14px">
+            <div style="font-size:13px;font-weight:800;color:#9a3412;margin-bottom:8px">⚠ 未確定受注（校正先行）— 数量・金額・仕様が未確定です</div>
+            <div style="font-size:12px;color:#7c2d12;margin-bottom:10px">校正が固まったら、見積を修正して受注内容に反映し、確定してください。</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700" onclick="document.querySelector('.proof-modal').remove();_openProjInEstForm_(${(DB.projects||[]).indexOf(project)})">📝 見積を修正 → 受注内容に反映</button>
+              <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="_confirmProvisionalProject_('${String(projectId).replace(/'/g,'')}')">✅ 数量・仕様を確定（未確定を解除）</button>
+            </div>
+          </div>` : ''}
           ${instructionPane}
           ${proofPane}
           <div style="margin-top:16px;background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px">
@@ -24421,6 +24562,29 @@ function showWorkInstructionView(projectId){
   document.body.appendChild(modal);
 }
 
+// #14: 未確定受注を確定（_provisional を解除）
+function _confirmProvisionalProject_(projectId){
+  var p = (DB.projects || []).find(function(x){ return x.id === projectId; });
+  if(!p){ alert('案件が見つかりません'); return; }
+  var qtyOk = window.prompt('確定する数量を入力してください（現在: ' + (p.qty||0) + (p.unit||'') + '）', p.qty || '');
+  if(qtyOk === null) return;
+  var q = parseInt(String(qtyOk).replace(/[^0-9]/g,'')) || 0;
+  if(q <= 0){ alert('数量を正しく入力してください'); return; }
+  var specOk = window.prompt('確定する仕様を入力してください（空欄なら現状維持）', p.spec || '');
+  if(specOk === null) return;
+  if(!confirm('この案件を「確定」にします。\n\n数量: ' + q + (p.unit||'') + '\n仕様: ' + (specOk || p.spec || '─') + '\n\nよろしいですか?')) return;
+  p.qty = q;
+  if(specOk) p.spec = specOk;
+  p._provisional = false;
+  if(p.status === '未確定(校正先行)') p.status = 'データ作成中';
+  p.updatedAt = new Date().toISOString();
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('update', 'project:' + p.id, '未確定受注を確定: ' + p.cust + '/' + p.item + ' ' + q + (p.unit||'')); } catch(e){}
+  if(typeof _toastMsg === 'function') _toastMsg('✅ 案件を確定しました (' + p.id + ')');
+  document.querySelector('.proof-modal')?.remove();
+  if(typeof renderProjects === 'function') renderProjects();
+}
 // 工程ステータスをモーダル内で循環変更
 function toggleProjectStepInModal(projectId, step){
   const project = (DB.projects || []).find(p => p.id === projectId);
@@ -26971,26 +27135,116 @@ function deleteQuotationPattern(idx, tabId){
 
 // 受注案件として確定モーダルを開く
 // QPPPP-2: 種別 (見積/受注) 選択で保存ボタンとラベルの強調を切替
+// ⑪見積書の種類（本見積/予算見積）切替表示
+function _updateEstDocKind_(id){
+  var k = document.querySelector('input[name="est-doc-kind-' + id + '"]:checked')?.value || 'final';
+  var fl = document.getElementById('estkind-final-lbl-' + id);
+  var bd = document.getElementById('estkind-budget-lbl-' + id);
+  if(k === 'budget'){
+    if(bd){ bd.style.borderColor = '#d97706'; bd.style.color = '#92400e'; }
+    if(fl){ fl.style.borderColor = '#e5e7eb'; fl.style.color = '#6b7280'; }
+  } else {
+    if(fl){ fl.style.borderColor = '#0891b2'; fl.style.color = '#0e7490'; }
+    if(bd){ bd.style.borderColor = '#e5e7eb'; bd.style.color = '#6b7280'; }
+  }
+}
+function _estDocKind_(id){ return document.querySelector('input[name="est-doc-kind-' + id + '"]:checked')?.value || 'final'; }
+// ③リピート元リンクのバナーを描画
+function _renderRepeatSrcBanner_(id){
+  var el = document.getElementById('repeat-src-banner-' + id); if(!el) return;
+  var s = (typeof ts === 'function') ? ts(id) : null;
+  var src = s && s._repeatFrom;
+  if(!src){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  var up = s._repeatBaseUnitp; var unit = s._repeatBaseUnit || '枚';
+  var atStr = (up != null && up !== '') ? ('@' + Number(up).toFixed(2) + '/' + unit + ' ') : '';
+  el.style.display = '';
+  el.innerHTML = '<span style="background:#faf5ff;border:1px solid #d8b4fe;color:#7c3aed;padding:4px 10px;border-radius:8px;font-weight:700">'
+    + '🔁 リピート ' + atStr
+    + '<a href="#" onclick="event.preventDefault();_jumpToQuote_(\'' + String(src).replace(/[\\\'"]/g,'') + '\')" style="color:#6d28d9;text-decoration:underline;font-weight:800">[リピート元: ' + String(src).replace(/</g,'') + ']</a>'
+    + '</span>';
+}
+// ①種別を前画面選択のまま表示／必要時のみ切替
+function _toggleEntryKind_(id){
+  var cur = document.querySelector('input[name="entry-kind-' + id + '"]:checked')?.value || 'quote';
+  var next = cur === 'order' ? 'quote' : 'order';
+  var r = document.querySelector('input[name="entry-kind-' + id + '"][value="' + next + '"]');
+  if(r){ r.checked = true; }
+  _updateEntryKind_(id);
+}
 function _updateEntryKind_(id){
   var kind = document.querySelector('input[name="entry-kind-' + id + '"]:checked')?.value || 'quote';
-  var qLbl = document.getElementById('kind-quote-lbl-' + id);
-  var oLbl = document.getElementById('kind-order-lbl-' + id);
   var qBtn = document.getElementById('save-quote-btn-' + id);
   var oBtn = document.getElementById('save-order-btn-' + id);
-  if(kind === 'order'){
-    if(qLbl){ qLbl.style.borderColor = '#e5e7eb'; qLbl.style.color = '#6b7280'; qLbl.style.fontWeight = '500'; }
-    if(oLbl){ oLbl.style.borderColor = '#065f46'; oLbl.style.color = '#065f46'; oLbl.style.fontWeight = '700'; }
-    // 受注ボタンを強調、見積ボタンを控えめに
-    if(oBtn){ oBtn.style.boxShadow = '0 0 0 3px rgba(6,78,59,.25)'; oBtn.style.opacity = '1'; }
-    if(qBtn){ qBtn.style.opacity = '.55'; qBtn.style.boxShadow = 'none'; }
-  } else {
-    if(oLbl){ oLbl.style.borderColor = '#e5e7eb'; oLbl.style.color = '#6b7280'; oLbl.style.fontWeight = '500'; }
-    if(qLbl){ qLbl.style.borderColor = '#0891b2'; qLbl.style.color = '#0e7490'; qLbl.style.fontWeight = '700'; }
-    if(qBtn){ qBtn.style.boxShadow = '0 0 0 3px rgba(8,145,178,.25)'; qBtn.style.opacity = '1'; }
-    if(oBtn){ oBtn.style.opacity = '.55'; oBtn.style.boxShadow = 'none'; }
+  var isOrder = (kind === 'order');
+  // ①選択内容チップ（新規/リピート × 見積書/受注案件）
+  var jt = document.getElementById('job-type-' + id)?.value || 'new';
+  var jtLbl = (jt === 'repeat') ? 'リピート' : '新規';
+  var chip = document.getElementById('entry-kind-chip-' + id);
+  if(chip){
+    if(isOrder){
+      chip.textContent = '🟢 ' + jtLbl + ' 受注案件';
+      chip.style.borderColor = '#065f46'; chip.style.color = '#065f46'; chip.style.background = '#ecfdf5';
+    } else {
+      chip.textContent = '🔵 ' + jtLbl + ' 見積書';
+      chip.style.borderColor = '#0891b2'; chip.style.color = '#0e7490'; chip.style.background = '#ecfeff';
+    }
   }
+  // ⑧種別に応じて保存ボタンは片方のみ表示
+  if(qBtn){ qBtn.style.display = isOrder ? 'none' : ''; qBtn.style.opacity = '1'; qBtn.style.boxShadow = isOrder ? 'none' : '0 0 0 3px rgba(8,145,178,.25)'; }
+  if(oBtn){ oBtn.style.display = isOrder ? '' : 'none'; oBtn.style.opacity = '1'; oBtn.style.boxShadow = isOrder ? '0 0 0 3px rgba(6,78,59,.25)' : 'none'; }
+  // ⑧上部プレビューを種別に応じて切替（見積書 / 製造指示書）
+  var pvBtn = document.getElementById('est-preview-btn-' + id);
+  if(pvBtn){
+    pvBtn.textContent = isOrder ? '🏭 製造指示書をプレビュー' : '🔍 この見積書をプレビュー';
+    pvBtn.setAttribute('onclick', isOrder ? ('_previewSeizouFromTab_(' + id + ')') : ('showPV([' + id + '])'));
+  }
+  // ⑨数量違い/仕様違い複製は見積書画面のみ
+  var dupRow = document.getElementById('est-actions2-' + id);
+  if(dupRow) dupRow.style.display = isOrder ? 'none' : '';
+  // ⑪予算/本見積の区別は見積書のみ表示
+  var budBox = document.getElementById('est-budget-box-' + id);
+  if(budBox) budBox.style.display = isOrder ? 'none' : '';
   // HDRCLR-1: ヘッダー色を種別に連動 (受注=紫 / 見積=水色)
-  if(typeof _applyEstHeaderColor_ === 'function') _applyEstHeaderColor_(kind === 'order' ? '#7c3aed' : '#0891b2');
+  if(typeof _applyEstHeaderColor_ === 'function') _applyEstHeaderColor_(isOrder ? '#7c3aed' : '#0891b2');
+}
+// ⑧受注モード：現在のフォーム内容から製造指示書プレビューを表示（未保存OK）
+function _previewSeizouFromTab_(id){
+  try {
+    var s = ts(id);
+    var g = function(f){ var el = document.getElementById(f + '-' + id); return el ? el.value : ''; };
+    var qty = (s.qtyPats && s.qtyPats[0]) ? s.qtyPats[0].v : parseInt(g('qty')) || 0;
+    var spec = '';
+    try { spec = (s.lines||[]).map(function(l){ return [l.item,l.spec].filter(Boolean).join(' '); }).filter(Boolean).join(' / '); } catch(e){}
+    var prov = (document.getElementById('job-type-' + id)?.value === 'repeat')
+      ? false : false;
+    var proj = {
+      id: g('estno') || '(未発番)',
+      cust: g('cust'), item: g('prod'), spec: spec || g('prod'),
+      qty: qty, unit: g('unit') || '枚', due: '', enduser: g('enduser'),
+      _provisional: false, status: '受注(プレビュー)'
+    };
+    if(typeof _renderSeizouSheet === 'function' && typeof _showSeizouPreviewModal_ === 'function'){
+      _showSeizouPreviewModal_(proj);
+    } else if(typeof _renderSeizouSheet === 'function'){
+      var w = window.open('', '_blank');
+      if(w){ w.document.write('<html><head><title>製造指示書プレビュー</title></head><body>' + _renderSeizouSheet(proj) + '</body></html>'); w.document.close(); }
+    } else {
+      alert('製造指示書プレビューを表示できません');
+    }
+  } catch(e){ alert('プレビュー失敗: ' + e.message); }
+}
+// 製造指示書プレビュー用の簡易モーダル
+function _showSeizouPreviewModal_(proj){
+  var old = document.getElementById('seizou-preview-modal'); if(old) old.remove();
+  var m = document.createElement('div');
+  m.id = 'seizou-preview-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:400;display:flex;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto';
+  m.innerHTML = '<div style="background:#fff;border-radius:10px;max-width:900px;width:100%;padding:1rem">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">'
+    + '<div style="font-weight:800">🏭 製造指示書プレビュー（未保存）</div>'
+    + '<button onclick="document.getElementById(\'seizou-preview-modal\').remove()" style="font-size:20px;background:none;border:none;cursor:pointer;color:#aaa">×</button></div>'
+    + '<div>' + _renderSeizouSheet(proj) + '</div></div>';
+  document.body.appendChild(m);
 }
 
 // PPPPP-1: 見積作成タブの内容を「見積中」として保存 (案件管理の見積中に表示)
@@ -27034,6 +27288,7 @@ function saveEstimateAsQuote(tabId){
     cust: cust, item: item, spec: spec, endUser: enduser,
     qty: qty, unit: unit, exTax: exTax,
     estCost: estCost,
+    docKind: (typeof _estDocKind_ === 'function') ? _estDocKind_(tabId) : 'final',
     status: isEdit ? (DB.estimates[existingIdx].status || 'sent') : 'sent',
     source: 'estimator',
     createdAt: isEdit ? DB.estimates[existingIdx].createdAt : new Date().toISOString(),
