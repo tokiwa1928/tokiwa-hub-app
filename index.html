@@ -3861,6 +3861,7 @@ async function loadFromCloud() {
     DB.releaseConfig = result.data.releaseConfig;
     if (typeof applyReleaseConfig === 'function') setTimeout(applyReleaseConfig, 100);
   }
+  if (result.data.toolCompanyConfig) DB.toolCompanyConfig = result.data.toolCompanyConfig;
   if (result.data.inquirySettings) {
     DB.inquirySettings = result.data.inquirySettings;
   }
@@ -4233,7 +4234,8 @@ async function saveToCloud() {
     deliveryItems: DB.deliveryItems || [],
     drivers: DB.drivers || [],
     inquirySettings: DB.inquirySettings || {},
-    releaseConfig: DB.releaseConfig || {}
+    releaseConfig: DB.releaseConfig || {},
+    toolCompanyConfig: DB.toolCompanyConfig || {}
   };
   
   const result = await callCloudAPI('saveAll', {}, {
@@ -15114,36 +15116,46 @@ function saveReleaseConfig(){
 
 // ═════════════ TLPF-1: 🧰 ツールランチャー ═════════════
 // 小さな単機能アプリ (tools/*.html) の置き場。データは本体DB (localStorage) を共有。
+// companies: [] または未指定 = 全社共通。配列に会社コード(TK/KT/AS/TS/NK/MU/YM)を入れると、その会社のみ表示。
+// トキワ印刷(TK)は管理会社として常に全ツール表示。
 var TOOLS_REGISTRY = [
   { href: 'tools/quote-builder.html', icon: '🧾', name: '見積作成（クイック・年度更新・新規 すべてここ）',
     desc: 'タブ1: 標準テンプレで新規/リピート見積（5社対応・ペラ/冊子/完全外注・データ作成有無・単価マスタや過去見積から流し込み→Excel出力＋自動蓄積）。タブ2: 前年Excelの年度だけ替えてそのままDL。',
-    status: '試作', tag: '見積' },
+    status: '試作', tag: '見積', companies: [] },
   { href: 'tools/keiri.html', icon: '💴', name: '経理仕訳 (JDL IBEX連携)',
     desc: 'JDL仕訳CSVを学習→摘要を打つと借方/貸方/税区を自動提案。請求書・通帳スキャンからAI下書き→承認。JDL形式CSV(Shift_JIS)でエクスポート＋どこまで出したか管理。',
-    status: '試作', tag: '経理' },
+    status: '試作', tag: '経理', companies: [] },
   { href: 'tools/tanka-master.html', icon: '📚', name: '単価マスタ構築 (ロータス対応・独立保存)',
     desc: '過去見積 (Excel・ロータス1-2-3) を取込→品名・仕様・単価を自動抽出 (文字化け自動修復)→前回単価ありきで蓄積・確定。村山印刷データ基準。Hubとは分離保存・一括移管ボタンあり。',
-    status: '試作', tag: '見積' },
+    status: '試作', tag: '見積', companies: [] },
   { href: 'tools/pdf-tools.html', icon: '📎', name: 'PDF 連結・分割・回転',
     desc: '複数PDFを順番指定で1本に連結／ページ指定・1枚ずつ・前後半で分割／全ページ回転。容量圧縮はデスクトップの「PDFを圧縮.bat」(印刷用/標準/メール用の3種)。',
-    status: '試作', tag: '共通' },
+    status: '試作', tag: '共通', companies: [] },
   { href: 'tools/kensa.html', icon: '🔍', name: '校正チェック (検版)',
     desc: '修正前と修正後のPDFを全ページ自動比較→変わった箇所をマゼンタ表示。修正指示のチェックリストで「直ったか」を確認して校了判断。',
-    status: '試作', tag: '制作' },
+    status: '試作', tag: '制作', companies: [] },
   { href: 'tools/mojiokoshi.html', icon: '📝', name: '文字起こし (OCR)',
     desc: 'スキャン画像・FAX・PDFから文字を抽出してテキスト化（日本語 横/縦書き対応・PC内処理）。コピー/.txt保存。',
-    status: '試作', tag: '共通' },
+    status: '試作', tag: '共通', companies: [] },
   // MNTU-3: 面付は単体ページ化 (ログイン不要・別タブで現場利用)
   { href: 'tools/mentu.html', icon: '🖨', name: '面付計算・面付PDF',
     desc: '面付数・配置の自動計算＋実PDF面付出力。同一データ多面付け／他面付け(複数データ)／裏面ミラー・トンボ対応。EPSはデスクトップの変換batでPDF化。',
-    status: '運用中', tag: '制作' },
+    status: '運用中', tag: '制作', companies: [] },
   { internal: 'calc', icon: '🔢', name: '電卓',
     desc: '印刷見積用の電卓。税込計算・用紙枚数計算に対応。',
-    status: '運用中', tag: '共通' },
+    status: '運用中', tag: '共通', companies: [] },
   { internal: 'hiragana', icon: '📝', name: 'ひらがな変換ツール (Excel)',
     desc: 'Excel(.xlsx) の漢字を一括ひらがな化（書式保持）。',
-    status: '運用中', tag: '制作' }
+    status: '運用中', tag: '制作', companies: [] }
 ];
+var TOOLS_ADMIN_CODE = 'TK'; // トキワ印刷=管理会社 (全ツール閲覧可)
+function _toolVisibleForCompany_(t){
+  var code = (typeof currentAuth!=='undefined' && currentAuth.companyCode) || '';
+  if(code === TOOLS_ADMIN_CODE) return true;           // 管理会社は全部
+  if((currentAuth && currentAuth.role) === 'admin') return true; // システム管理者も全部
+  if(!t.companies || !t.companies.length) return true; // 全社共通
+  return t.companies.indexOf(code) >= 0;               // 指定会社のみ
+}
 // AIKEY-1: AIキー設定 (各ツールと同じ localStorage キー 'tokiwa_ai_key' を共有)
 function updateAiKeyStatus(){
   var el = document.getElementById('aikey-status'); if(!el) return;
@@ -15195,13 +15207,27 @@ function renderToolsPage(){
     var c = s === '運用中' ? '#16a34a' : s === '試作' ? '#f59e0b' : '#94a3b8';
     return '<span style="font-size:10px;font-weight:800;color:#fff;background:' + c + ';padding:2px 8px;border-radius:10px">' + s + '</span>';
   };
+  // TLCOMP-1: 公開会社の上書き設定 (DB.toolCompanyConfig[key]=会社コード配列) を反映
+  var cfg = (DB && DB.toolCompanyConfig) || {};
+  var isAdminCompany = ((currentAuth && currentAuth.companyCode)===TOOLS_ADMIN_CODE) || ((currentAuth&&currentAuth.role)==='admin');
+  var compMap = (DB && Array.isArray(DB.companies)) ? DB.companies : [];
+  function compName(code){ var c=compMap.find(function(x){return x.code===code;}); return c?c.name:code; }
   el.innerHTML = TOOLS_REGISTRY.map(function(t, i){
+    var key = t.href || ('internal:'+t.internal);
+    var comps = cfg[key] || t.companies || [];
+    var tt = Object.assign({}, t, { companies: comps, _key:key });
+    if(!_toolVisibleForCompany_(tt)) return '';
+    // 管理会社にだけ「公開範囲」バッジを表示
+    var scopeBadge = isAdminCompany
+      ? '<span style="font-size:9.5px;color:'+(comps.length?'#7c3aed':'#94a3b8')+';border:1px solid '+(comps.length?'#c4b5fd':'#e2e8f0')+';border-radius:4px;padding:1px 6px;cursor:pointer" onclick="event.preventDefault();event.stopPropagation();editToolCompanies('+i+')" title="公開する会社を設定">'
+        + (comps.length ? '🏢 '+comps.map(compName).join('・') : '🌐 全社共通') + ' ✎</span>'
+      : '';
     var inner = '<div class="sec" style="display:flex;align-items:center;gap:14px;cursor:pointer" '
       + 'onmouseover="this.style.borderColor=\'#0891b2\'" onmouseout="this.style.borderColor=\'#e0ddd6\'">'
       + '<div style="font-size:30px">' + t.icon + '</div>'
       + '<div style="flex:1;min-width:0">'
       +   '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><strong style="font-size:15px">' + t.name + '</strong>' + stBadge(t.status)
-      +   '<span style="font-size:10px;color:#94a3b8;border:1px solid #e2e8f0;border-radius:4px;padding:1px 6px">' + t.tag + '</span></div>'
+      +   '<span style="font-size:10px;color:#94a3b8;border:1px solid #e2e8f0;border-radius:4px;padding:1px 6px">' + t.tag + '</span>' + scopeBadge + '</div>'
       +   '<div style="font-size:12px;color:#666;margin-top:3px;line-height:1.5">' + t.desc + '</div>'
       + '</div>'
       + '<div style="font-size:18px;color:#94a3b8">' + (t.internal ? '▶' : '↗') + '</div>'
@@ -15210,6 +15236,26 @@ function renderToolsPage(){
       ? '<div onclick="openInternalTool(\'' + t.internal + '\')">' + inner + '</div>'
       : '<a href="' + t.href + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">' + inner + '</a>';
   }).join('');
+}
+// TLCOMP-1: 管理会社がツールの公開会社を設定
+function editToolCompanies(i){
+  var t = TOOLS_REGISTRY[i]; if(!t) return;
+  var key = t.href || ('internal:'+t.internal);
+  if(!DB.toolCompanyConfig) DB.toolCompanyConfig = {};
+  var cur = DB.toolCompanyConfig[key] || t.companies || [];
+  var all = (Array.isArray(DB.companies)?DB.companies:[]).filter(function(c){ return c.code!==TOOLS_ADMIN_CODE; });
+  var msg = '「'+t.name+'」を公開する会社を選んでください。\n空欄=全社共通。トキワ印刷は常に全表示。\n\n会社コードをカンマ区切りで入力:\n'
+    + all.map(function(c){ return '  '+c.code+' = '+c.name; }).join('\n')
+    + '\n\n現在: ' + (cur.length ? cur.join(',') : '(全社共通)');
+  var inp = prompt(msg, cur.join(','));
+  if(inp===null) return;
+  var codes = inp.split(/[,、\s]+/).map(function(s){return s.trim().toUpperCase();}).filter(Boolean)
+    .filter(function(c){ return all.some(function(x){return x.code===c;}); });
+  DB.toolCompanyConfig[key] = codes;
+  saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  renderToolsPage();
+  alert('✅ 「'+t.name+'」の公開範囲を更新しました\n' + (codes.length ? codes.join('・') : '全社共通'));
 }
 // TLPF-2: 内蔵ツール (Wiki から移管) の開閉
 function openInternalTool(kind){
