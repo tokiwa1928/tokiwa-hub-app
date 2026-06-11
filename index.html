@@ -410,6 +410,9 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 .m-tbl{width:100%;border-collapse:collapse;font-size:12px}
 .m-tbl th{background:#f4f3f0;padding:5px 7px;border:1px solid #e0ddd6;font-weight:700;font-size:11px;color:#888;text-align:left;white-space:nowrap}
 .m-tbl td{padding:2px 2px;border:1px solid #e0ddd6}
+/* 案件一覧: 色分けに加えて行を線でハッキリ区切る */
+#proj-table td{border-bottom:2px solid #b9b4a5;border-right:1px solid #d6d2c6}
+#proj-table th{border-bottom:2px solid #8d8778}
 .m-tbl td input,.m-tbl td select{border:none;background:transparent;padding:3px 5px;font-size:12px;font-family:inherit;width:100%}
 .m-tbl td input:focus,.m-tbl td select:focus{background:#f4f3f0;border-radius:3px;outline:1px solid #1a1a1a}
 .m-tbl .dx{width:26px;text-align:center}
@@ -5542,12 +5545,12 @@ function ts(id){if(!window._ts[id])window._ts[id]={cat:'',sub:'',type:'env',qtyP
 // ═══════════════════ 定数 ══════════════════════
 const CATS=['封筒','帳票','冊子','名刺・カード','ラベル・シール','その他'];
 const SUBS={
-  封筒:['長3','長4','長40','長30','角2','角3','角0','窓付き','印刷なし'],
-  帳票:['複写伝票','単票','注文書/納品書','請求書/領収書','チェックシート','報告書'],
-  冊子:['無線綴じ','中綴じ','折りパンフ','カタログ'],
-  '名刺・カード':['名刺','カード類','はがき'],
-  'ラベル・シール':['ラベル','シール','荷札'],
-  その他:['うちわ','賞状','その他'],
+  封筒:['長3','長4','長40','長30','洋長3','洋2','角0','角1','角2','角3','角6','角8','窓付き','テープ付','スチック','クラフト','カラー','パステル','印刷なし'],
+  帳票:['複写伝票','単票','注文書/納品書','請求書/領収書','納品書','見積書','申込書','チェックシート','報告書','日報','カルテ'],
+  冊子:['無線綴じ','中綴じ','折りパンフ','カタログ','会報誌','記念誌','テキスト','マニュアル','広報誌'],
+  '名刺・カード':['名刺','カード類','はがき','招待状','挨拶状','診察券','ポイントカード'],
+  'ラベル・シール':['ラベル','シール','荷札','訂正シール','バーコード','宛名'],
+  その他:['うちわ','賞状','ポスター','チラシ','カレンダー','クリアファイル','その他'],
 };
 // サブカテゴリの説明（ユーザーに見せるラベル）
 const SUBS_LABEL='製品の種類（任意）';
@@ -6678,6 +6681,9 @@ function buildPanel(id,initData){
   <div id="sub-wrap-${id}" style="display:none;margin-bottom:.5rem">
     <div style="font-size:11px;color:#aaa;margin-bottom:4px">種類を絞り込む（任意）</div>
     <div class="pill-row" id="sub-row-${id}"></div>
+    <input id="sub-q-${id}" placeholder="🔍 自由ワードで製品を検索（例: パステル 窓 / 100g）" autocomplete="off"
+      style="margin-top:5px;width:300px;font-size:11px;padding:4px 9px;border:1px solid #d0cdc6;border-radius:6px"
+      oninput="updateProdQuickFilter(${id},ts(${id}).cat,ts(${id}).sub,this.value)">
   </div>
   <!-- 製品マスターから選択 → 品名・仕様を自動セット（品目選択で絞り込み） -->
   <div style="margin-top:.35rem;padding:.3rem .6rem;background:#f4f3f0;border-radius:7px;border:1px solid #e0ddd6">
@@ -6995,6 +7001,7 @@ function buildPanel(id,initData){
 
   <div class="brow" id="est-actions1-${id}">
     <button class="btn btn-p" id="est-preview-btn-${id}" onclick="showPV([${id}])">🔍 この見積書をプレビュー</button>
+    <button class="btn" style="background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6;font-weight:700" onclick="showHistoryAnalyzeModal(${id})" title="過去の類似案件と単価比較。流用や価格妥当性チェックができます">📊 過去実績と比較</button>
     <button class="btn" onclick="saveHist(${id})">実績として保存</button>
     <button class="btn" style="background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(${id})">⭐ テンプレート保存</button>
     <button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="clearTab(${id})" title="この見積書の入力内容をクリア">🗑 クリア</button>
@@ -7789,35 +7796,37 @@ function applyFinishToRows(id){
 function onFinishSizeChange(id){ applyFinishToRows(id); }
 
 // 品目カテゴリ変更時に製品マスター選択を絞り込む
-function updateProdQuickFilter(id, cat, sub){
+function updateProdQuickFilter(id, cat, sub, q){
   const sel=document.getElementById(`prod-quick-${id}`);
   if(!sel) return;
   const cur=sel.value;
+  if(q===undefined) q=document.getElementById(`sub-q-${id}`)?.value||'';
+  const terms=String(q||'').toLowerCase().split(/\s+/).filter(Boolean);
+  const byQ=p=>!terms.length||terms.every(t=>((p.n||'')+' '+(p.sp||'')).toLowerCase().includes(t));
+  const opt=p=>`<option value="${escQ(JSON.stringify({n:p.n,cat:p.cat,sp:p.sp||''}))}">${p.n}</option>`;
   let html=`<option value="">── 製品を選択 ──</option>`;
   if(cat){
     // 品目選択済み：そのカテゴリのみ表示
-    let items=DB.master.prod.filter(p=>p.cat===cat);
-    // サブカテゴリ選択済みなら更に絞り込み（製品名にサブカテゴリが含まれるものを優先表示）
+    let items=DB.master.prod.filter(p=>p.cat===cat).filter(byQ);
+    // サブカテゴリ選択済み：その種類だけ表示（他は出さない）
     if(sub && items.length){
       const matchedItems = items.filter(p => (p.n||'').includes(sub) || (p.sp||'').includes(sub) || (p.sub||'') === sub);
-      const otherItems = items.filter(p => !((p.n||'').includes(sub) || (p.sp||'').includes(sub) || (p.sub||'') === sub));
       if(matchedItems.length){
-        html+=`<optgroup label="▶ ${sub}">${matchedItems.map(p=>`<option value="${escQ(JSON.stringify({n:p.n,cat:p.cat,sp:p.sp||''}))}">${p.n}</option>`).join('')}</optgroup>`;
-      }
-      if(otherItems.length){
-        html+=`<optgroup label="その他の${cat}">${otherItems.map(p=>`<option value="${escQ(JSON.stringify({n:p.n,cat:p.cat,sp:p.sp||''}))}">${p.n}</option>`).join('')}</optgroup>`;
+        html+=`<optgroup label="▶ ${sub}">${matchedItems.map(opt).join('')}</optgroup>`;
+      } else {
+        html+=`<option value="" disabled>（「${sub}」に一致する製品なし — 検索窓で探すか種類の選択を解除）</option>`;
       }
     } else if(items.length){
-      html+=`<optgroup label="▶ ${cat}">${items.map(p=>`<option value="${escQ(JSON.stringify({n:p.n,cat:p.cat,sp:p.sp||''}))}">${p.n}</option>`).join('')}</optgroup>`;
+      html+=`<optgroup label="▶ ${cat}${terms.length?' (検索: '+q+')':''}">${items.map(opt).join('')}</optgroup>`;
     } else {
-      html+=`<option value="" disabled>（${cat}の製品マスターなし）</option>`;
+      html+=`<option value="" disabled>（${terms.length?'検索に一致する製品なし':cat+'の製品マスターなし'}）</option>`;
     }
   } else {
-    // 未選択：全カテゴリ表示
+    // 未選択：全カテゴリ表示（検索語があれば絞り込み）
     ['封筒','帳票','冊子','その他'].forEach(c=>{
-      const items=DB.master.prod.filter(p=>p.cat===c);
+      const items=DB.master.prod.filter(p=>p.cat===c).filter(byQ);
       if(!items.length) return;
-      html+=`<optgroup label="${c}">${items.map(p=>`<option value="${escQ(JSON.stringify({n:p.n,cat:p.cat,sp:p.sp||''}))}">${p.n}</option>`).join('')}</optgroup>`;
+      html+=`<optgroup label="${c}">${items.map(opt).join('')}</optgroup>`;
     });
   }
   sel.innerHTML=html;
@@ -24032,7 +24041,10 @@ function applyIngestToEstimate(extracted){
 
 // 履歴 AI 分析 モーダル
 // JJJJJJ-2: 類似案件JS検索 (APIコストゼロ) + AI価格提案 (手動/Haiku/低コスト)
-function showHistoryAnalyzeModal(){
+// tabId を渡すと見積タブ連携モード: 現タブの条件をプリフィルして自動検索し、
+// 単価の流用ボタンと価格妥当性チェック (乖離が大きい時の提案) が有効になる。
+function showHistoryAnalyzeModal(tabId){
+  window._haTabId_ = (tabId != null && typeof tabId === 'number') ? tabId : null;
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
@@ -24066,11 +24078,76 @@ function showHistoryAnalyzeModal(){
           '<button class="btn btn-p" onclick="_haSearch_()" style="background:#5b21b6;border-color:#5b21b6;font-weight:700">🔍 類似案件を検索 (無料)</button>' +
           '<button class="btn" id="ha-ai-btn" onclick="_haAiSuggest_()" style="background:#7c3aed;color:#fff;border-color:#7c3aed;display:none">🤖 AI価格提案 (Haiku/低コスト)</button>' +
         '</div>' +
+        '<div id="ha-price-check" style="display:none;margin-bottom:10px"></div>' +
         '<div id="ha-results" style="min-height:100px"></div>' +
         '<div id="ha-ai-result" style="display:none;margin-top:12px;background:#f0fdf4;border:2px solid #86efac;border-radius:8px;padding:14px;font-size:13px;line-height:1.7"></div>' +
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  // 見積タブ連携: 現タブの条件をプリフィルして自動検索
+  if(window._haTabId_ != null){
+    var tid = window._haTabId_;
+    var g = function(f){ var el = document.getElementById(f + '-' + tid); return el ? el.value : ''; };
+    var set = function(f, v){ var el = document.getElementById(f); if(el && v) el.value = v; };
+    set('ha-cust', g('cust'));
+    set('ha-item', g('prod'));
+    var q0 = (typeof ts === 'function' && ts(tid).qtyPats || [])[0];
+    if(q0 && q0.v) set('ha-qty', q0.v);
+    var spTxt = (g('spec') + ' ' + g('memo'));
+    var pm = spTxt.match(/(\d+)\s*(?:ページ|頁|P)\b/i); if(pm) set('ha-pages', pm[1]);
+    var sm = spTxt.match(/([AB]\d|長\d+|角\d+|洋長?\d+|葉書|名刺|\d{2,4}[x×]\d{2,4})/i); if(sm) set('ha-size', sm[1]);
+    if(g('cust') || g('prod')) _haSearch_();
+  }
+}
+// 検索結果の単価を現在の見積タブの採用単価へ流用
+function _haUseUnitp_(unitP){
+  var tid = window._haTabId_; if(tid == null) return;
+  var adEl = document.getElementById('adopted-' + tid + '-0-0') || document.getElementById('adopted-' + tid + '-0');
+  if(!adEl){ alert('採用単価欄が見つかりません（数量・単価明細を表示してください）'); return; }
+  adEl.value = unitP;
+  try { adEl.dispatchEvent(new Event('input', { bubbles: true })); } catch(e){}
+  if(typeof calc === 'function') try { calc(tid); } catch(e){}
+  if(typeof _toastMsg === 'function') _toastMsg('📋 採用単価に @¥' + Number(unitP).toLocaleString() + ' を流用しました');
+  _haPriceCheck_();
+}
+// 価格妥当性チェック: 現タブの採用単価 vs 類似実績の中央値。乖離が大きければ提案を表示
+function _haPriceCheck_(scoredRows){
+  var tid = window._haTabId_; var box = document.getElementById('ha-price-check');
+  if(tid == null || !box) return;
+  var rows = scoredRows;
+  if(!rows){
+    try { rows = JSON.parse(document.getElementById('ha-ai-btn')?.dataset.scored || '[]'); } catch(e){ rows = []; }
+  } else {
+    rows = rows.map(function(x){ return x.r || x; });
+  }
+  var unitps = rows.map(function(r){ var q = parseInt(r.qty)||0; return q > 0 ? (parseInt(r.exTax)||0)/q : 0; })
+    .filter(function(u){ return u > 0; }).sort(function(a,b){ return a-b; });
+  if(!unitps.length){ box.style.display = 'none'; return; }
+  var med = unitps[Math.floor(unitps.length/2)];
+  var qty = (typeof ts === 'function' && ts(tid).qtyPats || [])[0]?.v || 0;
+  var adEl = document.getElementById('adopted-' + tid + '-0-0') || document.getElementById('adopted-' + tid + '-0');
+  var cur = parseFloat(adEl?.value) || 0;
+  box.style.display = '';
+  if(cur <= 0){
+    box.innerHTML = '<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:10px 14px;font-size:12px;color:#1e40af">'
+      + '💡 過去実績の単価中央値は <b>@¥' + Math.round(med).toLocaleString() + '</b>'
+      + (qty ? '（' + Number(qty).toLocaleString() + '個なら ¥' + Math.round(med*qty).toLocaleString() + '）' : '')
+      + ' です。各行の「📋 流用」でこのタブの採用単価にセットできます。</div>';
+    return;
+  }
+  var dev = (cur - med) / med;
+  var pct = Math.round(Math.abs(dev) * 100);
+  if(Math.abs(dev) <= 0.3){
+    box.innerHTML = '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 14px;font-size:12px;color:#166534">'
+      + '✔ 現在の採用単価 <b>@¥' + cur.toLocaleString() + '</b> は過去実績の中央値 @¥' + Math.round(med).toLocaleString() + ' と整合的です（乖離 ' + pct + '%）。</div>';
+  } else {
+    var dir = dev > 0 ? '高く' : '安く';
+    box.innerHTML = '<div style="background:#fef2f2;border:2px solid #fca5a5;border-radius:8px;padding:12px 14px;font-size:12.5px;color:#991b1b">'
+      + '⚠ 現在の採用単価 <b>@¥' + cur.toLocaleString() + '</b> は過去実績の中央値 <b>@¥' + Math.round(med).toLocaleString() + '</b> より <b>' + pct + '% ' + dir + '</b>なっています。<br>'
+      + '💡 <b>提案: @¥' + Math.round(med).toLocaleString() + ' 前後'
+      + (qty ? '（' + Number(qty).toLocaleString() + '個で ¥' + Math.round(med*qty).toLocaleString() + '）' : '') + 'まで寄せることを検討してください。</b>'
+      + ' 仕様アップ・特急対応など意図的な差なら備考に理由を残すと次回も判断しやすくなります。</div>';
+  }
 }
 
 function _haSearch_(){
@@ -24125,13 +24202,14 @@ function _haSearch_(){
     return;
   }
 
+  var tabMode = (window._haTabId_ != null);
   var html = '<div style="font-size:11px;color:#666;margin-bottom:6px">類似案件 ' + scored.length + ' 件（スコア順）— 単価・仕様の参考にしてください</div>';
   html += '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
     '<thead><tr style="background:#f3f4f6;font-size:11px">' +
     '<th style="padding:6px 8px;text-align:left">得意先</th><th style="padding:6px 8px;text-align:left">品名</th>' +
     '<th style="padding:6px 8px;text-align:right">数量</th><th style="padding:6px 8px;text-align:right">受注金額</th>' +
     '<th style="padding:6px 8px;text-align:right">@単価</th><th style="padding:6px 8px;text-align:left">日付</th>' +
-    '<th style="padding:6px 8px;text-align:center">一致度</th></tr></thead><tbody>';
+    '<th style="padding:6px 8px;text-align:center">一致度</th>' + (tabMode?'<th style="padding:6px 8px"></th>':'') + '</tr></thead><tbody>';
   scored.forEach(function(x){
     var r=x.r;
     var unitP = (parseInt(r.qty)||0)>0 ? Math.round((parseInt(r.exTax)||0)/(parseInt(r.qty)||1)) : 0;
@@ -24145,6 +24223,7 @@ function _haSearch_(){
       '<td style="padding:6px 8px;text-align:right;color:#7c3aed">' + (unitP>0?'@¥'+unitP.toLocaleString():'-') + '</td>' +
       '<td style="padding:6px 8px;font-size:10px;color:#888">' + _escDiff((r.orderDate||r.date||r.createdAt||'').slice(0,7)) + '</td>' +
       '<td style="padding:6px 8px;text-align:center">' + bar + '</td>' +
+      (tabMode ? '<td style="padding:6px 8px;text-align:center">' + (unitP>0?'<button class="btn" style="font-size:11px;padding:3px 10px;background:#ede9fe;border-color:#c4b5fd;color:#5b21b6;font-weight:700;white-space:nowrap" onclick="_haUseUnitp_('+unitP+')">📋 流用</button>':'') + '</td>' : '') +
     '</tr>';
   });
   html += '</tbody></table>';
@@ -24153,6 +24232,8 @@ function _haSearch_(){
   // AI価格提案ボタンを有効化（検索結果がある時だけ）
   if(aiBtn){ aiBtn.style.display=''; aiBtn.dataset.scored = JSON.stringify(scored.slice(0,5).map(function(x){ var r=x.r; return {cust:r.cust,item:r.item,spec:r.spec,qty:r.qty,unit:r.unit,exTax:r.exTax,date:r.orderDate||r.date||''}; })); }
   var aiRes = document.getElementById('ha-ai-result'); if(aiRes) aiRes.style.display='none';
+  // 見積タブ連携: 価格妥当性チェック (新規=参考表示 / リピート=自分の単価と過去中央値を比較)
+  if(tabMode) _haPriceCheck_(scored);
 }
 
 async function _haAiSuggest_(){
@@ -24479,6 +24560,22 @@ function _renderSeizouSheet(project){
   +   '<table><colgroup><col style="width:17%"><col style="width:33%"><col style="width:17%"><col style="width:33%"></colgroup>'
   +   '<tr><td class="lbl">製本加工</td><td>&nbsp;</td><td class="lbl">外注先</td><td>&nbsp;</td></tr>'
   +   '<tr><td class="lbl">ミシン / 穴</td><td>&nbsp;</td><td class="lbl">カートン</td><td>&nbsp;</td></tr></table></div>'
+  // 04 工程（有無と実施場所）
+  + (function(){
+      var compName = _seizouCompanyName_(p);
+      var rows = STEPS.map(function(st){
+        var v = (p.steps && p.steps[st]) || '─';
+        var has = (v && v !== '─' && v !== '未着手') ? '■ 有' : '□';
+        var mk = (p.stepMaker && p.stepMaker[st]) || '';
+        var place = mk === '外製' ? '外製（外注先：　　　　　）' : mk === '内製' ? '内製（' + e(compName) + '）' : '　';
+        return '<tr class="tall"><td class="lbl" style="width:14%">' + e(st) + '</td>'
+          + '<td class="c" style="width:12%">' + has + '</td>'
+          + '<td style="width:74%">' + place + '</td></tr>';
+      }).join('');
+      return '<div class="sec"><div class="sec-h"><span class="tag">04 / PROCESS</span><span class="jp">工　程（有無・実施場所）</span><span class="rule"></span></div>'
+        + '<table><tr class="grid-h"><th style="width:14%">工程</th><th style="width:12%">有無</th><th>どこで行うか（内製＝自社 / 外製＝外注先名を記入）</th></tr>'
+        + rows + '</table></div>';
+    })()
   // 備考
   + (p.memo ? '<div class="sec"><div class="remark"><span class="tag rd">REMARKS 備考</span><div class="body">'+e(p.memo)+'</div></div></div>' : '')
   + '</div>';
