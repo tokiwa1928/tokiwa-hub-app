@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>💴 経理仕訳 (JDL連携) | Quote Tools</title>
+<script src="https://cdn.jsdelivr.net/npm/encoding-japanese@2.0.0/encoding.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:1080px; margin:14px auto; padding:0 14px; }
+  .tabs{ display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
+  .tab{ padding:8px 16px; border:1px solid var(--line); border-radius:8px 8px 0 0; background:#e9e7e2; cursor:pointer; font-weight:700; font-size:13px; }
+  .tab.act{ background:#fff; border-bottom-color:#fff; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; margin-bottom:.6rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.45rem; text-transform:uppercase; }
+  label{ font-size:11px; color:#888; display:block; margin-bottom:2px; }
+  input,select,textarea{ width:100%; padding:6px 8px; border:1px solid #d0cec8; border-radius:6px; font-size:13px; font-family:inherit; background:#fff; }
+  input:focus,select:focus{ outline:none; border-color:#1a1a1a; }
+  .btn{ padding:8px 14px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .btn-c{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  .hint{ background:#ecfeff; border:1px solid #67e8f9; border-radius:7px; padding:8px 12px; font-size:12.5px; color:#155e75; line-height:1.65; }
+  table{ width:100%; border-collapse:collapse; }
+  th{ background:#f4f3f0; font-size:10px; padding:4px 5px; border:1px solid var(--line); text-align:left; white-space:nowrap; }
+  td{ font-size:12px; padding:3px 5px; border:1px solid var(--line); vertical-align:middle; }
+  td.num{ text-align:right; font-variant-numeric:tabular-nums; font-weight:700; }
+  .sug{ border:1px solid var(--line); border-radius:7px; padding:5px 9px; margin-top:4px; cursor:pointer; font-size:12px; background:#fff; display:flex; gap:8px; align-items:center; }
+  .sug:hover{ border-color:var(--cyan); background:#f0fdff; }
+  .sug .acc{ font-weight:800; color:#0e7490; white-space:nowrap; }
+  .b-draft{ background:#fef3c7; color:#92400e; font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; }
+  .b-ok{ background:#dcfce7; color:#166534; font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; }
+  .b-exp{ background:#e0e7ff; color:#3730a3; font-size:10px; font-weight:800; padding:2px 7px; border-radius:9px; }
+  #drop-jdl,#drop-scan{ border:2.5px dashed #94a3b8; border-radius:9px; padding:20px 14px; text-align:center; color:#64748b; font-size:13px; cursor:pointer; background:#fff; }
+  .g4{ display:grid; grid-template-columns:110px 1fr 130px 110px; gap:8px; }
+  .g2a{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">QUOTE <b>TOOLS</b> 💴</span>
+  <span class="tname">経理仕訳（JDL IBEX 連携）</span>
+  <span class="user">🔒 独立保存・PC内処理</span>
+</header>
+<main>
+  <div class="tabs">
+    <div class="tab act" id="tab-in" onclick="kSw('in')">✏ 仕訳入力</div>
+    <div class="tab" id="tab-scan" onclick="kSw('scan')">📥 スキャン/明細から下書き</div>
+    <div class="tab" id="tab-exp" onclick="kSw('exp')">📤 エクスポート <span id="exp-badge"></span></div>
+    <div class="tab" id="tab-hist" onclick="kSw('hist')">⚙ 過去データ取込 <span id="hist-badge"></span></div>
+  </div>
+
+  <!-- ═══ ✏ 仕訳入力 ═══ -->
+  <div id="pane-in">
+    <div class="sec">
+      <div class="st">新しい仕訳（摘要を入れると過去の仕訳から候補が出ます）</div>
+      <div class="g4">
+        <div><label>日付</label><input type="date" id="e-date"></div>
+        <div><label>摘要</label><input id="e-tekiyo" placeholder="例: 売上 振込 ○○商事" oninput="kSuggest()" autocomplete="off"></div>
+        <div><label>金額</label><input id="e-amt" type="number" style="text-align:right;font-weight:800;font-size:15px"></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn btn-g" style="width:100%" onclick="kAdd()">＋ 追加</button></div>
+      </div>
+      <div id="sug-box"></div>
+      <div class="g2a" style="margin-top:8px">
+        <div>
+          <label>借方（科目 / 補助 / 税区・税率）</label>
+          <div style="display:flex;gap:5px">
+            <select id="e-dk" style="flex:1.3" onchange="kFillHojo('d')"></select>
+            <select id="e-dh" style="flex:1.2"></select>
+            <input id="e-dz" placeholder="税区" style="width:70px">
+            <input id="e-dr" placeholder="税率" style="width:54px">
+          </div>
+        </div>
+        <div>
+          <label>貸方（科目 / 補助 / 税区・税率）</label>
+          <div style="display:flex;gap:5px">
+            <select id="e-kk" style="flex:1.3" onchange="kFillHojo('k')"></select>
+            <select id="e-kh" style="flex:1.2"></select>
+            <input id="e-kz" placeholder="税区" style="width:70px">
+            <input id="e-kr" placeholder="税率" style="width:54px">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="st" style="display:flex;align-items:center;gap:10px">仕訳一覧（下書き → 承認 → エクスポート）
+        <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="kApproveAll()">✔ 下書きを一括承認</button>
+      </div>
+      <div id="entry-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══ 📥 スキャン/明細 ═══ -->
+  <div id="pane-scan" style="display:none">
+    <div class="hint" style="margin-bottom:8px">
+      請求書・通帳・入出金明細の<b>スキャン(画像/PDF)をAIが読み取り</b>、過去の仕訳パターンから<b>下書きを自動作成</b>します（手動実行・1ページ約1〜2円）。<br>
+      ネットバンキングの明細は下の<b>貼り付け欄</b>でもOK（無料）。下書きは「✏仕訳入力」タブで確認→承認してください。
+    </div>
+    <div class="sec">
+      <div class="st">A. スキャンをAIで読む（請求書・通帳・明細PDF/画像）</div>
+      <div id="drop-scan" onclick="document.getElementById('fi-scan').click()">📂 画像/PDFをドラッグ&ドロップ または クリック選択</div>
+      <input type="file" id="fi-scan" accept="image/*,application/pdf" multiple style="display:none" onchange="kScanAI(this.files)">
+      <div id="scan-status" class="muted" style="margin-top:5px"></div>
+    </div>
+    <div class="sec">
+      <div class="st">B. 明細テキスト貼り付け（1行=1件: 日付・金額・内容が入っていれば拾います）</div>
+      <textarea id="paste-src" rows="4" placeholder="例:&#10;06/10 振込 ﾑｻｼﾑﾗﾔﾏｼ 138,600&#10;06/11 ｺｸﾖｶｳﾈｯﾄ 4,580"></textarea>
+      <button class="btn" style="margin-top:6px" onclick="kPasteDraft()">→ 下書きを作成</button>
+    </div>
+  </div>
+
+  <!-- ═══ 📤 エクスポート ═══ -->
+  <div id="pane-exp" style="display:none">
+    <div class="hint" style="margin-bottom:8px">
+      承認済みの仕訳を <b>JDL出納帳の仕訳CSV形式 (Shift_JIS)</b> でダウンロードします。jblibex (JDL IBEX) でそのまま読み込めます。<br>
+      エクスポート済みの仕訳には🏷マークが付き、<b>二重出力を防止</b>。下の履歴で「いつ・何件・どこまで」出したか確認できます。
+    </div>
+    <div class="sec">
+      <div class="st">未エクスポートの承認済み仕訳</div>
+      <div id="exp-list"></div>
+      <div style="display:flex;gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-g" style="font-size:14px" onclick="kExport()">⬇ JDL形式CSVをエクスポート</button>
+        <span class="muted">ファイル名: JDL仕訳_インポート用_日付.csv（Shift_JIS）</span>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="st">エクスポート履歴（どこまで出したか）</div>
+      <div id="exp-log"></div>
+    </div>
+  </div>
+
+  <!-- ═══ ⚙ 過去データ取込 ═══ -->
+  <div id="pane-hist" style="display:none">
+    <div class="hint" style="margin-bottom:8px">
+      JDL出納帳からエクスポートした<b>仕訳CSV</b>を取込むと、勘定科目・補助科目・過去の仕訳パターンを学習し、入力時の自動提案に使われます。<br>
+      まず手元の3期分（0609/0709/0809）を全部入れてください。
+    </div>
+    <div class="sec">
+      <div id="drop-jdl" onclick="document.getElementById('fi-jdl').click()">📂 JDL仕訳CSV をドラッグ&ドロップ（複数OK / Shift_JIS自動判定）</div>
+      <input type="file" id="fi-jdl" accept=".csv" multiple style="display:none" onchange="kImportJDL(this.files)">
+      <div id="jdl-status" style="margin-top:6px"></div>
+      <div id="jdl-summary" style="margin-top:4px;font-size:12.5px"></div>
+    </div>
+    <div class="sec">
+      <div class="st">データ管理</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="kBackup()">📤 全データJSON書出（バックアップ）</button>
+        <button class="btn" onclick="document.getElementById('fi-json').click()">📥 JSON読込</button>
+        <input type="file" id="fi-json" accept=".json" style="display:none" onchange="kRestore(event)">
+        <button class="btn" style="color:#b91c1c" onclick="kClearHist()">🗑 学習データのみ削除</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="muted">💾 保存先: このブラウザ（独立領域）。定期的に「JSON書出」での保存を推奨。🔒 ファイルはPC内処理（AIスキャン実行時のみ画像を送信・手動）。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2800); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function yen(n){ return '¥'+Number(n||0).toLocaleString(); }
+
+// ═════ ストア ═════
+var K_KEY='tokiwa_keiri_v1';
+function kLoad(){ try{ var s=JSON.parse(localStorage.getItem(K_KEY))||{}; s.hist=s.hist||[]; s.entries=s.entries||[]; s.accounts=s.accounts||{}; s.exports=s.exports||[]; return s; }catch(e){ return {hist:[],entries:[],accounts:{},exports:[]}; } }
+function kSave(s){ try{ localStorage.setItem(K_KEY, JSON.stringify(s)); return true; }catch(e){ toast('❌ 保存失敗(容量): '+e); return false; } }
+
+function kSw(t){
+  ['in','scan','exp','hist'].forEach(function(x){
+    document.getElementById('tab-'+x).classList.toggle('act', x===t);
+    document.getElementById('pane-'+x).style.display = x===t ? '' : 'none';
+  });
+  if(t==='in') kRenderEntries();
+  if(t==='exp'){ kRenderExp(); kRenderExpLog(); }
+  if(t==='hist') kRenderHistSummary();
+  kBadges();
+}
+function kBadges(){
+  var s=kLoad();
+  var un=s.entries.filter(function(e){ return e.status==='approved' && !e.exportedAt; }).length;
+  document.getElementById('exp-badge').textContent = un ? '('+un+')' : '';
+  document.getElementById('hist-badge').textContent = s.hist.length ? '('+s.hist.length.toLocaleString()+')' : '';
+}
+
+// ═════ CSV パース (引用符対応) ═════
+function parseCSV(text){
+  var rows=[], row=[], cur='', q=false;
+  for(var i=0;i<text.length;i++){
+    var c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){ cur+='"'; i++; } else q=false; } else cur+=c; }
+    else if(c==='"') q=true;
+    else if(c===','){ row.push(cur); cur=''; }
+    else if(c==='\n'||c==='\r'){ if(c==='\r'&&text[i+1]==='\n') i++; row.push(cur); rows.push(row); row=[]; cur=''; }
+    else cur+=c;
+  }
+  if(cur!==''||row.length){ row.push(cur); rows.push(row); }
+  return rows;
+}
+
+// ═════ JDL CSV 取込 (学習) ═════
+function kImportJDL(fl){
+  var files=[].slice.call(fl).filter(function(f){ return /\.csv$/i.test(f.name); });
+  if(!files.length){ toast('CSVを入れてください'); return; }
+  var stat=document.getElementById('jdl-status');
+  files.forEach(function(f){
+    f.arrayBuffer().then(function(buf){
+      var u8=new Uint8Array(buf);
+      var det=Encoding.detect(u8);
+      var txt=Encoding.codeToString(Encoding.convert(u8,{to:'UNICODE',from:det||'SJIS'}));
+      var s=kLoad();
+      var added=0, dup=0;
+      var seen={}; s.hist.forEach(function(h){ seen[h.d+'|'+h.a+'|'+h.t]=1; });
+      parseCSV(txt).forEach(function(r){
+        if(r.length<24 || r[0].indexOf('//')===0 || r[0]!=='1000') return;
+        // 科目マスタ
+        function acc(code,n,f2,hc,hn){
+          if(!code) return;
+          if(!s.accounts[code]) s.accounts[code]={n:n,f:f2||n,hojo:{}};
+          if(hc) s.accounts[code].hojo[hc]=hn||'';
+        }
+        acc(r[3],r[4],r[5],r[6],r[7]); acc(r[13],r[14],r[15],r[16],r[17]);
+        var h={ d:r[2], dk:r[3], dh:r[6], dz:r[8], dr:r[9], kk:r[13], kh:r[16], kz:r[18], kr:r[19], a:parseInt(r[11])||0, t:r[23]||'' };
+        var key=h.d+'|'+h.a+'|'+h.t;
+        if(seen[key]){ dup++; return; }
+        seen[key]=1; s.hist.push(h); added++;
+      });
+      kSave(s);
+      stat.innerHTML += '<div style="font-size:12px;font-weight:600;color:#166534">✅ '+esc(f.name)+' — 仕訳 '+added.toLocaleString()+' 件を学習'+(dup?'（重複スキップ '+dup+'）':'')+'</div>';
+      kRenderHistSummary(); kInitAccountSelects(); kBadges();
+    }).catch(function(e){ stat.innerHTML+='<div style="color:#b91c1c;font-size:12px">❌ '+esc(f.name)+': '+esc(String(e))+'</div>'; });
+  });
+}
+function kRenderHistSummary(){
+  var s=kLoad();
+  var el=document.getElementById('jdl-summary');
+  if(!s.hist.length){ el.textContent='まだ学習データがありません'; return; }
+  var dates=s.hist.map(function(h){return h.d;}).sort();
+  el.innerHTML='<b>学習済み: '+s.hist.length.toLocaleString()+' 仕訳</b>（'+dates[0]+' 〜 '+dates[dates.length-1]+'）・勘定科目 '+Object.keys(s.accounts).length+' 種';
+}
+function kClearHist(){
+  if(!confirm('学習データ（過去仕訳・科目マスタ）を削除します。入力済みの仕訳とエクスポート履歴は残ります。続行?')) return;
+  var s=kLoad(); s.hist=[]; s.accounts={}; kSave(s);
+  kRenderHistSummary(); kBadges(); toast('削除しました');
+}
+
+// ═════ 科目セレクト ═════
+function kInitAccountSelects(){
+  var s=kLoad();
+  var opts='<option value="">─ 科目 ─</option>'+Object.keys(s.accounts).sort(function(a,b){return a-b;}).map(function(c){
+    return '<option value="'+c+'">'+c+' '+esc(s.accounts[c].n)+'</option>';
+  }).join('');
+  ['e-dk','e-kk'].forEach(function(id){ var el=document.getElementById(id); var v=el.value; el.innerHTML=opts; el.value=v; });
+  kFillHojo('d'); kFillHojo('k');
+}
+function kFillHojo(side){
+  var s=kLoad();
+  var code=document.getElementById(side==='d'?'e-dk':'e-kk').value;
+  var sel=document.getElementById(side==='d'?'e-dh':'e-kh');
+  var hojo=(s.accounts[code]||{}).hojo||{};
+  sel.innerHTML='<option value="">─ 補助 ─</option>'+Object.keys(hojo).sort(function(a,b){return a-b;}).map(function(h){
+    return '<option value="'+h+'">'+h+' '+esc(hojo[h])+'</option>';
+  }).join('');
+}
+
+// ═════ 摘要サジェスト (過去仕訳パターン) ═════
+function kTok(s){ return String(s||'').replace(/[、。・\/()（）\[\]【】]/g,' ').split(/[\s　]+/).filter(function(t){return t.length>=2;}); }
+function kSuggestFor(tekiyo, amount){
+  var s=kLoad();
+  var toks=kTok(tekiyo);
+  if(!toks.length) return [];
+  var scored=[];
+  for(var i=s.hist.length-1;i>=0;i--){
+    var h=s.hist[i];
+    var sc=0;
+    toks.forEach(function(t){ if(h.t.indexOf(t)>=0) sc+=t.length; });
+    if(!sc) continue;
+    if(amount && Math.abs(h.a-amount)<1) sc+=3;
+    sc += i/s.hist.length; // 新しいほど微加点
+    scored.push({h:h, sc:sc});
+  }
+  scored.sort(function(a,b){ return b.sc-a.sc; });
+  // 同じ科目組合せは1つに
+  var seen={}, out=[];
+  for(var j=0;j<scored.length && out.length<5;j++){
+    var k=scored[j].h.dk+'/'+scored[j].h.dh+'|'+scored[j].h.kk+'/'+scored[j].h.kh;
+    if(seen[k]) continue; seen[k]=1; out.push(scored[j].h);
+  }
+  return out;
+}
+function kAccName(code,hojo){
+  var s=kLoad(); var a=s.accounts[code];
+  if(!a) return code||'';
+  return a.n+(hojo&&a.hojo[hojo]?'/'+a.hojo[hojo]:'');
+}
+function kSuggest(){
+  var t=document.getElementById('e-tekiyo').value;
+  var amt=parseInt(document.getElementById('e-amt').value)||0;
+  var box=document.getElementById('sug-box');
+  var sugs=kSuggestFor(t, amt);
+  box.innerHTML=sugs.map(function(h,i){
+    return '<div class="sug" onclick="kApplySug('+i+')"><span>💡</span>'
+      + '<span class="acc">'+esc(kAccName(h.dk,h.dh))+' / '+esc(kAccName(h.kk,h.kh))+'</span>'
+      + '<span style="flex:1;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(h.t)+'</span>'
+      + '<span class="muted">'+yen(h.a)+' ('+h.d.slice(0,4)+')</span></div>';
+  }).join('');
+  window.__sugs=sugs;
+}
+function kApplySug(i){
+  var h=window.__sugs[i]; if(!h) return;
+  document.getElementById('e-dk').value=h.dk; kFillHojo('d');
+  document.getElementById('e-dh').value=h.dh;
+  document.getElementById('e-dz').value=h.dz||''; document.getElementById('e-dr').value=h.dr||'';
+  document.getElementById('e-kk').value=h.kk; kFillHojo('k');
+  document.getElementById('e-kh').value=h.kh;
+  document.getElementById('e-kz').value=h.kz||''; document.getElementById('e-kr').value=h.kr||'';
+  if(!document.getElementById('e-amt').value && h.a) document.getElementById('e-amt').value=h.a;
+  toast('💡 過去仕訳から科目をセットしました');
+}
+
+// ═════ 仕訳の追加・承認 ═════
+function kAdd(){
+  var date=document.getElementById('e-date').value.replace(/-/g,'');
+  var t=document.getElementById('e-tekiyo').value.trim();
+  var a=parseInt(document.getElementById('e-amt').value)||0;
+  var dk=document.getElementById('e-dk').value, kk=document.getElementById('e-kk').value;
+  if(!date||!t||!a){ toast('日付・摘要・金額を入れてください'); return; }
+  if(!dk||!kk){ toast('借方・貸方の科目を選んでください（候補をクリックすると自動）'); return; }
+  var s=kLoad();
+  s.entries.push({ id:'J-'+Date.now()+'-'+Math.floor(Math.random()*1000), date:date, t:t, a:a,
+    dk:dk, dh:document.getElementById('e-dh').value, dz:document.getElementById('e-dz').value, dr:document.getElementById('e-dr').value,
+    kk:kk, kh:document.getElementById('e-kh').value, kz:document.getElementById('e-kz').value, kr:document.getElementById('e-kr').value,
+    status:'approved', createdAt:new Date().toISOString(), src:'手入力' });
+  kSave(s);
+  document.getElementById('e-tekiyo').value=''; document.getElementById('e-amt').value='';
+  document.getElementById('sug-box').innerHTML='';
+  kRenderEntries(); kBadges();
+  toast('✅ 追加しました（承認済み）');
+  document.getElementById('e-tekiyo').focus();
+}
+function kRenderEntries(){
+  var s=kLoad();
+  var list=s.entries.slice().sort(function(a,b){ return (b.date+b.id).localeCompare(a.date+a.id); }).slice(0,200);
+  document.getElementById('entry-list').innerHTML = list.length ? '<table><tr><th style="width:78px">日付</th><th>摘要</th><th style="width:170px">借方 / 貸方</th><th style="width:92px">金額</th><th style="width:120px">状態</th><th style="width:120px">操作</th></tr>'
+    + list.map(function(e){
+      var noAcc = !e.dk || !e.kk;
+      var badge = e.exportedAt ? '<span class="b-exp">🏷 出力済</span>' : (e.status==='approved' ? '<span class="b-ok">承認済</span>' : '<span class="b-draft">下書き</span>');
+      if(noAcc && !e.exportedAt) badge += ' <span style="color:#b91c1c;font-size:10px;font-weight:800">⚠科目未定</span>';
+      var src = e.src && e.src!=='手入力' ? '<div class="muted">'+esc(e.src)+'</div>' : '';
+      return '<tr'+(noAcc&&!e.exportedAt?' style="background:#fff7ed"':'')+'>'
+        + '<td>'+e.date.slice(0,4)+'/'+e.date.slice(4,6)+'/'+e.date.slice(6,8)+'</td>'
+        + '<td>'+esc(e.t)+src+'</td>'
+        + '<td style="font-size:11px">'+(noAcc?'<span style="color:#b91c1c">未設定</span>':esc(kAccName(e.dk,e.dh))+'<br>'+esc(kAccName(e.kk,e.kh)))+'</td>'
+        + '<td class="num">'+yen(e.a)+'</td>'
+        + '<td>'+badge+'</td>'
+        + '<td style="white-space:nowrap">'
+        +   (!e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="kEdit(\''+e.id+'\')">✎ 修正</button> ' : '')
+        +   (e.status!=='approved' && !noAcc ? '<button class="btn" style="font-size:11px;padding:2px 8px;background:#dcfce7;border-color:#86efac" onclick="kSetStatus(\''+e.id+'\',\'approved\')">✔ 承認</button> ' : '')
+        +   (!e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px;color:#b91c1c" onclick="kDel(\''+e.id+'\')">削除</button>' : '')
+        + '</td></tr>';
+    }).join('') + '</table>'
+    : '<div class="muted" style="padding:14px;text-align:center">まだ仕訳がありません。上のフォーム、またはスキャン/明細タブから。</div>';
+}
+function kSetStatus(id, st){
+  var s=kLoad(); var e=s.entries.find(function(x){return x.id===id;});
+  if(e){
+    if(st==='approved' && (!e.dk || !e.kk)){ alert('⚠ 借方・貸方の科目が未設定のため承認できません。\n「✎修正」で科目を設定してください。'); return; }
+    e.status=st; kSave(s);
+  }
+  kRenderEntries(); kBadges();
+}
+function kApproveAll(){
+  var s=kLoad(); var n=0, skip=0;
+  s.entries.forEach(function(e){
+    if(e.status==='approved') return;
+    if(!e.dk || !e.kk){ skip++; return; }
+    e.status='approved'; n++;
+  });
+  kSave(s); kRenderEntries(); kBadges();
+  toast((n ? '✅ '+n+' 件を承認' : '承認対象なし') + (skip ? ' / ⚠ 科目未定 '+skip+' 件はスキップ (修正してください)' : ''));
+}
+// 下書きをフォームに呼び出して修正
+function kEdit(id){
+  var s=kLoad(); var e=s.entries.find(function(x){return x.id===id;});
+  if(!e) return;
+  document.getElementById('e-date').value=e.date.slice(0,4)+'-'+e.date.slice(4,6)+'-'+e.date.slice(6,8);
+  document.getElementById('e-tekiyo').value=e.t;
+  document.getElementById('e-amt').value=e.a;
+  document.getElementById('e-dk').value=e.dk; kFillHojo('d'); document.getElementById('e-dh').value=e.dh;
+  document.getElementById('e-dz').value=e.dz||''; document.getElementById('e-dr').value=e.dr||'';
+  document.getElementById('e-kk').value=e.kk; kFillHojo('k'); document.getElementById('e-kh').value=e.kh;
+  document.getElementById('e-kz').value=e.kz||''; document.getElementById('e-kr').value=e.kr||'';
+  // 元の下書きは削除して入力フォームから再追加してもらう
+  s.entries=s.entries.filter(function(x){return x.id!==id;});
+  kSave(s); kRenderEntries(); kBadges();
+  kSuggest(); kSw('in');
+  window.scrollTo(0,0);
+  toast('✏ フォームに呼び出しました。科目を確認して「＋追加」');
+}
+function kDel(id){
+  if(!confirm('この仕訳を削除しますか?')) return;
+  var s=kLoad(); s.entries=s.entries.filter(function(x){return x.id!==id;});
+  kSave(s); kRenderEntries(); kBadges();
+}
+
+// ═════ 明細貼り付け → 下書き ═════
+function kPasteDraft(){
+  var lines=(document.getElementById('paste-src').value||'').split(/\r?\n/).map(function(l){return l.trim();}).filter(Boolean);
+  if(!lines.length){ toast('明細を貼り付けてください'); return; }
+  var s=kLoad(); var made=0;
+  var Y=new Date().getFullYear();
+  lines.forEach(function(l){
+    var amts=(l.match(/[0-9][0-9,]{2,}/g)||[]).map(function(x){return parseInt(x.replace(/,/g,''));}).filter(function(n){return n>=100;});
+    var amount=amts.length?Math.max.apply(null,amts):0;
+    if(!amount) return;
+    var dm=l.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/)||l.match(/(\d{1,2})[\/月](\d{1,2})/);
+    var date= dm&&dm.length===4 ? dm[1]+String(dm[2]).padStart(2,'0')+String(dm[3]).padStart(2,'0')
+            : dm ? Y+String(dm[1]).padStart(2,'0')+String(dm[2]).padStart(2,'0')
+            : new Date().toISOString().slice(0,10).replace(/-/g,'');
+    var name=''; l.replace(/[0-9,\/\-:年月日円]/g,' ').split(/\s+/).forEach(function(tk){ if(tk.length>name.length&&!/^(振込|振り込み|入金|出金|普通|当座|ﾌﾘｺﾐ)$/.test(tk)) name=tk; });
+    var sug=kSuggestFor(name||l, amount);
+    var h=sug[0]||{};
+    s.entries.push({ id:'J-'+Date.now()+'-'+made+'-'+Math.floor(Math.random()*100), date:date, t:(name||l).slice(0,40), a:amount,
+      dk:h.dk||'', dh:h.dh||'', dz:h.dz||'', dr:h.dr||'', kk:h.kk||'', kh:h.kh||'', kz:h.kz||'', kr:h.kr||'',
+      status:'draft', createdAt:new Date().toISOString(), src:'明細貼付'+(h.dk?'・科目自動':'・科目未定') });
+    made++;
+  });
+  kSave(s);
+  document.getElementById('paste-src').value='';
+  toast('✅ 下書き '+made+' 件を作成（✏仕訳入力タブで確認→承認）');
+  kSw('in');
+}
+
+// ═════ AI スキャン → 下書き ═════
+function aiKey(){
+  var k=localStorage.getItem('tokiwa_ai_key')||'';
+  if(!k){ k=prompt('Anthropic APIキー (sk-ant-...) を入力\nこのPCにのみ保存されます'); if(!k) return null; localStorage.setItem('tokiwa_ai_key',k.trim()); }
+  return localStorage.getItem('tokiwa_ai_key');
+}
+async function fileToCanvases(file){
+  if(/\.pdf$/i.test(file.name)){
+    var buf=await file.arrayBuffer();
+    var doc=await pdfjsLib.getDocument({data:buf}).promise;
+    var cvs=[];
+    for(var p=1;p<=doc.numPages;p++){
+      var page=await doc.getPage(p);
+      var vp=page.getViewport({scale:2});
+      var cv=document.createElement('canvas'); cv.width=vp.width|0; cv.height=vp.height|0;
+      await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+      cvs.push(cv);
+    }
+    return cvs;
+  }
+  return new Promise(function(res,rej){
+    var img=new Image();
+    img.onload=function(){ var cv=document.createElement('canvas'); cv.width=img.naturalWidth; cv.height=img.naturalHeight; cv.getContext('2d').drawImage(img,0,0); URL.revokeObjectURL(img.src); res([cv]); };
+    img.onerror=rej; img.src=URL.createObjectURL(file);
+  });
+}
+async function kScanAI(fl){
+  var files=[].slice.call(fl||[]).filter(function(f){ return /\.(pdf|png|jpe?g|gif|bmp|webp)$/i.test(f.name); });
+  if(!files.length){ toast('画像かPDFを入れてください'); return; }
+  var st=document.getElementById('scan-status');
+  try{
+    var allCvs=[];
+    for(var i=0;i<files.length;i++) allCvs=allCvs.concat(await fileToCanvases(files[i]));
+    if(!confirm('🤖 '+allCvs.length+' ページ/枚 をAIで読み取り、仕訳の下書きを作ります\n費用目安: 約'+allCvs.length+'〜'+(allCvs.length*2)+'円\n続行?')) return;
+    var key=aiKey(); if(!key){ toast('APIキー未設定'); return; }
+    var s=kLoad(); var made=0;
+    for(var k2=0;k2<allCvs.length;k2++){
+      st.textContent='🤖 '+(k2+1)+'/'+allCvs.length+' を解析中...';
+      var cv=allCvs[k2];
+      var max=1400, sc=Math.min(1,max/Math.max(cv.width,cv.height));
+      var c2=cv;
+      if(sc<1){ c2=document.createElement('canvas'); c2.width=cv.width*sc|0; c2.height=cv.height*sc|0; c2.getContext('2d').drawImage(cv,0,0,c2.width,c2.height); }
+      var res=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{ 'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+        body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens:2500, messages:[{role:'user',content:[
+          { type:'text', text:'これは請求書または銀行通帳/入出金明細です。経理仕訳の材料として、取引を抽出しJSON配列のみ出力:\n[{"date":"YYYYMMDD","amount":数値(税込),"desc":"相手先や内容 30字以内","direction":"in"|"out"}]\n日付の年が無ければ'+new Date().getFullYear()+'年とする。合計行・繰越行は除外。' },
+          { type:'image', source:{ type:'base64', media_type:'image/jpeg', data:c2.toDataURL('image/jpeg',0.85).split(',')[1] } }
+        ]}] })
+      });
+      if(!res.ok){ if(res.status===401){ localStorage.removeItem('tokiwa_ai_key'); throw new Error('APIキー無効'); } throw new Error('AI呼出失敗 '+res.status); }
+      var j=await res.json();
+      var txt=(j.content||[]).map(function(c){return c.text||'';}).join('');
+      var m=txt.match(/\[[\s\S]*\]/);
+      var rows=[]; try{ rows=JSON.parse(m?m[0]:txt); }catch(pe){}
+      rows.forEach(function(r2){
+        if(!r2.amount) return;
+        var sug=kSuggestFor(r2.desc||'', r2.amount);
+        var h=sug[0]||{};
+        s.entries.push({ id:'J-'+Date.now()+'-'+made+'-'+Math.floor(Math.random()*100),
+          date:String(r2.date||'').replace(/\D/g,'').slice(0,8)||new Date().toISOString().slice(0,10).replace(/-/g,''),
+          t:String(r2.desc||'').slice(0,40), a:parseInt(r2.amount)||0,
+          dk:h.dk||'', dh:h.dh||'', dz:h.dz||'', dr:h.dr||'', kk:h.kk||'', kh:h.kh||'', kz:h.kz||'', kr:h.kr||'',
+          status:'draft', createdAt:new Date().toISOString(), src:'AIスキャン'+(h.dk?'・科目自動':'・科目未定') });
+        made++;
+      });
+    }
+    kSave(s);
+    st.textContent='✅ 完了: 下書き '+made+' 件を作成（✏仕訳入力タブで確認→承認）';
+    toast('✅ 下書き '+made+' 件'); kSw('in');
+  }catch(e){ console.error(e); st.textContent='⚠ '+(e.message||e); toast('❌ '+(e.message||e)); }
+}
+
+// ═════ JDL形式 CSV エクスポート (Shift_JIS) ═════
+function kRenderExp(){
+  var s=kLoad();
+  var list=s.entries.filter(function(e){ return e.status==='approved' && !e.exportedAt; }).sort(function(a,b){ return a.date.localeCompare(b.date); });
+  document.getElementById('exp-list').innerHTML = list.length
+    ? '<table><tr><th style="width:80px">日付</th><th>摘要</th><th style="width:170px">借方/貸方</th><th style="width:92px">金額</th></tr>'
+      + list.map(function(e){ return '<tr><td>'+e.date+'</td><td>'+esc(e.t)+'</td><td style="font-size:11px">'+esc(kAccName(e.dk,e.dh))+' / '+esc(kAccName(e.kk,e.kh))+'</td><td class="num">'+yen(e.a)+'</td></tr>'; }).join('')
+      + '</table><div style="margin-top:5px;font-weight:800;font-size:13px">計 '+list.length+' 件 / '+yen(list.reduce(function(t,e){return t+e.a;},0))+'</div>'
+    : '<div class="muted" style="padding:12px;text-align:center">エクスポート待ちの承認済み仕訳はありません</div>';
+}
+function kCsvField(v, quote){
+  v=String(v==null?'':v);
+  if(quote) return '"'+v.replace(/"/g,'""')+'"';
+  return v;
+}
+function kExport(){
+  var s=kLoad();
+  var list=s.entries.filter(function(e){ return e.status==='approved' && !e.exportedAt && e.dk && e.kk; }).sort(function(a,b){ return a.date.localeCompare(b.date); });
+  var noAcc=s.entries.filter(function(e){ return e.status==='approved' && !e.exportedAt && (!e.dk || !e.kk); }).length;
+  if(noAcc) toast('⚠ 科目未定の '+noAcc+' 件は出力対象外です (✎修正で科目を設定)');
+  if(!list.length){ if(!noAcc) toast('エクスポート対象がありません（承認済み・未出力の仕訳）'); return; }
+  var acc=s.accounts;
+  function nm(c){ return (acc[c]||{}).n||''; }
+  function fm(c){ return (acc[c]||{}).f||nm(c); }
+  function hn(c,h){ return ((acc[c]||{}).hojo||{})[h]||''; }
+  var rows=list.map(function(e){
+    return [ '1000','0',e.date,
+      e.dk, kCsvField(nm(e.dk),1), kCsvField(fm(e.dk),1), e.dh||'', kCsvField(hn(e.dk,e.dh),1),
+      kCsvField(e.dz||'',1), kCsvField(e.dr||'',1), kCsvField('',1), e.a, '0',
+      e.kk, kCsvField(nm(e.kk),1), kCsvField(fm(e.kk),1), e.kh||'', kCsvField(hn(e.kk,e.kh),1),
+      kCsvField(e.kz||'',1), kCsvField(e.kr||'',1), kCsvField('',1), e.a, '0',
+      kCsvField(e.t,1), '', '', '1', '', '1', ''
+    ].join(',');
+  });
+  var today=new Date();
+  var ymd=today.getFullYear()+String(today.getMonth()+1).padStart(2,'0')+String(today.getDate()).padStart(2,'0');
+  var csv='// Tokiwa 経理仕訳ツール エクスポート '+ymd+'\r\n// 件数: '+list.length+'\r\n\r\n'+rows.join('\r\n')+'\r\n';
+  var sjis=Encoding.convert(Encoding.stringToCode(csv), { to:'SJIS', from:'UNICODE' });
+  var blob=new Blob([new Uint8Array(sjis)], { type:'text/csv' });
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a'); a.href=url; a.download='JDL仕訳_インポート用_'+ymd+'.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url);},4000);
+  // 出力済みマーク + 履歴
+  var batch='EXP-'+Date.now();
+  var dates=list.map(function(e){return e.date;});
+  list.forEach(function(e){ e.exportedAt=new Date().toISOString(); e.exportBatch=batch; });
+  s.exports.push({ id:batch, at:new Date().toISOString(), count:list.length, total:list.reduce(function(t,e){return t+e.a;},0), from:dates[0], to:dates[dates.length-1] });
+  kSave(s);
+  kRenderExp(); kRenderExpLog(); kRenderEntries(); kBadges();
+  toast('✅ '+list.length+' 件をエクスポートし、出力済みマークを付けました');
+}
+function kRenderExpLog(){
+  var s=kLoad();
+  document.getElementById('exp-log').innerHTML = s.exports.length
+    ? '<table><tr><th>日時</th><th>件数</th><th>金額計</th><th>仕訳日付の範囲</th></tr>'
+      + s.exports.slice().reverse().map(function(x){
+          return '<tr><td>'+x.at.slice(0,16).replace('T',' ')+'</td><td class="num">'+x.count+'</td><td class="num">'+yen(x.total)+'</td><td>'+x.from+' 〜 '+x.to+'</td></tr>';
+        }).join('')+'</table>'
+    : '<div class="muted">まだエクスポートしていません</div>';
+}
+
+// ═════ バックアップ ═════
+function kBackup(){
+  var blob=new Blob([JSON.stringify(kLoad())],{type:'application/json'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a'); a.href=url; a.download='経理仕訳データ_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click(); setTimeout(function(){URL.revokeObjectURL(url);},4000);
+}
+function kRestore(ev){
+  var f=ev.target.files[0]; if(!f) return;
+  var r=new FileReader();
+  r.onload=function(){
+    try{
+      var d=JSON.parse(r.result);
+      if(!d.hist&&!d.entries){ toast('❌ 形式が違います'); return; }
+      if(!confirm('現在のデータを読込んだ内容で置き換えます。続行?')) return;
+      localStorage.setItem(K_KEY, JSON.stringify(d));
+      kInitAccountSelects(); kRenderEntries(); kRenderHistSummary(); kBadges();
+      toast('✅ 読込みました');
+    }catch(e){ toast('❌ '+e); }
+    ev.target.value='';
+  };
+  r.readAsText(f,'utf-8');
+}
+
+// ── 初期化 ──
+(function(){
+  var dz1=document.getElementById('drop-jdl');
+  ['dragover','dragenter'].forEach(function(ev){ dz1.addEventListener(ev,function(e){e.preventDefault();dz1.style.background='#ecfeff';}); });
+  ['dragleave','drop'].forEach(function(ev){ dz1.addEventListener(ev,function(e){e.preventDefault();dz1.style.background='#fff';}); });
+  dz1.addEventListener('drop',function(e){ kImportJDL(e.dataTransfer.files); });
+  var dz2=document.getElementById('drop-scan');
+  ['dragover','dragenter'].forEach(function(ev){ dz2.addEventListener(ev,function(e){e.preventDefault();dz2.style.background='#ecfeff';}); });
+  ['dragleave','drop'].forEach(function(ev){ dz2.addEventListener(ev,function(e){e.preventDefault();dz2.style.background='#fff';}); });
+  dz2.addEventListener('drop',function(e){ kScanAI(e.dataTransfer.files); });
+  document.getElementById('e-date').value=new Date().toISOString().slice(0,10);
+  kInitAccountSelects(); kRenderEntries(); kRenderHistSummary(); kBadges();
+})();
+window.__test={ load:kLoad, importText:function(txt){ /* テスト用: UTF-8文字列を直接取込 */
+  var s=kLoad(); var added=0;
+  parseCSV(txt).forEach(function(r){
+    if(r.length<24||r[0]!=='1000') return;
+    function acc(code,n,f2,hc,hn){ if(!code)return; if(!s.accounts[code])s.accounts[code]={n:n,f:f2||n,hojo:{}}; if(hc)s.accounts[code].hojo[hc]=hn||''; }
+    acc(r[3],r[4],r[5],r[6],r[7]); acc(r[13],r[14],r[15],r[16],r[17]);
+    s.hist.push({ d:r[2],dk:r[3],dh:r[6],dz:r[8],dr:r[9],kk:r[13],kh:r[16],kz:r[18],kr:r[19],a:parseInt(r[11])||0,t:r[23]||'' }); added++;
+  });
+  kSave(s); kInitAccountSelects(); kRenderHistSummary(); kBadges(); return added;
+} };
+</script>
+</body>
+</html>
