@@ -95,6 +95,16 @@
       <div class="st" style="display:flex;align-items:center;gap:10px">仕訳一覧（下書き → 承認 → エクスポート）
         <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="kApproveAll()">✔ 下書きを一括承認</button>
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <input type="text" id="entry-q" placeholder="🔍 摘要・科目・日付・金額で検索…" style="flex:1;min-width:200px;padding:6px 10px;border:1px solid #d0cec8;border-radius:6px;font-size:13px" oninput="kRenderEntries()">
+        <select id="entry-f" style="width:auto;padding:6px 8px;font-size:12.5px" onchange="kRenderEntries()">
+          <option value="">すべての状態</option>
+          <option value="draft">下書きのみ</option>
+          <option value="approved">承認済（未出力）</option>
+          <option value="exported">出力済</option>
+        </select>
+        <span id="entry-count" class="muted"></span>
+      </div>
       <div id="entry-list"></div>
     </div>
   </div>
@@ -355,7 +365,23 @@ function kAdd(){
 }
 function kRenderEntries(){
   var s=kLoad();
-  var list=s.entries.slice().sort(function(a,b){ return (b.date+b.id).localeCompare(a.date+a.id); }).slice(0,200);
+  var qEl=document.getElementById('entry-q'), fEl=document.getElementById('entry-f');
+  var q=(qEl?qEl.value:'').toLowerCase().trim();
+  var f=fEl?fEl.value:'';
+  var all=s.entries.slice().sort(function(a,b){ return (b.date+b.id).localeCompare(a.date+a.id); });
+  var filtered=all.filter(function(e){
+    if(f==='draft' && e.status!=='draft') return false;
+    if(f==='approved' && !(e.status==='approved' && !e.exportedAt)) return false;
+    if(f==='exported' && !e.exportedAt) return false;
+    if(q){
+      var hay=((e.t||'')+' '+kAccName(e.dk,e.dh)+' '+kAccName(e.kk,e.kh)+' '+(e.date||'')+' '+(e.a||'')+' '+(e.src||'')).toLowerCase();
+      if(hay.indexOf(q)<0) return false;
+    }
+    return true;
+  });
+  var cnt=document.getElementById('entry-count');
+  if(cnt) cnt.textContent = (q||f) ? ('該当 '+filtered.length+' / 全 '+all.length+' 件') : ('全 '+all.length+' 件');
+  var list=filtered.slice(0,200);
   document.getElementById('entry-list').innerHTML = list.length ? '<table><tr><th style="width:78px">日付</th><th>摘要</th><th style="width:170px">借方 / 貸方</th><th style="width:92px">金額</th><th style="width:120px">状態</th><th style="width:120px">操作</th></tr>'
     + list.map(function(e){
       var noAcc = !e.dk || !e.kk;
@@ -371,10 +397,21 @@ function kRenderEntries(){
         + '<td style="white-space:nowrap">'
         +   (!e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="kEdit(\''+e.id+'\')">✎ 修正</button> ' : '')
         +   (e.status!=='approved' && !noAcc ? '<button class="btn" style="font-size:11px;padding:2px 8px;background:#dcfce7;border-color:#86efac" onclick="kSetStatus(\''+e.id+'\',\'approved\')">✔ 承認</button> ' : '')
+        +   (e.status==='approved' && !e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px;background:#fef3c7;border-color:#fcd34d;color:#92400e" onclick="kSetStatus(\''+e.id+'\',\'draft\')">↩ 承認戻す</button> ' : '')
+        +   (e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px;background:#fef3c7;border-color:#fcd34d;color:#92400e" onclick="kUnexport(\''+e.id+'\')">↩ 出力取消</button> ' : '')
         +   (!e.exportedAt ? '<button class="btn" style="font-size:11px;padding:2px 8px;color:#b91c1c" onclick="kDel(\''+e.id+'\')">削除</button>' : '')
         + '</td></tr>';
     }).join('') + '</table>'
-    : '<div class="muted" style="padding:14px;text-align:center">まだ仕訳がありません。上のフォーム、またはスキャン/明細タブから。</div>';
+    : ((q||f) ? '<div class="muted" style="padding:14px;text-align:center">該当する仕訳がありません（検索条件を変えてください）</div>'
+              : '<div class="muted" style="padding:14px;text-align:center">まだ仕訳がありません。上のフォーム、またはスキャン/明細タブから。</div>');
+}
+function kUnexport(id){
+  if(!confirm('この仕訳の「出力済み」を取り消します。\n再びエクスポート対象に戻ります（JDL側で取り込み済みなら二重計上に注意）。続行?')) return;
+  var s=kLoad(); var e=s.entries.find(function(x){return x.id===id;});
+  if(e){ delete e.exportedAt; delete e.exportBatch; kSave(s); }
+  kRenderEntries(); kBadges();
+  if(typeof kRenderExp==='function') kRenderExp();
+  toast('↩ 出力済みを取り消しました');
 }
 function kSetStatus(id, st){
   var s=kLoad(); var e=s.entries.find(function(x){return x.id===id;});
