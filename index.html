@@ -24046,13 +24046,21 @@ function showHistoryAnalyzeModal(){
         '<div style="background:#ede9fe;padding:10px 12px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#5b21b6">' +
           '💡 <strong>類似案件の検索はAPIコストゼロ (JS内処理)</strong>。「🤖 AI価格提案」ボタンを押した時だけHaikuが動きます (~¥1/回)。' +
         '</div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">' +
           '<div><label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px">得意先名 (部分一致)</label>' +
             '<input id="ha-cust" placeholder="例: 伊勢原" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px"></div>' +
           '<div><label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px">品名キーワード</label>' +
             '<input id="ha-item" placeholder="例: カタログ 冊子" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px"></div>' +
           '<div><label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px">数量 (前後50%でマッチ)</label>' +
             '<input id="ha-qty" type="number" placeholder="例: 5000" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px"></div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">' +
+          '<div><label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px">サイズ</label>' +
+            '<input id="ha-size" placeholder="例: A4 / 120x235" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px"></div>' +
+          '<div><label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px">ページ数 (前後20%でマッチ)</label>' +
+            '<input id="ha-pages" type="number" placeholder="例: 20" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px"></div>' +
+          '<div><label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px">仕様キーワード (用紙・加工・綴じ等)</label>' +
+            '<input id="ha-spec" placeholder="例: 無線綴じ 上質 グラシン窓" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px"></div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;margin-bottom:14px">' +
           '<button class="btn btn-p" onclick="_haSearch_()" style="background:#5b21b6;border-color:#5b21b6;font-weight:700">🔍 類似案件を検索 (無料)</button>' +
@@ -24070,25 +24078,43 @@ function _haSearch_(){
   var item = (document.getElementById('ha-item')?.value||'').toLowerCase().trim();
   var qtyStr = document.getElementById('ha-qty')?.value||'';
   var qty = parseInt(qtyStr)||0;
+  var size = (document.getElementById('ha-size')?.value||'').toLowerCase().trim();
+  var pages = parseInt(document.getElementById('ha-pages')?.value)||0;
+  var spec = (document.getElementById('ha-spec')?.value||'').toLowerCase().trim();
   var res = document.getElementById('ha-results');
   var aiBtn = document.getElementById('ha-ai-btn');
   if(!res) return;
-  if(!cust && !item && !qty){ res.innerHTML='<div style="color:#888;font-size:12px;padding:10px">得意先名・品名・数量のいずれかを入力してください</div>'; return; }
+  if(!cust && !item && !qty && !size && !pages && !spec){ res.innerHTML='<div style="color:#888;font-size:12px;padding:10px">得意先名・品名・数量・サイズ・ページ数・仕様のいずれかを入力してください</div>'; return; }
 
+  // サイズ表記を正規化 (120×235 / 120x235 / 120*235 を同一視)
+  var normSize = function(s){ return String(s||'').toLowerCase().replace(/[×✕＊*]/g,'x').replace(/\s+/g,''); };
+  var sizeN = normSize(size);
   // JS スコアリング (APIコストゼロ)
   var pool = [].concat(DB.projects||[], DB.history||[]).filter(function(r){ return r.exTax > 0; });
   var itemKws = item.split(/\s+/).filter(Boolean);
+  var specKws = spec.split(/\s+/).filter(Boolean);
   var scored = pool.map(function(r){
     var score = 0;
+    var hayAll = ((r.item||'')+' '+(r.spec||'')+' '+(r.memo||'')).toLowerCase();
     if(cust && (r.cust||'').toLowerCase().indexOf(cust)>=0) score += 40;
     if(item){
-      var hayItem = ((r.item||'')+' '+(r.spec||'')).toLowerCase();
-      var matched = itemKws.filter(function(k){ return hayItem.indexOf(k)>=0; });
+      var matched = itemKws.filter(function(k){ return hayAll.indexOf(k)>=0; });
       score += matched.length * 20;
     }
     if(qty){
       var rQty = parseInt(r.qty)||0;
       if(rQty>0 && Math.abs(rQty-qty)/qty<=0.5) score += 20 - Math.abs(rQty-qty)/qty*20;
+    }
+    if(sizeN && normSize(hayAll).indexOf(sizeN)>=0) score += 15;
+    if(pages){
+      // 仕様から「20P / 20ページ / 20頁」を抽出して前後20%でマッチ
+      var pm = hayAll.match(/(\d+)\s*(?:ページ|頁|p)\b/i);
+      var rPages = pm ? parseInt(pm[1]) : 0;
+      if(rPages>0 && Math.abs(rPages-pages)/pages<=0.2) score += 15 - Math.abs(rPages-pages)/pages*15;
+    }
+    if(specKws.length){
+      var sm = specKws.filter(function(k){ return hayAll.indexOf(k)>=0; });
+      score += sm.length * 10;
     }
     return { r:r, score:score };
   }).filter(function(x){ return x.score>0; }).sort(function(a,b){ return b.score-a.score; }).slice(0,10);
@@ -24136,6 +24162,9 @@ async function _haAiSuggest_(){
   var cust = document.getElementById('ha-cust')?.value||'';
   var item = document.getElementById('ha-item')?.value||'';
   var qty  = document.getElementById('ha-qty')?.value||'';
+  var size = document.getElementById('ha-size')?.value||'';
+  var pages = document.getElementById('ha-pages')?.value||'';
+  var spec = document.getElementById('ha-spec')?.value||'';
   var matches = [];
   try{ matches = JSON.parse(btn.dataset.scored||'[]'); }catch(e){}
   if(!matches.length){ alert('先に「類似案件を検索」を実行してください'); return; }
@@ -24144,21 +24173,31 @@ async function _haAiSuggest_(){
   resEl.style.display=''; resEl.innerHTML='<div style="color:#888;font-size:12px">🤖 Haiku で価格分析中…（通常3〜8秒）</div>';
 
   // Haikuへ渡すプロンプト (短く・安く)
-  var matchText = matches.map(function(r,i){ return (i+1)+'. '+r.cust+'/'+r.item+(r.spec?' ('+r.spec.slice(0,30)+')':'')+' / '+r.qty+(r.unit||'')+'部 / ¥'+r.exTax+' / '+r.date; }).join('\n');
+  var matchText = matches.map(function(r,i){ return (i+1)+'. '+r.cust+'/'+r.item+(r.spec?' ('+r.spec.slice(0,40)+')':'')+' / '+r.qty+(r.unit||'')+' / ¥'+r.exTax+' / '+r.date; }).join('\n');
+  var cond = [
+    '得意先「'+(cust||'未指定')+'」','品名「'+(item||'未指定')+'」','数量「'+(qty||'未指定')+'」',
+    size?'サイズ「'+size+'」':'', pages?'ページ数「'+pages+'P」':'', spec?'仕様「'+spec+'」':''
+  ].filter(Boolean).join(' ');
   var prompt = '印刷会社の価格提案アシスタントです。以下の類似案件実績をもとに、今回の見積価格帯を提案してください。\n\n' +
-    '今回の条件: 得意先「'+(cust||'未指定')+'」品名「'+(item||'未指定')+'」数量「'+(qty||'未指定')+'」\n\n' +
+    '今回の条件: ' + cond + '\n\n' +
     '類似実績:\n' + matchText + '\n\n' +
     '回答は「提案価格帯: ¥X〜¥Y」「根拠: 〜」「注意点: 〜」の3行で簡潔に。';
 
   try{
-    var resp = await callCloudAPI('claudeChat', {}, { messages: JSON.stringify([{role:'user',content:prompt}]), max_tokens:300 });
-    var text = resp?.success ? (resp.text||resp.content?.[0]?.text||'') : '';
+    // claudeText = 汎用テキストAI (claudeChatの社内アシスタントsystemだと価格提案を断られるため専用アクション)
+    var resp = await callCloudAPI('claudeText', {}, { prompt: prompt, system: '印刷会社の見積・価格分析の専門アシスタントです。与えられた実績データに基づいて質問へ直接答えてください。', maxTokens: 300 });
+    var text = resp?.success ? (resp.reply||resp.text||resp.content?.[0]?.text||'') : '';
     if(text){
       resEl.innerHTML = '<div style="font-weight:700;color:#065f46;margin-bottom:8px">🤖 AI 価格提案 (Haiku)</div>' +
         '<div style="white-space:pre-wrap;font-size:13px;line-height:1.7">' + _escDiff(text) + '</div>' +
         '<div style="font-size:10px;color:#94a3b8;margin-top:8px">※ Haiku（低コストモデル）による参考提案です。最終判断はご自身で行ってください。</div>';
     } else {
-      resEl.innerHTML='<div style="color:#dc2626;font-size:12px">AI応答を取得できませんでした。GASの AI_ENABLED=true か確認してください。</div>';
+      var errMsg = (resp && resp.error) ? String(resp.error) : '';
+      var human = /usage limits|spending/i.test(errMsg) ? 'AI利用上限に達しています（管理会社で上限引き上げが必要）'
+        : /ai_disabled/i.test(errMsg) ? 'AI機能が管理者により停止されています（設定→AI設定で確認）'
+        : /CLAUDE_API_KEY/.test(errMsg) ? 'GASにAPIキーが未設定です（管理会社で設定）'
+        : 'AI応答を取得できませんでした' + (errMsg ? '（' + _escDiff(errMsg) + '）' : '。通信状況を確認してください');
+      resEl.innerHTML='<div style="color:#dc2626;font-size:12px">' + human + '</div>';
     }
   }catch(e){
     resEl.innerHTML='<div style="color:#dc2626;font-size:12px">エラー: '+_escDiff(e.message)+'</div>';
