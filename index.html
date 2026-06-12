@@ -17333,10 +17333,11 @@ function _doRepeatCreate_(mode){
   setTimeout(function(){
     // 過去案件の内容をプリフィル (新規登録の詳細見積引き継ぎと同じ仕組み)
     if(typeof applyIngestToEstimate === 'function'){
+      // リピート元情報は備考に書かず、バナー(リピート履歴リンク)で表示する
       applyIngestToEstimate({
         cust: r.cust || '', item: r.item || '', spec: r.spec || '',
         qty: parseInt(r.qty) || 0, unit: r.unit || '部', exTax: parseInt(r.exTax) || 0,
-        memo: (r.memo || '') + (r.id ? '\n[リピート元: ' + r.id + ']' : '')
+        memo: r.memo || ''
       });
     }
     if(_newTid){
@@ -17347,9 +17348,11 @@ function _doRepeatCreate_(mode){
       // ⑦リピート＝案件区分を「リピート」に固定
       var jt = document.getElementById('job-type-' + _newTid);
       if(jt){ jt.value = 'repeat'; }
-      // ③リピート元情報をタブ状態に保存
+      // ③リピート元情報をタブ状態に保存 (過去のリピート履歴チェーンも引き継ぐ)
       try {
         var st = ts(_newTid);
+        st._repeatRefs = (r.repeatRefs || []).slice();
+        if(r.repeatFrom && st._repeatRefs.indexOf(r.repeatFrom) < 0) st._repeatRefs.push(r.repeatFrom);
         st._repeatFrom = r.id || '';
         st._repeatBaseSpec = r.spec || '';
         var qn = parseInt(r.qty) || 0, ex = parseInt(r.exTax) || 0;
@@ -17358,6 +17361,8 @@ function _doRepeatCreate_(mode){
       } catch(e){}
       if(typeof onJobTypeChange === 'function') onJobTypeChange(_newTid);
       if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid);
+      // 備考に引き継がれた過去の[リピート元]行を抽出してバナーに集約 (備考はきれいに)
+      if(typeof _extractRepeatRefsFromMemo_ === 'function') _extractRepeatRefsFromMemo_(_newTid);
       if(typeof _renderRepeatSrcBanner_ === 'function') _renderRepeatSrcBanner_(_newTid);
       // ①種別バナーは不要（前画面で選択済み）→ 隠して見出しに反映
       if(typeof _hideEntryKindBanner_ === 'function') _hideEntryKindBanner_(_newTid);
@@ -27422,19 +27427,56 @@ function _updateEstDocKind_(id){
   }
 }
 function _estDocKind_(id){ return document.querySelector('input[name="est-doc-kind-' + id + '"]:checked')?.value || 'final'; }
-// ③リピート元リンクのバナーを描画
+// ③リピート元リンクのバナーを描画 (複数履歴をリンクのチェーンで表示)
 function _renderRepeatSrcBanner_(id){
   var el = document.getElementById('repeat-src-banner-' + id); if(!el) return;
-  var s = (typeof ts === 'function') ? ts(id) : null;
-  var src = s && s._repeatFrom;
-  if(!src){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  var s = (typeof ts === 'function') ? ts(id) : null; if(!s){ el.style.display='none'; return; }
+  var refs = (s._repeatRefs || []).slice();
+  if(s._repeatFrom && refs.indexOf(s._repeatFrom) < 0) refs.push(s._repeatFrom);
+  if(!refs.length){ el.style.display = 'none'; el.innerHTML = ''; return; }
   var up = s._repeatBaseUnitp; var unit = s._repeatBaseUnit || '枚';
-  var atStr = (up != null && up !== '') ? ('@' + Number(up).toFixed(2) + '/' + unit + ' ') : '';
+  var atChip = (up != null && up !== '' && !isNaN(up))
+    ? '<span style="background:#fff;border:1.5px solid #d8b4fe;border-radius:7px;padding:3px 12px;font-weight:800;color:#6d28d9;font-size:13px">前回単価 @' + Number(up).toFixed(2) + '/' + unit + '</span>' : '';
+  var kai = s._repeatKaitei ? '<span style="background:#fef3c7;border:1px solid #fbbf24;color:#92400e;border-radius:7px;padding:3px 10px;font-weight:700;font-size:11px">単価改定あり</span>' : '';
+  var links = refs.map(function(rid, i){
+    var last = (i === refs.length - 1);
+    var safe = String(rid).replace(/[\\'"<>]/g, '');
+    return '<a href="#" onclick="event.preventDefault();_jumpToQuote_(\'' + safe + '\')" '
+      + 'style="display:inline-block;background:' + (last ? '#6d28d9' : '#fff') + ';color:' + (last ? '#fff' : '#6d28d9') + ';border:1.5px solid #a78bfa;border-radius:7px;padding:4px 12px;font-weight:700;font-size:12px;text-decoration:none" '
+      + 'title="クリックで ' + safe + ' を開く">' + safe + (last ? '（直前）' : '') + '</a>';
+  }).join('');
   el.style.display = '';
-  el.innerHTML = '<span style="background:#faf5ff;border:1px solid #d8b4fe;color:#7c3aed;padding:4px 10px;border-radius:8px;font-weight:700">'
-    + '🔁 リピート ' + atStr
-    + '<a href="#" onclick="event.preventDefault();_jumpToQuote_(\'' + String(src).replace(/[\\\'"]/g,'') + '\')" style="color:#6d28d9;text-decoration:underline;font-weight:800">[リピート元: ' + String(src).replace(/</g,'') + ']</a>'
-    + '</span>';
+  el.innerHTML = '<div style="background:#faf5ff;border:2px solid #a78bfa;border-radius:10px;padding:10px 14px;box-shadow:0 1px 4px rgba(124,58,237,.12)">'
+    + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:14px;font-weight:800;color:#6d28d9">🔁 リピート案件</span>' + atChip + kai + '</div>'
+    + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px"><span style="font-size:12px;color:#7c3aed;font-weight:700">リピート履歴:</span>' + links
+    + '<span style="font-size:10px;color:#94a3b8;margin-left:4px">クリックで該当案件を開けます</span></div></div>';
+}
+// 備考に溜まった「@単価/枚」「[リピート元: …]」「単価改定あり」を抜き出してバナーへ移す (備考はきれいに)
+function _extractRepeatRefsFromMemo_(id){
+  var memoEl = document.getElementById('memo-' + id); if(!memoEl) return;
+  var s = ts(id);
+  var refs = s._repeatRefs || [];
+  var at = null, kaitei = false, found = false;
+  var keep = [];
+  String(memoEl.value || '').split(/\r?\n/).forEach(function(ln){
+    var t = ln.trim();
+    if(!t){ keep.push(ln); return; }
+    var hit = false;
+    var re = /\[リピート元:\s*([^\]]+)\]/g, m;
+    while((m = re.exec(t))){ var rid = m[1].trim(); if(rid && refs.indexOf(rid) < 0) refs.push(rid); hit = true; }
+    var rest = t.replace(/\[リピート元:\s*[^\]]+\]/g, '').trim();
+    var m2 = rest.match(/^@([\d,.]+)\/(\S+)/);
+    if(m2){ at = { p: parseFloat(m2[1].replace(/,/g, '')), u: m2[2] }; rest = rest.replace(/^@[\d,.]+\/\S+/, '').trim(); hit = true; }
+    if(/単価改定あり/.test(rest)){ kaitei = true; rest = rest.replace(/単価改定あり/g, '').trim(); hit = true; }
+    if(hit){ found = true; if(rest) keep.push(rest); }
+    else keep.push(ln);
+  });
+  if(found){
+    s._repeatRefs = refs;
+    if(at && (s._repeatBaseUnitp == null || s._repeatBaseUnitp === '')){ s._repeatBaseUnitp = at.p; s._repeatBaseUnit = at.u; }
+    if(kaitei) s._repeatKaitei = true;
+    memoEl.value = keep.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
 }
 // ①種別を前画面選択のまま表示／必要時のみ切替
 function _toggleEntryKind_(id){
@@ -27575,6 +27617,8 @@ function saveEstimateAsQuote(tabId){
     cust: cust, item: item, spec: spec, endUser: enduser,
     qty: qty, unit: unit, exTax: exTax,
     estCost: estCost,
+    repeatFrom: s._repeatFrom || '',
+    repeatRefs: (s._repeatRefs || []).slice(),
     docKind: (typeof _estDocKind_ === 'function') ? _estDocKind_(tabId) : 'final',
     status: isEdit ? (DB.estimates[existingIdx].status || 'sent') : 'sent',
     source: 'estimator',
@@ -27876,6 +27920,15 @@ function executeOrderConfirm(tabId){
     proj._provisional = true;
     proj.status = '未確定(校正先行)';
   }
+  // リピート履歴を案件に保存 (備考ではなくデータとして持つ → 次回リピート時にバナー表示)
+  (function(){
+    var sTab = (typeof ts === 'function') ? ts(tabId) : null;
+    if(sTab && (sTab._repeatFrom || (sTab._repeatRefs||[]).length)){
+      proj.repeatFrom = sTab._repeatFrom || '';
+      proj.repeatRefs = (sTab._repeatRefs || []).slice();
+      if(proj.repeatFrom && proj.repeatRefs.indexOf(proj.repeatFrom) < 0) proj.repeatRefs.push(proj.repeatFrom);
+    }
+  })();
 
   if(!DB.projects) DB.projects = [];
   DB.projects.push(proj);
