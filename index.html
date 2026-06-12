@@ -21372,6 +21372,8 @@ function _shouldAutoDraft_(inq){
   if(!inq) return false;
   var s = _getMailSettings_();
   if(!s.autoDraftEnabled) return false;
+  // 🚨 AIREAD-1: 一度AIに読ませたメールは記録して二度と読まない (失敗時の無限再試行=課金ループ防止)
+  if(inq.aiDraftReadAt) return false;
   // 既に下書きあり → スキップ
   var hasDraft = (inq.timeline || []).some(function(t){ return t.type === 'ai_draft_reply'; });
   if(hasDraft) return false;
@@ -21390,6 +21392,10 @@ async function generateInquirySummary(inq){
   if(!inq) return null;
   if(inq.summary && inq.summary.trim()) return inq.summary;  // 既に要約があれば skip
   if(!inq.body || inq.body.length < 30) return null;          // 短すぎる本文は要約不要
+  // 🚨 AIREAD-1: 一度AIに読ませたメールは記録して二度と読まない (失敗しても再試行しない)
+  if(inq.aiReadAt) return null;
+  inq.aiReadAt = new Date().toISOString();
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
   try {
     var prompt = '以下のメール / 連絡を **2〜3 文の日本語要約** にしてください。\n' +
       '- 誰が何をしてほしいかを冒頭に\n' +
@@ -21423,6 +21429,7 @@ async function autoGenerateAllSummaries(opts){
   if(!settings.autoSummaryEnabled && !opts.force){ return { generated: 0, total: 0 }; }
   var targets = (DB.inquiries || []).filter(function(inq){
     if(inq.summary && inq.summary.trim()) return false;
+    if(inq.aiReadAt) return false; // AIREAD-1: 読了済みマーカーがあるメールは二度と読まない
     if(!inq.body || inq.body.length < 50) return false;
     var s = inq.source_type || '';
     return s === 'gmail' || s === 'web_form' || s === 'linesvc';
@@ -21451,6 +21458,8 @@ async function autoGenerateAllDrafts(opts){
   var generated = 0, failed = 0;
   for(var i = 0; i < targets.length; i++){
     var inq = targets[i];
+    // AIREAD-1: 試行した時点で読了マーカー (失敗しても同じメールを二度とAIに送らない)
+    inq.aiDraftReadAt = new Date().toISOString();
     try {
       var resp = await callCloudAPI('generateAiDraftReply', {}, {
         inquiryId: inq.id,
