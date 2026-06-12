@@ -4110,12 +4110,18 @@ async function _autoMatchCustomers_(){
 }
 
 // AI 抽出済かつ見積未作成の問い合わせを検出してトースト通知
+// (同期のたびに再表示されてうるさい問題: 1セッション1回・件数が増えた時だけ再表示)
 function _notifyAutoExtractedInquiries_(){
   if(!Array.isArray(DB.inquiries)) return;
   var pending = DB.inquiries.filter(function(inq){
     return inq.extracted_data && !inq.linked_quote_id;
   });
   if(!pending.length) return;
+  try {
+    var last = parseInt(sessionStorage.getItem('tokiwa_ai_extract_notified') || '0');
+    if(pending.length <= last) return; // 既に同件数以下で通知済み → 出さない
+    sessionStorage.setItem('tokiwa_ai_extract_notified', String(pending.length));
+  } catch(e){}
   console.log('🤖 AI 抽出済の見積依頼:', pending.length, '件');
   _showAutoEstimateNotice_(pending.length);
 }
@@ -4703,6 +4709,26 @@ function _goHome_(){
   if(btn && typeof swPage === 'function') swPage('realtime', btn);
 }
 
+// 📍 LASTPG-1: 起動・リロード時に「最後に開いていたページ」を復元
+// (アップデートやタブ破棄のたびに毎回ホームから始まる問題の対策)
+function _restoreLastPage_(){
+  try {
+    if(!(typeof currentAuth !== 'undefined' && currentAuth && currentAuth.loggedIn)) return false;
+    var last = localStorage.getItem('tokiwa_last_page');
+    if(!last || last === 'realtime') return false;
+    // ユーザーが既に手動で移動していたら何もしない (初期ページ=ホームのままの時だけ復元)
+    var act = document.querySelector('.page.act');
+    if(act && act.id !== 'page-realtime') return false;
+    if(typeof _releaseAllows_ === 'function' && !_releaseAllows_(last)) return false;
+    var pg = document.getElementById('page-' + last);
+    if(!pg) return false;
+    var btn = document.querySelector('.tb-btn[data-page="' + last + '"]');
+    if(typeof swPage === 'function'){ swPage(last, btn || null); return true; }
+  } catch(e){}
+  return false;
+}
+window.addEventListener('load', function(){ setTimeout(_restoreLastPage_, 900); });
+
 // 見積管理 サブタブ切替 (estimates / history)
 function _navQuoteSubtab_(target, btn){
   var virtualBtn = document.createElement('button');
@@ -5267,6 +5293,8 @@ function swPage(id,btn){
 
   // 履歴記録 (エラーで止まらないよう try)
   try { _recordNav_(id); } catch(e){ console.warn('nav record failed:', e); }
+  // 📍 最後に開いたページを記録 → リロード/再起動時に復元 (毎回ホームから始まる問題の対策)
+  try { localStorage.setItem('tokiwa_last_page', id); } catch(e){}
 
   // ★ 表示切替 (これは絶対に成功させる)
   try {
@@ -21389,6 +21417,10 @@ async function generateInquirySummary(inq){
 // 一括: 要約が無いメール系問い合わせに自動生成 (sync 後 or 手動)
 async function autoGenerateAllSummaries(opts){
   opts = opts || {};
+  // 🚨 AIUSE-2: 自動要約は既定OFF (継続課金の最大源 — 毎同期5件×メール本文+巨大systemで課金されていた)
+  // メール設定で autoSummaryEnabled=true にした時だけ動く。手動実行(force)は可。
+  var settings = (typeof _getMailSettings_ === 'function') ? _getMailSettings_() : {};
+  if(!settings.autoSummaryEnabled && !opts.force){ return { generated: 0, total: 0 }; }
   var targets = (DB.inquiries || []).filter(function(inq){
     if(inq.summary && inq.summary.trim()) return false;
     if(!inq.body || inq.body.length < 50) return false;
