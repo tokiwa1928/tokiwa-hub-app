@@ -6935,6 +6935,18 @@ function buildPanel(id,initData){
       <span style="font-size:11px;color:#aaa">%</span>
     </div>
   </div>
+  <!-- 📊 PREV-1: 前回比較 — 前回数量・単価から同原価率で今回売価を作る -->
+  <div class="sec" style="background:#f0f9ff;border:1px solid #7dd3fc" id="prev-cmp-${id}">
+    <div class="st" style="color:#0369a1">📊 前回比較で単価を作る（前回の数量・単価 → 数量カーブで同原価率の売価 → 調整%を上乗せ）</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <div class="f" style="min-width:90px"><label>前回数量</label><input id="pv-qty-${id}" type="number" placeholder="例:500" oninput="_prevCmpCalc_(${id})"></div>
+      <div class="f" style="min-width:90px"><label>前回単価</label><input id="pv-unitp-${id}" type="number" step="0.01" placeholder="例:94" oninput="_prevCmpCalc_(${id})"></div>
+      <div class="f" style="min-width:95px"><label>前回原価率%（任意）</label><input id="pv-cr-${id}" type="number" placeholder="例:70" oninput="_prevCmpCalc_(${id})"></div>
+      <div class="f" style="min-width:200px"><label>数量カーブ（段階売価マスタ）</label><select id="pv-curve-${id}" style="font-size:11.5px" onchange="_prevCmpCalc_(${id})"><option value="">— カーブなし（単価据置で比較）—</option></select></div>
+      <div class="f" style="min-width:90px"><label>調整%（営業費）</label><input id="pv-adj-${id}" type="number" value="10" oninput="_prevCmpCalc_(${id})"></div>
+    </div>
+    <div id="pv-out-${id}" style="margin-top:6px;font-size:12.5px"></div>
+  </div>
   <!-- 明細テーブル：数量パターン＋仕様違いを統合 -->
   <div style="overflow-x:auto" id="res-wrap-${id}"></div>
 
@@ -7141,6 +7153,8 @@ function buildPanel(id,initData){
   try { if(typeof _updateEstDocKind_==='function') _updateEstDocKind_(id); } catch(e){}
   // 🧩 保存済みブロックレイアウト(順序・幅)を適用 + 管理者にレイアウト編集ボタン表示
   try { if(typeof _applyEstBlockLayout_==='function') _applyEstBlockLayout_(id); } catch(e){}
+  // 📊 前回比較: 数量カーブ(段階売価マスタ)の選択肢を構築
+  try { if(typeof _prevCmpPopulate_==='function') _prevCmpPopulate_(id); } catch(e){}
 }
 function buildSubRow(id,cat){
   const sw=document.getElementById(`sub-wrap-${id}`);const row=document.getElementById(`sub-row-${id}`);row.innerHTML='';
@@ -7396,6 +7410,73 @@ function _estBlkWidth_(id,k){
   it.w=(it.w===2)?1:2;
   DB.estBlockLayout=layout; if(typeof saveDB==='function') saveDB();
   _applyEstBlockLayout_(id); _renderBlkBars_(id);
+}
+// ═══ 📊 PREV-1: 前回比較 — 前回数量・単価から数量カーブで今回売価を作る ═══
+// 段階単価 tiers から数量に応じた単価を取得 (qty以上で最大のtier、なければ最小tier)
+function _tierPriceAt_(tiers, qty){
+  if(!Array.isArray(tiers)||!tiers.length) return null;
+  var sorted=tiers.slice().sort(function(a,b){return a.qty-b.qty;});
+  var hit=null;
+  sorted.forEach(function(t){ if(qty>=t.qty) hit=t; });
+  return (hit||sorted[0]).p;
+}
+// 段階単価を持つマスター(製本・印刷)をカーブ選択肢として列挙
+function _prevCmpPopulate_(id){
+  var sel=document.getElementById('pv-curve-'+id); if(!sel) return;
+  var cur=sel.value;
+  var opts='<option value="">— カーブなし（単価据置で比較）—</option>';
+  [['bind','製本'],['print','印刷']].forEach(function(pair){
+    var items=(DB.master[pair[0]]||[]).map(function(r,i){return {r:r,i:i};}).filter(function(x){return x.r.tiers&&x.r.tiers.length>=2;});
+    if(!items.length) return;
+    opts+='<optgroup label="'+pair[1]+'">'+items.map(function(x){
+      return '<option value="'+pair[0]+':'+x.i+'">'+(x.r.n||'')+'（'+x.r.tiers.length+'段階）</option>';
+    }).join('')+'</optgroup>';
+  });
+  sel.innerHTML=opts;
+  sel.value=cur;
+}
+function _prevCmpCalc_(id){
+  var out=document.getElementById('pv-out-'+id); if(!out) return;
+  var pq=parseFloat(document.getElementById('pv-qty-'+id)?.value)||0;
+  var pu=parseFloat(document.getElementById('pv-unitp-'+id)?.value)||0;
+  var pcr=parseFloat(document.getElementById('pv-cr-'+id)?.value)||0;
+  var adj=parseFloat(document.getElementById('pv-adj-'+id)?.value)||0;
+  var qtyNow=(ts(id).qtyPats||[])[0]?.v||0;
+  if(!pq||!pu||!qtyNow){ out.innerHTML=pq||pu?'<span style="color:#94a3b8">今回数量(数量欄)と前回数量・単価を入れると比較が出ます</span>':''; return; }
+  // 数量カーブ: 選択した段階売価マスタの (今回数量の単価 ÷ 前回数量の単価) を倍率に使う
+  var ratio=1, curveNote='カーブなし（単価据置）';
+  var cv=document.getElementById('pv-curve-'+id)?.value||'';
+  if(cv){
+    var parts=cv.split(':');
+    var item=(DB.master[parts[0]]||[])[parseInt(parts[1])];
+    if(item&&item.tiers){
+      var tNow=_tierPriceAt_(item.tiers,qtyNow), tPrev=_tierPriceAt_(item.tiers,pq);
+      if(tNow&&tPrev&&tPrev>0){ ratio=tNow/tPrev; curveNote=(item.n||'')+' カーブ（@'+tPrev+'→@'+tNow+'、×'+(Math.round(ratio*1000)/1000)+'）'; }
+    }
+  }
+  var base=Math.round(pu*ratio*100)/100;           // 同原価率の今回基準単価
+  var adjP=Math.round(base*(1+adj/100)*100)/100;    // 調整%上乗せ後
+  var amtPrev=Math.round(pq*pu), amtNow=Math.round(qtyNow*adjP);
+  var diffPct=amtPrev>0?Math.round((amtNow-amtPrev)/amtPrev*1000)/10:0;
+  var costLine='';
+  if(pcr>0){
+    var costNow=Math.round(base*pcr)/100;
+    costLine='<div style="color:#166534;margin-top:2px">原価率'+pcr+'%維持 → 今回想定原価 @¥'+costNow.toLocaleString()+'（基準単価ベース）</div>';
+  }
+  out.innerHTML='<div style="background:#fff;border:1px solid #bae6fd;border-radius:7px;padding:8px 12px;line-height:1.8">'
+    +'<div>前回: '+pq.toLocaleString()+'個 × @¥'+pu.toLocaleString()+' ＝ <b>¥'+amtPrev.toLocaleString()+'</b>'+(pcr?'（原価率'+pcr+'%）':'')+'</div>'
+    +'<div>今回 '+qtyNow.toLocaleString()+'個: 基準単価（同原価率） <b style="color:#0369a1">@¥'+base.toLocaleString()+'</b> <span style="font-size:10.5px;color:#64748b">'+curveNote+'</span></div>'
+    +'<div>調整'+(adj>=0?'+':'')+adj+'% → <b style="color:#b45309;font-size:14px">@¥'+adjP.toLocaleString()+'</b> ＝ <b style="font-size:14px">¥'+amtNow.toLocaleString()+'</b> <span style="color:'+(diffPct>=0?'#166534':'#b91c1c')+'">（前回比 '+(diffPct>=0?'+':'')+diffPct+'%）</span>'
+    +' <button class="btn" style="font-size:11px;padding:3px 12px;background:#0891b2;color:#fff;border-color:#0891b2;font-weight:700;margin-left:8px" onclick="_prevCmpApply_('+id+','+adjP+')">📋 この単価を採用</button></div>'
+    +costLine+'</div>';
+}
+function _prevCmpApply_(id, p){
+  var adEl=document.getElementById('adopted-'+id+'-0-0')||document.getElementById('adopted-'+id+'-0');
+  if(!adEl){ alert('採用単価欄が見つかりません（品目を選択して明細を表示してください）'); return; }
+  adEl.value=p;
+  try{ adEl.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
+  if(typeof calc==='function') try{ calc(id); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('📋 採用単価に @¥'+Number(p).toLocaleString()+' をセットしました');
 }
 // 発注形態 (完全/部分外注/分離発注) の切替: 部分外注・分離なら各工程の外注バーを表示
 function onOrderFormChange(id){
@@ -8883,6 +8964,99 @@ function closePV(){document.getElementById('pv-overlay').classList.remove('show'
 // ═══════════════════ マスター管理 ════════════
 let curMaster='paper';
 function swMaster(id,btn){curMaster=id;document.querySelectorAll('[id^="mc-"]').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');renderMaster(id);}
+// ═══ 📈 TIER-1: 実績データから数量別の段階売価を分析・生成 ═══
+// 製本: 種別(無線綴じ/中綴じ等)×ページ数でグループ化 / 印刷: 色数等でグループ化
+// 各グループを数量バケットに分け、単価(税抜金額÷数量)の中央値を段階売価として提案する
+const TIER_BUCKETS=[50,100,150,200,300,500,700,1000,1500,2000,3000,5000,10000];
+function _tierAnalyze_(target){
+  var rows=(DB.history||[]);
+  var groups={};
+  rows.forEach(function(r){
+    var qty=parseInt(r.qty)||0, ex=parseInt(r.exTax)||0;
+    if(qty<=0||ex<=0) return;
+    var hay=((r.item||'')+' '+(r.spec||''));
+    var kind=null;
+    if(target==='bind'){
+      if(/無線/.test(hay)) kind='無線綴じ';
+      else if(/中綴|中とじ/.test(hay)) kind='中綴じ';
+      else if(/平綴/.test(hay)) kind='平綴じ';
+      else if(/上製/.test(hay)) kind='上製本';
+      else if(/くるみ/.test(hay)) kind='くるみ製本';
+    } else {
+      if(/4\s*[色C\/]|カラー|CMYK/i.test(hay)) kind='カラー(4色)';
+      else if(/2\s*色/.test(hay)) kind='2色';
+      else if(/1\s*色|墨|スミ|モノクロ/.test(hay)) kind='1色(墨)';
+    }
+    if(!kind) return;
+    var pg=null, pm=hay.match(/(\d+)\s*(?:ページ|頁|P(?![A-Za-z]))/i); if(pm) pg=parseInt(pm[1]);
+    var gkey=kind+((target==='bind'&&pg)?(' '+pg+'P'):'');
+    var b=TIER_BUCKETS.filter(function(x){return x<=qty;}).pop()||TIER_BUCKETS[0];
+    groups[gkey]=groups[gkey]||{};
+    (groups[gkey][b]=groups[gkey][b]||[]).push(ex/qty);
+  });
+  var out=[];
+  Object.keys(groups).sort().forEach(function(g){
+    var tiers=[];
+    Object.keys(groups[g]).map(Number).sort(function(a,b){return a-b;}).forEach(function(b){
+      var arr=groups[g][b].slice().sort(function(a,b){return a-b;});
+      tiers.push({qty:b, p:Math.round(arr[Math.floor(arr.length/2)]*10)/10, n:arr.length});
+    });
+    out.push({g:g, tiers:tiers, total:tiers.reduce(function(s,t){return s+t.n;},0)});
+  });
+  out.sort(function(a,b){return b.total-a.total;});
+  return out;
+}
+function openTierAnalysis(target){
+  var res=_tierAnalyze_(target);
+  var label=target==='bind'?'製本':'印刷';
+  if(!res.length){ alert('📈 分析できる実績データがありません。\n過去実績('+label+'のキーワード+数量+金額)が溜まると分析できます。'); return; }
+  window._tierResult_={target:target,res:res};
+  var m=document.createElement('div');
+  m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;max-width:880px;width:100%;max-height:92vh;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>📈 '+label+'の数量別段階売価 — 実績分析 ('+res.length+'グループ)</b>'
+    +'<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    +'<div style="overflow-y:auto;padding:14px 18px;flex:1">'
+    +'<div style="font-size:11.5px;color:#666;margin-bottom:10px;background:#f8fafc;border-radius:6px;padding:8px 12px">実績の単価(税抜金額÷数量)を数量帯ごとに集計した<b>中央値</b>です。単価は手修正できます。チェックしたグループを「反映」すると'+label+'マスターに段階単価として登録され、見積で数量に応じた売価が自動適用されます。</div>'
+    + res.map(function(grp,gi){
+        return '<div style="border:1px solid #e5e7eb;border-radius:8px;margin-bottom:10px;overflow:hidden">'
+          +'<div style="background:#f5f3ff;padding:7px 12px;display:flex;align-items:center;gap:10px"><input type="checkbox" class="tier-grp-chk" data-gi="'+gi+'" checked style="width:15px;height:15px"><b style="font-size:13px;color:#5b21b6">'+_escDiff(grp.g)+'</b><span style="font-size:11px;color:#888">実績 '+grp.total+' 件</span></div>'
+          +'<table class="m-tbl" style="font-size:11.5px"><tr><th>数量帯</th>'+grp.tiers.map(function(t){return '<th style="text-align:right">'+t.qty.toLocaleString()+'〜</th>';}).join('')+'</tr>'
+          +'<tr><td style="font-weight:700">単価</td>'+grp.tiers.map(function(t,ti){return '<td><input type="number" step="0.1" class="tier-p-in" data-gi="'+gi+'" data-ti="'+ti+'" value="'+t.p+'" style="width:70px;text-align:right"></td>';}).join('')+'</tr>'
+          +'<tr><td style="color:#888">件数</td>'+grp.tiers.map(function(t){return '<td style="text-align:right;color:#888">'+t.n+'</td>';}).join('')+'</tr></table></div>';
+      }).join('')
+    +'</div>'
+    +'<div style="padding:12px 18px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">'
+    +'<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>'
+    +'<button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="_tierApply_()">✅ チェックしたグループを'+label+'マスターへ反映</button>'
+    +'</div></div>';
+  document.body.appendChild(m);
+}
+function _tierApply_(){
+  var ctx=window._tierResult_; if(!ctx) return;
+  // 手修正された単価を反映
+  document.querySelectorAll('.tier-p-in').forEach(function(inp){
+    var grp=ctx.res[parseInt(inp.dataset.gi)];
+    if(grp&&grp.tiers[parseInt(inp.dataset.ti)]) grp.tiers[parseInt(inp.dataset.ti)].p=parseFloat(inp.value)||grp.tiers[parseInt(inp.dataset.ti)].p;
+  });
+  var list=DB.master[ctx.target]=DB.master[ctx.target]||[];
+  var n=0;
+  document.querySelectorAll('.tier-grp-chk:checked').forEach(function(chk){
+    var grp=ctx.res[parseInt(chk.dataset.gi)]; if(!grp) return;
+    var tiers=grp.tiers.map(function(t){return {qty:t.qty,p:t.p};});
+    var name=grp.g+'（実績分析）';
+    var ex=list.find(function(x){return x.n===name;});
+    var midP=tiers[Math.floor(tiers.length/2)].p;
+    if(ex){ ex.tiers=tiers; ex.p=midP; }
+    else list.push({n:name, p:midP, mc:0, tiers:tiers, note:'実績'+grp.total+'件から自動生成 '+new Date().toISOString().slice(0,10)});
+    n++;
+  });
+  if(typeof saveDB==='function') saveDB();
+  document.querySelector('.proof-modal')?.remove();
+  renderMaster(ctx.target);
+  if(typeof _toastMsg==='function') _toastMsg('✅ '+n+' グループを段階売価としてマスターに登録しました');
+}
 // ═══ 💴 COST-1: 原価×原価率 → 売価の自動算出 (売価 = 原価 ÷ 原価率) ═══
 function _costToPrice_(c, cr){
   c = parseFloat(c); cr = parseFloat(cr);
@@ -9036,6 +9210,7 @@ function renderMaster(id){
   
   let html=`<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${labels[id]||id} <button class="add-btn" onclick="addMR('${id}')">＋ 追加</button>
     <input id="m-q-${id}" placeholder="検索…" style="width:160px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="renderMaster('${id}')">
+    ${(id==='bind'||id==='print')?`<button class="btn" style="font-size:11px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="openTierAnalysis('${id}')" title="過去実績(村山印刷の蓄積データ)から数量別の段階売価を分析して生成します">📈 実績から段階売価を生成</button>`:''}
   </div>`;
   const q=(document.getElementById(`m-q-${id}`)?.value||'').toLowerCase();
   const data=(DB.master[id]||[]).filter(r=>{
@@ -17706,6 +17881,14 @@ function _doRepeatCreate_(mode){
       // 備考に引き継がれた過去の[リピート元]行を抽出してバナーに集約 (備考はきれいに)
       if(typeof _extractRepeatRefsFromMemo_ === 'function') _extractRepeatRefsFromMemo_(_newTid);
       if(typeof _renderRepeatSrcBanner_ === 'function') _renderRepeatSrcBanner_(_newTid);
+      // 📊 前回比較パネルに前回の数量・単価をプリフィル
+      try {
+        var pvq = document.getElementById('pv-qty-' + _newTid), pvu = document.getElementById('pv-unitp-' + _newTid);
+        var stp = ts(_newTid);
+        if(pvq && parseInt(r.qty) > 0) pvq.value = parseInt(r.qty);
+        if(pvu && stp._repeatBaseUnitp != null) pvu.value = stp._repeatBaseUnitp;
+        if(typeof _prevCmpCalc_ === 'function') _prevCmpCalc_(_newTid);
+      } catch(e){}
       // ①種別バナーは不要（前画面で選択済み）→ 隠して見出しに反映
       if(typeof _hideEntryKindBanner_ === 'function') _hideEntryKindBanner_(_newTid);
       if(typeof _setEstPageTitle_ === 'function') _setEstPageTitle_(
@@ -24557,7 +24740,7 @@ function showHistoryAnalyzeModal(tabId){
     var q0 = (typeof ts === 'function' && ts(tid).qtyPats || [])[0];
     if(q0 && q0.v) set('ha-qty', q0.v);
     var spTxt = (g('spec') + ' ' + g('memo'));
-    var pm = spTxt.match(/(\d+)\s*(?:ページ|頁|P)\b/i); if(pm) set('ha-pages', pm[1]);
+    var pm = spTxt.match(/(\d+)\s*(?:ページ|頁|P(?![A-Za-z]))/i); if(pm) set('ha-pages', pm[1]);
     var sm = spTxt.match(/([AB]\d|長\d+|角\d+|洋長?\d+|葉書|名刺|\d{2,4}[x×]\d{2,4})/i); if(sm) set('ha-size', sm[1]);
     if(g('cust') || g('prod')) _haSearch_();
   }
@@ -24648,7 +24831,7 @@ function _haSearch_(){
     if(sizeN && normSize(hayAll).indexOf(sizeN)>=0) score += 15;
     if(pages){
       // 仕様から「20P / 20ページ / 20頁」を抽出して前後20%でマッチ
-      var pm = hayAll.match(/(\d+)\s*(?:ページ|頁|p)\b/i);
+      var pm = hayAll.match(/(\d+)\s*(?:ページ|頁|p(?![A-Za-z]))/i);
       var rPages = pm ? parseInt(pm[1]) : 0;
       if(rPages>0 && Math.abs(rPages-pages)/pages<=0.2) score += 15 - Math.abs(rPages-pages)/pages*15;
     }
