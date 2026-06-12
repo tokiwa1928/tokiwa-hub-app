@@ -8964,17 +8964,86 @@ function closePV(){document.getElementById('pv-overlay').classList.remove('show'
 // ═══════════════════ マスター管理 ════════════
 let curMaster='paper';
 function swMaster(id,btn){curMaster=id;document.querySelectorAll('[id^="mc-"]').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');renderMaster(id);}
+// ═══ 📋 TIER-UI: 段階単価の表組表示 + 編集ガード (✎編集を押すまで消せない) ═══
+window._tierEditRows_=window._tierEditRows_||{};
+function _tierCellHtml_(id, oi){
+  var r=(DB.master[id]||[])[oi]; if(!r) return '';
+  var tiers=(r.tiers||[]).slice().sort(function(a,b){return a.qty-b.qty;});
+  var editing=!!window._tierEditRows_[id+':'+oi];
+  var btn='<button class="btn" style="font-size:10px;padding:2px 8px;'+(editing?'background:#16a34a;color:#fff;border-color:#16a34a':'')+'" onclick="_tierToggleEdit_(\''+id+'\','+oi+')">'+(editing?'✔ 完了':'✎ 編集')+'</button>';
+  var addBtn=editing?'<button class="add-btn" style="font-size:10px;padding:1px 8px;margin:0" onclick="_tierAddPrompt_(\''+id+'\','+oi+')">＋ 段階追加</button>':'';
+  if(!tiers.length){
+    return '<div style="display:flex;gap:6px;align-items:center"><span style="color:#bbb;font-size:10px">段階なし</span>'+btn+addBtn+'</div>';
+  }
+  var head=tiers.map(function(t){return '<th style="text-align:right;padding:2px 8px;font-size:10px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;white-space:nowrap">'+t.qty.toLocaleString()+'部〜</th>';}).join('');
+  var vals=tiers.map(function(t,ti){
+    return editing
+      ? '<td style="padding:1px 3px;border:1px solid #bfdbfe;white-space:nowrap"><input type="number" step="0.1" value="'+t.p+'" style="width:58px;text-align:right;font-size:11px" onchange="_tierSetP_(\''+id+'\','+oi+','+ti+',this.value)"><button onclick="_tierDel_(\''+id+'\','+oi+','+ti+')" title="この段階を削除" style="border:none;background:none;color:#dc2626;cursor:pointer;font-size:11px;padding:0 3px">×</button></td>'
+      : '<td style="text-align:right;padding:2px 8px;border:1px solid #bfdbfe;font-weight:700;font-size:11.5px">¥'+t.p+'</td>';
+  }).join('');
+  return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+    + '<table style="border-collapse:collapse"><tr>'+head+'</tr><tr>'+vals+'</tr></table>'
+    + btn + addBtn + '</div>';
+}
+function _tierToggleEdit_(id, oi){
+  var k=id+':'+oi;
+  if(window._tierEditRows_[k]){ delete window._tierEditRows_[k]; if(typeof saveDB==='function') saveDB(); }
+  else window._tierEditRows_[k]=1;
+  renderMaster(id);
+}
+function _tierSetP_(id, oi, ti, v){
+  var r=(DB.master[id]||[])[oi]; if(!r||!r.tiers) return;
+  r.tiers.sort(function(a,b){return a.qty-b.qty;});
+  if(r.tiers[ti]) r.tiers[ti].p=parseFloat(v)||r.tiers[ti].p;
+}
+function _tierDel_(id, oi, ti){
+  var r=(DB.master[id]||[])[oi]; if(!r||!r.tiers) return;
+  r.tiers.sort(function(a,b){return a.qty-b.qty;});
+  var t=r.tiers[ti]; if(!t) return;
+  if(!confirm('「'+t.qty.toLocaleString()+'部〜 ¥'+t.p+'」の段階を削除しますか?')) return;
+  r.tiers.splice(ti,1);
+  renderMaster(id);
+}
+function _tierAddPrompt_(id, oi){
+  var q=prompt('部数（以上）:'); if(q==null) return;
+  var p=prompt('単価:'); if(p==null) return;
+  if(q&&p){
+    var r=(DB.master[id]||[])[oi]; if(!r) return;
+    if(!r.tiers) r.tiers=[];
+    r.tiers.push({qty:parseInt(q),p:parseFloat(p)});
+    r.tiers.sort(function(a,b){return a.qty-b.qty;});
+    renderMaster(id);
+  }
+}
 // ═══ 📈 TIER-1: 実績データから数量別の段階売価を分析・生成 ═══
 // 製本: 種別(無線綴じ/中綴じ等)×ページ数でグループ化 / 印刷: 色数等でグループ化
 // 各グループを数量バケットに分け、単価(税抜金額÷数量)の中央値を段階売価として提案する
 const TIER_BUCKETS=[50,100,150,200,300,500,700,1000,1500,2000,3000,5000,10000];
+// 分析サンプルを収集: ①本体の過去実績 ②単価マスタ構築ツールの取込データ(村山の見積計算書全件) ③追加読込JSON
+function _tierSamples_(){
+  var samples=[];
+  (DB.history||[]).forEach(function(r){
+    var qty=parseInt(r.qty)||0, ex=parseInt(r.exTax)||0;
+    if(qty>0&&ex>0) samples.push({hay:((r.item||'')+' '+(r.spec||'')), qty:qty, unit:ex/qty, src:'実績'});
+  });
+  // 単価マスタ構築ツール (tools/tanka-master.html) の蓄積 — ロータス/Excelの見積計算書取込分
+  try{
+    var tq=JSON.parse(localStorage.getItem('tokiwa_quote_tools_v1')||'null');
+    ((tq&&tq.master)||[]).forEach(function(m){
+      var q=parseFloat(m.qty)||0, p=parseFloat(m.price)||0;
+      if(q>0&&p>0) samples.push({hay:((m.rawItem||m.item||'')+' '+(m.spec||'')), qty:q, unit:p, src:'単価マスタ'});
+    });
+  }catch(e){}
+  // 📂 追加読込したJSON (単価マスタツールの書き出しファイル等)
+  (window._tierExtra_||[]).forEach(function(s){ samples.push(s); });
+  return samples;
+}
 function _tierAnalyze_(target){
-  var rows=(DB.history||[]);
+  var rows=_tierSamples_();
   var groups={};
   rows.forEach(function(r){
-    var qty=parseInt(r.qty)||0, ex=parseInt(r.exTax)||0;
-    if(qty<=0||ex<=0) return;
-    var hay=((r.item||'')+' '+(r.spec||''));
+    var qty=r.qty, ex=0;
+    var hay=r.hay;
     var kind=null;
     if(target==='bind'){
       if(/無線/.test(hay)) kind='無線綴じ';
@@ -8992,7 +9061,7 @@ function _tierAnalyze_(target){
     var gkey=kind+((target==='bind'&&pg)?(' '+pg+'P'):'');
     var b=TIER_BUCKETS.filter(function(x){return x<=qty;}).pop()||TIER_BUCKETS[0];
     groups[gkey]=groups[gkey]||{};
-    (groups[gkey][b]=groups[gkey][b]||[]).push(ex/qty);
+    (groups[gkey][b]=groups[gkey][b]||[]).push(r.unit);
   });
   var out=[];
   Object.keys(groups).sort().forEach(function(g){
@@ -9009,7 +9078,16 @@ function _tierAnalyze_(target){
 function openTierAnalysis(target){
   var res=_tierAnalyze_(target);
   var label=target==='bind'?'製本':'印刷';
-  if(!res.length){ alert('📈 分析できる実績データがありません。\n過去実績('+label+'のキーワード+数量+金額)が溜まると分析できます。'); return; }
+  var smp=_tierSamples_();
+  var nHist=smp.filter(function(s){return s.src==='実績';}).length;
+  var nTool=smp.filter(function(s){return s.src==='単価マスタ';}).length;
+  var nExtra=(window._tierExtra_||[]).length;
+  var srcLine='データ元: 本体の過去実績 '+nHist+'件 ＋ 単価マスタツール(見積計算書取込) '+nTool+'件'+(nExtra?' ＋ 追加JSON '+nExtra+'件':'')
+    +' <button class="btn" style="font-size:10px;padding:2px 8px;margin-left:6px" onclick="_tierLoadJson_(\''+target+'\')">📂 JSONを追加読込</button>';
+  if(!res.length){
+    if(confirm('📈 '+label+'として分類できるデータが見つかりませんでした。\n(本体実績 '+nHist+'件 / 単価マスタツール '+nTool+'件)\n\n単価マスタツールの書き出しJSONを読み込んで分析しますか?')){ _tierLoadJson_(target); }
+    return;
+  }
   window._tierResult_={target:target,res:res};
   var m=document.createElement('div');
   m.className='proof-modal';
@@ -9018,7 +9096,7 @@ function openTierAnalysis(target){
     +'<div style="padding:12px 18px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>📈 '+label+'の数量別段階売価 — 実績分析 ('+res.length+'グループ)</b>'
     +'<button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
     +'<div style="overflow-y:auto;padding:14px 18px;flex:1">'
-    +'<div style="font-size:11.5px;color:#666;margin-bottom:10px;background:#f8fafc;border-radius:6px;padding:8px 12px">実績の単価(税抜金額÷数量)を数量帯ごとに集計した<b>中央値</b>です。単価は手修正できます。チェックしたグループを「反映」すると'+label+'マスターに段階単価として登録され、見積で数量に応じた売価が自動適用されます。</div>'
+    +'<div style="font-size:11.5px;color:#666;margin-bottom:10px;background:#f8fafc;border-radius:6px;padding:8px 12px">実績の単価を数量帯ごとに集計した<b>中央値</b>です。単価は手修正できます。チェックしたグループを「反映」すると'+label+'マスターに段階単価として登録され、見積で数量に応じた売価が自動適用されます。<div style="margin-top:4px;color:#1e40af">'+srcLine+'</div></div>'
     + res.map(function(grp,gi){
         return '<div style="border:1px solid #e5e7eb;border-radius:8px;margin-bottom:10px;overflow:hidden">'
           +'<div style="background:#f5f3ff;padding:7px 12px;display:flex;align-items:center;gap:10px"><input type="checkbox" class="tier-grp-chk" data-gi="'+gi+'" checked style="width:15px;height:15px"><b style="font-size:13px;color:#5b21b6">'+_escDiff(grp.g)+'</b><span style="font-size:11px;color:#888">実績 '+grp.total+' 件</span></div>'
@@ -9032,6 +9110,39 @@ function openTierAnalysis(target){
     +'<button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="_tierApply_()">✅ チェックしたグループを'+label+'マスターへ反映</button>'
     +'</div></div>';
   document.body.appendChild(m);
+}
+// 📂 単価マスタツールの書き出しJSON等を追加読込して分析に含める
+function _tierLoadJson_(target){
+  var inp=document.createElement('input');
+  inp.type='file'; inp.accept='.json,application/json';
+  inp.onchange=function(){
+    var f=inp.files[0]; if(!f) return;
+    var fr=new FileReader();
+    fr.onload=function(){
+      try{
+        var j=JSON.parse(fr.result);
+        var arr=Array.isArray(j)?j:(j.master||j.records||j.rows||[]);
+        if(!Array.isArray(arr)||!arr.length) throw new Error('配列データが見つかりません');
+        var added=0;
+        window._tierExtra_=window._tierExtra_||[];
+        arr.forEach(function(m){
+          var q=parseFloat(m.qty)||0;
+          var p=parseFloat(m.price)||0;
+          if(!p&&m.exTax&&q>0) p=(parseFloat(m.exTax)||0)/q;
+          if(!p&&m.unitp) p=parseFloat(m.unitp)||0;
+          if(q>0&&p>0){
+            window._tierExtra_.push({hay:((m.rawItem||m.item||m.n||'')+' '+(m.spec||'')), qty:q, unit:p, src:'JSON'});
+            added++;
+          }
+        });
+        document.querySelector('.proof-modal')?.remove();
+        if(typeof _toastMsg==='function') _toastMsg('📂 '+added+'件を読み込みました。再分析します…');
+        openTierAnalysis(target);
+      }catch(e){ alert('読込失敗: '+e.message); }
+    };
+    fr.readAsText(f,'utf-8');
+  };
+  inp.click();
 }
 function _tierApply_(){
   var ctx=window._tierResult_; if(!ctx) return;
@@ -9405,17 +9516,7 @@ function renderMaster(id){
         <td><input class="r" type="number" value="${r.cr!=null?r.cr:''}" placeholder="70" style="background:#f0fdf4;width:50px" onchange="setMasterCost('print',${oi},'cr',this.value)"></td>
         <td><input class="r" type="number" value="${r.p!=null?r.p:''}" title="原価と原価率を入れると自動計算。直接入力も可" onchange="DB.master.print[${oi}].p=this.value?parseFloat(this.value):null"></td>
         <td><input class="r" type="number" value="${r.mc!=null?r.mc:''}" placeholder="0=なし" style="background:#fffbeb" onchange="DB.master.print[${oi}].mc=this.value?parseFloat(this.value):0"></td>
-        <td>
-          <div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center">
-            ${(r.tiers||[]).map((t,ti)=>`
-              <span style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:1px 4px;font-size:11px;white-space:nowrap">
-                ${t.qty.toLocaleString()}部～¥${t.p}
-                <button onclick="DB.master.print[${oi}].tiers.splice(${ti},1);renderMaster('print')" style="border:none;background:none;cursor:pointer;color:#aaa;font-size:10px;padding:0 2px">×</button>
-              </span>`).join('')}
-            <button class="add-btn" style="font-size:10px;padding:1px 6px;margin:0"
-              onclick="var q=prompt('部数（以上）:');var p=prompt('単価:');if(q&&p){if(!DB.master.print[${oi}].tiers)DB.master.print[${oi}].tiers=[];DB.master.print[${oi}].tiers.push({qty:parseInt(q),p:parseFloat(p)});DB.master.print[${oi}].tiers.sort((a,b)=>a.qty-b.qty);renderMaster('print');}">＋</button>
-          </div>
-        </td>
+        <td>${_tierCellHtml_('print',oi)}</td>
         <td><input type="text" value="${r.note||''}" onchange="DB.master.print[${oi}].note=this.value"></td>
         <td class="dx"><button class="del-btn" onclick="DB.master.print.splice(${oi},1);renderMaster('print')">×</button></td>
       </tr>`;
@@ -9442,17 +9543,7 @@ function renderMaster(id){
         <td><input class="r" type="number" value="${r.cr!=null?r.cr:''}" placeholder="70" style="background:#f0fdf4;width:50px" onchange="setMasterCost('${id}',${oi},'cr',this.value)"></td>
         <td><input class="r" type="number" value="${r.p!=null?r.p:''}" title="原価と原価率を入れると自動計算。直接入力も可" onchange="DB.master['${id}'][${oi}].p=this.value?parseFloat(this.value):null"></td>
         <td><input class="r" type="number" value="${r.mc!=null?r.mc:''}" placeholder="0=なし" style="background:#fffbeb" onchange="DB.master['${id}'][${oi}].mc=this.value?parseFloat(this.value):0"></td>
-        <td>
-          <div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center">
-            ${(r.tiers||[]).map((t,ti)=>`
-              <span style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:1px 4px;font-size:11px;white-space:nowrap">
-                ${t.qty.toLocaleString()}部～¥${t.p}
-                <button onclick="DB.master['${id}'][${oi}].tiers.splice(${ti},1);renderMaster('${id}')" style="border:none;background:none;cursor:pointer;color:#aaa;font-size:10px;padding:0 2px">×</button>
-              </span>`).join('')}
-            <button class="add-btn" style="font-size:10px;padding:1px 6px;margin:0"
-              onclick="var q=prompt('部数（以上）:');var p=prompt('単価:');if(q&&p){if(!DB.master['${id}'][${oi}].tiers)DB.master['${id}'][${oi}].tiers=[];DB.master['${id}'][${oi}].tiers.push({qty:parseInt(q),p:parseFloat(p)});DB.master['${id}'][${oi}].tiers.sort((a,b)=>a.qty-b.qty);renderMaster('${id}');}">＋</button>
-          </div>
-        </td>
+        <td>${_tierCellHtml_(id,oi)}</td>
         <td><input type="text" value="${r.note||''}" onchange="DB.master['${id}'][${oi}].note=this.value"></td>
         <td class="dx"><button class="del-btn" onclick="DB.master['${id}'].splice(${oi},1);renderMaster('${id}')">×</button></td>
       </tr>`;
