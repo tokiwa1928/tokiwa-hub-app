@@ -5654,6 +5654,8 @@ function openMasterModal(masterType, btn, tabId){
         tr.dataset.pw=(item.pw!=null?item.pw:'');
         tr.dataset.wq=item.wq||250;
       } else { delete tr.dataset.pb; delete tr.dataset.pw; delete tr.dataset.wq; }
+      // 🏭 MFG-1: 拠点別単価 (最適製造先の提案用)
+      if(item.cok){ tr.dataset.cok=JSON.stringify(item.cok); } else { delete tr.dataset.cok; }
       const finSel=tr.querySelector('[data-field=finish]');
       if(finSel?.value) autoMenRow(tr, item.sz||'');
       calcPaperRowAmt(tr);
@@ -5840,7 +5842,13 @@ function paperStep4(btn, nm, wt, cl){
       const colorBadge = getPaperColorBadge(r.cl||'白');
       const kc=(typeof _kiloCalcUnit_==='function')?_kiloCalcUnit_(r):{pb:null,pw:null};
       const kiloTag=(kc.pb!=null&&kc.pw!=null)?`<span class="ddi-tier" title="バラ@${kc.pb}/包み@${kc.pw} — 見積で安い方を自動採用">包み単価あり</span>`:'';
-      return `<button class="dd-item" onclick="selMasterItem({label:'${escQ(label)}',p:${r.p!=null?r.p:'null'},sz:'${escQ(r.sz||'')}',nm:'${escQ(r.nm||'')}',cl:'${escQ(r.cl||'白')}',pb:${kc.pb!=null?kc.pb:'null'},pw:${kc.pw!=null?kc.pw:'null'},wq:${r.wrapQty||250}})">
+      // 🏭 MFG-1: 拠点別の1枚単価 (製造先比較用)
+      let cokAttr='null';
+      if(typeof _kiloCalcUnitSite_==='function'&&typeof _mfgSites_==='function'){
+        const cok={}; _mfgSites_().forEach(c=>{ const u=_kiloCalcUnitSite_(r,c); if(u.pb!=null) cok[c]=u; });
+        if(Object.keys(cok).length>=2) cokAttr=JSON.stringify(cok).replace(/"/g,'&quot;');
+      }
+      return `<button class="dd-item" onclick="selMasterItem({label:'${escQ(label)}',p:${r.p!=null?r.p:'null'},sz:'${escQ(r.sz||'')}',nm:'${escQ(r.nm||'')}',cl:'${escQ(r.cl||'白')}',pb:${kc.pb!=null?kc.pb:'null'},pw:${kc.pw!=null?kc.pw:'null'},wq:${r.wrapQty||250},cok:${cokAttr}})">
         ${colorBadge}
         <span class="ddi-name">${r.nm||''} ${r.wt||''}</span>
         <span class="ddi-sub">${sub}</span>
@@ -6058,8 +6066,13 @@ function mmSearch(q){
       const label=`${r.nm||''}${r.wt?' '+r.wt:''}${r.cl&&r.cl!=='白'?' '+r.cl:''}`;
       const hay=`${r.nm||''} ${r.wt||''} ${r.cl||''} ${r.sz||''} ${r.mk||''}`.toLowerCase();
       const kc=(typeof _kiloCalcUnit_==='function')?_kiloCalcUnit_(r):{pb:null,pw:null};
+      let cok=null;
+      if(typeof _kiloCalcUnitSite_==='function'&&typeof _mfgSites_==='function'){
+        const c2={}; _mfgSites_().forEach(c=>{ const u=_kiloCalcUnitSite_(r,c); if(u.pb!=null) c2[c]=u; });
+        if(Object.keys(c2).length>=2) cok=c2;
+      }
       return {hay,html:`${getPaperColorBadge(r.cl||'白')}<span class="ddi-name">${r.nm||''} ${r.wt||''}</span><span class="ddi-sub">${(r.sz||'')+' '+(r.mk||'')}</span>${(kc.pb!=null&&kc.pw!=null)?'<span class="ddi-tier">包み単価あり</span>':''}<span class="ddi-price">${r.p!=null?'¥'+r.p:''}</span>`,
-        item:{label,p:r.p!=null?r.p:null,sz:r.sz||'',nm:r.nm||'',cl:r.cl||'白',pb:kc.pb,pw:kc.pw,wq:r.wrapQty||250}};
+        item:{label,p:r.p!=null?r.p:null,sz:r.sz||'',nm:r.nm||'',cl:r.cl||'白',pb:kc.pb,pw:kc.pw,wq:r.wrapQty||250,cok:cok}};
     });
   } else if(mt==='envelope'){
     items=DB.master.envelope.map(r=>({hay:`${r.nm||''} ${r.sp||''}`.toLowerCase(),
@@ -8289,6 +8302,40 @@ function calcPaperRowAmt(tr){
       kiloBadge=' <span style="background:#eff6ff;color:#1e40af;font-size:9px;font-weight:800;padding:1px 5px;border-radius:6px;white-space:nowrap" title="バラ採用: '+fullSheets+'枚×@'+pb+'＝¥'+totB.toLocaleString()+'（包み '+wrapSheets+'枚×@'+pw+'＝¥'+totW.toLocaleString()+' より高くならない）">バラ</span>';
     }
   }
+  // 🏭 MFG-1: 拠点別の用紙仕入を比較して、しきい値以上安ければ最適製造先を提案
+  // (役員=金額表示 / 一般=拠点名のみ。最終決定は役員が行う)
+  if(tr.dataset.cok&&cut>0&&hitsuyou>0){
+    try{
+      const cok=JSON.parse(tr.dataset.cok);
+      const siteIds=Object.keys(cok);
+      const anyOwn=siteIds.some(c=>cok[c]&&cok[c].own);
+      if(siteIds.length>=2&&anyOwn){
+        const fullSheets2=Math.ceil(dai*hitsuyou/cut);
+        const tot={};
+        siteIds.forEach(c=>{
+          const s=cok[c]; if(!s||!(s.pb>0)) return;
+          const tB=fullSheets2*s.pb;
+          const tW=(s.pw>0)?Math.ceil(fullSheets2/wq)*wq*s.pw:Infinity;
+          tot[c]=Math.round(Math.min(tB,tW));
+        });
+        const base=(typeof _mfgBaseline_==='function')?_mfgBaseline_():null;
+        let best=null;
+        Object.keys(tot).forEach(c=>{ if(best==null||tot[c]<tot[best]) best=c; });
+        if(best&&base&&tot[base]!=null&&best!==base){
+          const save=tot[base]-tot[best];
+          const thv=(typeof _mfgThreshold_==='function')?_mfgThreshold_():{yen:5000,pct:5};
+          if(save>0&&(save>=thv.yen||(tot[base]>0&&save/tot[base]*100>=thv.pct))){
+            if(typeof _canSeeAllCosts_==='function'&&_canSeeAllCosts_()){
+              const detail=Object.keys(tot).map(c=>_mfgSiteName_(c)+' ¥'+tot[c].toLocaleString()).join(' / ');
+              kiloBadge+=' <span style="background:#065f46;color:#fff;font-size:9px;font-weight:800;padding:1px 6px;border-radius:6px;white-space:nowrap" title="用紙仕入の拠点比較: '+detail+'（基準: '+_mfgSiteName_(base)+'）。しきい値(¥'+thv.yen+'/'+thv.pct+'%)超のため提案。最終決定は役員が行ってください">💡'+_mfgSiteName_(best)+'製造が有利 ¥'+save.toLocaleString()+'安</span>';
+            } else {
+              kiloBadge+=' <span style="background:#065f46;color:#fff;font-size:9px;font-weight:800;padding:1px 6px;border-radius:6px;white-space:nowrap" title="グループ内により有利な製造拠点があります（金額の比較は役員のみ閲覧可）。最終決定は役員が行います">💡'+_mfgSiteName_(best)+'製造を推奨</span>';
+            }
+          }
+        }
+      }
+    }catch(e){}
+  }
   const ac=tr.querySelector('.amt');if(ac)ac.innerHTML=am>0?fmt(am)+kiloBadge:'';
   return am;
 }
@@ -9222,6 +9269,41 @@ function setMasterCost(id, oi, field, val){
   if(typeof saveDB === 'function') saveDB();
   renderMaster(id);
 }
+// ═══ 🏭 MFG-1: 製造拠点 (会社別原価・最適製造先の提案) ═══
+// 拠点リスト (既定: トキワ印刷・北上プリント。将来 ＋拠点追加 で増やせる)
+function _mfgSites_(){
+  if(!Array.isArray(DB.mfgSites)||!DB.mfgSites.length) DB.mfgSites=['COMP002','COMP004'];
+  return DB.mfgSites;
+}
+function _mfgSiteName_(cid){
+  var c=((typeof COMPANY_INIT!=='undefined')?COMPANY_INIT:[]).find(function(x){return x.id===cid;})
+    ||((DB.companies||[]).find(function(x){return x.id===cid;}));
+  var n=c?(c.name||cid):cid;
+  return n.replace(/(株式会社|有限会社)/g,'');
+}
+// 原価全社閲覧の権限: TKのadmin + DB.conf.costExecs に登録された役員 (TK所属)
+function _canSeeAllCosts_(){
+  try{
+    if(typeof currentAuth==='undefined'||!currentAuth||!currentAuth.loggedIn) return false;
+    var isTK=(currentAuth.companyId==='COMP002'||currentAuth.companyCode==='TK');
+    if(!isTK) return false;
+    if(currentAuth.role==='admin') return true;
+    var ex=(DB.conf&&DB.conf.costExecs)||[];
+    return ex.indexOf(currentAuth.userName||'')>=0||ex.indexOf(currentAuth.email||'')>=0;
+  }catch(e){ return false; }
+}
+// 拠点切替の判定しきい値: 差が ¥yen 以上 または pct% 以上なら遠方拠点を推奨 (誤差程度なら近場優先)
+function _mfgThreshold_(){
+  var t=(DB.conf&&DB.conf.mfgThreshold)||{};
+  return { yen:(t.yen!=null?t.yen:5000), pct:(t.pct!=null?t.pct:5) };
+}
+// 自分の「近い拠点」(基準): 自社が拠点ならそれ、でなければ既定拠点 (DB.conf.defaultMfgSite, 既定=トキワ)
+function _mfgBaseline_(){
+  var sites=_mfgSites_();
+  var own=(typeof currentAuth!=='undefined'&&currentAuth)?currentAuth.companyId:'';
+  if(sites.indexOf(own)>=0) return own;
+  return (DB.conf&&DB.conf.defaultMfgSite)||sites[0];
+}
 // ═══ ⚖️ KILO-1: 用紙キロ単価 → 1枚単価の自動算出 ═══
 // 1枚単価 = 連量(kg/1000枚) × キロ単価 ÷ 1000
 function _kiloCalcUnit_(r){
@@ -9230,6 +9312,90 @@ function _kiloCalcUnit_(r){
   var pb = (r.kgPB != null && r.kgPB !== '') ? Math.ceil(ren * parseFloat(r.kgPB) / 1000 * 100) / 100 : null;
   var pw = (r.kgPW != null && r.kgPW !== '') ? Math.ceil(ren * parseFloat(r.kgPW) / 1000 * 100) / 100 : null;
   return { pb: pb, pw: pw };
+}
+// 拠点別の1枚単価 (拠点固有のキロ単価がなければ共通値にフォールバック)
+function _kiloCalcUnitSite_(r, cid){
+  var ren=parseFloat(r&&r.kgRen);
+  if(!ren||ren<=0) return {pb:null,pw:null,own:false};
+  var s=((r&&r.coKilo)||{})[cid]||{};
+  var kb=(s.pb!=null&&s.pb!=='')?s.pb:r.kgPB;
+  var kw=(s.pw!=null&&s.pw!=='')?s.pw:r.kgPW;
+  return {
+    pb:(kb!=null&&kb!=='')?Math.ceil(ren*parseFloat(kb)/1000*100)/100:null,
+    pw:(kw!=null&&kw!=='')?Math.ceil(ren*parseFloat(kw)/1000*100)/100:null,
+    own:(s.pb!=null&&s.pb!=='')||(s.pw!=null&&s.pw!=='')
+  };
+}
+// ── MFG-1 キロ単価モードの操作 ──
+function _kiloTabSet_(t){ window._kiloSiteTab_=t; renderMaster('paper'); }
+// 現在タブに応じて バラ/包みキロ単価を保存 (共通=kgPB/kgPW、拠点=coKilo[site])
+function _kiloSetVal_(oi, field, val){
+  var r=DB.master.paper[oi]; if(!r) return;
+  var v=(val!==''&&val!=null)?parseFloat(val):null;
+  var tab=window._kiloSiteTab_||'common';
+  if(tab==='common'){ r[field==='pb'?'kgPB':'kgPW']=v; }
+  else {
+    r.coKilo=r.coKilo||{};
+    r.coKilo[tab]=r.coKilo[tab]||{};
+    if(v==null) delete r.coKilo[tab][field]; else r.coKilo[tab][field]=v;
+  }
+  if(typeof saveDB==='function') saveDB();
+  renderMaster('paper');
+}
+// 銘柄ドロップダウンで選んだ銘柄の全行に、キロ単価を一括適用 (現在の拠点タブへ)
+function _kiloBulkBrand_(){
+  var nm=document.getElementById('kilo-bulk-nm')?.value||'';
+  var pb=parseFloat(document.getElementById('kilo-bulk-pb')?.value);
+  var pw=parseFloat(document.getElementById('kilo-bulk-pw')?.value);
+  if(!nm){ alert('銘柄を選択してください'); return; }
+  if(isNaN(pb)&&isNaN(pw)){ alert('バラまたは包みのキロ単価を入力してください'); return; }
+  var tab=window._kiloSiteTab_||'common';
+  var n=0;
+  (DB.master.paper||[]).forEach(function(r){
+    if(r.active===false||r.nm!==nm) return;
+    if(tab==='common'){
+      if(!isNaN(pb)) r.kgPB=pb;
+      if(!isNaN(pw)) r.kgPW=pw;
+      if(r.wrapQty==null) r.wrapQty=250;
+    } else {
+      r.coKilo=r.coKilo||{}; r.coKilo[tab]=r.coKilo[tab]||{};
+      if(!isNaN(pb)) r.coKilo[tab].pb=pb;
+      if(!isNaN(pw)) r.coKilo[tab].pw=pw;
+    }
+    n++;
+  });
+  if(typeof saveDB==='function') saveDB();
+  renderMaster('paper');
+  var label=tab==='common'?'共通':_mfgSiteName_(tab);
+  if(typeof _toastMsg==='function') _toastMsg('⚡ 「'+nm+'」'+n+'行に '+label+' のキロ単価を一括適用しました');
+}
+function _kiloAddSite_(){
+  var list=(DB.companies&&DB.companies.length?DB.companies:((typeof COMPANY_INIT!=='undefined')?COMPANY_INIT:[]));
+  var sites=_mfgSites_();
+  var cands=list.filter(function(c){return sites.indexOf(c.id)<0;});
+  if(!cands.length){ alert('追加できる会社がありません'); return; }
+  var msg='追加する製造拠点の番号を入力:\n'+cands.map(function(c,i){return (i+1)+'. '+c.name;}).join('\n');
+  var sel=prompt(msg); if(sel==null) return;
+  var c=cands[parseInt(sel)-1]; if(!c){ alert('番号が不正です'); return; }
+  sites.push(c.id);
+  if(typeof saveDB==='function') saveDB();
+  renderMaster('paper');
+  if(typeof _toastMsg==='function') _toastMsg('🏭 製造拠点に '+c.name+' を追加しました');
+}
+function _kiloSaveThreshold_(){
+  DB.conf=DB.conf||{};
+  DB.conf.mfgThreshold={
+    yen:parseInt(document.getElementById('mfg-th-yen')?.value)||5000,
+    pct:parseFloat(document.getElementById('mfg-th-pct')?.value)||5
+  };
+  if(typeof saveDB==='function') saveDB();
+  if(typeof _toastMsg==='function') _toastMsg('💾 しきい値を保存しました (差が¥'+DB.conf.mfgThreshold.yen+' または '+DB.conf.mfgThreshold.pct+'%以上で遠方拠点を推奨)');
+}
+function _kiloSaveExecs_(){
+  DB.conf=DB.conf||{};
+  DB.conf.costExecs=(document.getElementById('mfg-execs')?.value||'').split(/[,、]/).map(function(s){return s.trim();}).filter(Boolean);
+  if(typeof saveDB==='function') saveDB();
+  if(typeof _toastMsg==='function') _toastMsg('💾 原価全社閲覧の役員を保存しました: '+DB.conf.costExecs.join(', '));
 }
 // 連量×キロ単価が入っている全行の「単価(p)」を一括更新 (p=バラ1枚単価)
 function kiloBulkApply(){
@@ -9386,27 +9552,64 @@ function renderMaster(id){
       </label>
     </div>`;
     if(kiloMode){
+      const execView=_canSeeAllCosts_();
+      const sites=_mfgSites_();
+      // 表示できるタブ: 役員=共通+全拠点 / 一般=共通+自社拠点のみ
+      let tabs=['common'];
+      if(execView){ tabs=tabs.concat(sites); }
+      else { const own=currentAuth?.companyId; if(sites.indexOf(own)>=0) tabs.push(own); }
+      if(!window._kiloSiteTab_||tabs.indexOf(window._kiloSiteTab_)<0) window._kiloSiteTab_='common';
+      const tab=window._kiloSiteTab_;
+      const tabLabel=tab==='common'?'共通（既定）':_mfgSiteName_(tab);
+      const th=_mfgThreshold_();
+      // 銘柄一覧 (一括適用ドロップダウン用)
+      const brandList=[...new Set(DB.master.paper.filter(r=>r.active!==false).map(r=>r.nm||'').filter(Boolean))].sort();
       html+=`<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:8px 12px;margin-bottom:.5rem;font-size:11.5px;color:#1e40af;line-height:1.7">
-        💡 <b>1枚単価 ＝ 連量(kg/1000枚) × キロ単価 ÷ 1000</b>。包み単価（色上質など 250枚〜のまとめ買い価格）も登録すると、見積の用紙行で<b>バラ合計と包み合計を比較して安い方を自動採用</b>します。
+        💡 <b>1枚単価 ＝ 連量(kg/1000枚) × キロ単価 ÷ 1000</b>。包み単価も登録すると見積でバラ/包みの安い方を自動採用。拠点タブで<b>会社別の仕入キロ単価</b>を分けて登録できます（未入力の拠点は共通値を使用）。
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">
+          ${tabs.map(t=>`<button class="btn" style="font-size:11px;font-weight:700;${window._kiloSiteTab_===t?'background:#1e40af;color:#fff;border-color:#1e40af':'background:#fff'}" onclick="_kiloTabSet_('${t}')">${t==='common'?'📦 共通（既定）':'🏭 '+_mfgSiteName_(t)}</button>`).join('')}
+          ${execView?`<button class="btn" style="font-size:11px" onclick="_kiloAddSite_()" title="製造拠点を追加 (会社IDで登録)">＋ 拠点追加</button>`:''}
+          <span style="font-weight:800;color:#92400e;margin-left:6px">▼ 表示中の原価: ${tabLabel}</span>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center;background:#fff;border:1px dashed #93c5fd;border-radius:6px;padding:5px 8px">
+          <b>銘柄ごと一括入力:</b>
+          <select id="kilo-bulk-nm" style="font-size:11px;min-width:140px">${brandList.map(b=>`<option>${b}</option>`).join('')}</select>
+          バラ㌔<input id="kilo-bulk-pb" type="number" step="0.1" style="width:70px;font-size:11px;text-align:right">
+          包み㌔<input id="kilo-bulk-pw" type="number" step="0.1" style="width:70px;font-size:11px;text-align:right">
+          <button class="btn" style="font-size:11px;background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="_kiloBulkBrand_()">⚡ この銘柄の全行に適用（${tabLabel}）</button>
+        </div>
         <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
-          <button class="btn" style="font-size:11px;background:#1e40af;color:#fff;border-color:#1e40af" onclick="kiloBulkApply()">⚡ 連量×㌔単価で1枚単価を一括計算→「単価」に反映</button>
+          <button class="btn" style="font-size:11px;background:#1e40af;color:#fff;border-color:#1e40af" onclick="kiloBulkApply()">⚡ 共通値で1枚単価を一括計算→「単価」に反映</button>
           <button class="btn" style="font-size:11px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="kiloScanImport()">🤖 キロ単価表のスキャンを取込 (AI読み取り)</button>
         </div>
+        ${execView?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:5px 8px;color:#92400e">
+          <b>🏭 拠点切替の判定しきい値:</b> 差が ¥<input id="mfg-th-yen" type="number" value="${th.yen}" style="width:70px;font-size:11px;text-align:right"> または
+          <input id="mfg-th-pct" type="number" value="${th.pct}" style="width:45px;font-size:11px;text-align:right">% 以上安ければ遠方拠点を推奨（それ未満は近場優先）
+          <button class="btn" style="font-size:10px;padding:2px 8px" onclick="_kiloSaveThreshold_()">保存</button>
+          <span style="margin-left:10px"><b>原価全社閲覧の役員(TK):</b></span>
+          <input id="mfg-execs" value="${((DB.conf&&DB.conf.costExecs)||[]).join(', ')}" placeholder="氏名をカンマ区切り (adminは常に可)" style="min-width:180px;font-size:11px">
+          <button class="btn" style="font-size:10px;padding:2px 8px" onclick="_kiloSaveExecs_()">保存</button>
+        </div>`:''}
       </div>
       <div style="overflow-x:auto;max-height:500px;overflow-y:auto">
-      <table class="m-tbl"><thead><tr><th>用紙名</th><th>厚さ/斤量</th><th>判型</th><th style="width:80px">連量kg<br>(1000枚)</th><th style="width:80px">バラ<br>㌔単価</th><th style="width:80px">包み<br>㌔単価</th><th style="width:60px">包み<br>枚数</th><th style="text-align:right">→ バラ単価</th><th style="text-align:right">→ 包み単価</th><th style="text-align:right;width:70px">現在の単価</th></tr></thead><tbody>`;
+      <table class="m-tbl"><thead><tr><th>用紙名</th><th>厚さ/斤量</th><th>判型</th><th style="width:80px">連量kg<br>(1000枚)</th><th style="width:84px">バラ㌔単価<br><span style="font-weight:400">${tabLabel}</span></th><th style="width:84px">包み㌔単価<br><span style="font-weight:400">${tabLabel}</span></th><th style="width:60px">包み<br>枚数</th><th style="text-align:right">→ バラ単価</th><th style="text-align:right">→ 包み単価</th><th style="text-align:right;width:70px">現在の単価</th></tr></thead><tbody>`;
       filteredData.slice(0,200).forEach((r)=>{const oi=DB.master.paper.indexOf(r);
-        const calc=_kiloCalcUnit_(r);
+        const isC=(tab==='common');
+        const sv=((r.coKilo||{})[tab])||{};
+        const calc=isC?_kiloCalcUnit_(r):_kiloCalcUnitSite_(r,tab);
+        const pbVal=isC?(r.kgPB!=null?r.kgPB:''):(sv.pb!=null?sv.pb:'');
+        const pwVal=isC?(r.kgPW!=null?r.kgPW:''):(sv.pw!=null?sv.pw:'');
+        const ph1=(!isC&&r.kgPB!=null)?`placeholder="共通${r.kgPB}"`:''; const ph2=(!isC&&r.kgPW!=null)?`placeholder="共通${r.kgPW}"`:'';
         html+=`<tr>
           <td style="font-size:11px">${r.nm||''}</td>
           <td style="font-size:11px">${r.wt||r.thickness||''}</td>
           <td style="font-size:11px">${r.sz||''}</td>
           <td><input class="r" type="number" step="0.1" value="${r.kgRen!=null?r.kgRen:''}" style="width:70px" onchange="updateMasterField('paper',${oi},'kgRen',this.value?parseFloat(this.value):null);renderMaster('paper')"></td>
-          <td><input class="r" type="number" step="0.1" value="${r.kgPB!=null?r.kgPB:''}" style="width:70px" onchange="updateMasterField('paper',${oi},'kgPB',this.value?parseFloat(this.value):null);renderMaster('paper')"></td>
-          <td><input class="r" type="number" step="0.1" value="${r.kgPW!=null?r.kgPW:''}" style="width:70px" onchange="updateMasterField('paper',${oi},'kgPW',this.value?parseFloat(this.value):null);renderMaster('paper')"></td>
+          <td><input class="r" type="number" step="0.1" value="${pbVal}" ${ph1} style="width:72px${isC?'':';background:#fff7ed'}" onchange="_kiloSetVal_(${oi},'pb',this.value)"></td>
+          <td><input class="r" type="number" step="0.1" value="${pwVal}" ${ph2} style="width:72px${isC?'':';background:#fff7ed'}" onchange="_kiloSetVal_(${oi},'pw',this.value)"></td>
           <td><input class="r" type="number" value="${r.wrapQty!=null?r.wrapQty:250}" style="width:50px" onchange="updateMasterField('paper',${oi},'wrapQty',this.value?parseInt(this.value):250)"></td>
-          <td style="text-align:right;font-weight:700;color:#1e40af">${calc.pb!=null?'¥'+calc.pb.toFixed(2):'—'}</td>
-          <td style="text-align:right;font-weight:700;color:#7c3aed">${calc.pw!=null?'¥'+calc.pw.toFixed(2):'—'}</td>
+          <td style="text-align:right;font-weight:700;color:#1e40af">${calc.pb!=null?'¥'+calc.pb.toFixed(2):'—'}${(!isC&&calc.pb!=null&&!calc.own)?'<span style="font-size:9px;color:#94a3b8"> (共通)</span>':''}</td>
+          <td style="text-align:right;font-weight:700;color:#7c3aed">${calc.pw!=null?'¥'+calc.pw.toFixed(2):'—'}${(!isC&&calc.pw!=null&&!calc.own)?'<span style="font-size:9px;color:#94a3b8"> (共通)</span>':''}</td>
           <td style="text-align:right;color:#888">${r.p!=null?'¥'+r.p:''}</td>
         </tr>`;
       });
