@@ -7319,7 +7319,12 @@ function stackCostPanels(area,id){
       os.style.cssText='display:none;background:#fff7ed;border:1px dashed #fdba74;border-radius:7px;padding:6px 10px;margin:0 0 8px;font-size:11.5px;align-items:center;gap:10px;flex-wrap:wrap';
       os.innerHTML='<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:#9a3412;white-space:nowrap">'
         +`<input type="checkbox" class="sec-os-chk" style="width:15px;height:15px" onchange="_secOsChange_(${id},'${sec}')"> この工程を外注／別発注する</label>`
-        +`<input class="sec-os-vendor" placeholder="発注先名（例: ○○製本所）" style="flex:1;min-width:170px;font-size:11.5px;padding:4px 8px;border:1px solid #fdba74;border-radius:6px" oninput="_secOsChange_(${id},'${sec}')">`;
+        +`<input class="sec-os-vendor" placeholder="発注先名（例: ○○製本所）" style="flex:1;min-width:150px;font-size:11.5px;padding:4px 8px;border:1px solid #fdba74;border-radius:6px" oninput="_secOsChange_(${id},'${sec}')">`
+        +'<span style="white-space:nowrap;color:#9a3412">仕入(原価)¥'
+        +`<input class="sec-os-cost" type="number" placeholder="例:30000" style="width:85px;font-size:11.5px;padding:4px 6px;border:1px solid #fdba74;border-radius:6px;text-align:right" oninput="_secOsChange_(${id},'${sec}')"></span>`
+        +'<span style="white-space:nowrap;color:#9a3412">原価率'
+        +`<input class="sec-os-rate" type="number" value="70" style="width:48px;font-size:11.5px;padding:4px 6px;border:1px solid #fdba74;border-radius:6px;text-align:right" oninput="_secOsChange_(${id},'${sec}')">%</span>`
+        +'<b class="sec-os-sell" style="white-space:nowrap;color:#b45309;font-size:12.5px"></b>';
       const h2=pn.querySelector('.cost-sec-h');
       if(h2&&h2.nextSibling) pn.insertBefore(os,h2.nextSibling); else pn.appendChild(os);
     }
@@ -7411,6 +7416,9 @@ function _applyOrderFormUI_(id){
     if(st){
       const chk=bar.querySelector('.sec-os-chk'); if(chk) chk.checked=!!st.out;
       const vd=bar.querySelector('.sec-os-vendor'); if(vd&&st.vendor&&!vd.value) vd.value=st.vendor;
+      const ci=bar.querySelector('.sec-os-cost'); if(ci&&st.cost&&!ci.value) ci.value=st.cost;
+      const ri=bar.querySelector('.sec-os-rate'); if(ri&&st.rate) ri.value=st.rate;
+      const se=bar.querySelector('.sec-os-sell'); if(se&&st.sell>0) se.textContent='→ 売価 ¥'+Number(st.sell).toLocaleString();
     }
   });
 }
@@ -7419,7 +7427,13 @@ function _secOsChange_(id, sec){
   const bar=[...area.querySelectorAll('.sec-os-bar')].find(b=>b.dataset.sec===sec); if(!bar) return;
   const s=ts(id);
   s._sectionOutsource=s._sectionOutsource||{};
-  s._sectionOutsource[sec]={out:!!bar.querySelector('.sec-os-chk')?.checked, vendor:bar.querySelector('.sec-os-vendor')?.value||''};
+  const cost=parseFloat(bar.querySelector('.sec-os-cost')?.value)||0;
+  const rate=parseFloat(bar.querySelector('.sec-os-rate')?.value)||0;
+  // 都度外注: 仕入(原価) × 原価率 → 売価 (売価=原価÷原価率)
+  const sell=(cost>0&&rate>0)?Math.ceil(cost/(rate/100)):0;
+  const sellEl=bar.querySelector('.sec-os-sell');
+  if(sellEl) sellEl.textContent=sell>0?('→ 売価 ¥'+sell.toLocaleString()):'';
+  s._sectionOutsource[sec]={out:!!bar.querySelector('.sec-os-chk')?.checked, vendor:bar.querySelector('.sec-os-vendor')?.value||'', cost:cost, rate:rate, sell:sell};
 }
 // 封筒フォーム
 // ═══ 共通フォームHTMLヘルパー ═══
@@ -8869,6 +8883,20 @@ function closePV(){document.getElementById('pv-overlay').classList.remove('show'
 // ═══════════════════ マスター管理 ════════════
 let curMaster='paper';
 function swMaster(id,btn){curMaster=id;document.querySelectorAll('[id^="mc-"]').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');renderMaster(id);}
+// ═══ 💴 COST-1: 原価×原価率 → 売価の自動算出 (売価 = 原価 ÷ 原価率) ═══
+function _costToPrice_(c, cr){
+  c = parseFloat(c); cr = parseFloat(cr);
+  if(!(c > 0) || !(cr > 0)) return null;
+  return Math.ceil(c / (cr / 100) * 10) / 10;
+}
+function setMasterCost(id, oi, field, val){
+  var r = (DB.master[id] || [])[oi]; if(!r) return;
+  r[field] = (val !== '' && val != null) ? parseFloat(val) : null;
+  var p = _costToPrice_(r.c, r.cr);
+  if(p != null) r.p = p;
+  if(typeof saveDB === 'function') saveDB();
+  renderMaster(id);
+}
 // ═══ ⚖️ KILO-1: 用紙キロ単価 → 1枚単価の自動算出 ═══
 // 1枚単価 = 連量(kg/1000枚) × キロ単価 ÷ 1000
 function _kiloCalcUnit_(r){
@@ -9182,7 +9210,9 @@ function renderMaster(id){
     html+=`<table class="m-tbl"><thead><tr>
       <th>工程名</th>
       <th style="width:85px">印刷色</th>
-      <th style="text-align:right;width:80px">標準単価</th>
+      <th style="text-align:right;width:70px;color:#166534">原価</th>
+      <th style="text-align:right;width:60px;color:#166534">原価率%</th>
+      <th style="text-align:right;width:80px">売価<br><span style="font-weight:400;font-size:9px">(原価÷率で自動)</span></th>
       <th style="text-align:right;width:75px;color:#78350f">最低料金</th>
       <th style="min-width:180px">段階単価</th>
       <th>備考</th>
@@ -9196,7 +9226,9 @@ function renderMaster(id){
         <td><select onchange="DB.master.print[${oi}].iro=this.value" style="font-size:11px">
           ${iroOpts.map(o=>`<option${iroVal===o?' selected':''}>${o}</option>`).join('')}
         </select></td>
-        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" onchange="DB.master.print[${oi}].p=this.value?parseFloat(this.value):null"></td>
+        <td><input class="r" type="number" step="0.1" value="${r.c!=null?r.c:''}" style="background:#f0fdf4" onchange="setMasterCost('print',${oi},'c',this.value)"></td>
+        <td><input class="r" type="number" value="${r.cr!=null?r.cr:''}" placeholder="70" style="background:#f0fdf4;width:50px" onchange="setMasterCost('print',${oi},'cr',this.value)"></td>
+        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" title="原価と原価率を入れると自動計算。直接入力も可" onchange="DB.master.print[${oi}].p=this.value?parseFloat(this.value):null"></td>
         <td><input class="r" type="number" value="${r.mc!=null?r.mc:''}" placeholder="0=なし" style="background:#fffbeb" onchange="DB.master.print[${oi}].mc=this.value?parseFloat(this.value):0"></td>
         <td>
           <div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center">
@@ -9217,7 +9249,9 @@ function renderMaster(id){
   } else {
     html+=`<table class="m-tbl"><thead><tr>
       <th>工程名</th>
-      <th style="text-align:right;width:80px">標準単価</th>
+      <th style="text-align:right;width:70px;color:#166534">原価</th>
+      <th style="text-align:right;width:60px;color:#166534">原価率%</th>
+      <th style="text-align:right;width:80px">売価<br><span style="font-weight:400;font-size:9px">(原価÷率で自動)</span></th>
       <th style="text-align:right;width:75px;color:#78350f">最低料金</th>
       <th style="min-width:200px">段階単価 <span style="font-size:10px;font-weight:400;color:#aaa">（部数↑→単価↓。例: 500:3.5,1000:2.5,3000:2.0）</span></th>
       <th>備考</th>
@@ -9229,7 +9263,9 @@ function renderMaster(id){
       const tiersStr=(r.tiers||[]).map(t=>`${t.qty}:${t.p}`).join(',');
       html+=`<tr>
         <td><input type="text" value="${r.n||''}" onchange="DB.master['${id}'][${oi}].n=this.value"></td>
-        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" onchange="DB.master['${id}'][${oi}].p=this.value?parseFloat(this.value):null"></td>
+        <td><input class="r" type="number" step="0.1" value="${r.c!=null?r.c:''}" style="background:#f0fdf4" onchange="setMasterCost('${id}',${oi},'c',this.value)"></td>
+        <td><input class="r" type="number" value="${r.cr!=null?r.cr:''}" placeholder="70" style="background:#f0fdf4;width:50px" onchange="setMasterCost('${id}',${oi},'cr',this.value)"></td>
+        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" title="原価と原価率を入れると自動計算。直接入力も可" onchange="DB.master['${id}'][${oi}].p=this.value?parseFloat(this.value):null"></td>
         <td><input class="r" type="number" value="${r.mc!=null?r.mc:''}" placeholder="0=なし" style="background:#fffbeb" onchange="DB.master['${id}'][${oi}].mc=this.value?parseFloat(this.value):0"></td>
         <td>
           <div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center">
