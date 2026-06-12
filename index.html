@@ -1587,8 +1587,10 @@ setTimeout(_removeBootLoader_, 5000);
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-p" onclick="testGasAi()">🧪 AI接続テスト（GAS経由）</button>
+          <button class="btn" style="background:#f0fdf4;border-color:#86efac;color:#166534" onclick="showAiUsage()">💰 今日の使用量・コストを確認</button>
         </div>
         <div id="aikey-test" style="font-size:12px;margin-top:6px"></div>
+        <div id="ai-usage-box" style="font-size:12px;margin-top:6px"></div>
       </div>
     </div>
     <div id="tools-list"></div>
@@ -9228,10 +9230,10 @@ function kiloScanImport(){
           var fr = new FileReader();
           fr.onload = function(){ img.onload = function(){
             var cv = document.createElement('canvas');
-            var sc = Math.min(1, 1600 / Math.max(img.width, img.height));
+            var sc = Math.min(1, 1400 / Math.max(img.width, img.height));
             cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
             cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-            res(cv.toDataURL('image/jpeg', 0.85).split(',')[1]);
+            res(cv.toDataURL('image/jpeg', 0.8).split(',')[1]);
           }; img.onerror = rej; img.src = fr.result; };
           fr.onerror = rej; fr.readAsDataURL(f);
         });
@@ -16003,6 +16005,28 @@ function updateAiKeyStatus(){
 function toggleAiKeyBox(){
   var b = document.getElementById('aikey-box');
   b.style.display = b.style.display==='none' ? '' : 'none';
+}
+// 💰 AIUSE-1: 今日のAI使用量と概算コストを表示
+async function showAiUsage(){
+  var box = document.getElementById('ai-usage-box'); if(!box) return;
+  box.innerHTML = '💰 取得中…';
+  try {
+    var r = await callCloudAPI('getAiUsage', {});
+    if(!r || !r.success) throw new Error(r && r.error || '取得失敗');
+    var u = r.today || {};
+    var pct = r.limitJpy > 0 ? Math.min(100, Math.round((r.costJpy / r.limitJpy) * 100)) : 0;
+    var barColor = pct >= 80 ? '#dc2626' : pct >= 50 ? '#f59e0b' : '#16a34a';
+    box.innerHTML = '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 14px;line-height:1.8">'
+      + '<b>今日のAI使用量</b>（モデル: ' + (r.model || '') + '）<br>'
+      + '呼び出し ' + (u.n||0) + '回 ／ 入力 ' + Number(u.i||0).toLocaleString() + ' tok ／ 出力 ' + Number(u.o||0).toLocaleString() + ' tok'
+      + ((u.ci||0) > 0 ? ' ／ キャッシュ読込 ' + Number(u.ci).toLocaleString() + ' tok' : '') + '<br>'
+      + '概算コスト: <b style="font-size:15px;color:' + barColor + '">¥' + (r.costJpy||0) + '</b> ／ 日次上限 ¥' + r.limitJpy
+      + '<div style="background:#e5e7eb;border-radius:4px;height:8px;margin-top:4px"><div style="background:' + barColor + ';height:8px;border-radius:4px;width:' + pct + '%"></div></div>'
+      + '<div style="font-size:10.5px;color:#64748b;margin-top:4px">上限に達するとAIは自動停止し、翌日0時(日本時間)に再開します。上限変更はGASのスクリプトプロパティ AI_DAILY_LIMIT_JPY（0=無制限）。</div>'
+      + '</div>';
+  } catch(e){
+    box.innerHTML = '<span style="color:#dc2626">取得できませんでした: ' + _escDiff(e.message) + '（GASが旧バージョンの可能性）</span>';
+  }
 }
 async function testGasAi(){
   var out = document.getElementById('aikey-test');
@@ -25021,7 +25045,8 @@ async function _haAiSuggest_(){
         '<div style="font-size:10px;color:#94a3b8;margin-top:8px">※ Haiku（低コストモデル）による参考提案です。最終判断はご自身で行ってください。</div>';
     } else {
       var errMsg = (resp && resp.error) ? String(resp.error) : '';
-      var human = /usage limits|spending/i.test(errMsg) ? 'AI利用上限に達しています（管理会社で上限引き上げが必要）'
+      var human = /daily_limit/i.test(errMsg) ? '本日のAI利用上限に達しました（翌日0時に自動再開）'
+        : /usage limits|spending/i.test(errMsg) ? 'AI利用上限に達しています（管理会社で上限引き上げが必要）'
         : /ai_disabled/i.test(errMsg) ? 'AI機能が管理者により停止されています（設定→AI設定で確認）'
         : /CLAUDE_API_KEY/.test(errMsg) ? 'GASにAPIキーが未設定です（管理会社で設定）'
         : 'AI応答を取得できませんでした' + (errMsg ? '（' + _escDiff(errMsg) + '）' : '。通信状況を確認してください');
