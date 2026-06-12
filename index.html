@@ -6805,6 +6805,14 @@ function buildPanel(id,initData){
         <option value="yes">有</option>
       </select>
     </div>
+    <div class="f" style="min-width:150px">
+      <label>発注形態</label>
+      <select id="order-form-${id}" onchange="onOrderFormChange(${id})" title="部分外注・分離発注を選ぶと、各工程の下に外注先の入力欄が出ます">
+        <option value="complete">完全（自社一括）</option>
+        <option value="partial">部分外注</option>
+        <option value="separate">分離発注</option>
+      </select>
+    </div>
 
   </div>
   <!-- サイズ入力：選択リスト＋mm手入力 並列 -->
@@ -7274,6 +7282,7 @@ function stackCostPanels(area,id){
   }
   // 各パネルを常時表示＋セクション見出し
   const TITLES={p:'📄 用紙',pr:'🖨️ 印刷',pl:'🎯 製版・CTP',dt:'💻 データ作成',b:'📚 製本・加工'};
+  const SEC_NAMES={p:'用紙',pr:'印刷',pl:'製版・CTP',dt:'データ作成',b:'製本・加工'};
   Object.keys(TITLES).forEach(k=>{
     const pn=area.querySelector(`#cp-${k}-${id}`);
     if(!pn) return;
@@ -7286,7 +7295,50 @@ function stackCostPanels(area,id){
       h.textContent=TITLES[k];
       pn.insertBefore(h,pn.firstChild);
     }
+    // 部分外注/分離発注: 各工程の下に外注先入力バー (発注形態が完全の時は非表示)
+    if(!pn.querySelector('.sec-os-bar')){
+      const sec=SEC_NAMES[k];
+      const os=document.createElement('div');
+      os.className='sec-os-bar';
+      os.dataset.sec=sec;
+      os.style.cssText='display:none;background:#fff7ed;border:1px dashed #fdba74;border-radius:7px;padding:6px 10px;margin:0 0 8px;font-size:11.5px;align-items:center;gap:10px;flex-wrap:wrap';
+      os.innerHTML='<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:#9a3412;white-space:nowrap">'
+        +`<input type="checkbox" class="sec-os-chk" style="width:15px;height:15px" onchange="_secOsChange_(${id},'${sec}')"> この工程を外注／別発注する</label>`
+        +`<input class="sec-os-vendor" placeholder="発注先名（例: ○○製本所）" style="flex:1;min-width:170px;font-size:11.5px;padding:4px 8px;border:1px solid #fdba74;border-radius:6px" oninput="_secOsChange_(${id},'${sec}')">`;
+      const h2=pn.querySelector('.cost-sec-h');
+      if(h2&&h2.nextSibling) pn.insertBefore(os,h2.nextSibling); else pn.appendChild(os);
+    }
   });
+  _applyOrderFormUI_(id);
+}
+// 発注形態 (完全/部分外注/分離発注) の切替: 部分外注・分離なら各工程の外注バーを表示
+function onOrderFormChange(id){
+  const v=document.getElementById(`order-form-${id}`)?.value||'complete';
+  ts(id)._orderForm=v;
+  _applyOrderFormUI_(id);
+}
+function _applyOrderFormUI_(id){
+  const s=ts(id);
+  const v=s._orderForm||document.getElementById(`order-form-${id}`)?.value||'complete';
+  const show=(v==='partial'||v==='separate');
+  const area=document.getElementById(`form-area-${id}`);
+  if(!area) return;
+  area.querySelectorAll('.sec-os-bar').forEach(bar=>{
+    bar.style.display=show?'flex':'none';
+    // 保存済み状態を復元
+    const st=(s._sectionOutsource||{})[bar.dataset.sec];
+    if(st){
+      const chk=bar.querySelector('.sec-os-chk'); if(chk) chk.checked=!!st.out;
+      const vd=bar.querySelector('.sec-os-vendor'); if(vd&&st.vendor&&!vd.value) vd.value=st.vendor;
+    }
+  });
+}
+function _secOsChange_(id, sec){
+  const area=document.getElementById(`form-area-${id}`); if(!area) return;
+  const bar=[...area.querySelectorAll('.sec-os-bar')].find(b=>b.dataset.sec===sec); if(!bar) return;
+  const s=ts(id);
+  s._sectionOutsource=s._sectionOutsource||{};
+  s._sectionOutsource[sec]={out:!!bar.querySelector('.sec-os-chk')?.checked, vendor:bar.querySelector('.sec-os-vendor')?.value||''};
 }
 // 封筒フォーム
 // ═══ 共通フォームHTMLヘルパー ═══
@@ -24664,7 +24716,9 @@ function _renderSeizouSheet(project){
   // サブ情報
   + '<table><colgroup><col style="width:50%"><col style="width:50%"></colgroup>'
   +   '<tr class="tall"><td><span class="lbl-en">SPEC 仕様・規格</span><b>'+specCell+'</b></td>'
-  +   '<td><span class="lbl-en">CHANGE 変更</span><b>'+e(p.status||'─')+'</b></td></tr>'
+  +   '<td><span class="lbl-en">ORDER 発注形態</span><b>'+e(p.orderForm||'完全（自社一括）')+'</b>'
+  +     (p.sectionOutsource&&Object.keys(p.sectionOutsource).length?'<div style="font-size:9.5px;color:#9a3412;margin-top:2px">'+Object.keys(p.sectionOutsource).map(function(sec){return e(sec)+'→'+e(p.sectionOutsource[sec]);}).join(' ／ ')+'</div>':'')
+  +   '</td></tr>'
   + '</table>'
   // 01 用紙
   + '<div class="sec"><div class="sec-h"><span class="tag">01 / PAPER</span><span class="jp">用　紙</span><span class="rule"></span></div>'
@@ -24684,15 +24738,26 @@ function _renderSeizouSheet(project){
   // 04 工程（有無と実施場所）
   + (function(){
       var compName = _seizouCompanyName_(p);
+      // 工程 ← 原価セクションの外注設定をマッピング (版下=データ作成/製版CTP, 印刷=印刷, 加工=製本・加工)
+      var secMap = { '版下': ['データ作成', '製版・CTP'], '印刷': ['印刷'], '加工': ['製本・加工'] };
+      var so = p.sectionOutsource || {};
       var rows = STEPS.map(function(st){
         var v = (p.steps && p.steps[st]) || '─';
         var has = (v && v !== '─' && v !== '未着手') ? '■ 有' : '□';
+        var vendor = '';
+        (secMap[st] || []).forEach(function(sec){ if(!vendor && so[sec]) vendor = so[sec]; });
         var mk = (p.stepMaker && p.stepMaker[st]) || '';
-        var place = mk === '外製' ? '外製（外注先：　　　　　）' : mk === '内製' ? '内製（' + e(compName) + '）' : '　';
+        var place = vendor ? '外製（' + e(vendor) + '）'
+          : mk === '外製' ? '外製（外注先：　　　　　）'
+          : mk === '内製' ? '内製（' + e(compName) + '）' : '　';
         return '<tr class="tall"><td class="lbl" style="width:14%">' + e(st) + '</td>'
           + '<td class="c" style="width:12%">' + has + '</td>'
           + '<td style="width:74%">' + place + '</td></tr>';
       }).join('');
+      // 用紙の分離/外注は別行で明記
+      if(so['用紙']){
+        rows = '<tr class="tall"><td class="lbl" style="width:14%">用紙調達</td><td class="c" style="width:12%">■ 有</td><td style="width:74%">' + ((p.orderForm==='分離発注')?'分離発注':'外注') + '（' + e(so['用紙']) + '）</td></tr>' + rows;
+      }
       return '<div class="sec"><div class="sec-h"><span class="tag">04 / PROCESS</span><span class="jp">工　程（有無・実施場所）</span><span class="rule"></span></div>'
         + '<table><tr class="grid-h"><th style="width:14%">工程</th><th style="width:12%">有無</th><th>どこで行うか（内製＝自社 / 外製＝外注先名を記入）</th></tr>'
         + rows + '</table></div>';
@@ -27923,11 +27988,19 @@ function executeOrderConfirm(tabId){
   // リピート履歴を案件に保存 (備考ではなくデータとして持つ → 次回リピート時にバナー表示)
   (function(){
     var sTab = (typeof ts === 'function') ? ts(tabId) : null;
-    if(sTab && (sTab._repeatFrom || (sTab._repeatRefs||[]).length)){
+    if(!sTab) return;
+    if(sTab._repeatFrom || (sTab._repeatRefs||[]).length){
       proj.repeatFrom = sTab._repeatFrom || '';
       proj.repeatRefs = (sTab._repeatRefs || []).slice();
       if(proj.repeatFrom && proj.repeatRefs.indexOf(proj.repeatFrom) < 0) proj.repeatRefs.push(proj.repeatFrom);
     }
+    // 発注形態 (完全/部分外注/分離発注) + 工程別の外注先 → 製造指示書の工程欄に反映
+    var of = sTab._orderForm || document.getElementById('order-form-' + tabId)?.value || 'complete';
+    proj.orderForm = { complete: '完全（自社一括）', partial: '部分外注', separate: '分離発注' }[of] || of;
+    var so = sTab._sectionOutsource || {};
+    var out = {};
+    Object.keys(so).forEach(function(sec){ if(so[sec] && so[sec].out) out[sec] = so[sec].vendor || '外注'; });
+    if(Object.keys(out).length) proj.sectionOutsource = out;
   })();
 
   if(!DB.projects) DB.projects = [];
