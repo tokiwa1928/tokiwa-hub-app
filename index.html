@@ -18231,6 +18231,12 @@ function submitAddProject(){
   alert('✅ 案件 ' + proj.id + ' を登録しました' + (_estCost > 0 ? '\n想定原価 ¥' + _estCost.toLocaleString() + ' / 原価率 ' + (proj.costRate||0) + '%' : ''));
 }
 
+// 既定の参照元: 受注実績があればそれ、無ければ見積実績(見積書含む)を初期選択
+function _repeatDefaultSrc_(){
+  if((DB.projects || []).length) return 'projects';
+  if(_repeatHistPool_().length) return 'history';
+  return 'projects';
+}
 // 🔁 リピート登録 (過去案件・実績から選んで複製)
 function showRepeatProjectModal(){
   var modal = document.createElement('div');
@@ -18266,8 +18272,8 @@ function showRepeatProjectModal(){
           '</select>' +
         '</div>' +
         '<div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">' +
-          '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#334155;white-space:nowrap;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#fff"><input type="radio" name="repeat-src" value="projects" checked onchange="_refreshRepeatCustOpts_();_renderRepeatList_()" style="width:16px;height:16px"> 📋 受注実績 <span style="color:#94a3b8;font-size:12px">(' + ((DB.projects||[]).length) + '件)</span></label>' +
-          '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#334155;white-space:nowrap;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#fff"><input type="radio" name="repeat-src" value="history" onchange="_refreshRepeatCustOpts_();_renderRepeatList_()" style="width:16px;height:16px"> 📝 見積実績 <span style="color:#94a3b8;font-size:12px">(' + ((DB.history||[]).length) + '件)</span></label>' +
+          '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#334155;white-space:nowrap;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#fff"><input type="radio" name="repeat-src" value="projects"' + (_repeatDefaultSrc_()==='projects'?' checked':'') + ' onchange="_refreshRepeatCustOpts_();_renderRepeatList_()" style="width:16px;height:16px"> 📋 受注実績 <span style="color:#94a3b8;font-size:12px">(' + ((DB.projects||[]).length) + '件)</span></label>' +
+          '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#334155;white-space:nowrap;padding:6px 12px;border:1.5px solid #cbd5e1;border-radius:8px;cursor:pointer;background:#fff"><input type="radio" name="repeat-src" value="history"' + (_repeatDefaultSrc_()==='history'?' checked':'') + ' onchange="_refreshRepeatCustOpts_();_renderRepeatList_()" style="width:16px;height:16px"> 📝 見積実績 <span style="color:#94a3b8;font-size:12px">(' + (_repeatHistPool_().length) + '件)</span></label>' +
           '<button type="button" onclick="_clearRepeatFilters_()" style="font-size:12px;padding:6px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;cursor:pointer;color:#64748b;white-space:nowrap">✕ 絞り込みクリア</button>' +
           '<span style="margin-left:auto;font-size:11px;color:#94a3b8;white-space:nowrap" id="repeat-result-count"></span>' +
         '</div>' +
@@ -18279,10 +18285,22 @@ function showRepeatProjectModal(){
   setTimeout(function(){ document.getElementById('repeat-search')?.focus(); }, 100);
 }
 
+// 見積実績プール = 見積実績(history) + 保存済み見積書(estimates)。重複IDは除外
+function _repeatHistPool_(){
+  var seen = {};
+  var out = [];
+  (DB.history || []).forEach(function(r){ if(r){ out.push(r); if(r.id) seen[r.id] = 1; } });
+  (DB.estimates || []).forEach(function(e){
+    if(!e || (e.id && seen[e.id])) return;
+    out.push({ id: e.id, cust: e.cust, item: e.item, spec: e.spec, qty: e.qty, unit: e.unit,
+      exTax: e.exTax, memo: e.memo || e.note || '', date: (e.createdAt||'').slice(0,10), createdAt: e.createdAt });
+  });
+  return out;
+}
 // リピートモーダル: 得意先選択肢の自動生成
 function _repeatCustOptions_(){
   var src = document.querySelector('input[name="repeat-src"]:checked')?.value || 'projects';
-  var pool = src === 'projects' ? (DB.projects || []) : (DB.history || []);
+  var pool = src === 'projects' ? (DB.projects || []) : _repeatHistPool_();
   var custs = {};
   pool.forEach(function(r){ if(r.cust) custs[r.cust] = (custs[r.cust]||0) + 1; });
   return Object.keys(custs).sort(function(a,b){ return custs[b]-custs[a]; })
@@ -18311,7 +18329,7 @@ function _renderRepeatList_(){
   var list = document.getElementById('repeat-list');
   if(!list) return;
 
-  var rows = (src === 'projects') ? (DB.projects || []).slice() : (DB.history || []).slice();
+  var rows = (src === 'projects') ? (DB.projects || []).slice() : _repeatHistPool_().slice();
 
   // 期間フィルタ
   if(fPeriod){
