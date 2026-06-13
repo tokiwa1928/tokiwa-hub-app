@@ -1630,6 +1630,12 @@ setTimeout(_removeBootLoader_, 5000);
     </div>
   </div>
   
+  <!-- COSCOPE-1: 会社別の表示設定 (トキワ役員のみ) -->
+  <div class="sec" id="company-visibility-box" style="max-width:900px;margin-top:1rem;display:none;background:#faf5ff;border:1px solid #d8b4fe">
+    <div class="st" style="color:#6d28d9">🔐 会社別の表示設定（トキワ役員のみ）</div>
+    <div id="company-visibility-ui"></div>
+  </div>
+
   <!-- システムユーザー管理 -->
   <div class="sec" style="max-width:900px;margin-top:1rem">
     <div class="st" style="display:flex;align-items:center;justify-content:space-between">
@@ -16378,6 +16384,33 @@ var RELEASE_FEATURES = [
 // 第1段階プリセット: 案件管理表の置き換えに必要な最小セット
 var RELEASE_STAGE1 = ['realtime','project','guide'];
 function _isAdmin_(){ return !!(currentAuth && currentAuth.role === 'admin'); }
+// ═══ COSCOPE-1: 会社別データ分離 + トキワ役員による表示制御 ═══
+// トキワ印刷(COMP002)=管理会社。TKユーザーは全社のデータを閲覧できる。他社は自社のみ。
+function _isMgmtCompany_(){ return !!(currentAuth && (currentAuth.companyId === 'COMP002' || currentAuth.companyCode === 'TK')); }
+function _canSeeAllCompanies_(){ return _isMgmtCompany_(); }
+// 表示設定を変更できるのはトキワの役員2名 (TK admin または DB.conf.tkExecs に登録された氏名/メール)
+function _isTkExec_(){
+  if(!currentAuth || !currentAuth.loggedIn) return false;
+  if(!_isMgmtCompany_()) return false;
+  if(currentAuth.role === 'admin') return true;
+  var ex = (DB.conf && DB.conf.tkExecs) || [];
+  return ex.indexOf(currentAuth.userName || '') >= 0 || ex.indexOf(currentAuth.email || '') >= 0;
+}
+// データが現在のユーザーに見えてよいか (管理会社=全件 / 他社=自社companyIdのみ)
+function _itemVisibleByCompany_(item){
+  if(_canSeeAllCompanies_()) return true;
+  if(!item || !item.companyId) return true; // companyId 無し(旧データ)は自社扱い
+  return item.companyId === currentAuth.companyId;
+}
+// 会社別の表示設定 (TK役員が決める)。DB.companyVisibility['COMP004'] = 表示する機能キーの配列。
+// 未設定(配列でない)=全表示。配列がある場合、そこに無いページは非表示。
+function _pageHiddenForMe_(pageId){
+  if(_isMgmtCompany_()) return false; // 管理会社(トキワ)は常に全部見える
+  var cv = (DB && DB.companyVisibility) || {};
+  var vis = cv[currentAuth && currentAuth.companyId];
+  if(!Array.isArray(vis)) return false; // 設定なし=全表示
+  return vis.indexOf(pageId) < 0;       // 表示リストに無い=非表示
+}
 function getReleaseConfig(){
   var rc = (DB && DB.releaseConfig) || {};
   return { enabled: !!rc.enabled, visible: Array.isArray(rc.visible) ? rc.visible : [] };
@@ -16389,7 +16422,9 @@ function applyReleaseConfig(){
     document.querySelectorAll('.tb-btn').forEach(function(b){
       var key = b.dataset.page || b.dataset.rel;
       if(!key || key === 'est') return; // est(詳細フォーム)は内部遷移用に常に許可
-      b.style.display = (active && rc.visible.indexOf(key) < 0) ? 'none' : '';
+      var hideStaged = active && rc.visible.indexOf(key) < 0;
+      var hideCompany = (typeof _pageHiddenForMe_ === 'function') && _pageHiddenForMe_(key); // COSCOPE-1: 会社別非表示
+      b.style.display = (hideStaged || hideCompany) ? 'none' : '';
     });
     // 全ボタンが消えたグループは枠ごと隠す
     document.querySelectorAll('.tb-group').forEach(function(g){
@@ -16400,6 +16435,8 @@ function applyReleaseConfig(){
 }
 // 一般ユーザーが非公開ページへ遷移しようとした時のガード (内部リンク対策)
 function _releaseAllows_(pageId){
+  // COSCOPE-1: 会社別非表示が設定されていれば、その会社のユーザーは遷移不可
+  if(typeof _pageHiddenForMe_ === 'function' && _pageHiddenForMe_(pageId)) return false;
   var rc = getReleaseConfig();
   if(!rc.enabled || _isAdmin_()) return true;
   if(['est'].indexOf(pageId) >= 0) return true; // 案件詳細フォームは案件管理から必要
@@ -16446,6 +16483,58 @@ function saveReleaseConfig(){
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
   applyReleaseConfig();
   alert('✅ 段階リリース設定を保存しました\n' + (DB.releaseConfig.enabled ? ('一般ユーザーに表示: ' + visible.length + ' 機能') : '段階リリースは無効 (全機能表示)'));
+}
+
+// COSCOPE-1: 会社別の表示設定UI (トキワ役員のみ)
+function renderCompanyVisibilityUI(){
+  var box = document.getElementById('company-visibility-box');
+  var ui = document.getElementById('company-visibility-ui');
+  if(!box || !ui) return;
+  if(typeof _isTkExec_ !== 'function' || !_isTkExec_()){ box.style.display = 'none'; return; }
+  box.style.display = '';
+  var companies = (DB.companies || []).filter(function(c){ return c.id !== 'COMP002' && c.code !== 'TK'; }); // 管理会社トキワ以外
+  DB.companyVisibility = DB.companyVisibility || {};
+  var execs = (DB.conf && DB.conf.tkExecs) || [];
+  ui.innerHTML = ''
+    + '<div style="font-size:11.5px;color:#6b21a8;line-height:1.7;margin-bottom:10px">各会社で<b>表示する機能だけ</b>にチェック。チェックを外した機能は、その会社のアカウントでは非表示になります（ナビからも消え、直接リンクでも開けません）。トキワ印刷は管理会社として常に全機能が見えます。</div>'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;background:#fff;border:1px solid #d8b4fe;border-radius:6px;padding:6px 10px">'
+    +   '<b style="font-size:11.5px;color:#6d28d9">設定できる役員(トキワ):</b>'
+    +   '<input id="tk-execs-input" value="' + _escAttr_(execs.join(', ')) + '" placeholder="氏名をカンマ区切り (adminは常に可)" style="flex:1;min-width:200px;font-size:11.5px;padding:4px 8px">'
+    +   '<button class="btn" style="font-size:10px;padding:3px 8px" onclick="_saveTkExecs_()">保存</button>'
+    + '</div>'
+    + companies.map(function(c){
+        var vis = DB.companyVisibility[c.id]; // visible配列 (未設定=全表示)
+        var allVisible = !Array.isArray(vis);
+        return '<div style="border:1px solid #e9d5ff;border-radius:8px;margin-bottom:8px;overflow:hidden">'
+          + '<div style="background:#f5f3ff;padding:7px 12px;font-weight:700;font-size:13px;color:#5b21b6;display:flex;align-items:center;gap:8px">' + _escDiff(c.name || c.code) + ' <span style="font-size:10px;color:#a78bfa">(' + (c.code||'') + ')</span>'
+          + '<span style="margin-left:auto;font-size:10px;color:#7c3aed">' + (allVisible ? '全機能 表示中' : (vis.length + '機能 表示') ) + '</span></div>'
+          + '<div style="padding:8px 12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:3px">'
+          + RELEASE_FEATURES.map(function(f){
+              var checked = allVisible || vis.indexOf(f.key) >= 0;
+              var dis = f.core ? 'disabled' : '';
+              return '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer;padding:2px 5px;border:1px solid #eee;border-radius:4px;background:#fff">'
+                + '<input type="checkbox" class="cv-feat" data-cid="' + c.id + '" value="' + f.key + '" ' + (checked?'checked':'') + ' ' + dis + ' onchange="_saveCompanyVisibility_(\'' + c.id + '\')"> ' + f.label + '</label>';
+            }).join('')
+          + '</div></div>';
+      }).join('');
+}
+function _saveCompanyVisibility_(cid){
+  DB.companyVisibility = DB.companyVisibility || {};
+  var keys = [].slice.call(document.querySelectorAll('.cv-feat[data-cid="' + cid + '"]:checked')).map(function(c){ return c.value; });
+  // core(ホーム)は常に含める
+  RELEASE_FEATURES.forEach(function(f){ if(f.core && keys.indexOf(f.key) < 0) keys.push(f.key); });
+  DB.companyVisibility[cid] = keys;
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  renderCompanyVisibilityUI();
+  if(typeof _toastMsg === 'function') _toastMsg('🔐 表示設定を保存しました (全PCに同期)');
+}
+function _saveTkExecs_(){
+  DB.conf = DB.conf || {};
+  DB.conf.tkExecs = (document.getElementById('tk-execs-input')?.value || '').split(/[,、]/).map(function(s){ return s.trim(); }).filter(Boolean);
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  if(typeof _toastMsg === 'function') _toastMsg('💾 役員を保存しました: ' + DB.conf.tkExecs.join(', '));
 }
 
 // ═════════════ TLPF-1: 🧰 ツールランチャー ═════════════
@@ -29619,7 +29708,9 @@ function renderProjects(){
     if(stage !== 'all' && stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
     // AAAAAA-1: チップ式 複数キーワード AND 判定 (得意先/品名/仕様/種別)
     if(typeof _projMatchesChips_ === 'function' && !_projMatchesChips_(r)) return false;
-    // 会社フィルタ
+    // COSCOPE-1: 会社別データ分離 — 他社は自社案件のみ (管理会社トキワは全件閲覧)
+    if(typeof _itemVisibleByCompany_ === 'function' && !_itemVisibleByCompany_(r)) return false;
+    // 会社フィルタ (任意の絞り込み)
     if(cf==='own'){
       const isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId==='COMP001');
       if(!isOwn) return false;
@@ -31639,9 +31730,10 @@ function switchCompany(code){
 
 // 会社一覧を描画
 function renderCompanies(){
+  if(typeof renderCompanyVisibilityUI === 'function') try { renderCompanyVisibilityUI(); } catch(e){}
   const body = document.getElementById('company-body');
   if(!body) return;
-  
+
   const companies = DB.companies||[];
   if(!companies.length){
     body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#aaa;padding:1rem">会社が登録されていません</td></tr>';
