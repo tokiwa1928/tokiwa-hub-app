@@ -1825,12 +1825,6 @@ setTimeout(_removeBootLoader_, 5000);
         <span>📸 校正一覧</span>
         <div style="display:flex;gap:8px;align-items:center">
           <input id="proof-q" placeholder="案件・得意先で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderProofingList()">
-          <select id="proof-filter" style="font-size:12px;padding:4px 8px" onchange="renderProofingList()">
-            <option value="">すべて</option>
-            <option value="waiting">回答待ち</option>
-            <option value="feedback">修正依頼あり</option>
-            <option value="approved">校了</option>
-          </select>
           <button class="btn btn-p" onclick="createProofing()">＋ 新規校正</button>
         </div>
       </div>
@@ -12278,81 +12272,184 @@ function initProofingPage(){
 }
 
 // 校正一覧を描画
+// ═══ PROOFBOARD-1: 校正BOX のステータス(ラベル) を自由に編集できる掲示板スタイル ═══
+// 既定ステータス (LINE WORKS 掲示板を踏襲。編集可能)
+const PROOF_STATUS_DEFAULT = [
+  { key:'s_media_hi', label:'メディア部作業待ち(優先度高)', color:'#fecaca' },
+  { key:'s_media',    label:'メディア部作業待ち',           color:'#fef3c7' },
+  { key:'s_dtp',      label:'外注DTP・デザイン会社作業待ち', color:'#fef9c3' },
+  { key:'s_req',      label:'校正依頼(メディア部→営業)',     color:'#dbeafe' },
+  { key:'s_cust',     label:'校正中(営業→お客様)',          color:'#e0e7ff' },
+  { key:'s_print',    label:'校正中(営業→提携印刷会社)',     color:'#f3e8ff' },
+  { key:'s_done',     label:'校了',                         color:'#dcfce7', done:true },
+];
+// 旧ステータス(waiting/feedback/approved) → 新キーへの読み替え
+const PROOF_STATUS_LEGACY = { waiting:'s_media', feedback:'s_req', approved:'s_done' };
+function _proofStatuses_(){
+  if(!Array.isArray(DB.proofStatuses) || !DB.proofStatuses.length){
+    DB.proofStatuses = JSON.parse(JSON.stringify(PROOF_STATUS_DEFAULT));
+  }
+  return DB.proofStatuses;
+}
+function _normProofStatus_(st){
+  st = st || '';
+  var list = _proofStatuses_();
+  if(list.some(function(s){ return s.key === st; })) return st;
+  if(PROOF_STATUS_LEGACY[st] && list.some(function(s){ return s.key === PROOF_STATUS_LEGACY[st]; })) return PROOF_STATUS_LEGACY[st];
+  return list[0] ? list[0].key : '';
+}
+function _proofStatusMeta_(key){
+  return _proofStatuses_().find(function(s){ return s.key === key; }) || { key:key, label:key||'未設定', color:'#f1f5f9' };
+}
+window._proofViewStatus_ = window._proofViewStatus_ || '';  // '' = すべて
+
 function renderProofingList(){
   const container = document.getElementById('proofing-list');
   if(!container) return;
-  
   const q = (document.getElementById('proof-q')?.value || '').toLowerCase();
-  const filter = document.getElementById('proof-filter')?.value || '';
-  
+
   // PPP-2: 自社作成 OR 自社にシェアされている proofing のみ表示
   var myCompany = (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '';
-  const proofings = (DB.proofings || []).filter(p => {
-    // 会社フィルタ (グループ会社共有対応)
+  const all = (DB.proofings || []).filter(p => {
     if(myCompany){
       var owner = p.companyCode || '';
       var sharedWith = p.sharedWithCompanies || [];
       if(owner && owner !== myCompany && sharedWith.indexOf(myCompany) < 0) return false;
     }
-    // 検索
     if(q){
       const searchStr = `${p.custName||''} ${p.prodName||''} ${p.projectId||''}`.toLowerCase();
       if(!searchStr.includes(q)) return false;
     }
-    // フィルター
-    if(filter && p.status !== filter) return false;
     return true;
   }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  
-  if(proofings.length === 0){
-    container.innerHTML = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正データがありません</div>';
-    return;
-  }
-  
-  const statusColors = { waiting: '#fef3c7', feedback: '#fee2e2', approved: '#dcfce7' };
-  const statusLabels = { waiting: '⏳回答待ち', feedback: '✏️修正依頼', approved: '✅校了' };
-  
-  let html = '';
-  proofings.forEach(p => {
-    const bgColor = statusColors[p.status] || '#fff';
-    const statusLabel = statusLabels[p.status] || p.status;
+
+  const statuses = _proofStatuses_();
+  // 件数集計
+  const counts = {}; statuses.forEach(s => counts[s.key] = 0);
+  all.forEach(p => { const k = _normProofStatus_(p.status); counts[k] = (counts[k]||0) + 1; });
+
+  // ステータス・タブ（左の掲示板リスト風）
+  const viewK = window._proofViewStatus_ || '';
+  let railHtml = '<div style="display:flex;flex-direction:column;gap:3px;min-width:200px;max-width:240px">'
+    + `<button onclick="_proofSetView_('')" style="text-align:left;font-size:12px;padding:7px 10px;border-radius:6px;cursor:pointer;border:1px solid ${viewK===''?'#1e293b':'#e0ddd6'};background:${viewK===''?'#1e293b':'#fff'};color:${viewK===''?'#fff':'#1a1a1a'};font-weight:${viewK===''?'700':'500'}">📋 すべて <span style="float:right;opacity:.7">${all.length}</span></button>`;
+  statuses.forEach(s => {
+    const sel = viewK === s.key;
+    railHtml += `<button onclick="_proofSetView_('${s.key}')" style="text-align:left;font-size:12px;padding:7px 10px;border-radius:6px;cursor:pointer;border:1px solid ${sel?'#1e293b':'#e0ddd6'};background:${sel?s.color:'#fff'};color:#1a1a1a;font-weight:${sel?'700':'500'};border-left:5px solid ${s.color}">${_escDiff(s.label)} <span style="float:right;color:#888">${counts[s.key]||0}</span></button>`;
+  });
+  railHtml += '<button onclick="openProofStatusEditor()" style="text-align:left;font-size:11px;padding:6px 10px;border-radius:6px;cursor:pointer;border:1px dashed #cbd5e1;background:#f8fafc;color:#64748b;margin-top:4px">⚙ ステータス(ラベル)を編集</button>';
+  railHtml += '</div>';
+
+  // カードを描画するヘルパ
+  function cardHtml(p){
+    const k = _normProofStatus_(p.status);
+    const meta = _proofStatusMeta_(k);
     const versionCount = (p.versions || []).length;
-    // PPP-2: 共有バッジ
     var owner = p.companyCode || '';
     var isShared = (p.sharedWithCompanies || []).length > 0;
     var isFromOther = myCompany && owner && owner !== myCompany;
     var shareBadge = '';
-    if(isFromOther){
-      shareBadge = '<span style="font-size:9px;background:#f3e8ff;color:#581c87;padding:1px 6px;border-radius:8px;margin-left:4px;font-weight:600">📥 ' + owner + 'から共有</span>';
-    } else if(isShared){
-      shareBadge = '<span style="font-size:9px;background:#dbeafe;color:#1e3a8a;padding:1px 6px;border-radius:8px;margin-left:4px;font-weight:600">🤝 共有中(' + p.sharedWithCompanies.length + '社)</span>';
-    }
-    // PPP-1: 最新 round/v 表示
-    var latest = (p.versions || [])[((p.versions || []).length) - 1];
+    if(isFromOther){ shareBadge = '<span style="font-size:9px;background:#f3e8ff;color:#581c87;padding:1px 6px;border-radius:8px;margin-left:4px;font-weight:600">📥 ' + owner + 'から共有</span>'; }
+    else if(isShared){ shareBadge = '<span style="font-size:9px;background:#dbeafe;color:#1e3a8a;padding:1px 6px;border-radius:8px;margin-left:4px;font-weight:600">🤝 共有中(' + p.sharedWithCompanies.length + '社)</span>'; }
+    var latest = (p.versions || [])[versionCount - 1];
     var roundDisp = '';
     if(latest && latest.round){
       var lbl = _proofRoundLabel_(latest.round, latest.kind);
       var vlbl = (latest.kind === 'proof' || latest.kind === 'final') && latest.subVersion ? ' v' + latest.subVersion : '';
       roundDisp = ' / 最新: ' + lbl + vlbl;
     }
-
-    html += `<div style="background:${bgColor};border:1px solid #e0ddd6;border-radius:8px;padding:12px;margin-bottom:8px;cursor:pointer" onclick="showProofingDetail('${p.id}')">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    // クイック・ステータス変更
+    const quickSel = '<select onclick="event.stopPropagation()" onchange="event.stopPropagation();updateProofingStatus(\'' + p.id + '\',this.value)" style="font-size:10px;padding:2px 4px;border:1px solid #d1d5db;border-radius:5px;max-width:160px">'
+      + statuses.map(function(s){ return '<option value="' + s.key + '"' + (s.key===k?' selected':'') + '>' + _escDiff(s.label) + '</option>'; }).join('') + '</select>';
+    return `<div style="background:${meta.color};border:1px solid #e0ddd6;border-left:5px solid ${meta.color};border-radius:8px;padding:11px;margin-bottom:8px;cursor:pointer" onclick="showProofingDetail('${p.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:13px">${p.custName || '─'}${shareBadge}</div>
           <div style="font-size:12px;color:#555">${p.prodName || ''}</div>
-          <div style="font-size:11px;color:#888;margin-top:4px">
-            版数: ${versionCount}${roundDisp} / 作成: ${p.createdAt?.split('T')[0] || '─'}
-          </div>
+          <div style="font-size:11px;color:#888;margin-top:4px">版数: ${versionCount}${roundDisp} / 作成: ${p.createdAt?.split('T')[0] || '─'}</div>
         </div>
-        <div style="text-align:right">
-          <span style="font-size:11px;padding:3px 8px;border-radius:10px;background:#fff">${statusLabel}</span>
-        </div>
+        <div style="text-align:right;flex-shrink:0">${quickSel}</div>
       </div>
     </div>`;
-  });
-  
-  container.innerHTML = html;
+  }
+
+  let listHtml = '';
+  if(!all.length){
+    listHtml = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正データがありません</div>';
+  } else if(viewK){
+    const items = all.filter(p => _normProofStatus_(p.status) === viewK);
+    listHtml = items.length ? items.map(cardHtml).join('') : '<div style="text-align:center;color:#aaa;padding:1.5rem;font-size:12px">このステータスの案件はありません</div>';
+  } else {
+    // すべて: ステータスごとにセクション見出しで区切る
+    statuses.forEach(s => {
+      const items = all.filter(p => _normProofStatus_(p.status) === s.key);
+      if(!items.length) return;
+      listHtml += `<div style="font-size:12px;font-weight:800;color:#1a1a1a;padding:5px 10px;margin:6px 0 6px;border-radius:6px;background:${s.color};border-left:5px solid #475569">${_escDiff(s.label)} <span style="color:#64748b;font-weight:500">(${items.length})</span></div>`;
+      listHtml += items.map(cardHtml).join('');
+    });
+    if(!listHtml) listHtml = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">該当する校正データがありません</div>';
+  }
+
+  container.innerHTML = '<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap"><div style="flex-shrink:0">' + railHtml + '</div><div style="flex:1;min-width:300px">' + listHtml + '</div></div>';
+}
+function _proofSetView_(k){ window._proofViewStatus_ = k; renderProofingList(); }
+
+// ⚙ ステータス(ラベル) 編集モーダル
+function openProofStatusEditor(){
+  const statuses = _proofStatuses_();
+  const PALETTE = ['#fecaca','#fed7aa','#fef3c7','#fef9c3','#d9f99d','#bbf7d0','#dcfce7','#a7f3d0','#99f6e4','#bae6fd','#dbeafe','#e0e7ff','#ddd6fe','#f3e8ff','#fbcfe8','#e2e8f0'];
+  let rows = statuses.map((s,i) => `<tr data-i="${i}">
+    <td style="white-space:nowrap"><button class="btn" style="font-size:10px;padding:1px 5px" onclick="_proofStatusMove_(${i},-1)">↑</button><button class="btn" style="font-size:10px;padding:1px 5px" onclick="_proofStatusMove_(${i},1)">↓</button></td>
+    <td><input value="${_escAttr_(s.label)}" oninput="_proofStatusEdit_(${i},'label',this.value)" style="width:100%;font-size:12px;padding:4px 6px"></td>
+    <td><select onchange="_proofStatusEdit_(${i},'color',this.value)" style="font-size:11px;padding:3px;background:${s.color}">${PALETTE.map(c=>`<option value="${c}"${c===s.color?' selected':''} style="background:${c}">${c}</option>`).join('')}</select></td>
+    <td style="text-align:center"><label style="font-size:10px"><input type="checkbox" ${s.done?'checked':''} onchange="_proofStatusEdit_(${i},'done',this.checked)" title="校了状態 (Drive自動格納のトリガー)"> 校了</label></td>
+    <td><button class="del-btn" onclick="_proofStatusDel_(${i})">×</button></td>
+  </tr>`).join('');
+  const modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.id = 'proof-status-editor';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML = '<div style="background:#fff;border-radius:10px;max-width:680px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">'
+    + '<div style="padding:12px 18px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>⚙ 校正ステータス(ラベル)の編集</b><button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    + '<div style="overflow-y:auto;padding:14px 18px;flex:1">'
+    + '<div style="font-size:11.5px;color:#666;margin-bottom:8px">部署や工程に合わせてラベル・色・並び順を自由に変更できます。既存の校正案件は近いステータスへ自動で振り分けられます。「校了」にチェックした状態になると、Drive の 05_校了 への自動格納の対象になります。</div>'
+    + '<table class="m-tbl" style="font-size:12px"><thead><tr><th style="width:60px">順</th><th>ラベル</th><th style="width:110px">色</th><th style="width:60px">校了</th><th style="width:30px"></th></tr></thead><tbody id="proof-status-rows">' + rows + '</tbody></table>'
+    + '<button class="btn" style="margin-top:8px;font-size:12px" onclick="_proofStatusAdd_()">＋ ステータスを追加</button>'
+    + '</div>'
+    + '<div style="padding:12px 18px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">'
+    + '<button class="btn" style="font-size:11px;color:#991b1b" onclick="if(confirm(\'既定のステータスに戻しますか?\')){DB.proofStatuses=JSON.parse(JSON.stringify(PROOF_STATUS_DEFAULT));saveDB();this.closest(\'.proof-modal\').remove();openProofStatusEditor();}">既定に戻す</button>'
+    + '<button class="btn btn-p" style="background:#16a34a;border-color:#16a34a" onclick="_proofStatusSave_()">💾 保存して閉じる</button>'
+    + '</div></div>';
+  document.body.appendChild(modal);
+}
+function _proofStatusEdit_(i, field, val){
+  const s = _proofStatuses_()[i]; if(!s) return;
+  if(field === 'done'){ if(val) _proofStatuses_().forEach(function(x){ delete x.done; }); s.done = !!val; }
+  else s[field] = val;
+}
+function _proofStatusMove_(i, dir){
+  const list = _proofStatuses_(); const j = i + dir;
+  if(j < 0 || j >= list.length) return;
+  const t = list[i]; list[i] = list[j]; list[j] = t;
+  saveDB(); document.getElementById('proof-status-editor')?.remove(); openProofStatusEditor();
+}
+function _proofStatusDel_(i){
+  const list = _proofStatuses_();
+  if(list.length <= 1){ alert('ステータスは最低1つ必要です'); return; }
+  if(!confirm('「' + list[i].label + '」を削除しますか?\n(このステータスの案件は先頭ステータスに移ります)')) return;
+  list.splice(i, 1);
+  saveDB(); document.getElementById('proof-status-editor')?.remove(); openProofStatusEditor();
+}
+function _proofStatusAdd_(){
+  _proofStatuses_().push({ key:'s_' + Date.now().toString(36), label:'新しいステータス', color:'#e2e8f0' });
+  saveDB(); document.getElementById('proof-status-editor')?.remove(); openProofStatusEditor();
+}
+function _proofStatusSave_(){
+  saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  document.getElementById('proof-status-editor')?.remove();
+  if(window._proofViewStatus_ && !_proofStatuses_().some(function(s){ return s.key === window._proofViewStatus_; })) window._proofViewStatus_ = '';
+  renderProofingList();
+  if(typeof _toastMsg === 'function') _toastMsg('💾 校正ステータスを保存しました');
 }
 
 // 校正詳細を表示
@@ -12380,11 +12477,10 @@ function showProofingDetail(proofingId){
     return;
   }
   
-  const statusOptions = `
-    <option value="waiting"${p.status==='waiting'?' selected':''}>回答待ち</option>
-    <option value="feedback"${p.status==='feedback'?' selected':''}>修正依頼あり</option>
-    <option value="approved"${p.status==='approved'?' selected':''}>校了</option>
-  `;
+  const _curStK = (typeof _normProofStatus_==='function') ? _normProofStatus_(p.status) : p.status;
+  const statusOptions = (typeof _proofStatuses_==='function')
+    ? _proofStatuses_().map(function(s){ return '<option value="' + s.key + '"' + (s.key===_curStK?' selected':'') + '>' + _escDiff(s.label) + '</option>'; }).join('')
+    : `<option value="waiting"${p.status==='waiting'?' selected':''}>回答待ち</option><option value="feedback"${p.status==='feedback'?' selected':''}>修正依頼あり</option><option value="approved"${p.status==='approved'?' selected':''}>校了</option>`;
   
   const kindLabels = { manuscript: '原稿', instruction: '修正指示', proof: '校正', final: '校了' };
   const kindColors = { manuscript: '#fef9c3', instruction: '#fee2e2', proof: '#dbeafe', final: '#dcfce7' };
@@ -12617,8 +12713,10 @@ async function updateProofingStatus(proofingId, status){
     p.status = status;
     saveDB();
     renderProofingList();
-    // 🆕 GGG-E: 校了になったら最新校正データを自動で 05_校了 に格納
-    if(status === 'approved' && p.versions && p.versions.length > 0){
+    if(typeof showProofingDetail === 'function' && document.getElementById('proofing-detail')) try { showProofingDetail(proofingId); } catch(e){}
+    // 🆕 GGG-E: 校了(done)になったら最新校正データを自動で 05_校了 に格納
+    var _isDone = (typeof _proofStatusMeta_==='function') ? !!_proofStatusMeta_(status).done : (status === 'approved');
+    if(_isDone && p.versions && p.versions.length > 0){
       var linkedProj = (DB.projects || []).find(function(prj){ return prj.id === p.projectId; });
       if(linkedProj && linkedProj.driveFolderId && linkedProj.driveSubFolders){
         if(confirm('校了されました。\n\nこの最新校正データを Drive の 05_校了 フォルダに自動格納しますか?')){
