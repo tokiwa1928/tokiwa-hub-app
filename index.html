@@ -1825,6 +1825,7 @@ setTimeout(_removeBootLoader_, 5000);
         <span>📸 校正一覧</span>
         <div style="display:flex;gap:8px;align-items:center">
           <input id="proof-q" placeholder="案件・得意先で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderProofingList()">
+          <button class="btn" style="background:#fef2f2;border-color:#fca5a5;color:#b91c1c;font-weight:700;position:relative" onclick="showAttentionPanel()" title="N日動いていない校正・案件 / 納期が近い案件をまとめてチェック">🚨 要注意・停滞 <span class="attention-badge" style="display:none;background:#dc2626;color:#fff;border-radius:9px;padding:0 6px;font-size:10px;margin-left:2px"></span></button>
           <button class="btn btn-p" onclick="createProofing()">＋ 新規校正</button>
         </div>
       </div>
@@ -12390,6 +12391,7 @@ function renderProofingList(){
   }
 
   container.innerHTML = '<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap"><div style="flex-shrink:0">' + railHtml + '</div><div style="flex:1;min-width:300px">' + listHtml + '</div></div>';
+  if(typeof _updateAttentionBadge_ === 'function') try { _updateAttentionBadge_(); } catch(e){}
 }
 function _proofSetView_(k){ window._proofViewStatus_ = k; renderProofingList(); }
 
@@ -12402,6 +12404,7 @@ function openProofStatusEditor(){
     <td><input value="${_escAttr_(s.label)}" oninput="_proofStatusEdit_(${i},'label',this.value)" style="width:100%;font-size:12px;padding:4px 6px"></td>
     <td><select onchange="_proofStatusEdit_(${i},'color',this.value)" style="font-size:11px;padding:3px;background:${s.color}">${PALETTE.map(c=>`<option value="${c}"${c===s.color?' selected':''} style="background:${c}">${c}</option>`).join('')}</select></td>
     <td style="text-align:center"><label style="font-size:10px"><input type="checkbox" ${s.done?'checked':''} onchange="_proofStatusEdit_(${i},'done',this.checked)" title="校了状態 (Drive自動格納のトリガー)"> 校了</label></td>
+    <td style="text-align:center"><label style="font-size:10px" title="お客様返信待ちなど、何日放置されても停滞アラートに出さない状態"><input type="checkbox" ${s.wait?'checked':''} onchange="_proofStatusEdit_(${i},'wait',this.checked)"> 待ち放題</label></td>
     <td><button class="del-btn" onclick="_proofStatusDel_(${i})">×</button></td>
   </tr>`).join('');
   const modal = document.createElement('div');
@@ -12412,7 +12415,7 @@ function openProofStatusEditor(){
     + '<div style="padding:12px 18px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>⚙ 校正ステータス(ラベル)の編集</b><button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
     + '<div style="overflow-y:auto;padding:14px 18px;flex:1">'
     + '<div style="font-size:11.5px;color:#666;margin-bottom:8px">部署や工程に合わせてラベル・色・並び順を自由に変更できます。既存の校正案件は近いステータスへ自動で振り分けられます。「校了」にチェックした状態になると、Drive の 05_校了 への自動格納の対象になります。</div>'
-    + '<table class="m-tbl" style="font-size:12px"><thead><tr><th style="width:60px">順</th><th>ラベル</th><th style="width:110px">色</th><th style="width:60px">校了</th><th style="width:30px"></th></tr></thead><tbody id="proof-status-rows">' + rows + '</tbody></table>'
+    + '<table class="m-tbl" style="font-size:12px"><thead><tr><th style="width:60px">順</th><th>ラベル</th><th style="width:110px">色</th><th style="width:55px">校了</th><th style="width:70px">待ち放題</th><th style="width:30px"></th></tr></thead><tbody id="proof-status-rows">' + rows + '</tbody></table>'
     + '<button class="btn" style="margin-top:8px;font-size:12px" onclick="_proofStatusAdd_()">＋ ステータスを追加</button>'
     + '</div>'
     + '<div style="padding:12px 18px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end">'
@@ -12450,6 +12453,140 @@ function _proofStatusSave_(){
   if(window._proofViewStatus_ && !_proofStatuses_().some(function(s){ return s.key === window._proofViewStatus_; })) window._proofViewStatus_ = '';
   renderProofingList();
   if(typeof _toastMsg === 'function') _toastMsg('💾 校正ステータスを保存しました');
+}
+
+// 🔔 NOTIFY-1: 校正ステータス変更の通知 (トースト + ブラウザ通知 + 共有先へLW)
+function _notifyProofStatusChange_(p, fromKey, toKey){
+  var to = _proofStatusMeta_(toKey);
+  var msg = (p.custName || '') + ' / ' + (p.prodName || '') + ' → 「' + to.label + '」';
+  if(typeof _toastMsg === 'function') _toastMsg('🔔 ステータス変更: ' + msg);
+  if(('Notification' in window) && Notification.permission === 'granted' && typeof _showNotification_ === 'function'){
+    _showNotification_('🔔 校正ステータス変更', { body: msg, tag: 'proofst:' + p.id + ':' + toKey, data: { url: '/tokiwa-hub-app/' } });
+  }
+  // 共有先がある & 通知ONなら LW へ
+  if(p.notifyOnUpdate !== false && (p.sharedWithCompanies || []).length && typeof _notifyLwOnProofUpdate_ === 'function'){
+    try { _notifyLwOnProofUpdate_(p, '🔔 ステータスが「' + to.label + '」に変わりました'); } catch(e){}
+  }
+}
+
+// ↩ 内校差し戻し: ステータスを前工程に戻して「やり直し」を依頼 (校正のやり取りが何度も発生するため)
+function proofSendBack(proofingId){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p) return;
+  var statuses = _proofStatuses_();
+  var cur = _normProofStatus_(p.status);
+  var curIdx = statuses.findIndex(function(s){ return s.key === cur; });
+  // 差し戻し候補 = 現在より前のステータス (作業待ち系)
+  var cands = statuses.filter(function(s,i){ return i < curIdx; });
+  if(!cands.length) cands = statuses.slice(0, Math.max(1, curIdx));
+  if(!cands.length){ alert('差し戻せる前工程がありません'); return; }
+  var msg = '差し戻し先を選んでください:\n' + cands.map(function(s,i){ return (i+1) + '. ' + s.label; }).join('\n');
+  var sel = prompt(msg, '1'); if(sel == null) return;
+  var target = cands[parseInt(sel) - 1]; if(!target){ alert('番号が不正です'); return; }
+  var reason = prompt('差し戻しの理由・指示 (任意。例: 修正箇所が直っていません)', '') || '';
+  p.timeline = p.timeline || [];
+  p.timeline.push({ type: 'sendback', at: new Date().toISOString(), by: (currentAuth?.userName || ''), text: '↩ 差し戻し → ' + target.label + (reason ? '\n理由: ' + reason : '') });
+  updateProofingStatus(proofingId, target.key);
+  if(typeof _toastMsg === 'function') _toastMsg('↩ 「' + target.label + '」へ差し戻しました');
+}
+
+// ═══ STALE-1: 停滞・要注意リスト (N日動いていない / 納期接近・超過) ═══
+function _alertDays_(){
+  var d = (DB.conf && DB.conf.alertDays) || {};
+  return { proof: (d.proof != null ? d.proof : 3), project: (d.project != null ? d.project : 3), due: (d.due != null ? d.due : 7) };
+}
+function _daysSince_(iso){
+  if(!iso) return 9999;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+// 停滞している校正 (待ち放題ステータスと校了は除外)
+function _staleProofings_(){
+  var th = _alertDays_().proof;
+  var myCompany = (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '';
+  return (DB.proofings || []).filter(function(p){
+    if(myCompany){ var o = p.companyCode || ''; if(o && o !== myCompany && (p.sharedWithCompanies||[]).indexOf(myCompany) < 0) return false; }
+    var meta = _proofStatusMeta_(_normProofStatus_(p.status));
+    if(meta.done || meta.wait) return false;   // 校了・待ち放題は対象外
+    var last = p.lastMoveAt || (p.versions && p.versions.length ? p.versions[p.versions.length-1].uploadedAt : p.createdAt);
+    return _daysSince_(last) >= th;
+  }).map(function(p){ var last = p.lastMoveAt || (p.versions && p.versions.length ? p.versions[p.versions.length-1].uploadedAt : p.createdAt); return { p:p, days:_daysSince_(last) }; })
+    .sort(function(a,b){ return b.days - a.days; });
+}
+// 停滞している案件 (完了・納品済は除外)
+function _staleProjects_(){
+  var th = _alertDays_().project;
+  var done = function(s){ return s === '完了' || s === '納品済' || s === '失注'; };
+  return (DB.projects || []).filter(function(p){
+    if(done(p.status)) return false;
+    if(p._provisional) { /* 未確定は校正先行なので緩めるが一応含める */ }
+    var last = p.updatedAt || p.orderDate || p.createdAt;
+    return _daysSince_(last) >= th;
+  }).map(function(p){ var last = p.updatedAt || p.orderDate || p.createdAt; return { p:p, days:_daysSince_(last) }; })
+    .sort(function(a,b){ return b.days - a.days; });
+}
+// 納期が接近 or 超過している案件
+function _dueSoonProjects_(){
+  var th = _alertDays_().due;
+  var done = function(s){ return s === '完了' || s === '納品済' || s === '失注'; };
+  var now = Date.now();
+  return (DB.projects || []).filter(function(p){
+    if(!p.dueDate || done(p.status)) return false;
+    var left = Math.ceil((new Date(p.dueDate).getTime() - now) / 86400000);
+    return left <= th;
+  }).map(function(p){ var left = Math.ceil((new Date(p.dueDate).getTime() - now) / 86400000); return { p:p, left:left }; })
+    .sort(function(a,b){ return a.left - b.left; });
+}
+// 要注意パネルをモーダルで表示
+function showAttentionPanel(){
+  var sp = _staleProofings_(), pj = _staleProjects_(), du = _dueSoonProjects_();
+  var th = _alertDays_();
+  function card(title, color, rows){
+    return '<div style="margin-bottom:12px"><div style="font-weight:800;font-size:13px;color:' + color + ';margin-bottom:5px">' + title + '</div>' + (rows || '<div style="font-size:11px;color:#94a3b8;padding:4px 8px">該当なし 👍</div>') + '</div>';
+  }
+  var proofRows = sp.map(function(x){
+    var m = _proofStatusMeta_(_normProofStatus_(x.p.status));
+    return '<div onclick="document.getElementById(\'attention-modal\').remove();swPage(\'proofing\',document.querySelector(\'.tb-btn[data-page=proofing]\'));setTimeout(function(){showProofingDetail(\'' + x.p.id + '\')},200)" style="cursor:pointer;background:#fff;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:6px;padding:7px 10px;margin-bottom:5px;font-size:12px"><b>' + _escDiff(x.p.custName||'') + '</b> ' + _escDiff(x.p.prodName||'') + ' <span style="float:right;color:#dc2626;font-weight:700">' + x.days + '日停滞</span><div style="font-size:10px;color:#888">現在: ' + _escDiff(m.label) + '</div></div>';
+  }).join('');
+  var pjRows = pj.map(function(x){
+    return '<div onclick="document.getElementById(\'attention-modal\').remove();jumpToProject(\'' + x.p.id + '\')" style="cursor:pointer;background:#fff;border:1px solid #fed7aa;border-left:4px solid #ea580c;border-radius:6px;padding:7px 10px;margin-bottom:5px;font-size:12px"><b>' + _escDiff(x.p.cust||'') + '</b> ' + _escDiff(x.p.item||'') + ' <span style="float:right;color:#ea580c;font-weight:700">' + x.days + '日停滞</span><div style="font-size:10px;color:#888">' + _escDiff(x.p.id) + ' / ' + _escDiff(x.p.status||'') + '</div></div>';
+  }).join('');
+  var duRows = du.map(function(x){
+    var lbl = x.left < 0 ? '🚨' + (-x.left) + '日超過' : x.left === 0 ? '🚨本日' : '⏰あと' + x.left + '日';
+    var col = x.left <= 0 ? '#dc2626' : '#d97706';
+    return '<div onclick="document.getElementById(\'attention-modal\').remove();jumpToProject(\'' + x.p.id + '\')" style="cursor:pointer;background:#fff;border:1px solid #fde68a;border-left:4px solid ' + col + ';border-radius:6px;padding:7px 10px;margin-bottom:5px;font-size:12px"><b>' + _escDiff(x.p.cust||'') + '</b> ' + _escDiff(x.p.item||'') + ' <span style="float:right;color:' + col + ';font-weight:700">' + lbl + '</span><div style="font-size:10px;color:#888">納期: ' + _escDiff(x.p.dueDate||'') + ' / ' + _escDiff(x.p.id) + '</div></div>';
+  }).join('');
+  var m = document.createElement('div');
+  m.className = 'proof-modal'; m.id = 'attention-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto';
+  m.innerHTML = '<div style="background:#fff;border-radius:10px;max-width:640px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">'
+    + '<div style="padding:12px 18px;background:#b91c1c;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🚨 要注意・停滞 (' + (sp.length+pj.length+du.length) + '件)</b><button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    + '<div style="overflow-y:auto;padding:14px 18px;flex:1">'
+    + card('📸 ' + th.proof + '日以上動いていない校正 (' + sp.length + ')', '#dc2626', proofRows)
+    + card('📁 ' + th.project + '日以上進捗なしの案件 (' + pj.length + ')', '#ea580c', pjRows)
+    + card('⏰ 納期 ' + th.due + '日以内・超過の案件 (' + du.length + ')', '#d97706', duRows)
+    + '<div style="font-size:11px;color:#64748b;border-top:1px solid #eee;padding-top:8px;margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">しきい値: 校正<input id="al-proof" type="number" value="' + th.proof + '" style="width:45px;font-size:11px"> 案件<input id="al-project" type="number" value="' + th.project + '" style="width:45px;font-size:11px"> 納期<input id="al-due" type="number" value="' + th.due + '" style="width:45px;font-size:11px">日 <button class="btn" style="font-size:10px;padding:2px 8px" onclick="_saveAlertDays_()">保存</button> <span style="color:#94a3b8">※「待ち放題」ステータスの校正は停滞に出ません</span></div>'
+    + '</div></div>';
+  document.body.appendChild(m);
+}
+function _saveAlertDays_(){
+  DB.conf = DB.conf || {};
+  DB.conf.alertDays = {
+    proof: parseInt(document.getElementById('al-proof')?.value) || 3,
+    project: parseInt(document.getElementById('al-project')?.value) || 3,
+    due: parseInt(document.getElementById('al-due')?.value) || 7
+  };
+  if(typeof saveDB === 'function') saveDB();
+  document.getElementById('attention-modal')?.remove();
+  showAttentionPanel();
+  if(typeof _updateAttentionBadge_ === 'function') _updateAttentionBadge_();
+}
+// ヘッダー等の🚨バッジ件数を更新
+function _updateAttentionBadge_(){
+  var n = _staleProofings_().length + _staleProjects_().length + _dueSoonProjects_().length;
+  document.querySelectorAll('.attention-badge').forEach(function(el){
+    el.textContent = n; el.style.display = n > 0 ? '' : 'none';
+  });
+  return n;
 }
 
 // 校正詳細を表示
@@ -12570,6 +12707,7 @@ function showProofingDetail(proofingId){
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="uploadProofVersion('${p.id}')">📤 校正アップロード</button>
+      <button class="btn" style="background:#fff7ed;border-color:#fdba74;color:#9a3412" onclick="proofSendBack('${p.id}')" title="修正が直っていない等で前工程にやり直しを依頼 (内校差し戻し)">↩ 差し戻し</button>
       ${sendCustomerBtn}
       ${canCompare ? `<button class="btn" style="background:#dbeafe;border-color:#93c5fd" onclick="startProofComparison('${p.id}')">📐 検版開始</button>` : ''}
       ${canCompare ? `<button class="btn" style="background:#fef3c7;border-color:#fcd34d" onclick="startTextDiff('${p.id}')">📝 テキスト差分</button>` : ''}
@@ -12710,8 +12848,16 @@ function _doCreateProofingManual_(){
 async function updateProofingStatus(proofingId, status){
   const p = (DB.proofings || []).find(x => x.id === proofingId);
   if(p){
+    var _prev = p.status;
+    if(_prev === status) return;
     p.status = status;
+    p.lastMoveAt = new Date().toISOString();  // STALE-1: 最終ステータス変更日時 (停滞検知用)
+    // タイムライン記録
+    p.statusLog = p.statusLog || [];
+    p.statusLog.push({ at: p.lastMoveAt, from: _prev, to: status, by: (currentAuth?.userName || '') });
     saveDB();
+    // 🔔 NOTIFY-1: ステータス変更を通知 (トースト + ブラウザ通知 + 共有先へLW)
+    try { _notifyProofStatusChange_(p, _prev, status); } catch(e){}
     renderProofingList();
     if(typeof showProofingDetail === 'function' && document.getElementById('proofing-detail')) try { showProofingDetail(proofingId); } catch(e){}
     // 🆕 GGG-E: 校了(done)になったら最新校正データを自動で 05_校了 に格納
@@ -12766,6 +12912,7 @@ async function uploadProofVersion(proofingId){
   if(!p.versions) p.versions = [];
   p.versions.push(version);
   p.status = 'waiting';
+  p.lastMoveAt = new Date().toISOString();  // STALE-1: アップロードも活動として記録
   saveDB();
 
   // 🆕 GGG-E: バージョン番号 / 種類に応じて Drive サブフォルダに自動振り分け
