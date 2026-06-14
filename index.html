@@ -26463,16 +26463,49 @@ showProofingDetail = function(proofingId){
   
   const p = (DB.proofings || []).find(x => x.id === proofingId);
   if(!p || !p.versions?.length) return;
-  
+
+  // MENPU-1: 面付は「校了」後のみ表示 (校了データに対して面付する運用)
+  var _isApproved = (typeof _proofStatusMeta_==='function' && typeof _normProofStatus_==='function')
+    ? !!_proofStatusMeta_(_normProofStatus_(p.status)).done
+    : (p.status === 'approved');
+  if(!_isApproved) return;
+
   const btnContainer = container.querySelector('div:last-child');
   if(btnContainer && !btnContainer.querySelector('.impo-btn')){
     const impoBtn = document.createElement('button');
     impoBtn.className = 'btn impo-btn';
-    impoBtn.innerHTML = '📐 面付';
-    impoBtn.onclick = () => openImpositionModal(proofingId);
+    impoBtn.style.cssText = 'background:#1e293b;color:#fff;border-color:#1e293b;font-weight:700';
+    impoBtn.innerHTML = '📐 面付ツールで面付する（校了データ）';
+    impoBtn.title = '案件サイズ・面付履歴を引き継いで面付ツールを開きます';
+    impoBtn.onclick = () => openMentuForProof(proofingId);
     btnContainer.insertBefore(impoBtn, btnContainer.firstChild);
   }
 };
+
+// MENPU-1: 校了データを面付ツールへ (案件のサイズ・数量・面付履歴をパラメータで引き継ぐ)
+function openMentuForProof(proofingId){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p) return;
+  var proj = (DB.projects || []).find(function(pr){ return pr.id === p.projectId; }) || {};
+  // 仕上がりサイズ (mm) を案件/仕様から推定
+  var spec = (proj.spec || p.prodName || '');
+  var sm = spec.match(/(\d{2,4})\s*[x×*]\s*(\d{2,4})/);
+  var params = new URLSearchParams();
+  params.set('proj', proj.id || p.projectId || '');
+  params.set('cust', p.custName || proj.cust || '');
+  params.set('item', proj.item || p.prodName || '');
+  if(sm){ params.set('w', sm[1]); params.set('h', sm[2]); }
+  else { var nm = spec.match(/\b(A[0-8]|B[0-8]|長3|長4|角2|名刺|葉書)\b/); if(nm) params.set('size', nm[1]); }
+  if(proj.qty) params.set('qty', proj.qty);
+  // 直近の面付履歴 (同案件/同サイズ) を渡す
+  var hist = (proj._menpuHistory || p._menpuHistory || null);
+  if(hist) params.set('hist', encodeURIComponent(JSON.stringify(hist)));
+  var url = 'tools/mentu.html?' + params.toString();
+  window.open(url, '_blank');
+  // 面付に着手した記録
+  p._menpuOpenedAt = new Date().toISOString();
+  if(typeof saveDB === 'function') saveDB();
+}
 
 // ═══════════════════ 帳票出力 ══════════════════
 
