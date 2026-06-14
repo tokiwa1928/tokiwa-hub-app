@@ -12716,6 +12716,7 @@ function showProofingDetail(proofingId){
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">📄 校正履歴</div>
       ${versionsHtml || '<div style="color:#888;font-size:11px">まだ校正がありません</div>'}
     </div>
+    ${_proofSentLogHtml_(p)}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="uploadProofVersion('${p.id}')">📤 校正アップロード</button>
       <button class="btn" style="background:#fff7ed;border-color:#fdba74;color:#9a3412" onclick="proofSendBack('${p.id}')" title="修正が直っていない等で前工程にやり直しを依頼 (内校差し戻し)">↩ 差し戻し</button>
@@ -13145,7 +13146,11 @@ function showSendProofToCustomerModal(proofingId){
     '問題なければ「校了」のご返信をお願いいたします。\n\n' +
     '何卒よろしくお願い申し上げます。';
 
-  var defaultSubject = '【' + roundLabel + 'のご確認】' + (project ? (project.item || p.prodName) : p.prodName);
+  // 件名形式: 【日付】【初校】製品名 [顧客名]
+  var _td = new Date();
+  var _dStr = (_td.getMonth()+1) + '/' + _td.getDate();
+  var _prod = (project ? (project.item || p.prodName) : p.prodName) || '';
+  var defaultSubject = '【' + _dStr + '】【' + roundLabel + vLabel + '】' + _prod + ' [' + (p.custName||'') + ']';
 
   // モーダル
   var existing = document.getElementById('send-proof-customer-modal');
@@ -13167,10 +13172,17 @@ function showSendProofToCustomerModal(proofingId){
         '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#dbeafe;border-radius:6px;cursor:pointer;border:1px solid #93c5fd"><input type="radio" name="send-channel" value="email" checked> 📧 メール</label>' +
         '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#dcfce7;border-radius:6px;cursor:pointer;border:1px solid #86efac"><input type="radio" name="send-channel" value="lineworks"> 💼 LINE WORKS</label>' +
         '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fef3c7;border-radius:6px;cursor:pointer;border:1px solid #fde047"><input type="radio" name="send-channel" value="line"> 💚 LINE Notify</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fee2e2;border-radius:6px;cursor:pointer;border:1px solid #fca5a5"><input type="radio" name="send-channel" value="fax"> 📠 FAX(メール送信)</label>' +
       '</div>' +
-      '<div class="f"><label style="font-size:11px">宛先 (メール) / LWユーザーID / LINE token key</label>' +
-        '<input id="proof-send-to" placeholder="email@example.com / lwuser123 / default" value="' + ((project && project.contactEmail) || '') + '" style="font-size:12px"></div>' +
-      '<div class="f"><label style="font-size:11px">件名 (メールのみ)</label>' +
+      '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px">' +
+        '<span style="font-size:11px;font-weight:700;color:#166534">送付方式:</span>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="send-mode" value="link" checked onchange="_proofSendModeChange_(\'' + proofingId + '\')"> 🔗 Drive外部リンク(軽い)</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="send-mode" value="pdf" onchange="_proofSendModeChange_(\'' + proofingId + '\')"> 📎 PDF添付(容量大)</label>' +
+        '<span style="font-size:10px;color:#15803d">※重いデータは外部リンク推奨。受け取り側はリンクからDLでき、DL履歴が残ります</span>' +
+      '</div>' +
+      '<div class="f"><label style="font-size:11px">宛先 (メール/FAXはFAX番号@gateway / LWユーザーID / LINE token key)</label>' +
+        '<input id="proof-send-to" placeholder="email@example.com / 0312345678@fax.gateway / lwuser123 / default" value="' + ((project && project.contactEmail) || '') + '" style="font-size:12px"></div>' +
+      '<div class="f"><label style="font-size:11px">件名 (メール/FAX)</label>' +
         '<input id="proof-send-subject" value="' + defaultSubject.replace(/"/g, '&quot;') + '" style="font-size:12px"></div>' +
       '<div class="f"><label style="font-size:11px">本文</label>' +
         '<textarea id="proof-send-body" rows="14" style="font-size:12px;font-family:monospace">' + defaultBody + '</textarea></div>' +
@@ -13197,12 +13209,15 @@ async function submitSendProofToCustomer(proofingId){
   var btn = document.querySelector('#send-proof-customer-modal button.btn-p');
   if(btn){ btn.disabled = true; btn.textContent = '送信中…'; }
 
+  var sendModeEl = document.querySelector('#send-proof-customer-modal input[name="send-mode"]:checked');
+  var sendMode = sendModeEl ? sendModeEl.value : 'link';
   try {
     var apiResult;
-    if(channel === 'email'){
+    if(channel === 'email' || channel === 'fax'){
+      // FAX はメール経由 (FAXゲートウェイ宛メール)。送受信履歴がメールとして残る
       apiResult = await callCloudAPI('forwardInquiryToEmail', {}, {
         replyTo: to,
-        subject: subject,
+        subject: (channel === 'fax' ? '[FAX] ' : '') + subject,
         body: body,
         by: (typeof currentAuth !== 'undefined' && currentAuth && currentAuth.userName) || 'user'
       });
@@ -13222,18 +13237,26 @@ async function submitSendProofToCustomer(proofingId){
       // 校正タイムラインに記録
       if(!p.customerSentLog) p.customerSentLog = [];
       p.customerSentLog.push({
+        id: 'SND' + Date.now(),
         at: new Date().toISOString(),
         channel: channel,
+        sendMode: sendMode,
         to: to,
         subject: subject,
         body: body,
+        downloadedAt: null,   // DELIV-1: ダウンロード/確認状況
         by: (typeof currentAuth !== 'undefined' && currentAuth && currentAuth.userName) || 'user'
       });
       saveDB();
       if(typeof _addAuditLog_ === 'function') _addAuditLog_('proofing', proofingId, '校正を ' + channel + ' でお客様送信: ' + to);
-      alert('✅ 送信が完了しました');
       document.getElementById('send-proof-customer-modal').remove();
       showProofingDetail(proofingId);
+      // 送付後の確認メールを促す (○月○日に送りました。届いていなければご連絡ください)
+      if((channel === 'email' || channel === 'fax') && confirm('✅ 送信が完了しました。\n\n続けて「○月○日に送付しました。届いていなければご連絡ください」の確認メールを送りますか?')){
+        _composeProofConfirmMail_(proofingId, to);
+      } else {
+        alert('✅ 送信が完了しました');
+      }
     } else {
       alert('⚠ 送信失敗: ' + ((apiResult && apiResult.error) || 'unknown'));
       if(btn){ btn.disabled = false; btn.textContent = '📤 送信'; }
@@ -13244,6 +13267,73 @@ async function submitSendProofToCustomer(proofingId){
   }
 }
 
+// DELIV-1: お客様送付・ダウンロード履歴の表示 (校正詳細内)
+function _proofSentLogHtml_(p){
+  var log = p.customerSentLog || [];
+  if(!log.length) return '';
+  var chIcon = { email:'📧', fax:'📠', lineworks:'💼', line:'💚' };
+  var rows = log.slice().reverse().map(function(s){
+    var d = new Date(s.at);
+    var dStr = (d.getMonth()+1) + '/' + d.getDate() + ' ' + ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+    var dl = s.downloadedAt
+      ? '<span style="color:#166534;font-weight:700">✅ 確認済 ' + new Date(s.downloadedAt).toLocaleDateString('ja-JP') + '</span>'
+      : '<span style="color:#b91c1c;font-weight:700">⏳ 未確認</span>'
+        + ' <button onclick="_proofMarkDownloaded_(\'' + p.id + '\',\'' + (s.id||'') + '\')" style="font-size:9px;padding:1px 6px;border:1px solid #86efac;background:#dcfce7;border-radius:4px;cursor:pointer">確認済にする</button>'
+        + ' <button onclick="_proofRemind_(\'' + p.id + '\',\'' + (s.id||'') + '\')" style="font-size:9px;padding:1px 6px;border:1px solid #fca5a5;background:#fee2e2;color:#b91c1c;border-radius:4px;cursor:pointer">📨 催促</button>';
+    return '<div style="font-size:10.5px;border-bottom:1px dashed #e5e7eb;padding:4px 0">'
+      + (chIcon[s.channel]||'📤') + ' ' + dStr + ' → ' + _escDiff(s.to||'') + ' <span style="color:#94a3b8">(' + (s.sendMode==='pdf'?'PDF添付':'Driveリンク') + ')</span><br>' + dl + '</div>';
+  }).join('');
+  var unread = log.filter(function(s){ return !s.downloadedAt; }).length;
+  return '<div style="margin-bottom:.75rem;background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:8px 10px">'
+    + '<div style="font-size:12px;font-weight:700;margin-bottom:4px">📤 送付・ダウンロード履歴' + (unread?' <span style="background:#dc2626;color:#fff;border-radius:8px;padding:0 6px;font-size:10px">未確認' + unread + '</span>':'') + '</div>'
+    + rows + '</div>';
+}
+// 送付方式(リンク/PDF)切替で本文の案内文を入れ替え
+function _proofSendModeChange_(proofingId){
+  var ta = document.getElementById('proof-send-body'); if(!ta) return;
+  var modeEl = document.querySelector('#send-proof-customer-modal input[name="send-mode"]:checked');
+  var mode = modeEl ? modeEl.value : 'link';
+  var note = mode === 'link'
+    ? '※ データが大きいため、下記の確認リンクからダウンロードしてご確認ください。\n  (リンクを開くとダウンロード履歴が記録されます)'
+    : '※ 校正データを本メールに添付しております。';
+  // 既存の案内行を入れ替え (なければ末尾に追記)
+  var lines = ta.value.split('\n').filter(function(l){ return !/^※/.test(l.trim()); });
+  ta.value = lines.join('\n').replace(/\n+$/,'') + '\n\n' + note;
+}
+// 送付後の「確認メール」を作成 (○月○日に送付しました。届いていなければご連絡ください)
+function _composeProofConfirmMail_(proofingId, to){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p) return;
+  var last = (p.customerSentLog || [])[ (p.customerSentLog||[]).length - 1 ];
+  var d = new Date(last ? last.at : Date.now());
+  var dStr = (d.getMonth()+1) + '月' + d.getDate() + '日';
+  var body = (p.custName||'') + ' 様\n\n' +
+    'お世話になっております。\n' +
+    '先ほど ' + dStr + ' に校正データをお送りいたしました。\n\n' +
+    'お手元に届いていない場合や、ご覧になれない場合は\n' +
+    'お手数ですがご一報いただけますと幸いです。\n\n' +
+    'ご確認のほど、よろしくお願い申し上げます。';
+  showSendProofToCustomerModal(proofingId);
+  setTimeout(function(){
+    var s = document.getElementById('proof-send-subject'); if(s) s.value = '【送付のご確認】' + ((DB.projects||[]).find(function(pr){return pr.id===p.projectId;})?.item || p.prodName || '');
+    var b = document.getElementById('proof-send-body'); if(b) b.value = body;
+    var t = document.getElementById('proof-send-to'); if(t && to) t.value = to;
+  }, 50);
+}
+// DELIV-1: 送付の「DL/確認済み」を手動で記録
+function _proofMarkDownloaded_(proofingId, sndId){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p) return;
+  var s = (p.customerSentLog || []).find(function(x){ return x.id === sndId; });
+  if(s){ s.downloadedAt = new Date().toISOString(); s.downloadedBy = (currentAuth?.userName||''); saveDB(); showProofingDetail(proofingId); if(typeof _toastMsg==='function') _toastMsg('✅ ダウンロード/確認済みにしました'); }
+}
+// DELIV-1: 未ダウンロードの先方へリマインダー (確認メールを作成)
+function _proofRemind_(proofingId, sndId){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p) return;
+  var s = (p.customerSentLog || []).find(function(x){ return x.id === sndId; });
+  _composeProofConfirmMail_(proofingId, s ? s.to : '');
+}
 // 校正を削除
 function deleteProofing(proofingId){
   if(!confirm('この校正データを削除しますか？')) return;
