@@ -12720,6 +12720,7 @@ function showProofingDetail(proofingId){
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="uploadProofVersion('${p.id}')">📤 校正アップロード</button>
       <button class="btn" style="background:#fff7ed;border-color:#fdba74;color:#9a3412" onclick="proofSendBack('${p.id}')" title="修正が直っていない等で前工程にやり直しを依頼 (内校差し戻し)">↩ 差し戻し</button>
+      <button class="btn" style="background:#eef2ff;border-color:#a5b4fc;color:#3730a3" onclick="proofAdvanceStage('${p.id}')" title="現在の校データを次校フォルダへ自動コピーして次の校に進む">➡ 次校へ進む（データ引継ぎ）</button>
       ${sendCustomerBtn}
       ${canCompare ? `<button class="btn" style="background:#dbeafe;border-color:#93c5fd" onclick="startProofComparison('${p.id}')">📐 検版開始</button>` : ''}
       ${canCompare ? `<button class="btn" style="background:#fef3c7;border-color:#fcd34d" onclick="startTextDiff('${p.id}')">📝 テキスト差分</button>` : ''}
@@ -13326,6 +13327,38 @@ function _proofMarkDownloaded_(proofingId, sndId){
   if(!p) return;
   var s = (p.customerSentLog || []).find(function(x){ return x.id === sndId; });
   if(s){ s.downloadedAt = new Date().toISOString(); s.downloadedBy = (currentAuth?.userName||''); saveDB(); showProofingDetail(proofingId); if(typeof _toastMsg==='function') _toastMsg('✅ ダウンロード/確認済みにしました'); }
+}
+// STAGE-1: 校ステップ → Driveフォルダ名の対応 (出/戻ペア)
+var PROOF_STAGE_FOLDERS = {
+  1: { out:'02_初校_出', ret:'03_初校_戻', label:'初校' },
+  2: { out:'04_2校_出', ret:'05_2校_戻', label:'2校' },
+  3: { out:'06_3校_出', ret:'07_3校_戻', label:'3校' }
+};
+// 「次校へ進む」: 確認の上、現在の校の「出」データを次校の「出」フォルダへコピー (制作はそれを直す)
+async function proofAdvanceStage(proofingId){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p){ return; }
+  var proj = (DB.projects || []).find(function(pr){ return pr.id === p.projectId; });
+  if(!proj || !proj.driveFolderId){ alert('この案件にはDriveフォルダがありません。先に案件のフォルダを作成してください。'); return; }
+  var cur = p._proofRound || 1;
+  var next = cur + 1;
+  var from = PROOF_STAGE_FOLDERS[cur], to = PROOF_STAGE_FOLDERS[next];
+  if(!from || !to){ alert('対応する校ステップのフォルダがありません (初校〜3校)。'); return; }
+  if(!confirm('「' + from.label + '」の校了前データを「' + to.label + '_出」フォルダへコピーして次校に進みます。\n\n' +
+    '(制作は ' + to.out + ' のデータを直すだけになります)\n\nよろしいですか?')) return;
+  try {
+    var r = await callCloudAPI('copyStageFiles', {}, { projectFolderId: proj.driveFolderId, fromName: from.out, toName: to.out });
+    if(r && r.success){
+      p._proofRound = next;
+      p.timeline = p.timeline || [];
+      p.timeline.push({ type:'stage', at:new Date().toISOString(), by:(currentAuth?.userName||''), text:'➡ ' + to.label + 'へ進む (' + from.out + '→' + to.out + ' を ' + r.copied + '件コピー)' });
+      saveDB();
+      showProofingDetail(proofingId);
+      alert('✅ ' + to.label + 'に進みました (' + r.copied + '件コピー)\nコピー先: ' + to.out);
+    } else {
+      alert('⚠ コピー失敗: ' + ((r && r.error) || 'unknown'));
+    }
+  } catch(e){ alert('⚠ ' + e.message); }
 }
 // DELIV-1: 未ダウンロードの先方へリマインダー (確認メールを作成)
 function _proofRemind_(proofingId, sndId){
