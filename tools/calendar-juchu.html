@@ -111,6 +111,7 @@
         <button id="vTable" class="on" onclick="setView('table')">📋 表</button>
         <button id="vBoard" onclick="setView('board')">🗂 看板</button>
       </span>
+      <button class="btn" onclick="seedImport()" title="先ほどのExcel2つ(旧台帳＋受注用)をまとめて投入" style="background:#fef3c7;border-color:#fcd34d">📦 初期投入</button>
       <button class="btn btn-p" onclick="document.getElementById('imp').click()">📥 取込</button>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
@@ -440,21 +441,45 @@ function newRecord(o){
 }
 
 // ─ Excel取込（形式自動判定）─
+function importWorkbook(wb){
+  var firstAoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
+  var head = firstAoa.slice(0,8).map(function(row){ return (row||[]).join(''); }).join('');
+  if(head.indexOf('受注番号')>=0) return importExport(firstAoa);
+  if(head.indexOf('顧客名')>=0 && head.indexOf('品名')>=0) return importOldLedger(wb);
+  hubToast('❌ 形式を判定できません（「受注番号」も「顧客名＋品名」も見つかりません）');
+}
 function importFile(input){
   var f = input.files && input.files[0]; if(!f) return;
   var r = new FileReader();
   r.onload = function(){
-    try {
-      var wb = XLSX.read(r.result, { type:'array', codepage:932 });
-      var firstAoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
-      var head = firstAoa.slice(0,8).map(function(row){ return (row||[]).join(''); }).join('');
-      if(head.indexOf('受注番号')>=0) return importExport(firstAoa);
-      if(head.indexOf('顧客名')>=0 && head.indexOf('品名')>=0) return importOldLedger(wb);
-      hubToast('❌ 形式を判定できません（「受注番号」も「顧客名＋品名」も見つかりません）');
-    } catch(e){ console.error(e); hubToast('❌ 取込エラー: '+e.message); }
+    try { importWorkbook(XLSX.read(r.result, { type:'array', codepage:932 })); }
+    catch(e){ console.error(e); hubToast('❌ 取込エラー: '+e.message); }
     finally { input.value=''; }
   };
   r.readAsArrayBuffer(f);
+}
+
+// ─ 📦 初期投入: 同梱した先ほどのExcel2つ(旧台帳.xls＝過去履歴 / 受注用.xlsx＝2027分)を一括投入 ─
+//   seedは大きいのでクリック時に別ファイル(calendar-juchu-seed.js)を遅延ロード。取込は通常と同じ冪等アップサート。
+function b64ToBytes(b64){ var bin=atob(b64), len=bin.length, bytes=new Uint8Array(len); for(var i=0;i<len;i++) bytes[i]=bin.charCodeAt(i); return bytes; }
+function loadSeed(cb){
+  if(window.JUCHU_SEED) return cb();
+  var s=document.createElement('script'); s.src='calendar-juchu-seed.js?v=1';
+  s.onload=function(){ cb(); };
+  s.onerror=function(){ hubToast('❌ 初期データの読込に失敗（calendar-juchu-seed.js）'); };
+  document.head.appendChild(s);
+}
+function seedImport(){
+  if(!confirm('先ほどのExcel2つをまとめて投入します。\n・旧台帳(2026_顧客リスト.xls) → 過去履歴(全カテゴリ)\n・受注用(2027年カレンダー受注用.xlsx) → 2027年分\nこのあと取込ごとに確認が出ます。再投入しても二重化しません。\nよろしいですか？')) return;
+  hubToast('📦 初期データを読み込み中…');
+  loadSeed(function(){
+    try {
+      var S = window.JUCHU_SEED;
+      importWorkbook(XLSX.read(b64ToBytes(S.old), { type:'array', codepage:932 }));   // 旧台帳=過去履歴
+      document.getElementById('yearSel').value = '2027';
+      importWorkbook(XLSX.read(b64ToBytes(S.juchu), { type:'array', codepage:932 }));  // 受注用=2027
+    } catch(e){ console.error(e); hubToast('❌ 初期投入エラー: '+e.message); }
+  });
 }
 
 // ① 受注用エクスポート取込（今年分・カテゴリ=カレンダー）
