@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🖨 データ生成（差込・ラベル・名刺・連番）| Quote Tools</title>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<style>
+  body{font-family:system-ui,'Hiragino Kaku Gothic ProN','Meiryo',sans-serif;margin:0;background:#f4f3f0;color:#1a1a1a}
+  .top{background:#1e293b;color:#fff;padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .top b{font-size:15px}
+  .tabs{display:flex;gap:4px;padding:10px 16px 0;background:#fff;border-bottom:1px solid #ddd;flex-wrap:wrap}
+  .tab{padding:8px 16px;border:1px solid #ddd;border-bottom:none;border-radius:7px 7px 0 0;background:#eef0f3;color:#555;cursor:pointer;font-size:13px;font-weight:700}
+  .tab.act{background:#fff;color:#1e293b;border-color:#1e293b}
+  .pane{display:none;padding:16px;max-width:1000px;margin:0 auto}
+  .pane.act{display:block}
+  .card{background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:14px;margin-bottom:14px}
+  label{font-size:12px;color:#444;font-weight:600;display:block;margin:6px 0 2px}
+  input,select,textarea{font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-family:inherit;width:100%;box-sizing:border-box}
+  textarea{min-height:120px;font-family:monospace;font-size:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:120px}
+  .btn{font-size:13px;font-weight:700;padding:8px 16px;border:1px solid #1e293b;background:#1e293b;color:#fff;border-radius:7px;cursor:pointer}
+  .btn.sub{background:#fff;color:#1e293b}
+  .hint{font-size:11px;color:#777;line-height:1.6;margin:4px 0}
+  canvas{max-width:100%;border:1px solid #e0ddd6;border-radius:6px;background:#fff;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="top"><b>🖨 データ生成ツール</b><span style="font-size:12px;opacity:.85">CSV/入力 → 印刷用PDF をブラウザ内で生成（DTP軽減）。日本語OK・PC内処理</span></div>
+<div class="tabs">
+  <div class="tab act" data-t="merge" onclick="sw('merge')">📋 差し込み(CSV→多面)</div>
+  <div class="tab" data-t="label" onclick="sw('label')">🏷 宛名ラベル</div>
+  <div class="tab" data-t="card" onclick="sw('card')">💳 名刺</div>
+  <div class="tab" data-t="num" onclick="sw('num')">🔢 連番・ナンバリング</div>
+</div>
+
+<!-- 差し込み -->
+<div class="pane act" id="pane-merge">
+  <div class="card">
+    <div class="hint">Excelからコピペ（タブ区切り）または CSV を貼り付け。1行目を見出しにすると {{見出し}} で差し込めます。</div>
+    <label>データ（1行目=見出し、以降1件1行）</label>
+    <textarea id="m-data">氏名,会社,住所
+山田太郎,富士食品,東京都新宿区1-1-1
+佐藤花子,北山商事,大阪府大阪市2-2-2</textarea>
+    <div class="row">
+      <div><label>面付（横×縦）</label><div class="row"><input id="m-cols" type="number" value="2"><input id="m-rows" type="number" value="5"></div></div>
+      <div><label>用紙</label><select id="m-paper"><option value="A4">A4縦</option><option value="A4L">A4横</option></select></div>
+      <div><label>文字サイズ(pt)</label><input id="m-fs" type="number" value="11"></div>
+    </div>
+    <label>レイアウト（1行=1テキスト。書式 X,Y,内容 ※X/Yはセル内mm。{{見出し}}で差込）</label>
+    <textarea id="m-layout">5,8,{{氏名}} 様
+5,15,{{会社}}
+5,22,{{住所}}</textarea>
+    <div style="margin-top:10px"><button class="btn" onclick="genMerge(false)">👁 プレビュー</button> <button class="btn" onclick="genMerge(true)">📄 PDF生成</button></div>
+    <canvas id="m-cv" style="display:none"></canvas>
+  </div>
+</div>
+
+<!-- ラベル -->
+<div class="pane" id="pane-label">
+  <div class="card">
+    <label>ラベル台紙</label>
+    <select id="l-preset" onchange="">
+      <option value="3,4,0,0">A4 12面 (横3×縦4 / 約63×72mm)</option>
+      <option value="2,6,0,0">A4 12面 (横2×縦6 / 約86×46mm)</option>
+      <option value="3,8,0,0">A4 24面 (横3×縦8 / 約63×34mm)</option>
+      <option value="4,11,0,0">A4 44面 (横4×縦11 / 約45×25mm)</option>
+    </select>
+    <label>宛名データ（1件1行。改行で複数行ラベル可。空行で次のラベルへ）</label>
+    <textarea id="l-data">〒100-0001
+東京都千代田区1-1
+富士食品株式会社
+山田太郎 様
+
+〒540-0001
+大阪府大阪市2-2
+北山商事
+佐藤花子 様</textarea>
+    <div class="row"><div><label>文字サイズ(pt)</label><input id="l-fs" type="number" value="10"></div><div><label>余白(mm)</label><input id="l-pad" type="number" value="4"></div></div>
+    <div style="margin-top:10px"><button class="btn" onclick="genLabel(false)">👁 プレビュー</button> <button class="btn" onclick="genLabel(true)">📄 PDF生成</button></div>
+    <canvas id="l-cv" style="display:none"></canvas>
+  </div>
+</div>
+
+<!-- 名刺 -->
+<div class="pane" id="pane-card">
+  <div class="card">
+    <div class="hint">A4に10面（91×55mm・横2×縦5）で配置。複数人はデータ欄に1人1行（氏名,部署,会社,TEL,Email）で量産。</div>
+    <div class="row">
+      <div><label>会社名</label><input id="c-co" value="トキワ印刷株式会社"></div>
+      <div><label>住所</label><input id="c-addr" value="東京都武蔵村山市残堀2-1-1"></div>
+    </div>
+    <label>名刺データ（1人1行: 氏名,部署,会社(空欄可),TEL,Email）</label>
+    <textarea id="c-data">本多 亮,営業部,,042-560-2431,honda@tokiwap.co.jp
+山田 太郎,制作部,,042-560-2431,yamada@tokiwap.co.jp</textarea>
+    <div class="row"><div><label>面数(同一人を何面)</label><input id="c-each" type="number" value="10"></div></div>
+    <div style="margin-top:10px"><button class="btn" onclick="genCard(false)">👁 プレビュー</button> <button class="btn" onclick="genCard(true)">📄 PDF生成</button></div>
+    <canvas id="c-cv" style="display:none"></canvas>
+  </div>
+</div>
+
+<!-- 連番 -->
+<div class="pane" id="pane-num">
+  <div class="card">
+    <div class="row">
+      <div><label>接頭辞</label><input id="n-pre" value="No."></div>
+      <div><label>開始番号</label><input id="n-start" type="number" value="1"></div>
+      <div><label>桁数(0埋め)</label><input id="n-digits" type="number" value="4"></div>
+      <div><label>総数</label><input id="n-count" type="number" value="100"></div>
+    </div>
+    <div class="row">
+      <div><label>面付（横×縦）</label><div class="row"><input id="n-cols" type="number" value="4"><input id="n-rows" type="number" value="10"></div></div>
+      <div><label>文字サイズ(pt)</label><input id="n-fs" type="number" value="18"></div>
+      <div><label>用紙</label><select id="n-paper"><option value="A4">A4縦</option><option value="A4L">A4横</option></select></div>
+    </div>
+    <div style="margin-top:10px"><button class="btn" onclick="genNum(false)">👁 プレビュー</button> <button class="btn" onclick="genNum(true)">📄 PDF生成</button></div>
+    <canvas id="n-cv" style="display:none"></canvas>
+  </div>
+</div>
+
+<script>
+var jsPDF = window.jspdf.jsPDF;
+function sw(t){ document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('act',b.dataset.t===t);}); document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('act',p.id==='pane-'+t);}); }
+var MM2PX = 11.81; // 300dpi相当 (mm * 300/25.4)
+// 1セル(mm)をcanvasに描き、textsを配置
+function drawCell(cw, ch, drawFn){
+  var cv = document.createElement('canvas');
+  cv.width = Math.round(cw*MM2PX); cv.height = Math.round(ch*MM2PX);
+  var ctx = cv.getContext('2d');
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle='#111'; ctx.textBaseline='top';
+  drawFn(ctx, cv);
+  return cv;
+}
+function ptToPx(pt){ return pt*MM2PX*0.3528; } // pt→mm(0.3528)→px
+// 多面PDF生成エンジン: items[].drawFn(ctx) を grid に配置
+function buildGridPdf(opts){
+  var paperW = opts.landscape?297:210, paperH = opts.landscape?210:297;
+  var doc = new jsPDF({orientation: opts.landscape?'landscape':'portrait', unit:'mm', format:'a4'});
+  var cols=opts.cols, rows=opts.rows, per=cols*rows;
+  var cw = (opts.cellW || paperW/cols), ch=(opts.cellH || paperH/rows);
+  var ox = (paperW - cw*cols)/2, oy=(paperH - ch*rows)/2;
+  var firstCv=null;
+  opts.items.forEach(function(it, idx){
+    var page=Math.floor(idx/per), pos=idx%per;
+    if(idx>0 && pos===0) doc.addPage();
+    var c=pos%cols, r=Math.floor(pos/cols);
+    var cv=drawCell(cw, ch, it);
+    if(!firstCv) firstCv=cv;
+    doc.addImage(cv.toDataURL('image/jpeg',0.92),'JPEG', ox+c*cw, oy+r*ch, cw, ch);
+  });
+  return {doc:doc, preview:firstCv};
+}
+function parseRows(txt){ return txt.split(/\r?\n/).map(function(l){return l.split(/[\t,]/).map(function(s){return s.trim();});}); }
+function showPreview(id, cv){ var el=document.getElementById(id); el.style.display=''; el.width=cv.width; el.height=cv.height; el.getContext('2d').drawImage(cv,0,0); }
+
+// 📋 差し込み
+function genMerge(save){
+  var rows=parseRows(document.getElementById('m-data').value).filter(function(r){return r.join('').trim();});
+  if(rows.length<2){ alert('見出し行＋1件以上のデータが必要です'); return; }
+  var head=rows[0], recs=rows.slice(1);
+  var cols=+document.getElementById('m-cols').value||2, rws=+document.getElementById('m-rows').value||5;
+  var fs=+document.getElementById('m-fs').value||11, land=document.getElementById('m-paper').value==='A4L';
+  var layout=document.getElementById('m-layout').value.split(/\r?\n/).map(function(l){var m=l.match(/^\s*([\d.]+)\s*,\s*([\d.]+)\s*,(.*)$/);return m?{x:+m[1],y:+m[2],t:m[3]}:null;}).filter(Boolean);
+  var items=recs.map(function(rec){
+    return function(ctx){
+      ctx.font='bold '+ptToPx(fs)+'px sans-serif';
+      layout.forEach(function(L){
+        var t=L.t.replace(/\{\{(.+?)\}\}/g,function(_,k){var i=head.indexOf(k.trim());return i>=0?(rec[i]||''):'';});
+        ctx.fillText(t, L.x*MM2PX, L.y*MM2PX);
+      });
+    };
+  });
+  var r=buildGridPdf({cols:cols,rows:rws,landscape:land,items:items});
+  if(save) r.doc.save('差し込み_'+recs.length+'件.pdf'); else showPreview('m-cv', r.preview);
+}
+// 🏷 ラベル
+function genLabel(save){
+  var p=document.getElementById('l-preset').value.split(',').map(Number);
+  var cols=p[0], rws=p[1], fs=+document.getElementById('l-fs').value||10, pad=+document.getElementById('l-pad').value||4;
+  var blocks=document.getElementById('l-data').value.split(/\n\s*\n/).map(function(b){return b.trim();}).filter(Boolean);
+  if(!blocks.length){ alert('宛名データを入力してください'); return; }
+  var items=blocks.map(function(b){
+    var lines=b.split(/\r?\n/);
+    return function(ctx){
+      ctx.font=ptToPx(fs)+'px sans-serif';
+      var lh=ptToPx(fs)*1.5;
+      lines.forEach(function(ln,i){ ctx.fillText(ln, pad*MM2PX, pad*MM2PX + i*lh); });
+    };
+  });
+  var r=buildGridPdf({cols:cols,rows:rws,landscape:false,items:items});
+  if(save) r.doc.save('宛名ラベル_'+blocks.length+'件.pdf'); else showPreview('l-cv', r.preview);
+}
+// 💳 名刺 (91×55, 横2×縦5=10面)
+function genCard(save){
+  var co=document.getElementById('c-co').value, addr=document.getElementById('c-addr').value;
+  var each=+document.getElementById('c-each').value||10;
+  var people=parseRows(document.getElementById('c-data').value).filter(function(r){return r.join('').trim();});
+  if(!people.length){ alert('名刺データを入力してください'); return; }
+  var CW=91, CH=55;
+  var items=[];
+  people.forEach(function(pp){
+    var name=pp[0]||'', dept=pp[1]||'', company=pp[2]||co, tel=pp[3]||'', email=pp[4]||'';
+    for(var k=0;k<each;k++){
+      items.push(function(ctx){
+        ctx.font='bold '+ptToPx(8)+'px sans-serif'; ctx.fillText(company, 6*MM2PX, 7*MM2PX);
+        ctx.font=ptToPx(7)+'px sans-serif'; ctx.fillStyle='#555'; ctx.fillText(dept, 6*MM2PX, 16*MM2PX);
+        ctx.fillStyle='#111'; ctx.font='bold '+ptToPx(13)+'px sans-serif'; ctx.fillText(name, 6*MM2PX, 24*MM2PX);
+        ctx.font=ptToPx(6.5)+'px sans-serif'; ctx.fillStyle='#444';
+        ctx.fillText(addr, 6*MM2PX, 40*MM2PX);
+        ctx.fillText('TEL '+tel+(email?'   '+email:''), 6*MM2PX, 46*MM2PX);
+      });
+    }
+  });
+  var r=buildGridPdf({cols:2,rows:5,landscape:false,cellW:CW,cellH:CH,items:items});
+  if(save) r.doc.save('名刺_'+people.length+'名.pdf'); else showPreview('c-cv', r.preview);
+}
+// 🔢 連番
+function genNum(save){
+  var pre=document.getElementById('n-pre').value, start=+document.getElementById('n-start').value||1;
+  var digits=+document.getElementById('n-digits').value||0, count=+document.getElementById('n-count').value||1;
+  var cols=+document.getElementById('n-cols').value||4, rws=+document.getElementById('n-rows').value||10;
+  var fs=+document.getElementById('n-fs').value||18, land=document.getElementById('n-paper').value==='A4L';
+  var items=[];
+  for(var i=0;i<count;i++){
+    var n=start+i; var s=digits>0?('0'.repeat(digits)+n).slice(-digits):(''+n);
+    (function(txt){ items.push(function(ctx,cv){ ctx.font='bold '+ptToPx(fs)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(pre+txt, cv.width/2, cv.height/2); }); })(pre+s===pre+s? s : s);
+  }
+  var r=buildGridPdf({cols:cols,rows:rws,landscape:land,items:items});
+  if(save) r.doc.save('連番_'+count+'枚.pdf'); else showPreview('n-cv', r.preview);
+}
+</script>
+</body>
+</html>
