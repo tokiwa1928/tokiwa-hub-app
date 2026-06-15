@@ -12816,11 +12816,16 @@ function showProofingDetail(proofingId){
         : '<button class="btn" style="font-size:11px;padding:3px 10px;background:#eef2ff;border-color:#a5b4fc;color:#3730a3" onclick="ensureProofDriveFolder(\'' + p.id + '\').then(function(){showProofingDetail(\'' + p.id + '\')})">📁 Drive保存先を用意 (会社名/製番_会社名_製品名)</button>'}
     </div>
     ${sharedHtml}
+    ${_proofStatusMismatchHtml_(p)}
     <div class="f" style="margin-bottom:.75rem">
-      <label>ステータス</label>
-      <select style="font-size:12px" onchange="updateProofingStatus('${p.id}',this.value)">
-        ${statusOptions}
-      </select>
+      <label>ステータス（クリックで即変更）</label>
+      <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">
+        ${_proofStatuses_().map(function(s){
+          var on = s.key===_curStK;
+          return '<button onclick="updateProofingStatus(\''+p.id+'\',\''+s.key+'\')" style="text-align:left;font-size:12.5px;font-weight:'+(on?'800':'600')+';padding:8px 12px;border-radius:7px;cursor:pointer;border:2px solid '+(on?'#1e293b':'#e0ddd6')+';background:'+(on?s.color:'#fff')+';color:#1a1a1a;border-left:6px solid '+s.color+'">'+(on?'✅ ':'　')+_escDiff(s.label)+'</button>';
+        }).join('')}
+      </div>
+      <div style="font-size:10px;color:#94a3b8;margin-top:3px">※ 現在のステータスに ✅ が付きます。クリックすると即反映＋通知されます。</div>
     </div>
     <div style="margin-bottom:.75rem">
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">📄 校正履歴</div>
@@ -13388,6 +13393,24 @@ async function submitSendProofToCustomer(proofingId){
   }
 }
 
+// PROOFGUARD-1: 「校了/差戻/修正」と言っているのにステータスが動いていない時の注意喚起
+function _proofStatusMismatchHtml_(p){
+  var cur = (typeof _normProofStatus_==='function') ? _normProofStatus_(p.status) : p.status;
+  var meta = (typeof _proofStatusMeta_==='function') ? _proofStatusMeta_(cur) : {};
+  // 直近の手がかり: 最新コメント(versions.feedback) と やり取り(timeline)
+  var hints = [];
+  (p.versions||[]).forEach(function(v){ if(v.feedback) hints.push(v.feedback); });
+  (p.timeline||[]).forEach(function(t){ if(t.text) hints.push(t.text); });
+  var recent = hints.slice(-4).join(' / ');
+  var warn = '';
+  if(/校了|校了です|OK|問題ありません|これで|進めて/.test(recent) && !meta.done){
+    warn = '「<b>校了</b>」のやり取りがありますが、ステータスが<b>校了になっていません</b>。校了ボタンを押してください（製造に進めません）。';
+  } else if(/差戻|差し戻|やり直し|修正してください|直して|不備/.test(recent) && !/作業待ち|差戻|修正|DTP/.test(meta.label||'')){
+    warn = '「<b>差し戻し/修正依頼</b>」のやり取りがありますが、ステータスが作業待ちに戻っていない可能性があります。ご確認ください。';
+  }
+  if(!warn) return '';
+  return '<div style="background:#fef2f2;border:2px solid #f87171;border-radius:8px;padding:9px 12px;margin-bottom:.6rem;font-size:12px;color:#991b1b;font-weight:600">⚠ ' + warn + '</div>';
+}
 // DELIV-1: お客様送付・ダウンロード履歴の表示 (校正詳細内)
 function _proofSentLogHtml_(p){
   var log = p.customerSentLog || [];
@@ -17004,10 +17027,13 @@ function renderToolsPage(){
   if(typeof updateAiKeyStatus==='function') updateAiKeyStatus();
   var el = document.getElementById('tools-list'); if(!el) return;
   closeInternalTool(true);
-  var stBadge = function(s){
-    var c = s === '運用中' ? '#16a34a' : s === '試作' ? '#f59e0b' : '#94a3b8';
-    return '<span style="font-size:10px;font-weight:800;color:#fff;background:' + c + ';padding:2px 8px;border-radius:10px">' + s + '</span>';
+  var stBadge = function(s, i){
+    var c = s === '運用中' ? '#16a34a' : s === '試作' ? '#f59e0b' : s === '開発中' ? '#dc2626' : s === '停止中' ? '#64748b' : '#94a3b8';
+    var clickable = (((currentAuth&&currentAuth.companyCode)===TOOLS_ADMIN_CODE)||((currentAuth&&currentAuth.role)==='admin'));
+    return '<span ' + (clickable?'onclick="event.preventDefault();event.stopPropagation();editToolStatus('+i+')" title="クリックで状態を変更" style="cursor:pointer;':'style="') + 'font-size:10px;font-weight:800;color:#fff;background:' + c + ';padding:2px 8px;border-radius:10px">' + s + (clickable?' ✎':'') + '</span>';
   };
+  // 状態の上書き (DB.toolStatusOverride[key])
+  var stOv = (DB && DB.toolStatusOverride) || {};
   // TLCOMP-1: 公開会社の上書き設定 (DB.toolCompanyConfig[key]=会社コード配列) を反映
   var cfg = (DB && DB.toolCompanyConfig) || {};
   var isAdminCompany = ((currentAuth && currentAuth.companyCode)===TOOLS_ADMIN_CODE) || ((currentAuth&&currentAuth.role)==='admin');
@@ -17016,6 +17042,7 @@ function renderToolsPage(){
   el.innerHTML = TOOLS_REGISTRY.map(function(t, i){
     var key = t.href || ('internal:'+t.internal);
     var comps = cfg[key] || t.companies || [];
+    var status = stOv[key] || t.status;
     var tt = Object.assign({}, t, { companies: comps, _key:key });
     if(!_toolVisibleForCompany_(tt)) return '';
     // 管理会社にだけ「公開範囲」バッジを表示
@@ -17027,7 +17054,7 @@ function renderToolsPage(){
       + 'onmouseover="this.style.borderColor=\'#0891b2\'" onmouseout="this.style.borderColor=\'#e0ddd6\'">'
       + '<div style="font-size:30px">' + t.icon + '</div>'
       + '<div style="flex:1;min-width:0">'
-      +   '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><strong style="font-size:15px">' + t.name + '</strong>' + stBadge(t.status)
+      +   '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><strong style="font-size:15px">' + t.name + '</strong>' + stBadge(status, i)
       +   '<span style="font-size:10px;color:#94a3b8;border:1px solid #e2e8f0;border-radius:4px;padding:1px 6px">' + t.tag + '</span>' + scopeBadge + '</div>'
       +   '<div style="font-size:12px;color:#666;margin-top:3px;line-height:1.5">' + t.desc + '</div>'
       + '</div>'
@@ -17057,6 +17084,23 @@ function editToolCompanies(i){
   if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
   renderToolsPage();
   alert('✅ 「'+t.name+'」の公開範囲を更新しました\n' + (codes.length ? codes.join('・') : '全社共通'));
+}
+// ツールの状態ラベルを変更 (運用中/試作/開発中/停止中)
+function editToolStatus(i){
+  var t = TOOLS_REGISTRY[i]; if(!t) return;
+  var key = t.href || ('internal:'+t.internal);
+  if(!DB.toolStatusOverride) DB.toolStatusOverride = {};
+  var cur = DB.toolStatusOverride[key] || t.status;
+  var opts = ['運用中','試作','開発中','停止中'];
+  var msg = '「'+t.name+'」の状態を選択（番号入力）:\n' + opts.map(function(o,n){return (n+1)+'. '+o+(o===cur?' ←現在':'');}).join('\n');
+  var sel = prompt(msg, String(opts.indexOf(cur)+1 || 1));
+  if(sel===null) return;
+  var v = opts[parseInt(sel)-1]; if(!v){ alert('番号が不正です'); return; }
+  DB.toolStatusOverride[key] = v;
+  saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  renderToolsPage();
+  if(typeof _toastMsg==='function') _toastMsg('🏷 「'+t.name+'」を「'+v+'」にしました');
 }
 // TLPF-2: 内蔵ツール (Wiki から移管) の開閉
 function openInternalTool(kind){
