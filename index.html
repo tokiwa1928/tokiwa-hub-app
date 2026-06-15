@@ -26451,6 +26451,7 @@ function showWorkInstructionView(projectId){
           <div style="font-size:17px;font-weight:700">${project.id} · ${project.item || '─'}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
+          <button onclick="genDeliveryLabels('${String(projectId).replace(/'/g,'')}')" style="font-size:13px;padding:7px 14px;border:none;border-radius:6px;background:#fde68a;color:#92400e;font-weight:700;cursor:pointer" title="納品先・箱数から宛名ラベル(1/N)を生成">🏷 納品ラベル</button>
           <button onclick="_printSeizouSheet('${String(projectId).replace(/'/g,'')}')" style="font-size:13px;padding:7px 14px;border:none;border-radius:6px;background:#fff;color:#1e293b;font-weight:700;cursor:pointer">🖨 印刷 / PDF</button>
           <button onclick="this.closest('.proof-modal').remove()" style="font-size:28px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 8px">×</button>
         </div>
@@ -26767,6 +26768,42 @@ showProofingDetail = function(proofingId){
   }
 };
 
+// DELIVLABEL-1: 案件の納品先から宛名ラベル(箱番号 1/N つき)を生成 → データ生成ツールへ
+function genDeliveryLabels(projectId){
+  var proj = (DB.projects || []).find(function(p){ return p.id === projectId; });
+  if(!proj){ alert('案件が見つかりません'); return; }
+  // 納品先: この案件の配送タスク (custName+address)。無ければ案件のエンドユーザー/得意先
+  var dests = (DB.deliveryItems || []).filter(function(d){ return d.projectId === projectId; })
+    .map(function(d){ return { name: d.custName || '', addr: d.address || '', note: d.note || '', boxes: parseInt(d.qty) || 0 }; })
+    .filter(function(d){ return d.name || d.addr; });
+  if(!dests.length){
+    dests = [{ name: (proj.enduser || proj.endUser || proj.cust || '') + ' 様', addr: proj.deliveryNote || '', note:'', boxes: 0 }];
+  }
+  // 箱数: 各納品先ごとに確認 (deliveryItemのqtyを既定。なければ案件の総箱数 or 入力)
+  var defBoxes = parseInt(proj.packBoxes) || parseInt(String(proj.packBoxes||'').replace(/[^0-9]/g,'')) || 0;
+  var blocks = [];
+  dests.forEach(function(d){
+    var n = d.boxes || defBoxes;
+    if(!n){
+      var inp = prompt('「' + (d.name||d.addr) + '」の箱数を入力してください', '1');
+      if(inp === null) return;
+      n = parseInt(inp) || 1;
+    }
+    for(var i = 1; i <= n; i++){
+      var lines = [];
+      if(d.addr) lines.push(d.addr);
+      lines.push((d.name || '') + (/様|御中/.test(d.name) ? '' : ' 様'));
+      lines.push((proj.item || '') + '　' + i + '/' + n + '箱');
+      blocks.push(lines.join('\n'));
+    }
+  });
+  if(!blocks.length){ alert('ラベルを作成できませんでした（納品先・箱数が未設定）'); return; }
+  try {
+    localStorage.setItem('tokiwa_datagen_handoff', JSON.stringify({ tab:'label', preset:'2,6,0,0', labelData: blocks.join('\n\n'), title:'納品ラベル (' + proj.id + ')' }));
+  } catch(e){}
+  window.open('tools/data-gen.html', '_blank');
+  if(typeof _toastMsg === 'function') _toastMsg('🏷 納品ラベル ' + blocks.length + '枚分を生成ツールへ送りました');
+}
 // MENPU-1: 校了データを面付ツールへ (案件のサイズ・数量・面付履歴をパラメータで引き継ぐ)
 function openMentuForProof(proofingId){
   var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
