@@ -12501,6 +12501,48 @@ function proofSendBack(proofingId){
   if(typeof _toastMsg === 'function') _toastMsg('↩ 「' + target.label + '」へ差し戻しました');
 }
 
+// HANDOFF-1: 外注先⇄DTP の直接やり取り通知 (営業を介さない)
+// type: received(受領) / ack(受取) / reupload(再アップ) / fixed(修正完了)
+function _proofHandoff_(proofingId, type){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p) return;
+  var meta = {
+    received: { icon:'📥', label:'受領通知', msg:'データを受領しました', toStatus:null },
+    ack:      { icon:'🤝', label:'受取通知', msg:'受け取りを確認しました', toStatus:null },
+    reupload: { icon:'🔁', label:'再アップ通知', msg:'修正データを再アップしました。ご確認ください', toStatus:null },
+    fixed:    { icon:'✏️', label:'修正完了', msg:'修正が完了しました', toStatus:null }
+  }[type];
+  if(!meta) return;
+  var note = '';
+  if(type === 'reupload' || type === 'fixed'){
+    note = prompt(meta.label + ' — メモ (任意。修正内容など)', '') || '';
+  }
+  p.timeline = p.timeline || [];
+  p.timeline.push({ type:'handoff', kind:type, at:new Date().toISOString(), by:(currentAuth?.userName||''), text:meta.icon + ' ' + meta.label + (note ? '\n' + note : '') });
+  p.lastMoveAt = new Date().toISOString();
+  saveDB();
+  // 通知 (トースト + 共有先LW)
+  if(typeof _toastMsg === 'function') _toastMsg(meta.icon + ' ' + meta.label + 'を記録しました');
+  if(p.notifyOnUpdate !== false && (p.sharedWithCompanies||[]).length && typeof _notifyLwOnProofUpdate_ === 'function'){
+    try { _notifyLwOnProofUpdate_(p, meta.icon + ' ' + meta.msg + (note ? '\n' + note : '')); } catch(e){}
+  }
+  if(('Notification' in window) && Notification.permission === 'granted' && typeof _showNotification_ === 'function'){
+    _showNotification_(meta.icon + ' ' + meta.label, { body:(p.custName||'') + ' / ' + (p.prodName||''), tag:'handoff:'+p.id+':'+Date.now() });
+  }
+  showProofingDetail(proofingId);
+}
+// やり取り履歴の表示 (差戻/受領/受取/再アップ/工程)
+function _proofTimelineHtml_(p){
+  var tl = (p.timeline || []).filter(function(t){ return ['handoff','sendback','stage'].indexOf(t.type) >= 0; });
+  if(!tl.length) return '';
+  var rows = tl.slice().reverse().slice(0, 12).map(function(t){
+    var d = new Date(t.at);
+    var dStr = (d.getMonth()+1) + '/' + d.getDate() + ' ' + ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+    var col = t.type === 'sendback' ? '#b91c1c' : t.type === 'stage' ? '#3730a3' : '#166534';
+    return '<div style="font-size:10.5px;border-left:3px solid ' + col + ';padding:2px 8px;margin-bottom:3px;white-space:pre-wrap">' + _escDiff(t.text||'') + ' <span style="color:#94a3b8">' + dStr + (t.by?' '+_escDiff(t.by):'') + '</span></div>';
+  }).join('');
+  return '<div style="margin-bottom:.75rem;background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:8px 10px"><div style="font-size:12px;font-weight:700;margin-bottom:4px">🔄 やり取り履歴</div>' + rows + '</div>';
+}
 // ═══ STALE-1: 停滞・要注意リスト (N日動いていない / 納期接近・超過) ═══
 function _alertDays_(){
   var d = (DB.conf && DB.conf.alertDays) || {};
@@ -12722,6 +12764,16 @@ function showProofingDetail(proofingId){
     <div style="margin-bottom:.75rem">
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">📄 校正履歴</div>
       ${versionsHtml || '<div style="color:#888;font-size:11px">まだ校正がありません</div>'}
+    </div>
+    ${_proofTimelineHtml_(p)}
+    <div style="margin-bottom:.75rem;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px">
+      <div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px">📨 やり取り通知（外注先⇄DTP 直接）</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn" style="font-size:11px;padding:4px 10px;background:#dcfce7;border-color:#86efac;color:#166534" onclick="_proofHandoff_('${p.id}','received')">📥 受領通知</button>
+        <button class="btn" style="font-size:11px;padding:4px 10px;background:#dcfce7;border-color:#86efac;color:#166534" onclick="_proofHandoff_('${p.id}','ack')">🤝 受取通知</button>
+        <button class="btn" style="font-size:11px;padding:4px 10px;background:#fef9c3;border-color:#fde047;color:#854d0e" onclick="_proofHandoff_('${p.id}','fixed')">✏️ 修正完了</button>
+        <button class="btn" style="font-size:11px;padding:4px 10px;background:#dbeafe;border-color:#93c5fd;color:#1e40af" onclick="_proofHandoff_('${p.id}','reupload')">🔁 再アップ通知</button>
+      </div>
     </div>
     ${_proofSentLogHtml_(p)}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
