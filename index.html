@@ -12707,6 +12707,11 @@ function showProofingDetail(proofingId){
       <div style="font-size:12px;color:#555">${p.prodName || ''}</div>
     </div>
     ${projectLinkHtml}
+    <div style="margin-bottom:.6rem;font-size:11.5px">
+      ${p.driveFolderUrl
+        ? '📁 保存先: <a href="' + p.driveFolderUrl + '" target="_blank" style="color:#0369a1;font-weight:700">' + (p.custName||'') + ' / ' + ((DB.projects||[]).find(function(pr){return pr.id===p.projectId;})?.id || p.projectId || '') + ' フォルダを開く</a>'
+        : '<button class="btn" style="font-size:11px;padding:3px 10px;background:#eef2ff;border-color:#a5b4fc;color:#3730a3" onclick="ensureProofDriveFolder(\'' + p.id + '\').then(function(){showProofingDetail(\'' + p.id + '\')})">📁 Drive保存先を用意 (会社名/製番_会社名_製品名)</button>'}
+    </div>
     ${sharedHtml}
     <div class="f" style="margin-bottom:.75rem">
       <label>ステータス</label>
@@ -13329,6 +13334,32 @@ function _proofMarkDownloaded_(proofingId, sndId){
   if(!p) return;
   var s = (p.customerSentLog || []).find(function(x){ return x.id === sndId; });
   if(s){ s.downloadedAt = new Date().toISOString(); s.downloadedBy = (currentAuth?.userName||''); saveDB(); showProofingDetail(proofingId); if(typeof _toastMsg==='function') _toastMsg('✅ ダウンロード/確認済みにしました'); }
+}
+// PROOFDRIVE-1: 校正の保存先フォルダを自動で用意 (ルート/会社名/製番_会社名_製品名/段階)
+async function ensureProofDriveFolder(proofingId, silent){
+  var p = (DB.proofings || []).find(function(x){ return x.id === proofingId; });
+  if(!p) return null;
+  if(p.driveFolderId && p.driveSubFolders){ return p; } // 既に用意済み
+  var proj = (DB.projects || []).find(function(pr){ return pr.id === p.projectId; }) || {};
+  var seiban = proj.id || p.projectId || (p.id || '');
+  var company = p.custName || proj.cust || '';
+  var product = proj.item || p.prodName || '';
+  try {
+    var r = await callCloudAPI('ensureProofFolder', {}, { seiban: seiban, company: company, product: product });
+    if(r && r.success){
+      p.driveFolderId = r.folderId;
+      p.driveFolderUrl = r.folderUrl;
+      p.driveSubFolders = r.subFolders;
+      // 案件側にも反映
+      if(proj && proj.id){ proj.driveFolderId = proj.driveFolderId || r.folderId; proj.driveSubFolders = proj.driveSubFolders || r.subFolders; }
+      saveDB();
+      if(!silent && typeof _toastMsg === 'function') _toastMsg('📁 保存先フォルダを用意しました: ' + r.folderName);
+      return p;
+    } else {
+      if(!silent) alert('保存先フォルダの作成に失敗: ' + ((r && r.error) || 'unknown') + '\n(Drive保存先が未設定の場合は 設定 で登録してください)');
+    }
+  } catch(e){ if(!silent) alert('⚠ ' + e.message); }
+  return null;
 }
 // STAGE-1: 校ステップ → Driveフォルダ名の対応 (出/戻ペア)
 var PROOF_STAGE_FOLDERS = {
@@ -29517,6 +29548,8 @@ function createProofingFromProject(project, openAfterCreate){
   project.proofingIds.push(proofing.id);
 
   saveDB();
+  // PROOFDRIVE-1: 保存先フォルダを自動で用意 (会社名/製番_会社名_製品名)
+  if(typeof ensureProofDriveFolder === 'function') try { ensureProofDriveFolder(proofing.id, true); } catch(e){}
 
   if(openAfterCreate){
     const btn = document.querySelector('.tb-btn[onclick*="proofing"]');
