@@ -5,7 +5,7 @@
 // - キャッシュ名の version を上げると自動で旧キャッシュを掃除
 // ============================================================
 
-const CACHE_VERSION = 'tokiwa-hub-v2';
+const CACHE_VERSION = 'tokiwa-hub-v3';
 const RUNTIME_CACHE = 'tokiwa-hub-runtime-v2';
 
 // 起動時に最低限プリキャッシュするアセット (任意で増やせる)
@@ -88,8 +88,10 @@ self.addEventListener('fetch', (event) => {
     url.pathname.endsWith('/tokiwa-hub-app/') ||
     url.pathname === '/' || url.pathname.endsWith('/');
   if (isAppShell) {
+    // cache:'reload' でブラウザのHTTPキャッシュを必ずバイパスし、サーバの最新を取得
+    //   (これをしないと GitHub Pages の max-age により旧版が出続けることがある)
     event.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'reload' })
         .then((res) => {
           if (res && res.status === 200) {
             const clone = res.clone();
