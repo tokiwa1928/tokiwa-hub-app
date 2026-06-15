@@ -33,6 +33,7 @@
   <div class="tab" data-t="label" onclick="sw('label')">🏷 宛名ラベル</div>
   <div class="tab" data-t="card" onclick="sw('card')">💳 名刺</div>
   <div class="tab" data-t="num" onclick="sw('num')">🔢 連番・ナンバリング</div>
+  <div class="tab" data-t="env" onclick="sw('env')">📮 封筒</div>
 </div>
 
 <!-- 差し込み (ビジュアル編集) -->
@@ -136,6 +137,57 @@
     </div>
     <div style="margin-top:10px"><button class="btn" onclick="genNum(false)">👁 プレビュー</button> <button class="btn" onclick="genNum(true)">📄 PDF生成</button></div>
     <canvas id="n-cv" style="display:none"></canvas>
+  </div>
+</div>
+
+<!-- 封筒 -->
+<div class="pane" id="pane-env">
+  <div class="card">
+    <div class="hint">📮 封筒に宛名（と差出人）を直接印刷。長形・角形は<b>縦書き</b>、洋形は<b>横書き</b>が既定。1宛名＝1ページ（封筒サイズで出力）。</div>
+    <div class="row">
+      <div><label>封筒サイズ</label>
+        <select id="e-size" onchange="envSizeChange()">
+          <option value="120,235,v">長形3号 120×235（A4三つ折）</option>
+          <option value="90,205,v">長形4号 90×205（B5三つ折）</option>
+          <option value="240,332,v">角形2号 240×332（A4そのまま）</option>
+          <option value="228,312,v">角形A4 228×312</option>
+          <option value="162,114,h">洋形2号 162×114（横）</option>
+          <option value="235,120,h">洋長3 235×120（A4三つ折・横）</option>
+        </select>
+      </div>
+      <div><label>書式</label>
+        <select id="e-dir"><option value="v">縦書き</option><option value="h">横書き</option></select>
+      </div>
+    </div>
+    <div class="card" style="background:#f8fafc;margin:10px 0 0">
+      <label style="margin-top:0">差出人（差出人を印刷する場合のみ。空欄で印刷しない）</label>
+      <div class="row">
+        <div><label>〒</label><input id="e-szip" value="208-0011"></div>
+        <div style="flex:2"><label>住所</label><input id="e-saddr" value="東京都武蔵村山市残堀2-1-1"></div>
+      </div>
+      <div class="row">
+        <div style="flex:2"><label>会社・氏名</label><input id="e-sname" value="トキワ印刷株式会社"></div>
+        <div><label>TEL</label><input id="e-stel" value="042-560-2431"></div>
+      </div>
+      <label><input type="checkbox" id="e-sender-on" checked style="width:auto;margin-right:6px;vertical-align:middle">差出人を印刷する</label>
+    </div>
+    <label style="margin-top:12px">宛名データ（1件ごとに空行で区切る。各件：〒 / 住所 / 会社名 / 氏名＋様 の順）
+      <button class="btn sub" style="font-size:10px;padding:2px 8px;margin-left:6px" onclick="document.getElementById('e-csv-file').click()">📄 CSV読込</button>
+      <input type="file" id="e-csv-file" accept=".csv,.txt,text/csv" style="display:none" onchange="loadEnvCsv(this)">
+    </label>
+    <textarea id="e-data">〒100-0001
+東京都千代田区千代田1-1
+富士食品株式会社
+山田 太郎 様
+
+〒540-0001
+大阪府大阪市中央区2-2
+北山商事株式会社
+営業部 佐藤 花子 様</textarea>
+    <div class="hint">CSV読込は「〒,住所,会社,氏名」の列順（氏名に「様」が無ければ自動付与）。Excelからの貼り付けにも対応。</div>
+    <div class="row"><div><label>宛名サイズ(pt)</label><input id="e-namefs" type="number" value="30"></div><div><label>住所サイズ(pt)</label><input id="e-addrfs" type="number" value="15"></div></div>
+    <div style="margin-top:10px"><button class="btn" onclick="genEnv(false)">👁 プレビュー</button> <button class="btn" onclick="genEnv(true)">📄 PDF生成</button></div>
+    <canvas id="e-cv" style="display:none"></canvas>
   </div>
 </div>
 
@@ -382,6 +434,127 @@ function genNum(save){
   }
   var r=buildGridPdf({cols:cols,rows:rws,landscape:land,items:items});
   if(save) r.doc.save('連番_'+count+'枚.pdf'); else showPreview('n-cv', r.preview);
+}
+// 📮 封筒 ---------------------------------------------------------------
+// 封筒サイズ選択で書式(縦/横)の既定を切り替え
+function envSizeChange(){
+  var v=document.getElementById('e-size').value.split(',');
+  document.getElementById('e-dir').value = v[2]||'v';
+}
+// CSV読込 (〒,住所,会社,氏名 列順 → 件ブロックへ整形)
+function loadEnvCsv(inp){
+  var f=inp.files[0]; if(!f) return;
+  var fr=new FileReader();
+  fr.onload=function(){
+    var buf=fr.result, text;
+    try{ text=new TextDecoder('utf-8',{fatal:true}).decode(buf); }
+    catch(e){ try{ text=new TextDecoder('shift_jis').decode(buf); }catch(e2){ text=new TextDecoder('utf-8').decode(buf); } }
+    if(/�/.test(text)){ try{ text=new TextDecoder('shift_jis').decode(buf); }catch(e){} }
+    var rows=text.replace(/\r\n?/g,'\n').split('\n').map(function(l){return l.trim();}).filter(Boolean);
+    // ヘッダ行(〒/住所/郵便 等を含む)はスキップ
+    if(rows.length && /〒|郵便|住所|氏名|会社|宛名/.test(rows[0]) && /,|\t/.test(rows[0])) rows.shift();
+    var blocks=rows.map(function(l){
+      var c=l.split(/[\t,]/).map(function(s){return s.trim();});
+      var zip=c[0]||'', addr=c[1]||'', co=c[2]||'', name=c[3]||'';
+      if(name && !/様|御中|宛/.test(name)) name+=' 様';
+      return [zip?(/^〒/.test(zip)?zip:'〒'+zip):'', addr, co, name].filter(Boolean).join('\n');
+    }).filter(Boolean);
+    document.getElementById('e-data').value=blocks.join('\n\n');
+    alert('📄 CSVを読み込みました（'+blocks.length+'件）');
+  };
+  fr.readAsArrayBuffer(f);
+  inp.value='';
+}
+// 縦書き1列描画（上→下）。戻り値=最終y
+function envVCol(ctx, str, cx, top, fpx, bold, color){
+  ctx.font=(bold?'bold ':'')+Math.round(fpx)+'px sans-serif'; ctx.fillStyle=color||'#111';
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  var y=top, step=fpx*1.04, chars=Array.from(String(str));
+  for(var i=0;i<chars.length;i++){ var ch=chars[i];
+    // 長音・ダッシュは縦向きに回転
+    if(ch==='ー'||ch==='－'||ch==='—'||ch==='-'){ ctx.save(); ctx.translate(cx,y+fpx/2); ctx.rotate(Math.PI/2); ctx.fillText(ch,0,-fpx/2); ctx.restore(); }
+    else { ctx.fillText(ch, cx, y); }
+    y+=step;
+  }
+  ctx.textAlign='left';
+  return y;
+}
+// 縦書き複数列（右→左に折り返し）
+function envVColumns(ctx, str, rightX, top, bottom, fpx, bold, color){
+  var x=rightX, y=top, step=fpx*1.04, gap=fpx*0.55, chars=Array.from(String(str));
+  ctx.fillStyle=color||'#111'; ctx.textAlign='center'; ctx.textBaseline='top';
+  ctx.font=(bold?'bold ':'')+Math.round(fpx)+'px sans-serif';
+  for(var i=0;i<chars.length;i++){
+    if(y+fpx>bottom){ x-=(fpx+gap); y=top; }
+    var ch=chars[i];
+    if(ch==='ー'||ch==='－'||ch==='—'||ch==='-'){ ctx.save(); ctx.translate(x,y+fpx/2); ctx.rotate(Math.PI/2); ctx.fillText(ch,0,-fpx/2); ctx.restore(); }
+    else ctx.fillText(ch, x, y);
+    y+=step;
+  }
+  ctx.textAlign='left';
+  return x;
+}
+function genEnv(save){
+  var sz=document.getElementById('e-size').value.split(',');
+  var W=+sz[0], H=+sz[1];
+  var dir=document.getElementById('e-dir').value;
+  var nameFs=+document.getElementById('e-namefs').value||30, addrFs=+document.getElementById('e-addrfs').value||15;
+  var senderOn=document.getElementById('e-sender-on').checked;
+  var sZip=document.getElementById('e-szip').value.trim(), sAddr=document.getElementById('e-saddr').value.trim();
+  var sName=document.getElementById('e-sname').value.trim(), sTel=document.getElementById('e-stel').value.trim();
+  var blocks=document.getElementById('e-data').value.split(/\n\s*\n/).map(function(b){return b.trim();}).filter(Boolean);
+  if(!blocks.length){ alert('宛名データを入力してください'); return; }
+  var doc=new jsPDF({unit:'mm', format:[W,H], orientation: W>H?'landscape':'portrait'});
+  var cvW=Math.round(W*MM2PX), cvH=Math.round(H*MM2PX);
+  var firstCv=null;
+  blocks.forEach(function(b, bi){
+    var lines=b.split(/\r?\n/).map(function(s){return s.trim();}).filter(Boolean);
+    var zip='', name='', mid=[];
+    lines.forEach(function(ln,i){
+      if(i===0 && (/〒|^\d{3}-?\d{4}/.test(ln))) { zip=ln.replace(/^〒/,'').trim(); }
+      else if(i===lines.length-1) { name=ln; }
+      else mid.push(ln);
+    });
+    if(!name){ name=mid.pop()||''; }
+    var cv=document.createElement('canvas'); cv.width=cvW; cv.height=cvH;
+    var ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,cvW,cvH); ctx.fillStyle='#111';
+    var nameP=ptToPx(nameFs), addrP=ptToPx(addrFs);
+    if(dir==='v'){
+      // 縦書き：右上に住所、中央に大きく宛名
+      if(zip){ ctx.font=Math.round(ptToPx(addrFs*0.9))+'px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='top'; ctx.fillStyle='#111'; ctx.fillText('〒 '+zip, cvW*0.30, cvH*0.045); }
+      var top=cvH*0.12, bottom=cvH*0.60;
+      var leftX = envVColumns(ctx, mid.join('　'), cvW*0.86, top, bottom, addrP, false, '#111');
+      // 宛名（中央・大）
+      envVCol(ctx, name, cvW*0.46, cvH*0.16, nameP, true, '#111');
+      // 差出人（左下に小さく縦書き）
+      if(senderOn && (sName||sAddr)){
+        var sb=cvH*0.55;
+        if(sZip){ envVCol(ctx, '〒'+sZip, cvW*0.14, sb, ptToPx(9), false, '#444'); }
+        var sx=envVColumns(ctx, sAddr, cvW*0.115, sb+ptToPx(9)*4, cvH*0.95, ptToPx(10), false, '#333');
+        envVCol(ctx, sName, cvW*0.055, sb, ptToPx(11), true, '#222');
+        if(sTel){ ctx.font=Math.round(ptToPx(8))+'px sans-serif'; ctx.save(); ctx.translate(cvW*0.025, cvH*0.78); ctx.rotate(Math.PI/2); ctx.fillStyle='#555'; ctx.fillText('TEL '+sTel,0,0); ctx.restore(); }
+      }
+    } else {
+      // 横書き：上中央に住所、中央に宛名
+      ctx.textAlign='left'; ctx.textBaseline='top';
+      var x=cvW*0.14, y=cvH*0.18;
+      if(zip){ ctx.font=Math.round(ptToPx(addrFs))+'px sans-serif'; ctx.fillStyle='#111'; ctx.fillText('〒 '+zip, x, y); y+=addrP*1.5; }
+      ctx.font=Math.round(addrP)+'px sans-serif'; ctx.fillStyle='#111';
+      mid.forEach(function(ln){ ctx.fillText(ln, x, y); y+=addrP*1.4; });
+      y+=addrP*0.6;
+      ctx.font='bold '+Math.round(nameP)+'px sans-serif'; ctx.fillText(name, x+cvW*0.05, y);
+      // 差出人（下部に小さく）
+      if(senderOn && (sName||sAddr)){
+        var sy=cvH*0.78; ctx.textAlign='left'; ctx.fillStyle='#333'; ctx.font=Math.round(ptToPx(9))+'px sans-serif';
+        if(sZip) { ctx.fillText('〒'+sZip+'　'+sAddr, cvW*0.40, sy); sy+=ptToPx(9)*1.5; } else if(sAddr){ ctx.fillText(sAddr, cvW*0.40, sy); sy+=ptToPx(9)*1.5; }
+        ctx.font='bold '+Math.round(ptToPx(10))+'px sans-serif'; ctx.fillStyle='#222'; ctx.fillText(sName+(sTel?'　TEL '+sTel:''), cvW*0.40, sy);
+      }
+    }
+    if(bi>0) doc.addPage([W,H], W>H?'landscape':'portrait');
+    doc.addImage(cv.toDataURL('image/jpeg',0.92),'JPEG',0,0,W,H);
+    if(!firstCv) firstCv=cv;
+  });
+  if(save) doc.save('封筒_'+blocks.length+'件.pdf'); else showPreview('e-cv', firstCv);
 }
 // 起動時: ビジュアル編集に初期要素を配置
 window.addEventListener('DOMContentLoaded', function(){
