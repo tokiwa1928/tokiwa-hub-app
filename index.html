@@ -1636,6 +1636,12 @@ setTimeout(_removeBootLoader_, 5000);
     <div id="company-visibility-ui"></div>
   </div>
 
+  <!-- HOLIDAY-1: 共有休日・年間スケジュール (トキワが管理し全社へ配布) -->
+  <div class="sec" id="holiday-box" style="max-width:900px;margin-top:1rem;display:none;background:#fff7ed;border:1px solid #fdba74">
+    <div class="st" style="color:#9a3412">📅 グループ共有 休日・年間スケジュール（トキワが管理 → 全社へ配布）</div>
+    <div id="holiday-ui"></div>
+  </div>
+
   <!-- システムユーザー管理 -->
   <div class="sec" style="max-width:900px;margin-top:1rem">
     <div class="st" style="display:flex;align-items:center;justify-content:space-between">
@@ -11857,14 +11863,20 @@ function initSchedulePage(){
   refreshReminders();
 }
 
-// SCHED-2: 営業日(土日除く・任意で祝日)で n 日ずらした日付を返す。n<0=過去方向
-var JP_HOLIDAYS_2026 = ['2026-09-21','2026-09-22','2026-09-23','2026-07-20','2026-08-11','2026-09-15','2026-10-13','2026-11-03','2026-11-23'];
+// SCHED-2/HOLIDAY-1: 営業日(土日＋トキワ管理の共有休日を除く)で n 日ずらす。n<0=過去方向
+var JP_HOLIDAYS_2026 = ['2026-01-01','2026-01-12','2026-02-11','2026-02-23','2026-03-20','2026-04-29','2026-05-03','2026-05-04','2026-05-05','2026-05-06','2026-07-20','2026-08-11','2026-09-21','2026-09-22','2026-09-23','2026-10-13','2026-11-03','2026-11-23'];
+// 共有休日(トキワが管理し全社へ配布): DB.holidays = ['YYYY-MM-DD' or {date,name}]
+function _holidaySet_(){
+  var arr = (DB && Array.isArray(DB.holidays) && DB.holidays.length) ? DB.holidays : JP_HOLIDAYS_2026;
+  var set = {};
+  arr.forEach(function(h){ var d = (typeof h === 'string') ? h : (h && h.date); if(d) set[d] = (typeof h==='object'? (h.name||'休') : '休'); });
+  return set;
+}
 function _isBizDay_(d){
   var wd = d.getDay();
   if(wd === 0 || wd === 6) return false;
   var iso = d.toISOString().slice(0,10);
-  if((DB.conf && DB.conf.holidays ? DB.conf.holidays : JP_HOLIDAYS_2026).indexOf(iso) >= 0) return false;
-  return true;
+  return !_holidaySet_()[iso];
 }
 function _addBizDays_(baseDate, n){
   var d = new Date(baseDate);
@@ -16827,6 +16839,76 @@ function _saveTkExecs_(){
   if(typeof _toastMsg === 'function') _toastMsg('💾 役員を保存しました: ' + DB.conf.tkExecs.join(', '));
 }
 
+// HOLIDAY-1: 共有休日・年間スケジュールの管理 (トキワが管理し全社へ配布。営業日計算に連動)
+function _normHolidays_(){
+  if(!Array.isArray(DB.holidays)) DB.holidays = JP_HOLIDAYS_2026.map(function(d){ return { date:d, name:'祝日' }; });
+  DB.holidays = DB.holidays.map(function(h){ return (typeof h==='string') ? { date:h, name:'休日' } : h; })
+    .filter(function(h){ return h && h.date; }).sort(function(a,b){ return a.date.localeCompare(b.date); });
+  return DB.holidays;
+}
+function _normAnnual_(){
+  if(!Array.isArray(DB.annualEvents)) DB.annualEvents = [];
+  DB.annualEvents = DB.annualEvents.filter(function(e){ return e && e.date; }).sort(function(a,b){ return a.date.localeCompare(b.date); });
+  return DB.annualEvents;
+}
+function renderHolidayManager(){
+  var box = document.getElementById('holiday-box'), ui = document.getElementById('holiday-ui');
+  if(!box || !ui) return;
+  var editable = (typeof _isTkExec_ === 'function') ? _isTkExec_() : false;
+  // 閲覧は全社可 (配布された休日を見られる)、編集はトキワ役員のみ
+  box.style.display = '';
+  var hol = _normHolidays_(), ann = _normAnnual_();
+  var thisYear = String(new Date().getFullYear());
+  var holRows = hol.filter(function(h){ return h.date >= thisYear + '-01-01'; }).map(function(h,i){
+    var gi = DB.holidays.indexOf(h);
+    return '<span style="display:inline-flex;align-items:center;gap:5px;background:#fee2e2;border:1px solid #fca5a5;border-radius:14px;padding:3px 10px;font-size:11.5px;margin:2px">'
+      + '🔴 ' + h.date + ' ' + _escDiff(h.name||'') + (editable ? ' <span style="color:#b91c1c;cursor:pointer;font-weight:800" onclick="_holDel_(' + gi + ')">✕</span>' : '') + '</span>';
+  }).join('') || '<span style="color:#94a3b8;font-size:11px">今年の休日は未登録</span>';
+  var annRows = ann.filter(function(e){ return e.date >= thisYear + '-01-01'; }).map(function(e){
+    var gi = DB.annualEvents.indexOf(e);
+    return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 0;border-bottom:1px dashed #fde68a">📌 <b>' + e.date + '</b> ' + _escDiff(e.name||'') + (e.company?' <span style="color:#9a3412">['+_escDiff(e.company)+']</span>':'') + (editable ? ' <span style="margin-left:auto;color:#b91c1c;cursor:pointer" onclick="_annDel_(' + gi + ')">削除</span>':'') + '</div>';
+  }).join('') || '<span style="color:#94a3b8;font-size:11px">年間スケジュール未登録</span>';
+
+  ui.innerHTML = '<div style="font-size:11.5px;color:#9a3412;line-height:1.7;margin-bottom:8px">ここで登録した休日は<b>営業日計算（日程表の自動作成）に反映</b>され、クラウド同期で全グループ会社に配布されます。土日は自動で休みです（祝日・会社休業日のみ登録）。</div>'
+    + (editable
+        ? '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;background:#fff;border:1px solid #fdba74;border-radius:6px;padding:7px 10px">'
+          + '<b style="font-size:11.5px">休日を追加:</b> <input type="date" id="hol-date" style="font-size:12px;padding:3px"> <input id="hol-name" placeholder="名称(例:夏季休業)" style="font-size:12px;padding:3px 6px;width:140px">'
+          + '<button class="btn" style="font-size:11px;padding:3px 10px;background:#dc2626;color:#fff;border-color:#dc2626" onclick="_holAdd_()">＋休日</button>'
+          + '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_holLoadJpHolidays_()">📥 ' + thisYear + '年の日本の祝日を投入</button>'
+          + '</div>'
+          + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;background:#fff;border:1px solid #fde68a;border-radius:6px;padding:7px 10px">'
+          + '<b style="font-size:11.5px">年間予定を追加:</b> <input type="date" id="ann-date" style="font-size:12px;padding:3px"> <input id="ann-name" placeholder="予定名(例:○○DM 発送)" style="font-size:12px;padding:3px 6px;width:160px"> <input id="ann-co" placeholder="会社(任意)" style="font-size:12px;padding:3px 6px;width:90px">'
+          + '<button class="btn" style="font-size:11px;padding:3px 10px;background:#d97706;color:#fff;border-color:#d97706" onclick="_annAdd_()">＋予定</button>'
+          + '</div>'
+        : '<div style="font-size:11px;color:#9a3412;margin-bottom:8px">※ 休日の編集はトキワ役員のみ可能です（閲覧のみ）。</div>')
+    + '<div style="font-weight:700;font-size:12px;color:#9a3412;margin:6px 0 3px">🗓 ' + thisYear + '年 休日</div><div>' + holRows + '</div>'
+    + '<div style="font-weight:700;font-size:12px;color:#9a3412;margin:10px 0 3px">📌 ' + thisYear + '年 年間スケジュール</div><div>' + annRows + '</div>';
+}
+function _holAdd_(){
+  var d = document.getElementById('hol-date')?.value; if(!d){ alert('日付を選択してください'); return; }
+  _normHolidays_();
+  if(DB.holidays.some(function(h){ return h.date === d; })){ alert('既に登録済みです'); return; }
+  DB.holidays.push({ date:d, name:(document.getElementById('hol-name')?.value||'休日') });
+  _holSave_();
+}
+function _holDel_(i){ _normHolidays_(); DB.holidays.splice(i,1); _holSave_(); }
+function _holLoadJpHolidays_(){
+  _normHolidays_(); var n=0;
+  JP_HOLIDAYS_2026.forEach(function(d){ if(!DB.holidays.some(function(h){return h.date===d;})){ DB.holidays.push({date:d,name:'祝日'}); n++; } });
+  _holSave_(); if(typeof _toastMsg==='function') _toastMsg('📥 祝日 '+n+'件を投入しました');
+}
+function _annAdd_(){
+  var d = document.getElementById('ann-date')?.value; if(!d){ alert('日付を選択してください'); return; }
+  _normAnnual_();
+  DB.annualEvents.push({ date:d, name:(document.getElementById('ann-name')?.value||''), company:(document.getElementById('ann-co')?.value||'') });
+  _holSave_();
+}
+function _annDel_(i){ _normAnnual_(); DB.annualEvents.splice(i,1); _holSave_(); }
+function _holSave_(){
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try { saveToCloud(); } catch(e){}
+  renderHolidayManager();
+}
 // ═════════════ TLPF-1: 🧰 ツールランチャー ═════════════
 // 小さな単機能アプリ (tools/*.html) の置き場。データは本体DB (localStorage) を共有。
 // companies: [] または未指定 = 全社共通。配列に会社コード(TK/KT/AS/TS/NK/MU/YM)を入れると、その会社のみ表示。
@@ -32056,6 +32138,7 @@ function switchCompany(code){
 // 会社一覧を描画
 function renderCompanies(){
   if(typeof renderCompanyVisibilityUI === 'function') try { renderCompanyVisibilityUI(); } catch(e){}
+  if(typeof renderHolidayManager === 'function') try { renderHolidayManager(); } catch(e){}
   const body = document.getElementById('company-body');
   if(!body) return;
 
