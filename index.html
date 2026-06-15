@@ -11878,17 +11878,19 @@ function initSchedulePage(){
 // SCHED-2/HOLIDAY-1: 営業日(土日＋トキワ管理の共有休日を除く)で n 日ずらす。n<0=過去方向
 var JP_HOLIDAYS_2026 = ['2026-01-01','2026-01-12','2026-02-11','2026-02-23','2026-03-20','2026-04-29','2026-05-03','2026-05-04','2026-05-05','2026-05-06','2026-07-20','2026-08-11','2026-09-21','2026-09-22','2026-09-23','2026-10-13','2026-11-03','2026-11-23'];
 // 共有休日(トキワが管理し全社へ配布): DB.holidays = ['YYYY-MM-DD' or {date,name}]
-function _holidaySet_(){
-  var arr = (DB && Array.isArray(DB.holidays) && DB.holidays.length) ? DB.holidays : JP_HOLIDAYS_2026;
+// 各社固有: DB.companyHolidays[companyId] = [{date,name}]。companyId指定で「グループ共通＋自社」を合算
+function _holidaySet_(companyId){
   var set = {};
-  arr.forEach(function(h){ var d = (typeof h === 'string') ? h : (h && h.date); if(d) set[d] = (typeof h==='object'? (h.name||'休') : '休'); });
+  function add(arr){ (arr||[]).forEach(function(h){ var d=(typeof h==='string')?h:(h&&h.date); if(d) set[d]=(typeof h==='object'?(h.name||'休'):'休'); }); }
+  add((DB && Array.isArray(DB.holidays) && DB.holidays.length) ? DB.holidays : JP_HOLIDAYS_2026);
+  if(companyId && DB.companyHolidays && DB.companyHolidays[companyId]) add(DB.companyHolidays[companyId]);
   return set;
 }
-function _isBizDay_(d){
+function _isBizDay_(d, companyId){
   var wd = d.getDay();
   if(wd === 0 || wd === 6) return false;
   var iso = d.toISOString().slice(0,10);
-  return !_holidaySet_()[iso];
+  return !_holidaySet_(companyId)[iso];
 }
 function _addBizDays_(baseDate, n){
   var d = new Date(baseDate);
@@ -16900,63 +16902,140 @@ function _normAnnual_(){
   DB.annualEvents = DB.annualEvents.filter(function(e){ return e && e.date; }).sort(function(a,b){ return a.date.localeCompare(b.date); });
   return DB.annualEvents;
 }
+function _normAnnual_(){
+  if(!Array.isArray(DB.annualEvents)) DB.annualEvents = [];
+  DB.annualEvents = DB.annualEvents.filter(function(e){ return e && e.date; }).sort(function(a,b){ return a.date.localeCompare(b.date); });
+  return DB.annualEvents;
+}
+// 現在の編集対象 (group / companyId) と年
+function _holTarget_(){ return window._holTargetVal_ || 'group'; }
+function _holYear_(){ return window._holYearVal_ || new Date().getFullYear(); }
+// 対象の休日配列を取得 (normalize)
+function _holListOf_(target){
+  if(target === 'group'){
+    if(!Array.isArray(DB.holidays)) DB.holidays = JP_HOLIDAYS_2026.map(function(d){return {date:d,name:'祝日'};});
+    DB.holidays = DB.holidays.map(function(h){return typeof h==='string'?{date:h,name:'休日'}:h;}).filter(function(h){return h&&h.date;});
+    return DB.holidays;
+  }
+  DB.companyHolidays = DB.companyHolidays || {};
+  if(!Array.isArray(DB.companyHolidays[target])) DB.companyHolidays[target] = [];
+  return DB.companyHolidays[target];
+}
 function renderHolidayManager(){
   var box = document.getElementById('holiday-box'), ui = document.getElementById('holiday-ui');
   if(!box || !ui) return;
   var editable = (typeof _isTkExec_ === 'function') ? _isTkExec_() : false;
-  // 閲覧は全社可 (配布された休日を見られる)、編集はトキワ役員のみ
   box.style.display = '';
-  var hol = _normHolidays_(), ann = _normAnnual_();
-  var thisYear = String(new Date().getFullYear());
-  var holRows = hol.filter(function(h){ return h.date >= thisYear + '-01-01'; }).map(function(h,i){
-    var gi = DB.holidays.indexOf(h);
-    return '<span style="display:inline-flex;align-items:center;gap:5px;background:#fee2e2;border:1px solid #fca5a5;border-radius:14px;padding:3px 10px;font-size:11.5px;margin:2px">'
-      + '🔴 ' + h.date + ' ' + _escDiff(h.name||'') + (editable ? ' <span style="color:#b91c1c;cursor:pointer;font-weight:800" onclick="_holDel_(' + gi + ')">✕</span>' : '') + '</span>';
-  }).join('') || '<span style="color:#94a3b8;font-size:11px">今年の休日は未登録</span>';
-  var annRows = ann.filter(function(e){ return e.date >= thisYear + '-01-01'; }).map(function(e){
-    var gi = DB.annualEvents.indexOf(e);
-    return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 0;border-bottom:1px dashed #fde68a">📌 <b>' + e.date + '</b> ' + _escDiff(e.name||'') + (e.company?' <span style="color:#9a3412">['+_escDiff(e.company)+']</span>':'') + (editable ? ' <span style="margin-left:auto;color:#b91c1c;cursor:pointer" onclick="_annDel_(' + gi + ')">削除</span>':'') + '</div>';
-  }).join('') || '<span style="color:#94a3b8;font-size:11px">年間スケジュール未登録</span>';
+  var target = _holTarget_(), year = _holYear_(), Y = String(year);
+  var companies = (DB.companies||[]);
+  var list = _holListOf_(target).slice().sort(function(a,b){return a.date.localeCompare(b.date);});
+  var inYear = list.filter(function(h){ return (h.date||'').slice(0,4) === Y; });
+  var tgtOpts = '<option value="group"' + (target==='group'?' selected':'') + '>🟥 グループ共通（全社）</option>'
+    + companies.map(function(c){ return '<option value="'+c.id+'"'+(target===c.id?' selected':'')+'>🏢 '+_escDiff(c.name)+'</option>'; }).join('');
+  var yrOpts = ''; for(var yy=year-1; yy<=year+3; yy++) yrOpts += '<option'+(yy===year?' selected':'')+'>'+yy+'</option>';
+  var holRows = inYear.map(function(h){
+    var gi = _holListOf_(target).indexOf(h);
+    return '<span style="display:inline-flex;align-items:center;gap:5px;background:'+(target==='group'?'#fee2e2':'#ffedd5')+';border:1px solid '+(target==='group'?'#fca5a5':'#fdba74')+';border-radius:14px;padding:3px 10px;font-size:11.5px;margin:2px">'
+      + (target==='group'?'🟥':'🏢') + ' ' + h.date.slice(5) + ' ' + _escDiff(h.name||'') + (editable ? ' <span style="color:#b91c1c;cursor:pointer;font-weight:800" onclick="_holDel_('+gi+')">✕</span>' : '') + '</span>';
+  }).join('') || '<span style="color:#94a3b8;font-size:11px">'+Y+'年の休日は未登録</span>';
 
-  ui.innerHTML = '<div style="font-size:11.5px;color:#9a3412;line-height:1.7;margin-bottom:8px">ここで登録した休日は<b>営業日計算（日程表の自動作成）に反映</b>され、クラウド同期で全グループ会社に配布されます。土日は自動で休みです（祝日・会社休業日のみ登録）。</div>'
+  ui.innerHTML = '<div style="font-size:11.5px;color:#9a3412;line-height:1.7;margin-bottom:8px">休日は<b>営業日計算（日程表）に反映</b>＆全社配布。土日は自動休み。<b>グループ共通</b>＝全社の祝日等／<b>各社</b>＝その会社だけの定休・休業。日程表は「グループ共通＋その会社」を合算します。</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'
+      + '対象 <select onchange="window._holTargetVal_=this.value;renderHolidayManager()" style="font-size:12px;padding:4px">' + tgtOpts + '</select>'
+      + '年 <select onchange="window._holYearVal_=+this.value;renderHolidayManager()" style="font-size:12px;padding:4px">' + yrOpts + '</select>'
+      + '<button class="btn" style="font-size:11px;padding:4px 10px" onclick="previewHolidayCalendar()">📅 カレンダー表示／PDF</button>'
+    + '</div>'
     + (editable
-        ? '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;background:#fff;border:1px solid #fdba74;border-radius:6px;padding:7px 10px">'
-          + '<b style="font-size:11.5px">休日を追加:</b> <input type="date" id="hol-date" style="font-size:12px;padding:3px"> <input id="hol-name" placeholder="名称(例:夏季休業)" style="font-size:12px;padding:3px 6px;width:140px">'
-          + '<button class="btn" style="font-size:11px;padding:3px 10px;background:#dc2626;color:#fff;border-color:#dc2626" onclick="_holAdd_()">＋休日</button>'
-          + '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_holLoadJpHolidays_()">📥 ' + thisYear + '年の日本の祝日を投入</button>'
-          + '</div>'
-          + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;background:#fff;border:1px solid #fde68a;border-radius:6px;padding:7px 10px">'
-          + '<b style="font-size:11.5px">年間予定を追加:</b> <input type="date" id="ann-date" style="font-size:12px;padding:3px"> <input id="ann-name" placeholder="予定名(例:○○DM 発送)" style="font-size:12px;padding:3px 6px;width:160px"> <input id="ann-co" placeholder="会社(任意)" style="font-size:12px;padding:3px 6px;width:90px">'
-          + '<button class="btn" style="font-size:11px;padding:3px 10px;background:#d97706;color:#fff;border-color:#d97706" onclick="_annAdd_()">＋予定</button>'
-          + '</div>'
-        : '<div style="font-size:11px;color:#9a3412;margin-bottom:8px">※ 休日の編集はトキワ役員のみ可能です（閲覧のみ）。</div>')
-    + '<div style="font-weight:700;font-size:12px;color:#9a3412;margin:6px 0 3px">🗓 ' + thisYear + '年 休日</div><div>' + holRows + '</div>'
-    + '<div style="font-weight:700;font-size:12px;color:#9a3412;margin:10px 0 3px">📌 ' + thisYear + '年 年間スケジュール</div><div>' + annRows + '</div>';
+      ? '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;background:#fff;border:1px solid #fdba74;border-radius:6px;padding:7px 10px">'
+        + '<b style="font-size:11.5px">休日追加:</b> <input type="date" id="hol-date" value="'+Y+'-01-01" style="font-size:12px;padding:3px"> <input id="hol-name" placeholder="名称(例:夏季休業)" style="font-size:12px;padding:3px 6px;width:130px">'
+        + '<button class="btn" style="font-size:11px;padding:3px 10px;background:#dc2626;color:#fff;border-color:#dc2626" onclick="_holAdd_()">＋追加</button>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;background:#fffbeb;border:1px dashed #fbbf24;border-radius:6px;padding:7px 10px">'
+        + '<b style="font-size:11.5px">かんたん一括('+Y+'年):</b>'
+        + '<button class="btn" style="font-size:11px;padding:3px 8px" onclick="_holLoadJpHolidays_()">📥 日本の祝日</button>'
+        + '<button class="btn" style="font-size:11px;padding:3px 8px" onclick="_holYearEnd_()">🎍 年末年始(12/29-1/3)</button>'
+        + '<button class="btn" style="font-size:11px;padding:3px 8px" onclick="_holObon_()">🏮 お盆(8/13-8/16)</button>'
+        + '<button class="btn" style="font-size:11px;padding:3px 8px" onclick="_holWeekly_()">📆 毎週○曜を定休</button>'
+        + '<button class="btn" style="font-size:11px;padding:3px 8px" onclick="_holCopyPrev_()">📋 前年('+(year-1)+')をコピー</button>'
+        + '<button class="btn" style="font-size:11px;padding:3px 8px;color:#b91c1c" onclick="_holClearYear_()">🗑 '+Y+'年をクリア</button>'
+        + '</div>'
+      : '<div style="font-size:11px;color:#9a3412;margin-bottom:8px">※ 編集はトキワ役員のみ（閲覧のみ）。</div>')
+    + '<div style="font-weight:700;font-size:12px;color:#9a3412;margin:6px 0 3px">🗓 '+Y+'年 ('+inYear.length+'日)</div><div>' + holRows + '</div>';
 }
 function _holAdd_(){
-  var d = document.getElementById('hol-date')?.value; if(!d){ alert('日付を選択してください'); return; }
-  _normHolidays_();
-  if(DB.holidays.some(function(h){ return h.date === d; })){ alert('既に登録済みです'); return; }
-  DB.holidays.push({ date:d, name:(document.getElementById('hol-name')?.value||'休日') });
+  var d=document.getElementById('hol-date')?.value; if(!d){ alert('日付を選択'); return; }
+  var L=_holListOf_(_holTarget_());
+  if(L.some(function(h){return h.date===d;})){ alert('登録済みです'); return; }
+  L.push({date:d,name:(document.getElementById('hol-name')?.value||'休日')});
   _holSave_();
 }
-function _holDel_(i){ _normHolidays_(); DB.holidays.splice(i,1); _holSave_(); }
-function _holLoadJpHolidays_(){
-  _normHolidays_(); var n=0;
-  JP_HOLIDAYS_2026.forEach(function(d){ if(!DB.holidays.some(function(h){return h.date===d;})){ DB.holidays.push({date:d,name:'祝日'}); n++; } });
-  _holSave_(); if(typeof _toastMsg==='function') _toastMsg('📥 祝日 '+n+'件を投入しました');
+function _holDel_(i){ _holListOf_(_holTarget_()).splice(i,1); _holSave_(); }
+function _holAddDates_(dates, name){
+  var L=_holListOf_(_holTarget_()), n=0;
+  dates.forEach(function(d){ if(!L.some(function(h){return h.date===d;})){ L.push({date:d,name:name}); n++; } });
+  _holSave_(); if(typeof _toastMsg==='function') _toastMsg('📥 '+n+'件追加しました');
 }
-function _annAdd_(){
-  var d = document.getElementById('ann-date')?.value; if(!d){ alert('日付を選択してください'); return; }
-  _normAnnual_();
-  DB.annualEvents.push({ date:d, name:(document.getElementById('ann-name')?.value||''), company:(document.getElementById('ann-co')?.value||'') });
+function _holLoadJpHolidays_(){ // 簡易: 2026固定リストの月日を選択年に適用
+  var Y=_holYear_(); _holAddDates_(JP_HOLIDAYS_2026.map(function(d){return Y+d.slice(4);}), '祝日');
+}
+function _holYearEnd_(){ var Y=_holYear_(); _holAddDates_([Y+'-12-29',Y+'-12-30',Y+'-12-31',Y+'-01-01',Y+'-01-02',Y+'-01-03'],'年末年始'); }
+function _holObon_(){ var Y=_holYear_(); _holAddDates_([Y+'-08-13',Y+'-08-14',Y+'-08-15',Y+'-08-16'],'お盆休み'); }
+function _isoLocal_(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+function _holWeekly_(){
+  var wd=prompt('毎週の定休にする曜日を番号で (0=日,1=月,2=火,3=水,4=木,5=金,6=土)\n例: 水曜定休なら 3','3');
+  if(wd===null) return; wd=parseInt(wd); if(isNaN(wd)||wd<0||wd>6){ alert('0〜6で入力'); return; }
+  var Y=_holYear_(), dates=[], d=new Date(Y,0,1), wn=['日','月','火','水','木','金','土'][wd];
+  while(d.getFullYear()===Y){ if(d.getDay()===wd) dates.push(_isoLocal_(d)); d.setDate(d.getDate()+1); }
+  _holAddDates_(dates, wn+'曜定休');
+}
+function _holCopyPrev_(){
+  var Y=_holYear_(), P=String(Y-1), L=_holListOf_(_holTarget_());
+  var prev=L.filter(function(h){return (h.date||'').slice(0,4)===P;});
+  if(!prev.length){ alert(P+'年の休日がありません'); return; }
+  _holAddDates_(prev.map(function(h){return Y+h.date.slice(4);}), '前年コピー');
+}
+function _holClearYear_(){
+  var Y=String(_holYear_());
+  if(!confirm(Y+'年の'+(_holTarget_()==='group'?'グループ共通':'この会社の')+'休日をすべて削除しますか?')) return;
+  var key=_holTarget_();
+  if(key==='group') DB.holidays=DB.holidays.filter(function(h){return (h.date||'').slice(0,4)!==Y;});
+  else DB.companyHolidays[key]=(DB.companyHolidays[key]||[]).filter(function(h){return (h.date||'').slice(0,4)!==Y;});
   _holSave_();
 }
-function _annDel_(i){ _normAnnual_(); DB.annualEvents.splice(i,1); _holSave_(); }
 function _holSave_(){
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try { saveToCloud(); } catch(e){}
   renderHolidayManager();
+}
+// 📅 カレンダー(年間12ヶ月)プレビュー + PDF(印刷)
+function previewHolidayCalendar(){
+  var target=_holTarget_(), Y=_holYear_();
+  var name = target==='group' ? 'グループ共通' : ((DB.companies||[]).find(function(c){return c.id===target;})||{}).name || target;
+  var hset = target==='group' ? _holidaySet_() : _holidaySet_(target); // 各社は共通+自社合算
+  var ann = {}; (DB.annualEvents||[]).forEach(function(e){ if((e.date||'').slice(0,4)===String(Y)) ann[e.date]=(ann[e.date]||'')+ ' '+(e.name||''); });
+  var months='';
+  for(var m=0;m<12;m++){
+    var first=new Date(Y,m,1), last=new Date(Y,m+1,0), pad=first.getDay();
+    var cells='';
+    for(var i=0;i<pad;i++) cells+='<td></td>';
+    for(var day=1;day<=last.getDate();day++){
+      var dt=new Date(Y,m,day), iso=_isoLocal_(dt), wd=dt.getDay();
+      var hol=hset[iso], ev=ann[iso];
+      var bg = hol?'#fee2e2':(wd===0?'#fef2f2':wd===6?'#eff6ff':'#fff');
+      var col = hol?'#dc2626':(wd===0?'#dc2626':wd===6?'#2563eb':'#111');
+      cells+='<td style="background:'+bg+';color:'+col+';border:1px solid #eee;width:14%;height:42px;vertical-align:top;font-size:10px;padding:2px"><b>'+day+'</b>'+(hol?'<div style="font-size:7px;color:#b91c1c">'+hol+'</div>':'')+(ev?'<div style="font-size:7px;color:#9a3412">●</div>':'')+'</td>';
+      if(dt.getDay()===6 && day<last.getDate()){ cells+='</tr><tr>'; }
+    }
+    months+='<div style="display:inline-block;width:32%;vertical-align:top;margin:0.5%"><div style="font-weight:700;font-size:12px;text-align:center;background:#1e293b;color:#fff;padding:2px">'+Y+'年'+(m+1)+'月</div>'
+      +'<table style="width:100%;border-collapse:collapse;table-layout:fixed"><tr style="font-size:8px;color:#888">'+['日','月','火','水','木','金','土'].map(function(w){return '<td style="text-align:center">'+w+'</td>';}).join('')+'</tr><tr>'+cells+'</tr></table></div>';
+  }
+  var w=window.open('','_blank','width=1100,height=800');
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+Y+'年 休日カレンダー '+name+'</title>'
+    +'<style>body{font-family:sans-serif;margin:14px}h2{font-size:16px}@media print{button{display:none}}</style></head><body>'
+    +'<h2>📅 '+Y+'年 休日カレンダー（'+name+'）<button onclick="window.print()" style="margin-left:14px;padding:6px 16px;font-size:13px;cursor:pointer">🖨 PDF / 印刷</button></h2>'
+    +'<div style="font-size:11px;color:#666;margin-bottom:8px">🟥赤=休日／日曜=赤・土曜=青／●=年間予定。'+(target!=='group'?'※グループ共通の休日も含めて表示':'')+'</div>'
+    +months+'</body></html>');
+  w.document.close();
 }
 // ═════════════ TLPF-1: 🧰 ツールランチャー ═════════════
 // 小さな単機能アプリ (tools/*.html) の置き場。データは本体DB (localStorage) を共有。
