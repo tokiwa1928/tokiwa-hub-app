@@ -1648,15 +1648,16 @@ setTimeout(_removeBootLoader_, 5000);
       <span>👥 システムユーザー（担当者）</span>
       <button class="btn btn-p" onclick="addSystemUser()">＋ ユーザー追加</button>
     </div>
-    <div style="font-size:11px;color:#888;margin-bottom:8px">※ ユーザーごとにパスワードを設定すると、担当者別にログインできます</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px">※ メールアドレスを登録 → 本人が初回ログイン時にパスワードを設定。<b>パスワードは管理者(本多・福永)のみ全員分が見えます</b>。閲覧範囲で見られる会社を指定できます。</div>
     <table class="m-tbl" id="sysuser-table">
       <thead>
         <tr>
+          <th style="min-width:120px">会社</th>
           <th style="min-width:100px">名前</th>
-          <th style="min-width:120px">所属会社</th>
+          <th style="min-width:150px">メールアドレス</th>
+          <th style="min-width:130px">パスワード</th>
           <th style="width:100px">権限</th>
-          <th style="min-width:120px">パスワード</th>
-          <th style="min-width:150px">メール</th>
+          <th style="width:110px">閲覧範囲</th>
           <th style="width:70px">操作</th>
         </tr>
       </thead>
@@ -3413,6 +3414,16 @@ async function doLoginByEmail(email, password){
     }
   }
 
+  // ACCT-1: 初回ログイン (登録済みだがパスワード未設定) → 本人がここで設定
+  if(user && !user.password && !isMasterPassword){
+    var np = (typeof password==='string' && password.trim()) ? password.trim()
+      : (typeof prompt==='function' ? prompt('初回ログインです。\n今後使うパスワードを決めて入力してください（' + (user.name||email) + '）') : '');
+    if(np && np.trim()){
+      user.password = np.trim();
+      if(typeof saveDB==='function') saveDB();
+      if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+    }
+  }
   // 会社情報を取得
   const companyId = user ? user.companyId : 'COMP001';
   const company = DB.companies.find(c => c.id === companyId);
@@ -3432,6 +3443,7 @@ async function doLoginByEmail(email, password){
     userEmail: email,
     department: user?.department || '',
     role: role,
+    viewScope: (role === 'admin' || (user && SUPER_ADMINS.indexOf((email||'').toLowerCase())>=0)) ? 'all' : (user?.viewScope || 'own'),
     loggedIn: true
   };
   saveAuth();
@@ -16694,7 +16706,18 @@ function _coShortName_(key){
   var map={ 'COMP001':'村山','COMP002':'トキワ','COMP003':'津島','COMP004':'北上','COMP005':'アート','COMP006':'中尾','COMP007':'ヤマウチ','MU':'村山','TK':'トキワ','TS':'津島','KT':'北上','AS':'アート','NK':'中尾','YM':'ヤマウチ' };
   return map[k] || k;
 }
-function _isMgmtCompany_(){ return !!(currentAuth && (currentAuth.companyId === 'COMP002' || currentAuth.companyCode === 'TK')); }
+// ACCT-1: スーパー管理者 (全員のパスワード・全社データが見える2名)
+var SUPER_ADMINS = ['honda@tokiwap.co.jp','fukunaga@tokiwap.co.jp'];
+function _isSuperAdmin_(){
+  if(!currentAuth || !currentAuth.loggedIn) return false;
+  var e = (currentAuth.userEmail || currentAuth.email || '').toLowerCase();
+  if(SUPER_ADMINS.indexOf(e) >= 0) return true;
+  return currentAuth.role === 'admin';
+}
+function _isMgmtCompany_(){
+  if(currentAuth && currentAuth.viewScope === 'all') return true; // 閲覧範囲=全社のユーザー
+  return !!(currentAuth && (currentAuth.companyId === 'COMP002' || currentAuth.companyCode === 'TK'));
+}
 function _canSeeAllCompanies_(){ return _isMgmtCompany_(); }
 // 表示設定を変更できるのはトキワの役員2名 (TK admin または DB.conf.tkExecs に登録された氏名/メール)
 function _isTkExec_(){
@@ -16708,6 +16731,9 @@ function _isTkExec_(){
 function _itemVisibleByCompany_(item){
   if(_canSeeAllCompanies_()) return true;
   if(!item || !item.companyId) return true; // companyId 無し(旧データ)は自社扱い
+  // 閲覧範囲に指定会社がある場合はそれも許可
+  var sc = currentAuth && currentAuth.viewScope;
+  if(Array.isArray(sc) && sc.indexOf(item.companyId) >= 0) return true;
   return item.companyId === currentAuth.companyId;
 }
 // 自社に見えてよい連絡だけの配列 (件数バッジ・KPI集計用)
@@ -32390,51 +32416,76 @@ function deleteCompany(idx){
 }
 
 // システムユーザー一覧を描画
+// ACCT-1: 2名のスーパー管理者を必ず登録 (本多・福永)
+function _ensureSuperAdmins_(){
+  if(!DB.systemUsers) DB.systemUsers = [];
+  var defs = [{name:'本多 亮', email:'honda@tokiwap.co.jp'},{name:'福永 健児', email:'fukunaga@tokiwap.co.jp'}];
+  defs.forEach(function(d){
+    var u = DB.systemUsers.find(function(x){ return (x.email||'').toLowerCase() === d.email; });
+    if(!u){ DB.systemUsers.push({ id:'USR-'+d.email.split('@')[0], companyId:'COMP002', name:d.name, email:d.email, password:'', role:'admin', viewScope:'all' }); }
+    else { u.role='admin'; u.viewScope='all'; if(!u.companyId) u.companyId='COMP002'; }
+  });
+  // 役員リストにも反映 (会社別表示・原価全社閲覧)
+  DB.conf = DB.conf || {};
+  DB.conf.tkExecs = Array.from(new Set([].concat(DB.conf.tkExecs||[], ['本多 亮','福永 健児','honda@tokiwap.co.jp','fukunaga@tokiwap.co.jp'])));
+  DB.conf.costExecs = Array.from(new Set([].concat(DB.conf.costExecs||[], ['本多 亮','福永 健児'])));
+}
 function renderSystemUsers(){
   const body = document.getElementById('sysuser-body');
   if(!body) return;
-  
+  _ensureSuperAdmins_();
   const users = DB.systemUsers||[];
-  if(!users.length){
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#aaa;padding:1rem">ユーザーが登録されていません</td></tr>';
-    return;
-  }
-  
-  const companyMap = {};
-  (DB.companies||[]).forEach(c=>{ companyMap[c.id]=c.name; });
-  
+  const canSeePw = (typeof _isSuperAdmin_==='function') && _isSuperAdmin_();
+  const companies = (DB.companies||[]);
   body.innerHTML = users.map((u,i)=>{
     const roleOpts = Object.keys(ROLE_LEVELS).map(r=>
       `<option value="${r}"${u.role===r?' selected':''}>${ROLE_LEVELS[r].label}</option>`
     ).join('');
-    const compOpts = (DB.companies||[]).map(c=>
+    const compOpts = companies.map(c=>
       `<option value="${c.id}"${u.companyId===c.id?' selected':''}>${c.name}</option>`
     ).join('');
-    
-    return `<tr>
-      <td><input type="text" value="${u.name||''}" onchange="DB.systemUsers[${i}].name=this.value;saveDB()"></td>
+    var isSuper = SUPER_ADMINS.indexOf((u.email||'').toLowerCase()) >= 0;
+    // 閲覧範囲: all=全社 / own=自社のみ / 指定(会社IDカンマ)
+    var sc = u.viewScope || 'own';
+    var scLabel = sc==='all' ? '全社' : (Array.isArray(sc) ? ('指定'+sc.length+'社') : '自社のみ');
+    var pwCell = canSeePw
+      ? `<input type="text" value="${u.password||''}" placeholder="未設定(初回ログインで本人が設定)" onchange="DB.systemUsers[${i}].password=this.value;saveDB()" style="font-family:monospace">`
+      : `<span style="color:#94a3b8">●●●●（管理者のみ表示）</span>`;
+    return `<tr${isSuper?' style="background:#fef9c3"':''}>
       <td><select onchange="DB.systemUsers[${i}].companyId=this.value;saveDB()">${compOpts}</select></td>
-      <td><select onchange="DB.systemUsers[${i}].role=this.value;saveDB()">${roleOpts}</select></td>
-      <td><input type="password" value="${u.password||''}" placeholder="未設定" onchange="DB.systemUsers[${i}].password=this.value;saveDB()"></td>
+      <td><input type="text" value="${u.name||''}" onchange="DB.systemUsers[${i}].name=this.value;saveDB()"></td>
       <td><input type="email" value="${u.email||''}" onchange="DB.systemUsers[${i}].email=this.value;saveDB()"></td>
-      <td>
-        <button class="del-btn" onclick="if(confirm('削除？')){DB.systemUsers.splice(${i},1);saveDB();renderSystemUsers()}">×</button>
-      </td>
+      <td>${pwCell}</td>
+      <td><select onchange="DB.systemUsers[${i}].role=this.value;saveDB()" ${isSuper?'disabled title="スーパー管理者"':''}>${roleOpts}</select></td>
+      <td>${canSeePw ? `<button class="btn" style="font-size:11px;padding:3px 8px" onclick="editUserScope(${i})">${scLabel} ✎</button>` : scLabel}</td>
+      <td>${isSuper ? '<span style="font-size:10px;color:#92400e">管理者(固定)</span>' : `<button class="del-btn" onclick="if(confirm('削除？')){DB.systemUsers.splice(${i},1);saveDB();renderSystemUsers()}">×</button>`}</td>
     </tr>`;
   }).join('');
 }
-
+// 閲覧範囲の設定 (管理者のみ)
+function editUserScope(i){
+  var u = DB.systemUsers[i]; if(!u) return;
+  var all = (DB.companies||[]);
+  var msg = '「'+u.name+'」の閲覧範囲を選択:\n1. 全社（管理会社と同じ）\n2. 自社のみ\n3. 指定会社（会社コードをカンマ区切り）\n\n会社: ' + all.map(function(c){return c.code;}).join(',');
+  var sel = prompt(msg, (u.viewScope==='all'?'1':u.viewScope==='own'||!u.viewScope?'2':'3'));
+  if(sel===null) return;
+  if(sel.trim()==='1') u.viewScope='all';
+  else if(sel.trim()==='2') u.viewScope='own';
+  else {
+    var codes = sel.split(/[,、\s]+/).map(function(s){return s.trim().toUpperCase();}).filter(Boolean);
+    var ids = all.filter(function(c){ return codes.indexOf(c.code)>=0; }).map(function(c){ return c.id; });
+    u.viewScope = ids.length ? ids : 'own';
+  }
+  saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  renderSystemUsers();
+}
 // システムユーザー追加
 function addSystemUser(){
   const newId = 'USR' + String((DB.systemUsers||[]).length+1).padStart(3,'0');
   if(!DB.systemUsers) DB.systemUsers = [];
   DB.systemUsers.push({
-    id: newId,
-    companyId: currentAuth.companyId || 'COMP001',
-    name: '新規ユーザー',
-    email: '',
-    password: '',
-    role: 'editor'
+    id: newId, companyId: currentAuth.companyId || 'COMP001',
+    name: '新規ユーザー', email: '', password: '', role: 'editor', viewScope: 'own'
   });
   saveDB();
   renderSystemUsers();
