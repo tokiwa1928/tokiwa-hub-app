@@ -85,6 +85,11 @@
   .card .c-prop{ color:#166534; font-weight:700; }
   .card select{ margin-top:5px; width:100%; font-size:11px; padding:2px 4px; border:1px solid #e2e0da; border-radius:5px; background:#fffdf5; font-family:inherit; }
   #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+  #busy{ position:fixed; inset:0; background:rgba(15,23,42,.45); display:none; align-items:center; justify-content:center; z-index:200; }
+  #busy .box{ background:#fff; padding:18px 26px; border-radius:12px; font-weight:700; box-shadow:0 8px 30px rgba(0,0,0,.25); display:flex; gap:12px; align-items:center; }
+  #busy .sp{ width:18px; height:18px; border:3px solid #e2e8f0; border-top-color:var(--cyan); border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .empty .seedbtn{ margin-top:12px; background:#fef3c7; border-color:#fcd34d; font-size:14px; padding:10px 18px; }
   .empty{ padding:38px; text-align:center; color:#94a3b8; }
   .pill{ display:inline-block; font-size:10px; border:1px solid #e2e8f0; border-radius:10px; padding:1px 8px; color:#64748b; }
 </style>
@@ -171,6 +176,7 @@
   <p class="muted" style="margin-top:8px">💾 本体アプリを開くと自動でクラウド同期・日次バックアップされます。／ 取込元: 基幹「受注用」エクスポート(.xlsx)＝今年分 ／ 旧台帳「2026_顧客リスト.xls」＝過去履歴(カテゴリ別)。再取込しても入力済みの動き・担当・備考は保持。</p>
 </main>
 <div id="toast"></div>
+<div id="busy"><div class="box"><span class="sp"></span><span id="busy-msg">処理中…</span></div></div>
 
 <script>
 // ═════════ Tokiwa Hub 共有ヘルパー (全ツール共通・原則編集しない) ═════════
@@ -307,7 +313,17 @@ function kpi(k,v,color){ return '<div class="kpi"><div class="k">'+k+'</div><div
 function renderTable(){
   var view = viewRows(false);
   var tb = document.getElementById('tbody');
-  if(!view.length){ tb.innerHTML = '<tr><td colspan="23" class="empty">該当データがありません。<br>右上の「📥 取込」からデータを読み込んでください。</td></tr>'; return; }
+  if(!view.length){
+    var none = loadAll().length===0;
+    tb.innerHTML = '<tr><td colspan="23" class="empty">'
+      + (none
+          ? 'まだデータがありません。<br>下のボタンで先ほどのExcel2つ（旧台帳の過去履歴＋受注用2027）をまとめて取り込めます。'
+            + '<br><button class="btn seedbtn" onclick="seedImport()">📦 初期投入（旧台帳＋受注用）</button>'
+            + '<br><span style="font-size:11px;color:#94a3b8">または右上の「📥 取込」でExcelを選択</span>'
+          : '該当データがありません。<br>絞り込み（年度・カテゴリ・検索）を見直してください。')
+      + '</td></tr>';
+    return;
+  }
   tb.innerHTML = view.map(function(r){
     var id = hubEsc(r.id);
     function inp(field, type){
@@ -441,12 +457,13 @@ function newRecord(o){
 }
 
 // ─ Excel取込（形式自動判定）─
-function importWorkbook(wb){
+function importWorkbook(wb, quiet){
   var firstAoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
   var head = firstAoa.slice(0,8).map(function(row){ return (row||[]).join(''); }).join('');
-  if(head.indexOf('受注番号')>=0) return importExport(firstAoa);
-  if(head.indexOf('顧客名')>=0 && head.indexOf('品名')>=0) return importOldLedger(wb);
+  if(head.indexOf('受注番号')>=0) return importExport(firstAoa, quiet);
+  if(head.indexOf('顧客名')>=0 && head.indexOf('品名')>=0) return importOldLedger(wb, quiet);
   hubToast('❌ 形式を判定できません（「受注番号」も「顧客名＋品名」も見つかりません）');
+  return null;
 }
 function importFile(input){
   var f = input.files && input.files[0]; if(!f) return;
@@ -470,20 +487,27 @@ function loadSeed(cb){
   document.head.appendChild(s);
 }
 function seedImport(){
-  if(!confirm('先ほどのExcel2つをまとめて投入します。\n・旧台帳(2026_顧客リスト.xls) → 過去履歴(全カテゴリ)\n・受注用(2027年カレンダー受注用.xlsx) → 2027年分\nこのあと取込ごとに確認が出ます。再投入しても二重化しません。\nよろしいですか？')) return;
-  hubToast('📦 初期データを読み込み中…');
+  if(!confirm('先ほどのExcel2つをまとめて投入します。\n・旧台帳(2026_顧客リスト.xls) → 過去履歴(全カテゴリ)\n・受注用(2027年カレンダー受注用.xlsx) → 2027年分\n再投入しても二重化しません。よろしいですか？')) return;
+  showBusy('📦 初期データを投入中…');
   loadSeed(function(){
-    try {
-      var S = window.JUCHU_SEED;
-      importWorkbook(XLSX.read(b64ToBytes(S.old), { type:'array', codepage:932 }));   // 旧台帳=過去履歴
-      document.getElementById('yearSel').value = '2027';
-      importWorkbook(XLSX.read(b64ToBytes(S.juchu), { type:'array', codepage:932 }));  // 受注用=2027
-    } catch(e){ console.error(e); hubToast('❌ 初期投入エラー: '+e.message); }
+    setTimeout(function(){   // オーバーレイを先に描画してから重い処理へ
+      try {
+        var S = window.JUCHU_SEED, before = loadAll().length;
+        var r1 = importWorkbook(XLSX.read(b64ToBytes(S.old), { type:'array', codepage:932 }), true) || {added:0,updated:0};
+        document.getElementById('yearSel').value = '2027';
+        var r2 = importWorkbook(XLSX.read(b64ToBytes(S.juchu), { type:'array', codepage:932 }), true) || {added:0,updated:0};
+        var total = loadAll().length, added=(r1.added||0)+(r2.added||0), updated=(r1.updated||0)+(r2.updated||0);
+        hideBusy();
+        hubToast(added||updated ? ('✅ 初期投入完了: 合計 '+total+' 件（新規 '+added+' / 更新 '+updated+'）') : ('✅ 既に投入済み（合計 '+total+' 件・二重化なし）'));
+      } catch(e){ hideBusy(); console.error(e); hubToast('❌ 初期投入エラー: '+e.message); }
+    }, 60);
   });
 }
+function showBusy(m){ var b=document.getElementById('busy'); if(!b) return; document.getElementById('busy-msg').textContent=m||'処理中…'; b.style.display='flex'; }
+function hideBusy(){ var b=document.getElementById('busy'); if(b) b.style.display='none'; }
 
 // ① 受注用エクスポート取込（今年分・カテゴリ=カレンダー）
-function importExport(aoa){
+function importExport(aoa, quiet){
   var y = curYear();
   var hi=-1; for(var i=0;i<aoa.length;i++){ if(aoa[i].some(function(c){ return String(c).indexOf('受注番号')>=0; })){ hi=i; break; } }
   if(hi<0){ hubToast('❌ ヘッダー(「受注番号」)が見つかりません'); return; }
@@ -500,7 +524,7 @@ function importExport(aoa){
     var ref=String(get(row,c.ref)).trim(), prod=String(get(row,c.prod)).trim();
     if(!ref && !prod) continue; parsed.push({ref:ref,prod:prod,row:row}); }
   if(!parsed.length){ hubToast('❌ 取り込めるデータ行がありません'); return; }
-  if(!confirm(y+'年カレンダーに '+parsed.length+' 件を取り込みます。\n（同じ明細は前年実績・提案価格のみ更新し、入力済みの動きは保持）\nよろしいですか？')) return;
+  if(!quiet && !confirm(y+'年カレンダーに '+parsed.length+' 件を取り込みます。\n（同じ明細は前年実績・提案価格のみ更新し、入力済みの動きは保持）\nよろしいですか？')) return;
   var added=0,updated=0;
   var ok=hubSave(function(db){
     var arr=db[COLL]||(db[COLL]=[]);
@@ -517,7 +541,8 @@ function importExport(aoa){
       else { var nr=newRecord(fields); if(get(row,c.note)) nr.note=String(get(row,c.note)||''); arr.push(nr); added++; }
     });
   });
-  if(ok){ hubToast('✅ 受注用取込: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
+  if(ok){ if(!quiet) hubToast('✅ 受注用取込: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
+  return { added:added, updated:updated };
 }
 
 // ② 旧台帳(.xls) 全シートから過去履歴を取込（カテゴリ別）
@@ -536,7 +561,7 @@ var SHEET_MAPS = [
     years:[ {y:2022,q:28,p:29,o:6,d:9},{y:2023,q:26,p:27,o:0,d:4},{y:2024,q:24,p:25,o:10,d:14,c:32},{y:2025,q:22,p:23,o:15,d:19,c:31} ] },
   { match:/うちわ/, cat:'うちわ', hr:0, cust:2, code:5, name:6, staff:1, note:10, single:{q:8,p:9,o:0} }
 ];
-function importOldLedger(wb){
+function importOldLedger(wb, quiet){
   var clean=function(s){ return String(s==null?'':s).replace(/[　\s]+/g,' ').trim(); };
   var ymd=function(v){ if(typeof v!=='number'||!v) return ''; var d=XLSX.SSF.parse_date_code(v); return d?d.y+'-'+('0'+d.m).slice(-2)+'-'+('0'+d.d).slice(-2):''; };
   var at=function(row,idx){ return idx==null?'':row[idx]; };
@@ -576,7 +601,7 @@ function importOldLedger(wb){
   if(!allRecs.length){ hubToast('❌ 取り込める履歴行がありません'+(skipped.length?'（除外: '+skipped.join(', ')+'）':'')); return; }
   var byCat={}; allRecs.forEach(function(x){ byCat[x.category]=(byCat[x.category]||0)+1; });
   var summary = Object.keys(byCat).map(function(c){ return c+' '+byCat[c]+'件'; }).join(' / ');
-  if(!confirm('旧台帳から過去履歴を取り込みます。\n'+summary+'\n（状態=納品済で登録。再取込しても二重化せず、今年の受注用データには影響しません）'
+  if(!quiet && !confirm('旧台帳から過去履歴を取り込みます。\n'+summary+'\n（状態=納品済で登録。再取込しても二重化せず、今年の受注用データには影響しません）'
     + (skipped.length?'\n※除外シート: '+skipped.join(', '):'') + '\nよろしいですか？')) return;
   var keyOf=function(x){ return [x.category,x.year,x.product,x.cust,x.orderQty,x.orderPrice].join(''); };
   var added=0,updated=0;
@@ -587,7 +612,8 @@ function importOldLedger(wb){
       if(q&&q.length){ var ex=q.shift(); Object.assign(ex,nr,{id:ex.id,_createdAt:ex._createdAt}); ex._updatedAt=new Date().toISOString(); updated++; }
       else { arr.push(newRecord(nr)); added++; } });
   });
-  if(ok){ hubToast('✅ 旧台帳履歴: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
+  if(ok){ if(!quiet) hubToast('✅ 旧台帳履歴: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
+  return { added:added, updated:updated };
 }
 function mkHist(cat, y, cust, product, pq, pp, q, p, orderDate, delivDate, staff, note, cost){
   return { year:y, category:cat, ref:'', cust:cust, user:'', product:product, unit:'冊',
