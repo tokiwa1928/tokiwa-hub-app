@@ -35,25 +35,42 @@
   <div class="tab" data-t="num" onclick="sw('num')">🔢 連番・ナンバリング</div>
 </div>
 
-<!-- 差し込み -->
+<!-- 差し込み (ビジュアル編集) -->
 <div class="pane act" id="pane-merge">
   <div class="card">
-    <div class="hint">Excelからコピペ（タブ区切り）または CSV を貼り付け。1行目を見出しにすると {{見出し}} で差し込めます。</div>
-    <label>データ（1行目=見出し、以降1件1行）</label>
-    <textarea id="m-data">氏名,会社,住所
+    <div class="hint">🎨 ビジュアル編集：要素をドラッグで移動、画像も配置できます。テキストに <b>{{見出し}}</b> を入れるとデータが差し込まれます。</div>
+    <div class="row">
+      <div style="flex:2;min-width:300px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
+          <button class="btn sub" onclick="edAddText()">＋ テキスト</button>
+          <button class="btn sub" onclick="document.getElementById('ed-img-file').click()">＋ 画像</button>
+          <input type="file" id="ed-img-file" accept="image/*" style="display:none" onchange="edAddImage(this)">
+          <span style="font-size:11px;color:#777">面サイズ:</span>
+          <input id="ed-cw" type="number" value="91" style="width:64px" onchange="edRenderEditor()" title="面の幅mm"> ×
+          <input id="ed-ch" type="number" value="55" style="width:64px" onchange="edRenderEditor()" title="面の高さmm"> mm
+          <button class="btn sub" onclick="edPreset('card')" style="font-size:11px">名刺91×55</button>
+          <button class="btn sub" onclick="edPreset('postcard')" style="font-size:11px">ハガキ100×148</button>
+          <button class="btn sub" onclick="edPreset('label')" style="font-size:11px">ラベル86×46</button>
+        </div>
+        <div id="ed-stage-wrap" style="background:#e5e7eb;padding:14px;border-radius:8px;overflow:auto">
+          <div id="ed-stage" style="position:relative;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.2);margin:0 auto"></div>
+        </div>
+        <div class="hint">要素をクリックで選択→ドラッグ移動。画像は右下の□でリサイズ。Deleteキー/🗑で削除。</div>
+      </div>
+      <div style="flex:1;min-width:220px">
+        <div id="ed-props" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:12px;min-height:120px">要素を選択すると編集できます</div>
+        <label style="margin-top:10px">差込データ（1行目=見出し、1件1行 / タブ・カンマ区切り）</label>
+        <textarea id="m-data" style="min-height:90px">氏名,会社,住所
 山田太郎,富士食品,東京都新宿区1-1-1
 佐藤花子,北山商事,大阪府大阪市2-2-2</textarea>
-    <div class="row">
-      <div><label>面付（横×縦）</label><div class="row"><input id="m-cols" type="number" value="2"><input id="m-rows" type="number" value="5"></div></div>
-      <div><label>用紙</label><select id="m-paper"><option value="A4">A4縦</option><option value="A4L">A4横</option></select></div>
-      <div><label>文字サイズ(pt)</label><input id="m-fs" type="number" value="11"></div>
+        <div class="row">
+          <div><label>面付横×縦</label><div class="row"><input id="m-cols" type="number" value="2"><input id="m-rows" type="number" value="5"></div></div>
+          <div><label>用紙</label><select id="m-paper"><option value="A4">A4縦</option><option value="A4L">A4横</option></select></div>
+        </div>
+        <div style="margin-top:10px"><button class="btn" onclick="genMerge(false)">👁 プレビュー</button> <button class="btn" onclick="genMerge(true)">📄 PDF生成</button></div>
+        <canvas id="m-cv" style="display:none"></canvas>
+      </div>
     </div>
-    <label>レイアウト（1行=1テキスト。書式 X,Y,内容 ※X/Yはセル内mm。{{見出し}}で差込）</label>
-    <textarea id="m-layout">5,8,{{氏名}} 様
-5,15,{{会社}}
-5,22,{{住所}}</textarea>
-    <div style="margin-top:10px"><button class="btn" onclick="genMerge(false)">👁 プレビュー</button> <button class="btn" onclick="genMerge(true)">📄 PDF生成</button></div>
-    <canvas id="m-cv" style="display:none"></canvas>
   </div>
 </div>
 
@@ -172,25 +189,125 @@ function buildGridPdf(opts){
 function parseRows(txt){ return txt.split(/\r?\n/).map(function(l){return l.split(/[\t,]/).map(function(s){return s.trim();});}); }
 function showPreview(id, cv){ var el=document.getElementById(id); el.style.display=''; el.width=cv.width; el.height=cv.height; el.getContext('2d').drawImage(cv,0,0); }
 
-// 📋 差し込み
-function genMerge(save){
-  var rows=parseRows(document.getElementById('m-data').value).filter(function(r){return r.join('').trim();});
-  if(rows.length<2){ alert('見出し行＋1件以上のデータが必要です'); return; }
-  var head=rows[0], recs=rows.slice(1);
-  var cols=+document.getElementById('m-cols').value||2, rws=+document.getElementById('m-rows').value||5;
-  var fs=+document.getElementById('m-fs').value||11, land=document.getElementById('m-paper').value==='A4L';
-  var layout=document.getElementById('m-layout').value.split(/\r?\n/).map(function(l){var m=l.match(/^\s*([\d.]+)\s*,\s*([\d.]+)\s*,(.*)$/);return m?{x:+m[1],y:+m[2],t:m[3]}:null;}).filter(Boolean);
-  var items=recs.map(function(rec){
-    return function(ctx){
-      ctx.font='bold '+ptToPx(fs)+'px sans-serif';
-      layout.forEach(function(L){
-        var t=L.t.replace(/\{\{(.+?)\}\}/g,function(_,k){var i=head.indexOf(k.trim());return i>=0?(rec[i]||''):'';});
-        ctx.fillText(t, L.x*MM2PX, L.y*MM2PX);
-      });
+// 🎨 ビジュアル編集エンジン — 要素を mm 座標で保持しドラッグ編集
+var ED = { els:[], sel:null, scale:3.2 }; // scale = px/mm の表示倍率
+function edCW(){ return +document.getElementById('ed-cw').value||91; }
+function edCH(){ return +document.getElementById('ed-ch').value||55; }
+function edPreset(k){
+  var p={card:[91,55],postcard:[100,148],label:[86,46]}[k]; if(!p) return;
+  document.getElementById('ed-cw').value=p[0]; document.getElementById('ed-ch').value=p[1]; edRenderEditor();
+}
+function edAddText(){
+  ED.els.push({type:'text', x:5, y:5, t:'{{氏名}} 様', fs:12, bold:true, color:'#111'});
+  ED.sel=ED.els.length-1; edRenderEditor();
+}
+function edAddImage(inp){
+  var f=inp.files[0]; if(!f) return;
+  var fr=new FileReader();
+  fr.onload=function(){
+    var img=new Image();
+    img.onload=function(){
+      var maxW=edCW()*0.5, w=maxW, h=w*img.height/img.width;
+      ED.els.push({type:'image', x:3, y:3, w:w, h:h, src:fr.result});
+      ED.sel=ED.els.length-1; edRenderEditor();
     };
+    img.src=fr.result;
+  };
+  fr.readAsDataURL(f);
+  inp.value='';
+}
+function edRenderEditor(){
+  var st=document.getElementById('ed-stage'); if(!st) return;
+  var s=ED.scale, cw=edCW(), ch=edCH();
+  st.style.width=(cw*s)+'px'; st.style.height=(ch*s)+'px';
+  st.innerHTML='';
+  ED.els.forEach(function(el,i){
+    var d=document.createElement('div');
+    d.style.cssText='position:absolute;left:'+(el.x*s)+'px;top:'+(el.y*s)+'px;cursor:move;'+(i===ED.sel?'outline:2px solid #2563eb;':'outline:1px dashed #cbd5e1;');
+    if(el.type==='text'){
+      d.style.font=(el.bold?'bold ':'')+(el.fs*s*0.3528)+'px sans-serif';
+      d.style.color=el.color||'#111'; d.style.whiteSpace='nowrap'; d.style.padding='1px 2px';
+      d.textContent=el.t||'';
+    } else {
+      d.style.width=(el.w*s)+'px'; d.style.height=(el.h*s)+'px';
+      d.innerHTML='<img src="'+el.src+'" style="width:100%;height:100%;object-fit:contain;pointer-events:none">';
+      if(i===ED.sel){ var hd=document.createElement('div'); hd.className='ed-resize'; hd.style.cssText='position:absolute;right:-6px;bottom:-6px;width:12px;height:12px;background:#2563eb;border-radius:50%;cursor:nwse-resize'; d.appendChild(hd); }
+    }
+    d.dataset.i=i;
+    d.addEventListener('pointerdown', edDragStart);
+    st.appendChild(d);
   });
-  var r=buildGridPdf({cols:cols,rows:rws,landscape:land,items:items});
-  if(save) r.doc.save('差し込み_'+recs.length+'件.pdf'); else showPreview('m-cv', r.preview);
+  edRenderProps();
+}
+var _drag=null;
+function edDragStart(e){
+  var i=+this.dataset.i; ED.sel=i;
+  var resize=e.target.classList.contains('ed-resize');
+  _drag={ i:i, sx:e.clientX, sy:e.clientY, ox:ED.els[i].x, oy:ED.els[i].y, ow:ED.els[i].w, oh:ED.els[i].h, resize:resize };
+  e.preventDefault(); edRenderEditor();
+  window.addEventListener('pointermove', edDragMove);
+  window.addEventListener('pointerup', edDragEnd);
+}
+function edDragMove(e){
+  if(!_drag) return; var s=ED.scale, el=ED.els[_drag.i];
+  var dx=(e.clientX-_drag.sx)/s, dy=(e.clientY-_drag.sy)/s;
+  if(_drag.resize && el.type==='image'){ el.w=Math.max(5,_drag.ow+dx); el.h=Math.max(5,_drag.oh+dy); }
+  else { el.x=Math.max(0,Math.round((_drag.ox+dx)*10)/10); el.y=Math.max(0,Math.round((_drag.oy+dy)*10)/10); }
+  edRenderEditor();
+}
+function edDragEnd(){ _drag=null; window.removeEventListener('pointermove',edDragMove); window.removeEventListener('pointerup',edDragEnd); }
+function edRenderProps(){
+  var box=document.getElementById('ed-props'); var el=ED.els[ED.sel];
+  if(!el){ box.innerHTML='要素を選択すると編集できます'; return; }
+  if(el.type==='text'){
+    box.innerHTML='<b>📝 テキスト</b>'
+      +'<label>内容 ({{見出し}}で差込)</label><input id="ep-t" value="'+(el.t||'').replace(/"/g,'&quot;')+'" oninput="ED.els[ED.sel].t=this.value;edRenderEditor()">'
+      +'<div class="row"><div><label>サイズpt</label><input type="number" id="ep-fs" value="'+el.fs+'" oninput="ED.els[ED.sel].fs=+this.value;edRenderEditor()"></div>'
+      +'<div><label>色</label><input type="color" id="ep-c" value="'+(el.color||'#111111')+'" oninput="ED.els[ED.sel].color=this.value;edRenderEditor()"></div></div>'
+      +'<label style="margin-top:4px"><input type="checkbox" '+(el.bold?'checked':'')+' onchange="ED.els[ED.sel].bold=this.checked;edRenderEditor()"> 太字</label>'
+      +'<div class="row" style="margin-top:4px"><div><label>X mm</label><input type="number" step="0.5" value="'+el.x+'" oninput="ED.els[ED.sel].x=+this.value;edRenderEditor()"></div><div><label>Y mm</label><input type="number" step="0.5" value="'+el.y+'" oninput="ED.els[ED.sel].y=+this.value;edRenderEditor()"></div></div>'
+      +'<button class="btn sub" style="margin-top:8px;color:#b91c1c" onclick="edDel()">🗑 削除</button>';
+  } else {
+    box.innerHTML='<b>🖼 画像</b>'
+      +'<div class="row"><div><label>幅mm</label><input type="number" value="'+Math.round(el.w)+'" oninput="ED.els[ED.sel].w=+this.value;edRenderEditor()"></div><div><label>高mm</label><input type="number" value="'+Math.round(el.h)+'" oninput="ED.els[ED.sel].h=+this.value;edRenderEditor()"></div></div>'
+      +'<div class="row"><div><label>X mm</label><input type="number" step="0.5" value="'+el.x+'" oninput="ED.els[ED.sel].x=+this.value;edRenderEditor()"></div><div><label>Y mm</label><input type="number" step="0.5" value="'+el.y+'" oninput="ED.els[ED.sel].y=+this.value;edRenderEditor()"></div></div>'
+      +'<button class="btn sub" style="margin-top:8px;color:#b91c1c" onclick="edDel()">🗑 削除</button>';
+  }
+}
+function edDel(){ if(ED.sel!=null){ ED.els.splice(ED.sel,1); ED.sel=null; edRenderEditor(); } }
+document.addEventListener('keydown',function(e){ if((e.key==='Delete')&&ED.sel!=null&&document.activeElement.tagName!=='INPUT'&&document.activeElement.tagName!=='TEXTAREA'){ edDel(); } });
+// 1レコードを ctx に描画 (テキスト差込＋画像)
+function edDrawRecord(ctx, head, rec){
+  ED.els.forEach(function(el){
+    if(el.type==='text'){
+      var t=(el.t||'').replace(/\{\{(.+?)\}\}/g,function(_,k){var i=head.indexOf(k.trim());return i>=0?(rec[i]||''):'';});
+      ctx.fillStyle=el.color||'#111'; ctx.textAlign='left'; ctx.textBaseline='top';
+      ctx.font=(el.bold?'bold ':'')+ptToPx(el.fs)+'px sans-serif';
+      ctx.fillText(t, el.x*MM2PX, el.y*MM2PX);
+    } else if(el.type==='image' && el._img){
+      ctx.drawImage(el._img, el.x*MM2PX, el.y*MM2PX, el.w*MM2PX, el.h*MM2PX);
+    }
+  });
+}
+function genMerge(save){
+  if(!ED.els.length){ alert('テキストや画像を配置してください'); return; }
+  var rows=parseRows(document.getElementById('m-data').value).filter(function(r){return r.join('').trim();});
+  var head=rows.length?rows[0]:[], recs=rows.length>1?rows.slice(1):[[]];
+  var cols=+document.getElementById('m-cols').value||2, rws=+document.getElementById('m-rows').value||5, land=document.getElementById('m-paper').value==='A4L';
+  var cw=edCW(), ch=edCH();
+  // 画像をImageオブジェクト化してから生成 (描画同期のため)
+  var imgs=ED.els.filter(function(e){return e.type==='image';});
+  var loaded=0;
+  function go(){
+    var items=recs.map(function(rec){ return function(ctx){ edDrawRecord(ctx, head, rec); }; });
+    var r=buildGridPdf({cols:cols,rows:rws,landscape:land,cellW:cw,cellH:ch,items:items});
+    if(save) r.doc.save('差し込み_'+recs.length+'件.pdf'); else showPreview('m-cv', r.preview);
+  }
+  if(!imgs.length) return go();
+  imgs.forEach(function(el){
+    if(el._img){ if(++loaded===imgs.length) go(); return; }
+    el._img=new Image(); el._img.onload=function(){ if(++loaded===imgs.length) go(); }; el._img.src=el.src;
+  });
 }
 // 🏷 ラベル
 function genLabel(save){
@@ -247,6 +364,11 @@ function genNum(save){
   var r=buildGridPdf({cols:cols,rows:rws,landscape:land,items:items});
   if(save) r.doc.save('連番_'+count+'枚.pdf'); else showPreview('n-cv', r.preview);
 }
+// 起動時: ビジュアル編集に初期要素を配置
+window.addEventListener('DOMContentLoaded', function(){
+  if(!ED.els.length){ ED.els=[{type:'text',x:6,y:8,t:'{{氏名}} 様',fs:13,bold:true,color:'#111'},{type:'text',x:6,y:20,t:'{{会社}}',fs:10,color:'#333'},{type:'text',x:6,y:30,t:'{{住所}}',fs:9,color:'#555'}]; }
+  if(document.getElementById('ed-stage')) edRenderEditor();
+});
 </script>
 </body>
 </html>
