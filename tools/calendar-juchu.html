@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>カレンダー受注台帳 | Tokiwa Hub Tools</title>
+<!--
+  ═══════════════════════════════════════════════════════════
+  📅 受注台帳 (年度更新式・全カテゴリ対応)
+  ─ 旧「2026_顧客リスト.xls」(カレンダー/業社/米屋/酒版/ミニ/うちわ)を置き換える小アプリ ─
+
+  考え方:
+  ・前年実績＋今年の提案価格(値上げ込み)を「受注用エクスポート(.xlsx)」から取込
+  ・旧台帳(.xls)からは過去履歴を全シート(カテゴリ別)に展開して取込
+  ・現場は今年の受注サイクル(TEL→受注→発注→納品)だけを入力する
+  ・前年実績・提案価格・製品名は読み取り専用 = 大事な部分を壊せない
+  ・表⇄看板(ステータス別カード)を切替。看板はドラッグで状態変更
+  ・保存先は本体DB (murayama_v15 / db.calendarOrders)
+  ═══════════════════════════════════════════════════════════
+-->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  :root{ --lime:#84cc16; --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; letter-spacing:.04em; font-size:14px; }
+  header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:1500px; margin:14px auto; padding:0 12px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.7rem .9rem; margin-bottom:.6rem; }
+  .btn{ padding:8px 14px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13px; font-family:inherit; font-weight:600; }
+  .btn-p{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .btn-g{ background:#16a34a; border-color:#16a34a; color:#fff; }
+  .btn:active{ transform:translateY(1px); }
+  .muted{ font-size:11px; color:#94a3b8; }
+  .toolbar{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .toolbar input[type=text], .toolbar select{ padding:7px 9px; border:1px solid #d0cec8; border-radius:6px; font-size:13px; font-family:inherit; background:#fff; }
+  /* ビュー切替 */
+  .seg{ display:inline-flex; border:1px solid #d0cec8; border-radius:7px; overflow:hidden; }
+  .seg button{ border:0; background:#fff; padding:8px 12px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .seg button.on{ background:#1f2937; color:#fff; }
+  /* 集計バー */
+  .kpis{ display:flex; gap:10px; flex-wrap:wrap; }
+  .kpi{ flex:1; min-width:110px; background:#fafaf8; border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+  .kpi .k{ font-size:10px; color:#94a3b8; font-weight:700; }
+  .kpi .v{ font-size:18px; font-weight:800; margin-top:2px; }
+  /* テーブル */
+  .tblwrap{ overflow:auto; max-height:70vh; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  table{ border-collapse:separate; border-spacing:0; font-size:12px; width:100%; }
+  thead th{ position:sticky; top:0; z-index:3; background:#1f2937; color:#fff; font-weight:700; padding:6px 7px; white-space:nowrap; text-align:left; border-right:1px solid #374151; font-size:11px; }
+  thead th.grp{ background:#0f172a; text-align:center; }
+  thead th.sortable{ cursor:pointer; user-select:none; }
+  thead th.sortable:hover{ background:#374151; }
+  tbody td{ padding:3px 6px; border-bottom:1px solid #eee; border-right:1px solid #f1f1ee; white-space:nowrap; vertical-align:middle; }
+  tbody tr:hover td{ background:#f8fafc; }
+  td.drag{ text-align:center; color:#c7c9cc; user-select:none; font-size:14px; }
+  td.drag[draggable="true"]:hover{ color:#0891b2; background:#f0f9ff; }
+  tr.dragover-row td{ border-top:2px solid #0891b2; }
+  td.ref{ background:#fbfbf9; color:#444; }
+  td.prev{ background:#f5f8fb; color:#1e40af; text-align:right; }
+  td.prop{ background:#f3faf4; color:#166534; text-align:right; font-weight:600; }
+  td.up{ color:#b45309; text-align:right; font-size:11px; }
+  td.inp input, td.inp select{ width:100%; min-width:60px; padding:3px 4px; border:1px solid #e2e0da; border-radius:4px; font-size:12px; font-family:inherit; background:#fffdf5; }
+  td.inp input:focus, td.inp select:focus{ outline:none; border-color:var(--cyan); background:#fff; }
+  td.inp input[type=date]{ min-width:122px; }
+  td.inp input.num{ text-align:right; min-width:64px; }
+  .prod{ max-width:240px; overflow:hidden; text-overflow:ellipsis; }
+  .cust{ font-weight:700; max-width:170px; overflow:hidden; text-overflow:ellipsis; }
+  .catbadge{ display:inline-block; font-size:9.5px; font-weight:800; color:#fff; padding:1px 6px; border-radius:9px; vertical-align:middle; }
+  /* 看板 */
+  .board{ display:flex; gap:10px; overflow-x:auto; padding-bottom:8px; align-items:flex-start; }
+  .bcol{ flex:0 0 230px; background:#eef0f2; border:1px solid var(--line); border-radius:10px; min-height:120px; max-height:74vh; display:flex; flex-direction:column; }
+  .bcol.over{ outline:2px dashed var(--cyan); outline-offset:-2px; }
+  .bcol-h{ color:#fff; font-weight:800; font-size:12px; padding:7px 10px; border-radius:9px 9px 0 0; display:flex; justify-content:space-between; position:sticky; top:0; }
+  .bcol-h .n{ background:rgba(255,255,255,.25); border-radius:9px; padding:0 7px; }
+  .bcol-b{ overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:7px; }
+  .card{ background:#fff; border:1px solid #e2e0da; border-left:4px solid #94a3b8; border-radius:7px; padding:7px 9px; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  .card:active{ cursor:grabbing; }
+  .card .c-cust{ font-weight:800; font-size:12.5px; }
+  .card .c-prod{ font-size:11px; color:#555; margin:2px 0; white-space:normal; word-break:break-word; }
+  .card .c-row{ font-size:11px; color:#334155; display:flex; gap:8px; flex-wrap:wrap; }
+  .card .c-prev{ color:#1e40af; }
+  .card .c-prop{ color:#166534; font-weight:700; }
+  .card select{ margin-top:5px; width:100%; font-size:11px; padding:2px 4px; border:1px solid #e2e0da; border-radius:5px; background:#fffdf5; font-family:inherit; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+  .empty{ padding:38px; text-align:center; color:#94a3b8; }
+  .pill{ display:inline-block; font-size:10px; border:1px solid #e2e8f0; border-radius:10px; padding:1px 8px; color:#64748b; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🧰</span>
+  <span class="tname">📅 カレンダー受注台帳</span>
+  <span class="user" id="hub-user"></span>
+</header>
+<main>
+
+  <div class="sec">
+    <div class="toolbar">
+      <label style="font-size:11px;color:#888;margin:0">年度</label>
+      <select id="yearSel" onchange="render()"></select>
+      <select id="fCat" onchange="render()"><option value="">全カテゴリ</option></select>
+      <input type="text" id="q" placeholder="🔍 得意先・製品名・担当で検索…" oninput="render()" style="flex:1;min-width:180px">
+      <select id="fStatus" onchange="render()">
+        <option value="">全ステータス</option>
+        <option>未着手</option><option>TEL済</option><option>受注</option><option>発注済</option><option>納品済</option><option>見送り</option>
+      </select>
+      <span class="seg">
+        <button id="vTable" class="on" onclick="setView('table')">📋 表</button>
+        <button id="vBoard" onclick="setView('board')">🗂 看板</button>
+      </span>
+      <button class="btn btn-p" onclick="document.getElementById('imp').click()">📥 取込</button>
+      <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
+      <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
+      <button class="btn" onclick="addRow()">＋ 行追加</button>
+    </div>
+    <div class="muted" style="margin-top:6px">
+      <span class="pill">青=前年実績(読取専用)</span> <span class="pill">緑=今年提案価格(読取専用)</span> <span class="pill" style="background:#fffdf5">黄=入力欄</span>
+      入力欄を埋めるだけ。提案価格や製品名は触れないので壊れません。<br>
+      🗂 看板はカードをドラッグ＝状態変更。 📥 取込は形式自動判定: <b>受注番号</b>あり→受注用(今年) ／ <b>顧客名＋品名</b>あり→旧台帳.xlsの過去履歴(全シート)。
+    </div>
+  </div>
+
+  <div class="sec kpis" id="kpis"></div>
+
+  <div id="tableView">
+    <div class="tblwrap">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th rowspan="2" title="ドラッグで並べ替え（列ソート解除中のみ）">⠿</th>
+            <th rowspan="2" class="sortable" onclick="setSort('category')">区分<span class="sind" data-k="category"></span></th>
+            <th rowspan="2" class="sortable" onclick="setSort('cust')">得意先<span class="sind" data-k="cust"></span></th>
+            <th rowspan="2" class="sortable" onclick="setSort('product')">製品名<span class="sind" data-k="product"></span></th>
+            <th class="grp" colspan="2" style="background:#1e3a8a">前年実績</th>
+            <th class="grp" colspan="3" style="background:#14532d">今年提案(値上後)</th>
+            <th rowspan="2" class="sortable" onclick="setSort('status')">状態<span class="sind" data-k="status"></span></th>
+            <th class="grp" colspan="6" style="background:#7c2d12">今年の動き（入力）</th>
+            <th rowspan="2" class="sortable" onclick="setSort('orderQty')">受注数<span class="sind" data-k="orderQty"></span></th>
+            <th rowspan="2" class="sortable" onclick="setSort('orderPrice')">受注単価<br><span style="font-weight:400;color:#cbd5e1">売価</span></th>
+            <th rowspan="2" class="sortable" onclick="setSort('cost')">仕入値<span class="sind" data-k="cost"></span></th>
+            <th rowspan="2" class="sortable" onclick="setSort('costRatio')">原価率<span class="sind" data-k="costRatio"></span></th>
+            <th rowspan="2" class="sortable" onclick="setSort('staff')">担当<span class="sind" data-k="staff"></span></th>
+            <th rowspan="2">備考</th>
+            <th rowspan="2"></th>
+          </tr>
+          <tr>
+            <th class="grp" style="background:#1e3a8a">数量</th>
+            <th class="grp sortable" style="background:#1e3a8a" onclick="setSort('pyPrice')">単価<span class="sind" data-k="pyPrice"></span></th>
+            <th class="grp" style="background:#14532d">数量</th>
+            <th class="grp sortable" style="background:#14532d" onclick="setSort('propPrice')">単価<span class="sind" data-k="propPrice"></span></th>
+            <th class="grp" style="background:#14532d">値上額</th>
+            <th class="grp" style="background:#7c2d12">TEL日</th>
+            <th class="grp" style="background:#7c2d12">受注日</th>
+            <th class="grp" style="background:#7c2d12">発注日</th>
+            <th class="grp" style="background:#7c2d12">発注納期</th>
+            <th class="grp" style="background:#7c2d12">製品納入</th>
+            <th class="grp" style="background:#7c2d12">納品日</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="boardView" style="display:none"><div class="board" id="board"></div></div>
+
+  <p class="muted" style="margin-top:8px">💾 本体アプリを開くと自動でクラウド同期・日次バックアップされます。／ 取込元: 基幹「受注用」エクスポート(.xlsx)＝今年分 ／ 旧台帳「2026_顧客リスト.xls」＝過去履歴(カテゴリ別)。再取込しても入力済みの動き・担当・備考は保持。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+// ═════════ Tokiwa Hub 共有ヘルパー (全ツール共通・原則編集しない) ═════════
+var HUB_DBKEY = 'murayama_v15';
+var HUB_AUTHKEY = 'murayama_auth';
+var HUB_TOOL_ID = 'calendar-juchu';
+function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ console.error(e); return null; } }
+function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
+function hubSave(mutator){
+  var db = hubLoad();
+  if(!db){ hubToast('❌ 本体データが見つかりません。先に本体アプリへログインしてください'); return false; }
+  try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }
+  catch(e){ hubToast('❌ 保存失敗 (容量?): ' + e); return false; }
+  try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
+  return true;
+}
+function hubAppend(key, record){ return hubSave(function(db){ if(!Array.isArray(db[key])) db[key] = []; db[key].push(record); }); }
+function hubEsc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function hubToast(msg){ var t = document.getElementById('toast'); if(!t) return alert(msg); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._tm); t._tm = setTimeout(function(){ t.style.display='none'; }, 2600); }
+function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
+(function(){ var a = hubAuth(); var el = document.getElementById('hub-user'); if(el) el.textContent = a.loggedIn ? ('👤 ' + (a.userName||'') + ' / ' + (a.companyName||'')) : '⚠ 本体未ログイン'; })();
+// ═════════ 共有ヘルパーここまで ═════════
+
+var COLL = 'calendarOrders';
+var STATUSES = ['未着手','TEL済','受注','発注済','納品済','見送り'];
+var STCOLOR = { '未着手':'#94a3b8','TEL済':'#0891b2','受注':'#2563eb','発注済':'#7c3aed','納品済':'#16a34a','見送り':'#9ca3af' };
+var CATCOLOR = { 'カレンダー':'#0891b2','ミニカレンダー':'#0ea5e9','業社':'#7c3aed','米屋':'#ca8a04','酒版':'#dc2626','うちわ':'#16a34a' };
+var CATORDER = ['カレンダー','ミニカレンダー','業社','米屋','酒版','うちわ'];
+var viewMode = 'table';
+var sortKey = '', sortDir = 1;
+// 手動並び順: カテゴリ順 → order(手動) → 未設定は末尾(安定)
+function byManual(a,b){
+  var ca=CATORDER.indexOf(a.category), cb=CATORDER.indexOf(b.category); ca=ca<0?99:ca; cb=cb<0?99:cb;
+  if(ca!==cb) return ca-cb;
+  var ao=(a.order==null?1e9:a.order), bo=(b.order==null?1e9:b.order); return ao-bo;
+}
+
+function loadAll(){ var db = hubLoad(); if(!db) return []; return Array.isArray(db[COLL]) ? db[COLL] : []; }
+function curYear(){ return Number(document.getElementById('yearSel').value || 2027); }
+function curCat(){ return document.getElementById('fCat').value || ''; }
+function num(v){ var n = parseFloat(v); return isNaN(n) ? '' : n; }
+function fmt(n){ return (n===''||n==null) ? '—' : Number(n).toLocaleString(); }
+function catColor(c){ return CATCOLOR[c] || '#64748b'; }
+// 売価(=受注単価優先、無ければ提案単価) と 仕入値 から原価率。値が無ければ ''。
+function saleOf(r){ var s=Number(r.orderPrice)||Number(r.propPrice)||0; return s; }
+function costRatioVal(r){ var c=Number(r.cost), s=saleOf(r); return (r.cost!=='' && r.cost!=null && !isNaN(c) && s) ? c/s : ''; }
+function fmtPct(v){ return v===''? '—' : (v*100).toFixed(1)+'%'; }
+
+function buildYears(){
+  var rows = loadAll(); var years = {}; rows.forEach(function(r){ years[r.year] = 1; });
+  var list = Object.keys(years).map(Number).sort(function(a,b){ return b-a; });
+  if(list.indexOf(2027) < 0) list.unshift(2027);
+  var sel = document.getElementById('yearSel'); var cur = sel.value;
+  sel.innerHTML = list.map(function(y){ return '<option value="'+y+'">'+y+'年</option>'; }).join('');
+  sel.value = cur && list.indexOf(Number(cur))>=0 ? cur : String(list[0]);
+}
+function buildCats(){
+  var rows = loadAll(); var cats = {}; rows.forEach(function(r){ if(r.category) cats[r.category]=1; });
+  var list = Object.keys(cats);
+  // 既知の順番を優先
+  var order = ['カレンダー','ミニカレンダー','業社','米屋','酒版','うちわ'];
+  list.sort(function(a,b){ var ia=order.indexOf(a), ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
+  var sel = document.getElementById('fCat'); var cur = sel.value;
+  sel.innerHTML = '<option value="">全カテゴリ</option>' + list.map(function(c){ return '<option value="'+hubEsc(c)+'">'+hubEsc(c)+'</option>'; }).join('');
+  sel.value = cur;
+}
+
+// 年度＋カテゴリで絞ったベース集合
+function baseRows(){
+  var y = curYear(), cat = curCat();
+  return loadAll().filter(function(r){ return r.year===y && (!cat || r.category===cat); });
+}
+// さらに検索・ステータスで絞る（看板はステータス無視）
+function viewRows(ignoreStatus){
+  var q = (document.getElementById('q').value||'').trim().toLowerCase();
+  var fs = document.getElementById('fStatus').value;
+  var v = baseRows().filter(function(r){
+    if(!ignoreStatus && fs && r.status!==fs) return false;
+    if(!q) return true;
+    return ((r.cust||'')+(r.user||'')+(r.product||'')+(r.staff||'')).toLowerCase().indexOf(q) >= 0;
+  });
+  if(sortKey){
+    v = v.slice().sort(function(a,b){
+      var x, y2;
+      if(sortKey==='costRatio'){ x=costRatioVal(a); y2=costRatioVal(b); x=(x===''?-1:x); y2=(y2===''?-1:y2); }
+      else { x=a[sortKey]; y2=b[sortKey];
+        if(sortKey==='status'){ x=STATUSES.indexOf(x); y2=STATUSES.indexOf(y2); }
+        else if(['pyPrice','propPrice','orderQty','cost'].indexOf(sortKey)>=0){ x=Number(x)||0; y2=Number(y2)||0; }
+        else { x=(x==null?'':String(x)); y2=(y2==null?'':String(y2)); } }
+      return (x<y2?-1:x>y2?1:0)*sortDir;
+    });
+  } else {
+    v = v.slice().sort(byManual);   // 手動並び順（既定）
+  }
+  return v;
+}
+
+function setView(m){
+  viewMode=m;
+  document.getElementById('vTable').classList.toggle('on', m==='table');
+  document.getElementById('vBoard').classList.toggle('on', m==='board');
+  document.getElementById('tableView').style.display = m==='table'?'':'none';
+  document.getElementById('boardView').style.display = m==='board'?'':'none';
+  render();
+}
+function setSort(k){ if(sortKey===k){ sortDir=-sortDir; } else { sortKey=k; sortDir=1; } render(); }
+
+function render(){
+  // 集計（年度＋カテゴリのベースで）
+  var base = baseRows();
+  var done = base.filter(function(r){ return r.status==='受注'||r.status==='発注済'||r.status==='納品済'; });
+  var sumProp = base.reduce(function(s,r){ return s + (Number(r.propAmt)||0); }, 0);
+  var sumOrder = done.reduce(function(s,r){ return s + ((Number(r.orderQty)||Number(r.propQty)||0) * (Number(r.orderPrice)||Number(r.propPrice)||0)); }, 0);
+  var sumPrev = base.reduce(function(s,r){ return s + (Number(r.pyAmt)||0); }, 0);
+  // 平均原価率（仕入値が分かる行のみ・売上加重）
+  var cBase=base.filter(function(r){ return costRatioVal(r)!==''; });
+  var cAmt=cBase.reduce(function(s,r){ return s + saleOf(r)*(Number(r.orderQty)||Number(r.propQty)||1); }, 0);
+  var costAmt=cBase.reduce(function(s,r){ return s + Number(r.cost)*(Number(r.orderQty)||Number(r.propQty)||1); }, 0);
+  var avgCR = cAmt>0 ? costAmt/cAmt : '';
+  document.getElementById('kpis').innerHTML =
+      kpi('件数', base.length + ' 件')
+    + kpi('受注確定', done.length + ' 件', STCOLOR['受注'])
+    + kpi('提案額 合計', hubYen(Math.round(sumProp)), '#166534')
+    + kpi('受注額(確定分)', hubYen(Math.round(sumOrder)), '#b45309')
+    + kpi('前年実績 合計', hubYen(Math.round(sumPrev)), '#1e40af')
+    + kpi('平均原価率', avgCR===''?'—':(avgCR*100).toFixed(1)+'%', avgCR===''?'#94a3b8':(avgCR>=0.7?'#dc2626':avgCR>=0.5?'#b45309':'#16a34a'));
+  // ソート表示
+  document.querySelectorAll('.sind').forEach(function(el){ el.textContent = (el.getAttribute('data-k')===sortKey) ? (sortDir>0?' ▲':' ▼') : ''; });
+  if(viewMode==='board') renderBoard(); else renderTable();
+}
+function kpi(k,v,color){ return '<div class="kpi"><div class="k">'+k+'</div><div class="v" style="'+(color?'color:'+color:'')+'">'+v+'</div></div>'; }
+
+function renderTable(){
+  var view = viewRows(false);
+  var tb = document.getElementById('tbody');
+  if(!view.length){ tb.innerHTML = '<tr><td colspan="23" class="empty">該当データがありません。<br>右上の「📥 取込」からデータを読み込んでください。</td></tr>'; return; }
+  tb.innerHTML = view.map(function(r){
+    var id = hubEsc(r.id);
+    function inp(field, type){
+      var v = hubEsc(r[field]==null?'':r[field]);
+      return '<td class="inp"><input '+(type==='date'?'type="date"':type==='num'?'type="number" step="any" class="num"':'type="text"')
+        + ' value="'+v+'" data-id="'+id+'" data-f="'+field+'" onchange="onEdit(this)"></td>';
+    }
+    var stSel = '<td class="inp"><select data-id="'+id+'" data-f="status" onchange="onEdit(this)">'
+      + STATUSES.map(function(s){ return '<option'+(r.status===s?' selected':'')+'>'+s+'</option>'; }).join('') + '</select></td>';
+    var canDrag = !sortKey;
+    var cr = costRatioVal(r);
+    var crColor = cr===''?'#cbd5e1':(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a');
+    return '<tr ondragover="event.preventDefault();this.classList.add(\'dragover-row\')" ondragleave="this.classList.remove(\'dragover-row\')" ondrop="this.classList.remove(\'dragover-row\');rowDrop(event,\''+id+'\')">'
+      + '<td class="drag" data-id="'+id+'" '+(canDrag?'draggable="true" ondragstart="rowDrag(event)" style="cursor:grab" title="ドラッグで並べ替え"':'title="列ソート中は並べ替え不可"')+'>⠿</td>'
+      + '<td><span class="catbadge" style="background:'+catColor(r.category)+'">'+hubEsc(r.category||'')+'</span></td>'
+      + '<td class="cust" title="'+hubEsc((r.cust||'')+(r.user?' / '+r.user:''))+'">'+hubEsc(r.cust||'')+(r.user?'<br><span class="muted">'+hubEsc(r.user)+'</span>':'')+'</td>'
+      + '<td class="ref prod" title="'+hubEsc(r.product||'')+'">'+hubEsc(r.product||'')+'</td>'
+      + '<td class="prev">'+fmt(r.pyQty)+'</td>'
+      + '<td class="prev">'+fmt(r.pyPrice)+'</td>'
+      + '<td class="prop">'+fmt(r.propQty)+'</td>'
+      + '<td class="prop">'+fmt(r.propPrice)+'</td>'
+      + '<td class="up">'+(r.upPrice?('+'+fmt(r.upPrice)):'—')+'</td>'
+      + stSel
+      + inp('telDate','date') + inp('orderDate','date') + inp('poDate','date') + inp('poDue','date') + inp('inDate','date') + inp('delivDate','date')
+      + inp('orderQty','num') + inp('orderPrice','num') + inp('cost','num')
+      + '<td style="text-align:right;font-weight:700;color:'+crColor+'" title="仕入値 ÷ 売価">'+fmtPct(cr)+'</td>'
+      + inp('staff','text') + inp('note','text')
+      + '<td><button class="btn" style="padding:3px 8px;font-size:11px" onclick="delRow(\''+id+'\')" title="削除">🗑</button></td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderBoard(){
+  var list = viewRows(true);   // 看板はステータスで分けるのでステータス絞込は無視
+  var board = document.getElementById('board');
+  board.innerHTML = STATUSES.map(function(s){
+    var cards = list.filter(function(r){ return (r.status||'未着手')===s; });
+    return '<div class="bcol" data-st="'+s+'" ondragover="boardOver(event,this)" ondragleave="this.classList.remove(\'over\')" ondrop="boardDrop(event,this)">'
+      + '<div class="bcol-h" style="background:'+STCOLOR[s]+'">'+s+'<span class="n">'+cards.length+'</span></div>'
+      + '<div class="bcol-b">' + cards.map(cardHtml).join('') + '</div></div>';
+  }).join('');
+}
+function cardHtml(r){
+  var id = hubEsc(r.id);
+  var price = '';
+  if(r.pyPrice!=='' && r.pyPrice!=null) price += '<span class="c-prev">前 '+fmt(r.pyPrice)+'</span>';
+  if(r.propPrice!=='' && r.propPrice!=null) price += '<span class="c-prop">提 '+fmt(r.propPrice)+'</span>';
+  if(r.orderPrice!=='' && r.orderPrice!=null) price += '<span style="color:#b45309">受 '+fmt(r.orderPrice)+(r.orderQty!==''?'×'+fmt(r.orderQty):'')+'</span>';
+  if(r.cost!=='' && r.cost!=null) price += '<span style="color:#7c3aed">仕 '+fmt(r.cost)+'</span>';
+  var cr2=costRatioVal(r); if(cr2!=='') price += '<span style="font-weight:700;color:'+(cr2>=0.7?'#dc2626':cr2>=0.5?'#b45309':'#16a34a')+'">原 '+fmtPct(cr2)+'</span>';
+  var stSel = '<select onmousedown="event.stopPropagation()" data-id="'+id+'" data-f="status" onchange="onEdit(this)">'
+    + STATUSES.map(function(s){ return '<option'+(r.status===s?' selected':'')+'>'+s+'</option>'; }).join('') + '</select>';
+  return '<div class="card" draggable="true" data-id="'+id+'" ondragstart="cardDrag(event)" ondragover="event.preventDefault()" ondrop="cardDrop(event,\''+id+'\',\''+hubEsc(r.status||'未着手')+'\')" style="border-left-color:'+catColor(r.category)+'">'
+    + '<div class="c-cust">'+hubEsc(r.cust||'(無名)')+' <span class="catbadge" style="background:'+catColor(r.category)+'">'+hubEsc(r.category||'')+'</span></div>'
+    + '<div class="c-prod">'+hubEsc(r.product||'')+'</div>'
+    + (price?'<div class="c-row">'+price+'</div>':'')
+    + (r.staff?'<div class="c-row">👤 '+hubEsc(r.staff)+'</div>':'')
+    + stSel + '</div>';
+}
+function cardDrag(e){ e.dataTransfer.setData('text/plain', e.target.getAttribute('data-id')); e.dataTransfer.effectAllowed='move'; }
+function boardOver(e, col){ e.preventDefault(); col.classList.add('over'); }
+function boardDrop(e, col){ e.preventDefault(); col.classList.remove('over'); var id=e.dataTransfer.getData('text/plain'); if(!id) return; var st=col.getAttribute('data-st'); applyReorder(id, null, 'end', st); }
+function setStatus(id, st){
+  var ok = hubSave(function(db){ var rec=(db[COLL]||[]).find(function(x){return x.id===id;}); if(!rec) throw '対象なし'; rec.status=st; rec._updatedAt=new Date().toISOString(); });
+  if(ok) render();
+}
+
+// ─ 手動並べ替え（行・カード共通）─
+//   dragged を target の before/after に差し込み、同じ年度+カテゴリのグループを order で振り直す。
+//   newStatus 指定時は状態も変更（看板の列間移動）。target=null は末尾。
+function applyReorder(draggedId, targetId, place, newStatus){
+  var ok = hubSave(function(db){
+    var arr = db[COLL] || (db[COLL]=[]);
+    var dragged = arr.find(function(x){ return x.id===draggedId; }); if(!dragged) throw 'no drag';
+    if(newStatus!=null) dragged.status = newStatus;
+    var grp = arr.filter(function(x){ return x.year===dragged.year && x.category===dragged.category; }).sort(byManual);
+    grp = grp.filter(function(x){ return x.id!==draggedId; });
+    var idx;
+    if(targetId){ idx = grp.findIndex(function(x){ return x.id===targetId; }); if(idx<0) idx=grp.length; else if(place==='after') idx+=1; }
+    else { idx = grp.length; }
+    grp.splice(idx, 0, dragged);
+    grp.forEach(function(x,i){ x.order = (i+1)*10; });
+    dragged._updatedAt = new Date().toISOString();
+  });
+  if(ok) render();
+}
+// 表: 行ドラッグ（列ソート中は無効）
+function rowDrag(e){ e.dataTransfer.setData('text/plain', e.target.getAttribute('data-id')); e.dataTransfer.effectAllowed='move'; }
+function rowDrop(e, targetId){
+  e.preventDefault();
+  var id = e.dataTransfer.getData('text/plain'); if(!id || id===targetId) return;
+  var tr = e.currentTarget, rect = tr.getBoundingClientRect();
+  var place = (e.clientY-rect.top) > rect.height/2 ? 'after' : 'before';
+  applyReorder(id, targetId, place, null);
+}
+// 看板: カード上にドロップ＝そのカードの前後へ（＋必要なら状態変更）
+function cardDrop(e, targetId, st){
+  e.preventDefault(); e.stopPropagation();
+  var id = e.dataTransfer.getData('text/plain'); if(!id || id===targetId){ return; }
+  var card = e.currentTarget, rect = card.getBoundingClientRect();
+  var place = (e.clientY-rect.top) > rect.height/2 ? 'after' : 'before';
+  applyReorder(id, targetId, place, st);
+}
+
+// 1セル編集 → 即保存
+function onEdit(elm){
+  var id = elm.getAttribute('data-id'), f = elm.getAttribute('data-f'), val = elm.value;
+  var ok = hubSave(function(db){
+    var rec = (db[COLL]||[]).find(function(x){ return x.id === id; });
+    if(!rec) throw '対象が見つかりません';
+    rec[f] = val; rec._updatedAt = new Date().toISOString();
+  });
+  if(ok){ if(elm.style){ elm.style.background = '#dcfce7'; setTimeout(function(){ elm.style.background=''; }, 500); } render(); }
+}
+function delRow(id){
+  if(!confirm('この行を削除します。よろしいですか？')) return;
+  if(hubSave(function(db){ db[COLL] = (db[COLL]||[]).filter(function(x){ return x.id !== id; }); })){ hubToast('🗑 削除しました'); render(); }
+}
+function addRow(){
+  var rec = newRecord({ year:curYear(), category: curCat() || 'カレンダー', cust:'（新規）', product:'' });
+  if(hubAppend(COLL, rec)){ hubToast('＋ 行を追加しました'); buildYears(); buildCats(); render(); }
+}
+function newRecord(o){
+  return Object.assign({
+    id: 'co_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36),
+    year: 2027, category:'カレンダー', ref:'', prevDate:'', cust:'', user:'', product:'', unit:'冊',
+    pyQty:'', pyPrice:'', pyAmt:'', propQty:'', propPrice:'', propAmt:'', upPrice:'', upAmt:'', mkUpPrice:'', mkUpAmt:'',
+    status:'未着手', telDate:'', orderDate:'', poDate:'', poDue:'', inDate:'', delivDate:'',
+    orderQty:'', orderPrice:'', cost:'', staff:'', pay:'', note:'', _createdAt:new Date().toISOString()
+  }, o||{});
+}
+
+// ─ Excel取込（形式自動判定）─
+function importFile(input){
+  var f = input.files && input.files[0]; if(!f) return;
+  var r = new FileReader();
+  r.onload = function(){
+    try {
+      var wb = XLSX.read(r.result, { type:'array', codepage:932 });
+      var firstAoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
+      var head = firstAoa.slice(0,8).map(function(row){ return (row||[]).join(''); }).join('');
+      if(head.indexOf('受注番号')>=0) return importExport(firstAoa);
+      if(head.indexOf('顧客名')>=0 && head.indexOf('品名')>=0) return importOldLedger(wb);
+      hubToast('❌ 形式を判定できません（「受注番号」も「顧客名＋品名」も見つかりません）');
+    } catch(e){ console.error(e); hubToast('❌ 取込エラー: '+e.message); }
+    finally { input.value=''; }
+  };
+  r.readAsArrayBuffer(f);
+}
+
+// ① 受注用エクスポート取込（今年分・カテゴリ=カレンダー）
+function importExport(aoa){
+  var y = curYear();
+  var hi=-1; for(var i=0;i<aoa.length;i++){ if(aoa[i].some(function(c){ return String(c).indexOf('受注番号')>=0; })){ hi=i; break; } }
+  if(hi<0){ hubToast('❌ ヘッダー(「受注番号」)が見つかりません'); return; }
+  var H = aoa[hi].map(function(c){ return String(c).replace(/\s/g,''); });
+  function col(){ for(var a=0;a<arguments.length;a++){ var idx=H.indexOf(arguments[a]); if(idx>=0) return idx; } return -1; }
+  var c = { ref:col('受注番号'), date:col('受注日'), cust:col('取引先名(得意先)','取引先名（得意先）','得意先'),
+    user:col('取引先名(ユーザー)','取引先名（ユーザー）','ユーザー'), prod:col('製品名','製品名*'),
+    pyQty:col('受注数'), unit:col('単位','単位*'), pyPrice:col('受注単価'), pyAmt:col('受注額'),
+    propQty:col('数量'), propPrice:col('単価'), propAmt:col('金額'),
+    up:col('値上げ単価'), upAmt:col('値上げ額'), mkUp:col('メーカー値上単価'), mkUpAmt:col('メーカー値上額'), note:col('備考') };
+  var get=function(row,idx){ return idx>=0?row[idx]:''; };
+  var parsed=[];
+  for(var i2=hi+1;i2<aoa.length;i2++){ var row=aoa[i2]; if(!row) continue;
+    var ref=String(get(row,c.ref)).trim(), prod=String(get(row,c.prod)).trim();
+    if(!ref && !prod) continue; parsed.push({ref:ref,prod:prod,row:row}); }
+  if(!parsed.length){ hubToast('❌ 取り込めるデータ行がありません'); return; }
+  if(!confirm(y+'年カレンダーに '+parsed.length+' 件を取り込みます。\n（同じ明細は前年実績・提案価格のみ更新し、入力済みの動きは保持）\nよろしいですか？')) return;
+  var added=0,updated=0;
+  var ok=hubSave(function(db){
+    var arr=db[COLL]||(db[COLL]=[]);
+    var keyOf=function(x){ return [x.ref,x.product,x.pyQty,x.pyPrice].join(''); };
+    var pool={}; arr.forEach(function(x){ if(x.year!==y||x.category!=='カレンダー'||x._src) return; var k=keyOf(x); (pool[k]||(pool[k]=[])).push(x); });
+    parsed.forEach(function(p){ var row=p.row;
+      var fields={ year:y, category:'カレンダー', ref:p.ref, prevDate:String(get(row,c.date)||''),
+        cust:String(get(row,c.cust)||''), user:String(get(row,c.user)||''), product:p.prod, unit:String(get(row,c.unit)||'冊'),
+        pyQty:num(get(row,c.pyQty)), pyPrice:num(get(row,c.pyPrice)), pyAmt:num(get(row,c.pyAmt)),
+        propQty:num(get(row,c.propQty)), propPrice:num(get(row,c.propPrice)), propAmt:num(get(row,c.propAmt)),
+        upPrice:num(get(row,c.up)), upAmt:num(get(row,c.upAmt)), mkUpPrice:num(get(row,c.mkUp)), mkUpAmt:num(get(row,c.mkUpAmt)) };
+      var k=[fields.ref,fields.product,fields.pyQty,fields.pyPrice].join(''); var q=pool[k];
+      if(q&&q.length){ var rec=q.shift(); Object.assign(rec,fields); rec._updatedAt=new Date().toISOString(); updated++; }
+      else { var nr=newRecord(fields); if(get(row,c.note)) nr.note=String(get(row,c.note)||''); arr.push(nr); added++; }
+    });
+  });
+  if(ok){ hubToast('✅ 受注用取込: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
+}
+
+// ② 旧台帳(.xls) 全シートから過去履歴を取込（カテゴリ別）
+//   各シート専用の固定列マッピング(ヘッダー署名で検証)。横並び年度ブロックを年ごとに展開。状態=納品済。
+//   year列: q=受注数, p=単価, o=受注日, d=納品日(無ければnull)。前年はその行で直前にデータのある年を自動採用。
+var SHEET_MAPS = [
+  { match:/ﾐﾆ|ミニ/, cat:'ミニカレンダー', hr:1, cust:5, code:6, name:9, staff:3, note:23,
+    years:[ {y:2022,q:21,p:22,o:1,d:11},{y:2023,q:19,p:20,o:0,d:10},{y:2024,q:17,p:18,o:2,d:12},{y:2025,q:15,p:16,o:4,d:13} ] },
+  { match:/カレンダー/, cat:'カレンダー', hr:1, cust:28, code:33, name:34, staff:27, note:57,
+    years:[ {y:2022,q:39,p:44,o:1,d:4,c:47},{y:2023,q:43,p:45,o:6,d:10,c:48},{y:2025,q:41,p:42,o:12,d:17,c:50} ] },
+  { match:/業社|業者/, cat:'業社', hr:1, cust:30, code:34, name:35, staff:29, note:57,
+    years:[ {y:2021,q:46,p:47,o:2,d:null,c:50},{y:2022,q:44,p:45,o:3,d:8,c:51},{y:2023,q:42,p:43,o:9,d:13,c:52},{y:2024,q:40,p:41,o:15,d:20,c:53},{y:2025,q:38,p:39,o:22,d:27,c:54} ] },
+  { match:/米屋/, cat:'米屋', hr:0, cust:33, code:null, name:36, staff:null, note:43,
+    years:[ {y:2022,q:28,p:29,o:5,d:null},{y:2023,q:22,p:23,o:0,d:12},{y:2024,q:24,p:25,o:8,d:13},{y:2025,q:26,p:27,o:14,d:19,c:31} ] },
+  { match:/酒版|酒販/, cat:'酒版', hr:0, cust:35, code:36, name:39, staff:null, note:44,
+    years:[ {y:2022,q:28,p:29,o:6,d:9},{y:2023,q:26,p:27,o:0,d:4},{y:2024,q:24,p:25,o:10,d:14,c:32},{y:2025,q:22,p:23,o:15,d:19,c:31} ] },
+  { match:/うちわ/, cat:'うちわ', hr:0, cust:2, code:5, name:6, staff:1, note:10, single:{q:8,p:9,o:0} }
+];
+function importOldLedger(wb){
+  var clean=function(s){ return String(s==null?'':s).replace(/[　\s]+/g,' ').trim(); };
+  var ymd=function(v){ if(typeof v!=='number'||!v) return ''; var d=XLSX.SSF.parse_date_code(v); return d?d.y+'-'+('0'+d.m).slice(-2)+'-'+('0'+d.d).slice(-2):''; };
+  var at=function(row,idx){ return idx==null?'':row[idx]; };
+  var allRecs=[], skipped=[];
+  wb.SheetNames.forEach(function(sn){
+    if(/サンプル/.test(sn)) { return; }
+    var map = SHEET_MAPS.find(function(m){ return m.match.test(sn); });
+    if(!map){ skipped.push(sn); return; }
+    var aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'' });
+    var H = (aoa[map.hr]||[]).map(function(c){ return String(c).replace(/\s/g,''); });
+    if(!(String(H[map.cust]||'').indexOf('顧客名')>=0 && String(H[map.name]||'').indexOf('品名')>=0)){ skipped.push(sn+'(列不一致)'); return; }
+    for(var r=map.hr+1; r<aoa.length; r++){
+      var row=aoa[r]; if(!row) continue;
+      var cust=clean(at(row,map.cust)), name=clean(at(row,map.name)), hin=map.code!=null?clean(at(row,map.code)):'';
+      if(!cust && !name && !hin) continue;
+      var product = hin ? (hin+' '+name).trim() : name;
+      var baseNote = clean(at(row,map.note)), staff = map.staff!=null?clean(at(row,map.staff)):'';
+      if(map.single){
+        var sq=num(at(row,map.single.q)), sp=num(at(row,map.single.p));
+        if(sq===''&&sp==='') continue;
+        var sod=at(row,map.single.o); var sy=(typeof sod==='number'&&sod)?(XLSX.SSF.parse_date_code(sod)||{}).y:2025;
+        allRecs.push(mkHist(map.cat, sy||2025, cust, product, '', '', sq, sp, ymd(sod), '', staff, baseNote, ''));
+      } else {
+        var lastQ='', lastP='';
+        map.years.forEach(function(Y){
+          var q=num(at(row,Y.q)), p=num(at(row,Y.p));
+          if(q===''&&p==='') return;
+          var od=at(row,Y.o), dv=Y.d!=null?at(row,Y.d):'';
+          var cost=Y.c!=null?num(at(row,Y.c)):'';
+          var extra=[]; if(typeof od==='string'&&clean(od)) extra.push('受注:'+clean(od)); if(typeof dv==='string'&&clean(dv)) extra.push('納品:'+clean(dv));
+          allRecs.push(mkHist(map.cat, Y.y, cust, product, lastQ, lastP, q, p, ymd(od), ymd(dv), staff, [baseNote].concat(extra).filter(Boolean).join(' / '), cost));
+          lastQ=q; lastP=p;
+        });
+      }
+    }
+  });
+  if(!allRecs.length){ hubToast('❌ 取り込める履歴行がありません'+(skipped.length?'（除外: '+skipped.join(', ')+'）':'')); return; }
+  var byCat={}; allRecs.forEach(function(x){ byCat[x.category]=(byCat[x.category]||0)+1; });
+  var summary = Object.keys(byCat).map(function(c){ return c+' '+byCat[c]+'件'; }).join(' / ');
+  if(!confirm('旧台帳から過去履歴を取り込みます。\n'+summary+'\n（状態=納品済で登録。再取込しても二重化せず、今年の受注用データには影響しません）'
+    + (skipped.length?'\n※除外シート: '+skipped.join(', '):'') + '\nよろしいですか？')) return;
+  var keyOf=function(x){ return [x.category,x.year,x.product,x.cust,x.orderQty,x.orderPrice].join(''); };
+  var added=0,updated=0;
+  var ok=hubSave(function(db){
+    var arr=db[COLL]||(db[COLL]=[]);
+    var pool={}; arr.forEach(function(x){ if(x._src!=='旧台帳移行') return; var k=keyOf(x); (pool[k]||(pool[k]=[])).push(x); });
+    allRecs.forEach(function(nr){ var k=keyOf(nr), q=pool[k];
+      if(q&&q.length){ var ex=q.shift(); Object.assign(ex,nr,{id:ex.id,_createdAt:ex._createdAt}); ex._updatedAt=new Date().toISOString(); updated++; }
+      else { arr.push(newRecord(nr)); added++; } });
+  });
+  if(ok){ hubToast('✅ 旧台帳履歴: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
+}
+function mkHist(cat, y, cust, product, pq, pp, q, p, orderDate, delivDate, staff, note, cost){
+  return { year:y, category:cat, ref:'', cust:cust, user:'', product:product, unit:'冊',
+    pyQty:pq, pyPrice:pp, pyAmt:(pq!==''&&pp!=='')?pq*pp:'',
+    propQty:'', propPrice:'', propAmt:'', upPrice:'', upAmt:'', mkUpPrice:'', mkUpAmt:'',
+    status:'納品済', telDate:'', orderDate:orderDate, poDate:'', poDue:'', inDate:'', delivDate:delivDate,
+    orderQty:q, orderPrice:p, cost:(cost==null?'':cost), staff:staff, note:note, _src:'旧台帳移行' };
+}
+
+// ─ Excel書出（年度＋カテゴリ＋絞込）─
+function exportXlsx(){
+  var y=curYear();
+  var rows=viewRows(false);
+  if(!rows.length){ hubToast('書き出す行がありません'); return; }
+  var head=['区分','得意先','ユーザー','製品名','単位','前年数量','前年単価','提案数量','提案単価','提案金額','値上単価','値上額','メーカー値上','状態','TEL日','受注日','発注日','発注納期','製品納入','納品日','受注数','受注単価(売価)','仕入値','原価率','担当','備考'];
+  var aoa=[head].concat(rows.map(function(r){ var cr=costRatioVal(r); return [r.category,r.cust,r.user,r.product,r.unit,r.pyQty,r.pyPrice,r.propQty,r.propPrice,r.propAmt,r.upPrice,r.upAmt,r.mkUpPrice,r.status,r.telDate,r.orderDate,r.poDate,r.poDue,r.inDate,r.delivDate,r.orderQty,r.orderPrice,r.cost,(cr===''?'':+(cr*100).toFixed(1)),r.staff,r.note]; }));
+  var ws=XLSX.utils.aoa_to_sheet(aoa); var wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, y+'年受注'); XLSX.writeFile(wb, y+'年受注台帳'+(curCat()?('_'+curCat()):'')+'.xlsx');
+}
+
+// 起動
+buildYears(); buildCats(); render();
+try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ buildYears(); buildCats(); render(); } }; } catch(e){}
+</script>
+</body>
+</html>
