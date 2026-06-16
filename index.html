@@ -9171,6 +9171,11 @@ function restoreFormSnapshot(id, snap){
 }
 
 // ═══════════════════ プレビュー ══════════════
+// CUSTCO-10: 得意先の書類フラグ（日付なし見積も/請書も）を取得
+function _custDocFlags_(custName){
+  var rec=(DB.master.cust||[]).find(function(c){ return c && c.org && custName && (c.org===custName); });
+  return { undated: !!(rec&&rec.quoteUndated), ack: !!(rec&&rec.needsAck) };
+}
 function showPV(idArr){
   const ids=Array.isArray(idArr)?idArr:[idArr];
 
@@ -9190,6 +9195,7 @@ function showPV(idArr){
   groups.forEach((group,gi)=>{
     const isLastGroup=(gi===groups.length-1);
     const cust=group.cust;
+    const _gStart=html.length; // CUSTCO-10: このグループのページHTML開始位置（変種生成用）
 
     // グループ内の全タブのデータを収集
     const entries=group.ids.map(id=>{
@@ -9198,12 +9204,13 @@ function showPV(idArr){
       const unit=document.getElementById(`unit-${id}`)?.value||'セット';
       const date=document.getElementById(`date-${id}`)?.value||'';
       const valid=document.getElementById(`valid-${id}`)?.value||'';
+      const due=document.getElementById(`due-${id}`)?.value||'';
       const estno=document.getElementById(`estno-${id}`)?.value||'';
       const grand=parseInt(document.getElementById(`g-grand-${id}`)?.textContent?.replace(/[^0-9]/g,'')||0);
       const tr2=parseFloat(document.getElementById(`trate-${id}`)?.value)/100||0.75;
       const sObj=ts(id);
       const patterns=sObj.qtyPats;
-      return {id,mainItem,mainSpec,unit,date,valid,estno,grand,tr2,patterns};
+      return {id,mainItem,mainSpec,unit,date,valid,due,estno,grand,tr2,patterns};
     });
 
     // 代表情報（最初のタブから取得）
@@ -9314,6 +9321,30 @@ function showPV(idArr){
       ※ 上記金額には校正提出後の訂正・変更による費用は含まれておりません。<br>
       見積り有効期限　${rep.valid}限り
     </div></div>`;
+
+    // CUSTCO-10: 顧客フラグに応じて「日付なし見積」「請書」を追加生成
+    try{
+      var _flags=(typeof _custDocFlags_==='function')?_custDocFlags_(cust):{undated:false,ack:false};
+      if(_flags.undated || _flags.ack){
+        var _basePage=html.substring(_gStart);
+        var _pgbrk='<div style="page-break-after:always;border-top:2px dashed #ccc;margin:1.5rem 0"></div>';
+        if(_flags.undated){
+          var _u=_basePage;
+          if(rep.date) _u=_u.split('発行日：'+rep.date+'　見積番号').join('発行日：　見積番号');
+          html+=_pgbrk+_u;
+        }
+        if(_flags.ack){
+          var _a=_basePage;
+          _a=_a.split(_titleTxt).join('請　書');                                  // タイトル→請書
+          if(_budgetTag) _a=_a.split(_budgetTag).join('');                        // 予算タグ除去
+          var _akuLine='見積り有効期限　'+rep.valid+'限り';
+          var _due=rep.due?('納　期　'+rep.due):'';
+          if(_a.indexOf(_akuLine)>=0) _a=_a.split(_akuLine).join(_due);           // 有効期限→納期
+          else if(_due) _a=_a.replace('</div></div>', '<br>'+_due+'</div></div>');
+          html+=_pgbrk+_a;
+        }
+      }
+    }catch(e){}
 
     if(!isLastGroup){
       html+=`<div style="page-break-after:always;border-top:2px dashed #ccc;margin:1.5rem 0"></div>`;
