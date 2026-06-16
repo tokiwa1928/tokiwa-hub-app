@@ -10690,14 +10690,25 @@ function generateOrderPDF(tabId, processIndex){
     if(v){ vendorName = v.name; vendorFax = v.fax || ''; }
   }
   
-  // 納品先を取得
+  // CUSTCO-5: 案件チェーン（元請/経由・エンドユーザー・部署）を取得
+  const _relay = document.getElementById(`relay-${tabId}`)?.value || '';
+  const _endUser = document.getElementById(`enduser-${tabId}`)?.value || '';
+  const _endDept = document.getElementById(`enduser-dept-${tabId}`)?.value || '';
+  const _chainRec = { cust:cust, relay:_relay, endUser:_endUser, endUserDept:_endDept,
+    delivTarget: document.getElementById(`deliv-target-${tabId}`)?.value||'auto',
+    delivOther: document.getElementById(`deliv-other-${tabId}`)?.value||'',
+    delivMulti: !!document.getElementById(`deliv-multi-${tabId}`)?.checked,
+    delivList: document.getElementById(`deliv-multi-list-${tabId}`)?.value||'' };
+  const _chainDeliv = (typeof _resolveDelivery_==='function') ? _resolveDelivery_(_chainRec) : '';
+
+  // 納品先を取得（個別指定が無ければチェーンから解決した納品先を既定に）
   let deliveryToName = '自社';
   if(order.deliveryTo === 'direct') deliveryToName = cust + ' 様（直送）';
   else if(order.deliveryTo?.startsWith('company:')){
     const c = (DB.companies||[]).find(x => x.id === order.deliveryTo.replace('company:',''));
     deliveryToName = c ? c.name : '';
-  }
-  
+  } else if(_chainDeliv){ deliveryToName = _chainDeliv; }
+
   // 発注番号を生成
   const d = new Date();
   const orderNo = `P${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${tabId}-${processIndex+1}`;
@@ -10709,6 +10720,7 @@ function generateOrderPDF(tabId, processIndex){
   // 発注書データを保存
   window._currentOrderData = {
     orderNo, orderDate, vendorName, vendorFax, cust, prod, spec, qty, unit,
+    relay: _relay, endUser: _endUser, endDept: _endDept,
     process: order.process, content: order.content || '', price: order.price,
     deliveryToName, deliveryNote, packUnit, packBox, packBoxes, dieCutText,
     myCompany: DB.conf?.name || '', myAddr: DB.conf?.addr || '', myTel: DB.conf?.tel || ''
@@ -10757,7 +10769,9 @@ function showOrderPreviewModal(data){
         </div>
         <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px">
           <tr style="background:#f4f3f0"><th style="border:1px solid #ddd;padding:8px;text-align:left;width:100px">品名</th><td style="border:1px solid #ddd;padding:8px" colspan="3">${data.prod}</td></tr>
-          <tr><th style="border:1px solid #ddd;padding:8px;text-align:left;background:#f4f3f0">得意先</th><td style="border:1px solid #ddd;padding:8px" colspan="3">${data.cust} 様向け</td></tr>
+          <tr><th style="border:1px solid #ddd;padding:8px;text-align:left;background:#f4f3f0">得意先(発注元)</th><td style="border:1px solid #ddd;padding:8px" colspan="3">${data.cust} 様向け</td></tr>
+          ${data.relay ? `<tr><th style="border:1px solid #ddd;padding:8px;text-align:left;background:#f4f3f0">元請(経由)</th><td style="border:1px solid #ddd;padding:8px" colspan="3">${data.relay}</td></tr>` : ''}
+          ${data.endUser ? `<tr><th style="border:1px solid #ddd;padding:8px;text-align:left;background:#f4f3f0">エンドユーザー</th><td style="border:1px solid #ddd;padding:8px" colspan="3">${data.endUser}${data.endDept?(' '+data.endDept):''}</td></tr>` : ''}
           <tr><th style="border:1px solid #ddd;padding:8px;text-align:left;background:#f4f3f0">仕様</th><td style="border:1px solid #ddd;padding:8px" colspan="3">${data.spec || '─'}</td></tr>
           <tr><th style="border:1px solid #ddd;padding:8px;text-align:left;background:#f4f3f0">数量</th><td style="border:1px solid #ddd;padding:8px">${data.qty || '─'} ${data.unit || ''}</td>
               <th style="border:1px solid #ddd;padding:8px;text-align:left;background:#f4f3f0;width:80px">金額</th><td style="border:1px solid #ddd;padding:8px;font-weight:700">¥${(data.price||0).toLocaleString()}</td></tr>
@@ -18673,6 +18687,18 @@ function _printDocument_(docType, cust, dateStr, entries){
     '</div>' +
     '<div class="cust"><span class="org">' + _escDiff(cust) + '</span> <span style="font-size:11pt">御中</span></div>' +
     '<div class="title">' + docType + '</div>';
+
+  // CUSTCO-5: 取引先チェーン参考（請求書=得意先宛＋エンドユーザー / 納品書=納品先）
+  try{
+    var _fp = (entries[0]||{}).project || {};
+    var _end=(_fp.end_user||_fp.endUser||_fp.enduser||''), _endDept=_fp.endUserDept||'', _relay=_fp.relay||'';
+    var _dlv=(typeof _resolveDelivery_==='function')?_resolveDelivery_(_fp):'';
+    var _lines=[];
+    if(docType==='納品書' && _dlv) _lines.push('納品先: '+_dlv);
+    if(_end) _lines.push('エンドユーザー: '+_end+(_endDept?(' '+_endDept):''));
+    if(_relay) _lines.push('元請(経由): '+_relay);
+    if(_lines.length) html += '<div class="meta" style="margin-top:1mm;color:#444">'+_lines.map(function(l){return '<span>'+_escDiff(l)+'</span>';}).join('')+'</div>';
+  }catch(e){}
 
   if(docType === '領収書'){
     html += '<div style="font-size:13pt;text-align:center;margin:5mm 0;letter-spacing:.1em">下記金額を領収いたしました</div>' +
