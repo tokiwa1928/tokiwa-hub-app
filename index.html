@@ -6936,8 +6936,26 @@ function buildPanel(id,initData){
 <div class="sec">
   <div class="st">基本情報</div>
   <div class="g4">
-    <div class="f"><label>得意先名</label><input id="cust-${id}" list="cust-dl-${id}" placeholder="得意先を入力または選択" onchange="onCustChange(${id})"><datalist id="cust-dl-${id}">${custOpts}</datalist></div>
-    <div class="f"><label>エンドユーザー <span style="font-size:10px;color:#aaa">（最終納品先）</span></label><input id="enduser-${id}" list="enduser-dl-${id}" placeholder="エンドユーザーを入力または選択" onchange="onEnduserChange(${id})"><datalist id="enduser-dl-${id}">${enduserOpts}</datalist></div>
+    <div class="f"><label>得意先名 <span style="font-size:10px;color:#aaa">（発注元）</span></label><input id="cust-${id}" list="cust-dl-${id}" placeholder="自社に発注した相手" onchange="onCustChange(${id});updateDeliveryDefault(${id})"><datalist id="cust-dl-${id}">${custOpts}</datalist></div>
+    <div class="f"><label>経由（元請） <span style="font-size:10px;color:#aaa">（任意・北上時にアート等）</span></label><input id="relay-${id}" list="cust-dl-${id}" placeholder="間に入るグループ会社（無ければ空欄）" onchange="updateDeliveryDefault(${id})"></div>
+    <div class="f"><label>エンドユーザー <span style="font-size:10px;color:#aaa">（最終客の会社）</span></label><input id="enduser-${id}" list="enduser-dl-${id}" placeholder="例: 伊勢原市役所" onchange="onEnduserChange(${id});updateDeliveryDefault(${id})"><datalist id="enduser-dl-${id}">${enduserOpts}</datalist></div>
+    <div class="f"><label>担当部署・窓口</label><input id="enduser-dept-${id}" placeholder="例: ○○課" onchange="updateDeliveryDefault(${id})"></div>
+    <div class="f" style="grid-column:1/-1">
+      <label>納品先</label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px">
+        <select id="deliv-target-${id}" onchange="onDeliveryChange(${id})" style="font-size:12px">
+          <option value="auto">自動（立場で判定）</option>
+          <option value="end">最終顧客（エンドユーザー）</option>
+          <option value="cust">発注元（得意先）</option>
+          <option value="relay">経由（元請）</option>
+          <option value="other">その他（通常と異なる）</option>
+        </select>
+        <span id="deliv-auto-label-${id}" style="font-size:11px;color:#0369a1"></span>
+        <label style="font-size:11px;color:#555;display:inline-flex;align-items:center;gap:3px"><input type="checkbox" id="deliv-multi-${id}" onchange="onDeliveryChange(${id})" style="width:auto"> 納品先が複数ある</label>
+      </div>
+      <input id="deliv-other-${id}" placeholder="納品先が通常と異なる場合に入力（会社名・部署・住所など）" style="display:none;margin-top:4px">
+      <textarea id="deliv-multi-list-${id}" placeholder="複数の納品先を1行ずつ入力（例: 伊勢原市役所 ○○課 / 同 △△課 別納品 など）" style="display:none;margin-top:4px;min-height:48px;width:100%"></textarea>
+    </div>
     <div class="f"><label>品名</label><input id="prod-${id}" list="prod-dl-${id}" placeholder="品名を入力または選択"><datalist id="prod-dl-${id}">${prodOpts}</datalist></div>
     <div class="f"><label>発行日</label>
       <div style="display:flex;gap:4px;align-items:center">
@@ -8404,6 +8422,44 @@ function onEnduserChange(id){
     if(prev && typeof _toastMsg === 'function') _toastMsg('🔁 得意先を「' + found.org + '」に変更しました（エンドユーザーに連動）');
     if(typeof onCustChange === 'function') onCustChange(id);
   }
+}
+
+// CUSTCO-3: 取引先チェーンから「納品先」の既定を判定（立場で自動）
+//   経由(元請)あり=2次受け→経由へ / 得意先≠最終客=1次受け→発注元へ / それ以外=最終顧客へ
+function updateDeliveryDefault(id){
+  var g=function(s){var e=document.getElementById(s+'-'+id);return e?(e.value||'').trim():'';};
+  var cust=g('cust'), relay=g('relay'), end=g('enduser'), dept=g('enduser-dept');
+  var key, label;
+  if(relay){ key='relay'; label=relay; }
+  else if(cust && end && cust!==end){ key='cust'; label=cust; }
+  else { key='end'; label=(end||'')+(dept?(' '+dept):''); }
+  var keyName={relay:'経由（元請）',cust:'発注元（得意先）',end:'最終顧客'}[key];
+  var lab=document.getElementById('deliv-auto-label-'+id);
+  var sel=document.getElementById('deliv-target-'+id);
+  if(lab){ lab.textContent = label ? ('→ 既定: '+keyName+'＝'+label) : ''; }
+  if(sel){ sel.dataset.autoKey=key; }
+}
+// 納品先セレクト/チェック変更時: 手入力欄・複数欄の表示切替＋タブ状態に保存
+function onDeliveryChange(id){
+  var sel=document.getElementById('deliv-target-'+id);
+  var other=document.getElementById('deliv-other-'+id);
+  var multiCk=document.getElementById('deliv-multi-'+id);
+  var multiList=document.getElementById('deliv-multi-list-'+id);
+  var v=sel?sel.value:'auto';
+  if(other) other.style.display=(v==='other')?'block':'none';
+  if(multiList) multiList.style.display=(multiCk&&multiCk.checked)?'block':'none';
+  updateDeliveryDefault(id);
+  try{
+    var s=(typeof ts==='function')?ts(id):null;
+    if(s){
+      s.relay=document.getElementById('relay-'+id)?.value||'';
+      s.endUserDept=document.getElementById('enduser-dept-'+id)?.value||'';
+      s.delivTarget=v;
+      s.delivOther=other?other.value:'';
+      s.delivMulti=!!(multiCk&&multiCk.checked);
+      s.delivList=multiList?multiList.value:'';
+    }
+  }catch(e){}
 }
 
 // 用紙行の金額計算
