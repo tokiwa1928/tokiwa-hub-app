@@ -10022,6 +10022,8 @@ function renderMaster(id){
     </div>`;
     html += `<div style="display:flex;gap:8px;margin-bottom:.5rem;align-items:center;flex-wrap:wrap">
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="addCustOrg()">＋ 新規取引先</button>
+      <button class="btn" style="font-size:11px;padding:4px 10px;background:#ecfdf5;border-color:#6ee7b7;color:#065f46;font-weight:700" onclick="document.getElementById('cust-import-file').click()" title="得意先台帳のExcel/CSVを取込（得意先名・担当者・TEL/FAX等を自動マッピング）→ 現在の会社の得意先に追加">📥 Excel/CSV取込</button>
+      <input type="file" id="cust-import-file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="importCustFile(this)">
       ${_mgmtCust?`<label style="font-size:11px;color:#555">所属会社で絞り込み:
         <select style="font-size:11px;padding:3px 6px" onchange="window._custCoFilter_=this.value;renderMaster('cust')">
           <option value="all"${_custCoFilter==='all'?' selected':''}>全社</option>
@@ -28906,6 +28908,68 @@ function addCustOrg(){
   renderMaster('cust');
 }
 
+// CUSTCO-7: 得意先台帳(Excel/CSV)を取込み、現在の会社の得意先に追加（列は見出しから自動マッピング）
+function importCustFile(input){
+  var f=input.files&&input.files[0]; if(!f) return;
+  var co=(currentAuth&&currentAuth.companyId)||'COMP002';
+  var coObj=(DB.companies||[]).find(function(c){return c.id===co;});
+  var coName=coObj?coObj.name:co;
+  var isCsv=/\.(csv|txt)$/i.test(f.name);
+  var fr=new FileReader();
+  fr.onload=function(){
+    try{
+      var rows=[];
+      if(isCsv){
+        var text;
+        try{ text=new TextDecoder('utf-8',{fatal:true}).decode(fr.result); }
+        catch(e){ text=new TextDecoder('shift_jis').decode(fr.result); }
+        if(/�/.test(text)){ try{ text=new TextDecoder('shift_jis').decode(fr.result); }catch(e){} }
+        rows=text.replace(/\r/g,'').split('\n').filter(function(l){return l.trim();}).map(function(l){return l.split(',').map(function(s){return s.replace(/^"|"$/g,'');}); });
+      } else {
+        if(typeof XLSX==='undefined'){ alert('Excel読込ライブラリ(XLSX)が見つかりません。CSVに変換して取込んでください。'); input.value=''; return; }
+        var wb=XLSX.read(fr.result,{type:'array'});
+        var ws=wb.Sheets[wb.SheetNames[0]];
+        rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+      }
+      if(rows.length<2){ alert('データ行がありません'); input.value=''; return; }
+      var hdr=rows[0].map(function(h){return String(h||'').trim();});
+      var find=function(keys,excl){ for(var i=0;i<hdr.length;i++){ var h=hdr[i]; if(!h) continue; if(excl&&excl.some(function(x){return h.indexOf(x)>=0;})) continue; if(keys.some(function(k){return h.indexOf(k)>=0;})) return i; } return -1; };
+      var ex=['略称','ﾌﾘｶﾞﾅ','フリガナ','カナ','No','ＮＯ','ＩＤ','ID'];
+      var iOrg=find(['得意先名','会社名','取引先名','顧客名','社名'],ex);
+      if(iOrg<0) iOrg=find(['名称','名前','得意先','取引先','顧客'],ex);
+      var iUser=find(['担当者','ご担当','担当','氏名']);
+      var iTel=find(['TEL','ＴＥＬ','電話']);
+      var iFax=find(['FAX','ＦＡＸ']);
+      var iMail=find(['ﾒｰﾙ','メール','Mail','mail','Email','E-mail']);
+      var iDept=find(['部署','所属']);
+      var iNote=find(['略称','ﾌﾘｶﾞﾅ','フリガナ','カナ','備考']);
+      if(iOrg<0){ alert('「得意先名」列が見つかりませんでした。\n1行目の見出しに「得意先名」または「会社名」等を入れてください。'); input.value=''; return; }
+      if(!confirm('「'+coName+'」の得意先として取込みます。\n対象: '+(rows.length-1)+'行\n得意先名列: '+hdr[iOrg]+'\n担当: '+(iUser>=0?hdr[iUser]:'なし')+' / TEL: '+(iTel>=0?hdr[iTel]:'なし')+'\n\nよろしいですか？')){ input.value=''; return; }
+      var added=0, skipped=0;
+      DB.master.cust=DB.master.cust||[];
+      for(var r=1;r<rows.length;r++){
+        var row=rows[r]; if(!row) continue;
+        var org=String(row[iOrg]||'').trim(); if(!org){ skipped++; continue; }
+        var user=iUser>=0?String(row[iUser]||'').trim():'';
+        var dept=iDept>=0?String(row[iDept]||'').trim():'';
+        if(dept) user=(user?(dept+' '+user):dept);
+        DB.master.cust.push({ org:org, user:user,
+          email:iMail>=0?String(row[iMail]||'').trim():'',
+          tel:iTel>=0?String(row[iTel]||'').trim():'',
+          fax:iFax>=0?String(row[iFax]||'').trim():'',
+          note:iNote>=0?String(row[iNote]||'').trim():'',
+          type:'customer', companyId:co });
+        added++;
+      }
+      saveDB();
+      if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+      renderMaster('cust');
+      alert('📥 取込完了：'+added+'件を「'+coName+'」の得意先に追加しました'+(skipped?'（空行スキップ '+skipped+'件）':''));
+    }catch(e){ alert('取込エラー: '+(e&&e.message||e)); }
+    input.value='';
+  };
+  fr.readAsArrayBuffer(f);
+}
 // CUSTCO-1: 取引先(org)の所属会社をまとめて変更（管理会社=トキワが整理用）
 function setCustOrgCompany(org, companyId){
   (DB.master.cust||[]).forEach(function(c){ if(c && c.org===org) c.companyId=companyId; });
