@@ -178,7 +178,7 @@
     <div class="tblwrap">
       <table id="mtbl" class="mtbl"><thead id="mhead"></thead><tbody id="mbody"></tbody></table>
     </div>
-    <p class="muted" style="margin-top:6px">📅 1ページ表示: 得意先×製品ごとに各年を横並び。<span class="pill" style="background:#fffdf5">黄=選択年(入力)</span> 過去年は西暦の参考（読取専用）。各年セル＝数量×単価／受注→納品／仕入・原価率。</p>
+    <p class="muted" style="margin-top:6px">📅 1ページ表示: 得意先×製品ごとに各年を横並び。<span class="pill" style="background:#fffdf5">黄=選択年(入力)</span> 過去年は西暦の参考（読取専用）。各年セル＝数量×単価／<b>前年比の上げ幅（▲上げ/▼下げ）</b>／受注→納品／仕入・原価率。</p>
   </div>
   <style>
     .mtbl{ font-size:11px; }
@@ -199,6 +199,9 @@
     .mtbl .ycell .dt{ color:#475569; font-size:10px; }
     .mtbl .ycell .cs{ color:#7c3aed; font-size:10px; }
     .mtbl .ycell .cr{ font-weight:700; font-size:10px; }
+    .mtbl .ycell .dlt{ font-size:10px; font-weight:700; margin-top:1px; }
+    .mtbl .ycell .dlt .pct{ font-weight:400; font-size:9px; }
+    .mtbl .ycell .dlt.z{ color:#b8bcc4; font-weight:400; }
     .mtbl .ycell .none{ color:#cbd5e1; }
     .mtbl .ycell input, .mtbl .ycell select{ width:100%; padding:2px 3px; border:1px solid #e2e0da; border-radius:4px; font-size:10px; font-family:inherit; background:#fff; margin-bottom:2px; }
     .mtbl .ycell .mini2{ display:flex; gap:3px; }
@@ -422,9 +425,13 @@ function renderMatrix(){
   var mb=document.getElementById('mbody');
   if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="'+(3+years.length)+'" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
   mb.innerHTML=_mGroups.map(function(g,i){
-    var cells=years.map(function(y){
+    var cells=years.map(function(y,yi){
       var r=g.byYear[y];
-      return y===cur ? '<td class="ycell cur">'+curCell(g,r,i)+'</td>' : '<td class="ycell">'+pastCell(r)+'</td>';
+      // 前年（データのある直近の古い年）の単価との差＝上げ幅
+      var curP=mPrice(r), prevP='';
+      for(var j=yi+1;j<years.length;j++){ var pp=mPrice(g.byYear[years[j]]); if(pp!==''){ prevP=pp; break; } }
+      var up=upHtml(curP, prevP);
+      return y===cur ? '<td class="ycell cur">'+curCell(g,r,i)+up+'</td>' : '<td class="ycell">'+pastCell(r,up)+'</td>';
     }).join('');
     return '<tr>'
       + '<td><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span></td>'
@@ -433,7 +440,18 @@ function renderMatrix(){
       + cells + '</tr>';
   }).join('');
 }
-function pastCell(r){
+// その年の単価（受注単価優先→提案単価→前年単価欄）。上げ幅計算・表示の基準。
+function mPrice(r){ if(!r) return ''; var p=(r.orderPrice!==''&&r.orderPrice!=null)?r.orderPrice:(r.propPrice!==''&&r.propPrice!=null)?r.propPrice:r.pyPrice; return (p!==''&&p!=null)?Number(p):''; }
+// 前年比の上げ幅（差額＋率）。prevP が無い（最古年）/同額/未入力は控えめ表示。
+function upHtml(curP, prevP){
+  if(curP===''||prevP==='') return '';
+  var d=curP-prevP;
+  if(d===0) return '<div class="dlt z">前年比 ±0</div>';
+  var up=d>0, pct=d/prevP*100;
+  return '<div class="dlt" style="color:'+(up?'#b45309':'#2563eb')+'" title="前年単価 ¥'+fmt(prevP)+' → ¥'+fmt(curP)+'">'
+    + (up?'▲':'▼')+'¥'+fmt(Math.abs(d))+' <span class="pct">'+(up?'+':'−')+Math.abs(pct).toFixed(1)+'%</span></div>';
+}
+function pastCell(r, up){
   if(!r) return '<span class="none">—</span>';
   var out='';
   var q=(r.orderQty!==''&&r.orderQty!=null)?r.orderQty:r.pyQty, p=(r.orderPrice!==''&&r.orderPrice!=null)?r.orderPrice:r.pyPrice;
@@ -444,6 +462,7 @@ function pastCell(r){
     if(p!==''&&p!=null) parts.push('<span class="pr">¥'+fmt(p)+'</span>');
     out+='<div class="qp">'+parts.join('<span class="x">×</span>')+'</div>';
   }
+  out+=(up||'');
   var dts=[]; if(r.orderDate) dts.push('受'+mYmd(r.orderDate)); if(r.delivDate) dts.push('納'+mYmd(r.delivDate));
   if(dts.length) out+='<div class="dt">'+hubEsc(dts.join('  '))+'</div>';
   if(r.cost!==''&&r.cost!=null){ var cr=costRatioVal(r); out+='<div class="cs">仕¥'+fmt(r.cost)+(cr!==''?' <span class="cr" style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'">'+fmtPct(cr)+'</span>':'')+'</div>'; }
