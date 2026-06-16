@@ -17038,10 +17038,17 @@ function _inqVisibleByCompany_(inq){
   var mine = _coShortName_(currentAuth && (currentAuth.companyId || currentAuth.companyCode));
   var mineFull = (currentAuth && currentAuth.companyName) || '';
   var owner = String(inq.channel_company || inq.company || '');
-  if(!owner && !inq.companyId) return true; // 帰属不明の旧データは自社扱い (取りこぼし防止)
+  // 帰属不明の旧データは管理会社(トキワ)のみが見る。トキワ以外は自社に明確に紐づくものだけ。
+  if(!owner && !inq.companyId) return false;
   if(mine && owner.indexOf(mine) >= 0) return true;
   if(mineFull && owner && (owner.indexOf(mineFull) >= 0 || mineFull.indexOf(owner) >= 0)) return true;
   return false;
+}
+// 会社スコープを反映した連絡一覧（管理会社=全件 / 他社=自社のみ）— 件数集計の基準
+function _inqScopedAll_(){
+  var all = DB.inquiries || [];
+  if(_canSeeAllCompanies_()) return all;
+  return all.filter(_inqVisibleByCompany_);
 }
 // 会社別の表示設定 (TK役員が決める)。DB.companyVisibility['COMP004'] = 表示する機能キーの配列。
 // 未設定(配列でない)=全表示。配列がある場合、そこに無いページは非表示。
@@ -34734,22 +34741,31 @@ function renderInquiryCompanyTabs(){
   var container = document.getElementById('inq-company-tabs');
   if(!container) return;
 
-  // グループ7社 + 全社
+  // トキワ以外（管理会社でない）は自社のみ → 会社タブ自体を非表示
+  if(typeof _canSeeAllCompanies_==='function' && !_canSeeAllCompanies_()){
+    container.innerHTML='';
+    window._inqCompanyTab_='all';
+    return;
+  }
+
+  // グループ7社 + 全社（管理会社=トキワのみ）
   var companies = [
     { key:'all',     label:'🏢 全社',         color:'#374151' },
     { key:'トキワ',   label:'トキワ印刷',      color:'#65a30d' },
     { key:'村山',     label:'村山印刷',        color:'#6d28d9' },
-    { key:'北上',     label:'北上プリント',    color:'#c2410c' },
+    { key:'北上',     label:'北上プリント',    color:'#ea580c' },
     { key:'アート',   label:'アート・エス',    color:'#1d4ed8' },
     { key:'津島',     label:'津島プリント',    color:'#78350f' },
-    { key:'中尾',     label:'中尾印刷',        color:'#9f1239' }
+    { key:'中尾',     label:'中尾印刷',        color:'#9f1239' },
+    { key:'ヤマウチ', label:'ヤマウチ印刷',    color:'#ca8a04' }
   ];
 
-  // 各社の件数
-  var counts = { all: (DB.inquiries||[]).length };
+  // 各社の件数（管理会社スコープ＝全件）
+  var base = (typeof _inqScopedAll_==='function') ? _inqScopedAll_() : (DB.inquiries||[]);
+  var counts = { all: base.length };
   companies.forEach(function(c){
     if(c.key === 'all') return;
-    counts[c.key] = (DB.inquiries||[]).filter(function(inq){
+    counts[c.key] = base.filter(function(inq){
       return _matchesCompanyTab_(inq, c.key);
     }).length;
   });
@@ -36395,7 +36411,7 @@ const INQ_FOLDERS = [
 function renderInquiryFolderList(){
   var container = document.getElementById('inq-folder-list');
   if(!container) return;
-  var allRaw = DB.inquiries || [];
+  var allRaw = (typeof _inqScopedAll_==='function') ? _inqScopedAll_() : (DB.inquiries || []);
 
   // PPPP-1: 会社別フィルタを反映した集計
   var companyTab = window._inqCompanyTab_ || 'all';
@@ -36603,6 +36619,8 @@ function _getInquiriesForKanban_(){
   var all = DB.inquiries || [];
   var period = (typeof _filterByPeriod_ === 'function') ? _filterByPeriod_(all, 'inq-list', ['received_at','createdAt']) : all;
   return period.filter(function(inq){
+    // COSCOPE-1: トキワ以外は自社のみ
+    if(typeof _inqVisibleByCompany_ === 'function' && !_inqVisibleByCompany_(inq)) return false;
     if(companyTab !== 'all' && typeof _matchesCompanyTab_ === 'function' && !_matchesCompanyTab_(inq, companyTab)) return false;
     var src = inq.source_type || '';
     if(scope === 'external' && externalSources.indexOf(src) < 0) return false;
