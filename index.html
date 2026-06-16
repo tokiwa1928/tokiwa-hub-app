@@ -6937,7 +6937,9 @@ function buildPanel(id,initData){
   <div class="st">基本情報</div>
   <div class="g4">
     <div class="f"><label>得意先名 <span style="font-size:10px;color:#aaa">（発注元）</span></label><input id="cust-${id}" list="cust-dl-${id}" placeholder="自社に発注した相手" onchange="onCustChange(${id});updateDeliveryDefault(${id})"><datalist id="cust-dl-${id}">${custOpts}</datalist></div>
-    <div class="f"><label>経由（元請） <span style="font-size:10px;color:#aaa">（任意・北上時にアート等）</span></label><input id="relay-${id}" list="cust-dl-${id}" placeholder="間に入るグループ会社（無ければ空欄）" onchange="updateDeliveryDefault(${id})"></div>
+    <div class="f"><label>経由（元請） <span style="font-size:10px;color:#aaa">（任意・北上時にアート等）</span></label>
+      <div style="display:flex;gap:4px"><input id="relay-${id}" list="cust-dl-${id}" placeholder="間に入るグループ会社（無ければ空欄）" onchange="updateDeliveryDefault(${id})" style="flex:1">
+      <button type="button" onclick="autoFillChain(${id})" title="発注元がグループ会社のとき、上流の案件から経由(元請)・エンドユーザーを自動補完" style="font-size:10px;padding:2px 6px;white-space:nowrap;border:1px solid #0369a1;background:#e0f2fe;color:#0369a1;border-radius:5px;cursor:pointer">🔗自動</button></div></div>
     <div class="f"><label>エンドユーザー <span style="font-size:10px;color:#aaa">（最終客の会社）</span></label><input id="enduser-${id}" list="enduser-dl-${id}" placeholder="例: 伊勢原市役所" onchange="onEnduserChange(${id});updateDeliveryDefault(${id})"><datalist id="enduser-dl-${id}">${enduserOpts}</datalist></div>
     <div class="f"><label>担当部署・窓口</label><input id="enduser-dept-${id}" placeholder="例: ○○課" onchange="updateDeliveryDefault(${id})"></div>
     <div class="f" style="grid-column:1/-1">
@@ -8473,6 +8475,32 @@ function _resolveDelivery_(rec){
   var base = t==='relay'?relay : t==='cust'?cust : t==='other'?(rec.delivOther||'') : endFull;
   if(rec.delivMulti && rec.delivList){ return (base?base+' 他':'')+'（複数）\n'+rec.delivList; }
   return base || endFull || cust || '';
+}
+// CUSTCO-6: 経由(元請)・エンドユーザーを上流の案件から自動補完
+//   発注元(得意先)がグループ会社なら、その会社の同一エンドユーザー/品名の案件を探し、
+//   その案件の得意先=経由(元請)、エンドユーザーを引き継ぐ（社間で共有のDB.projectsを辿る）
+function autoFillChain(tabId){
+  var g=function(s){var e=document.getElementById(s+'-'+tabId);return e?(e.value||'').trim():'';};
+  var myCust=g('cust'), end=g('enduser'), item=g('prod');
+  if(!myCust){ alert('先に「得意先（発注元）」を入力してください'); return; }
+  var norm=function(a,b){ a=String(a||'');b=String(b||''); return a&&b&&(a===b||a.indexOf(b)>=0||b.indexOf(a)>=0); };
+  var custCo=(DB.companies||[]).find(function(c){ return norm(c.name,myCust); });
+  if(!custCo){ alert('発注元「'+myCust+'」はグループ会社ではないため、自動補完できません（直接のお客様）。経由は空欄のままでOKです。'); return; }
+  // 発注元会社(custCo)の案件から、同じエンドユーザー/品名のものを探す
+  var up=(DB.projects||[]).filter(function(p){ return p.companyId===custCo.id; });
+  if(end) up=up.filter(function(p){ return norm(p.end_user||p.endUser||p.enduser, end); });
+  if(item) up=up.filter(function(p){ return !p.item || norm(p.item, item); });
+  up.sort(function(a,b){ return String(b.createdAt||'').localeCompare(String(a.createdAt||'')); });
+  if(!up.length){ alert(custCo.name+'側に対応する案件が見つかりませんでした。\n（上流の案件が登録されると自動補完できます。今は手入力してください）'); return; }
+  var src=up[0];
+  var relayEl=document.getElementById('relay-'+tabId);
+  if(relayEl && src.cust){ relayEl.value=src.cust; }
+  if(!end){ var srcEnd=src.end_user||src.endUser||src.enduser||''; if(srcEnd){ var ee=document.getElementById('enduser-'+tabId); if(ee) ee.value=srcEnd; } }
+  var deptEl=document.getElementById('enduser-dept-'+tabId);
+  if(deptEl && !deptEl.value && src.endUserDept){ deptEl.value=src.endUserDept; }
+  if(typeof updateDeliveryDefault==='function') updateDeliveryDefault(tabId);
+  var msg='🔗 経由(元請)=「'+(src.cust||'')+'」を自動補完しました';
+  if(typeof _toastMsg==='function') _toastMsg(msg); else alert(msg);
 }
 // チェーンの表示用ラベル配列（案件詳細・指示書）
 function _chainLabels_(rec){
