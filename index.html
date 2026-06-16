@@ -8461,6 +8461,30 @@ function onDeliveryChange(id){
     }
   }catch(e){}
 }
+// CUSTCO-4: 記録(rec)の取引先チェーンから「納品先」文字列を解決
+function _resolveDelivery_(rec){
+  rec=rec||{};
+  var cust=rec.cust||'', relay=rec.relay||'';
+  var end=rec.endUser||rec.enduser||rec.end_user||'';
+  var dept=rec.endUserDept||'';
+  var endFull=(end||'')+(dept?(' '+dept):'');
+  var t=rec.delivTarget||'auto';
+  if(t==='auto'){ if(relay) t='relay'; else if(cust&&end&&cust!==end) t='cust'; else t='end'; }
+  var base = t==='relay'?relay : t==='cust'?cust : t==='other'?(rec.delivOther||'') : endFull;
+  if(rec.delivMulti && rec.delivList){ return (base?base+' 他':'')+'（複数）\n'+rec.delivList; }
+  return base || endFull || cust || '';
+}
+// チェーンの表示用ラベル配列（案件詳細・指示書）
+function _chainLabels_(rec){
+  rec=rec||{};
+  var end=rec.endUser||rec.enduser||rec.end_user||'', dept=rec.endUserDept||'';
+  var out=[];
+  if(rec.cust) out.push('発注元: '+rec.cust);
+  if(rec.relay) out.push('経由(元請): '+rec.relay);
+  if(end) out.push('エンドユーザー: '+end+(dept?(' '+dept):''));
+  var d=_resolveDelivery_(rec); if(d) out.push('納品先: '+d);
+  return out;
+}
 
 // 用紙行の金額計算
 // 枚数 = ceil(数量 ÷ 面付数)、予備 = ceil(枚数 × 10%)、必要枚数 = 枚数 + 予備
@@ -15647,6 +15671,14 @@ function _openProjInEstForm_(oi){
     setv('spec-' + _tid, p.spec);
     setv('memo-' + _tid, p.memo);
     setv('unit-' + _tid, p.unit);
+    // CUSTCO-4: 取引先チェーンを復元
+    setv('relay-' + _tid, p.relay);
+    setv('enduser-' + _tid, p.end_user || p.endUser || p.enduser);
+    setv('enduser-dept-' + _tid, p.endUserDept);
+    setv('deliv-target-' + _tid, p.delivTarget);
+    setv('deliv-other-' + _tid, p.delivOther);
+    setv('deliv-multi-list-' + _tid, p.delivList);
+    try{ var _mk=document.getElementById('deliv-multi-'+_tid); if(_mk) _mk.checked=!!p.delivMulti; if(typeof onDeliveryChange==='function') onDeliveryChange(_tid); }catch(e){}
     if(p.qty){
       if(typeof ts === 'function'){ var st = ts(_tid); if(st && st.qtyPats && st.qtyPats[0]) st.qtyPats[0].v = parseInt(p.qty) || st.qtyPats[0].v; }
       var q = document.getElementById('qty-' + _tid); if(q) q.value = p.qty;
@@ -15684,6 +15716,13 @@ function confirmEstimateAsProject(estId){
     cust: est.cust || '',
     item: est.item || '',
     spec: est.spec || '',
+    end_user: est.endUser || est.enduser || est.end_user || '',
+    relay: est.relay || '',
+    endUserDept: est.endUserDept || '',
+    delivTarget: est.delivTarget || 'auto',
+    delivOther: est.delivOther || '',
+    delivMulti: !!est.delivMulti,
+    delivList: est.delivList || '',
     qty: parseInt(est.qty) || 0,
     unit: est.unit || '部',
     exTax: parseInt(est.exTax) || 0,
@@ -27334,7 +27373,10 @@ function genDeliveryLabels(projectId){
     .map(function(d){ return { name: d.custName || '', addr: d.address || '', note: d.note || '', boxes: parseInt(d.qty) || 0 }; })
     .filter(function(d){ return d.name || d.addr; });
   if(!dests.length){
-    dests = [{ name: (proj.enduser || proj.endUser || proj.cust || '') + ' 様', addr: proj.deliveryNote || '', note:'', boxes: 0 }];
+    // CUSTCO-4: 納品先はチェーンから解決（立場で既定: 北上=元請/トキワ=発注元/直販=最終客）
+    var _dlvName = (typeof _resolveDelivery_==='function') ? _resolveDelivery_(Object.assign({},proj,{delivMulti:false})) : '';
+    _dlvName = _dlvName || proj.end_user || proj.enduser || proj.endUser || proj.cust || '';
+    dests = [{ name: _dlvName, addr: proj.deliveryNote || '', note:'', boxes: 0 }];
   }
   // 箱数: 各納品先ごとに確認 (deliveryItemのqtyを既定。なければ案件の総箱数 or 入力)
   var defBoxes = parseInt(proj.packBoxes) || parseInt(String(proj.packBoxes||'').replace(/[^0-9]/g,'')) || 0;
@@ -29905,6 +29947,12 @@ function saveEstimateAsQuote(tabId){
     companyId: currentAuth?.companyId || 'COMP001',
     companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
     cust: cust, item: item, spec: spec, endUser: enduser,
+    relay: document.getElementById('relay-'+tabId)?.value||'',
+    endUserDept: document.getElementById('enduser-dept-'+tabId)?.value||'',
+    delivTarget: document.getElementById('deliv-target-'+tabId)?.value||'auto',
+    delivOther: document.getElementById('deliv-other-'+tabId)?.value||'',
+    delivMulti: !!document.getElementById('deliv-multi-'+tabId)?.checked,
+    delivList: document.getElementById('deliv-multi-list-'+tabId)?.value||'',
     qty: qty, unit: unit, exTax: exTax,
     estCost: estCost,
     repeatFrom: s._repeatFrom || '',
@@ -32508,9 +32556,14 @@ function _renderHandoffChain_(record, opts){
 
   var chain = [];
 
-  // ① エンドユーザー (実際の依頼主)
+  // ① エンドユーザー (実際の依頼主) ＋ 担当部署
   if(record.end_user){
-    chain.push({ icon:'👤', label:'エンドユーザー', name: record.end_user, color: '#6b7280', bg: '#f3f4f6' });
+    chain.push({ icon:'👤', label:'エンドユーザー', name: record.end_user + (record.endUserDept ? ' '+record.endUserDept : ''), color: '#6b7280', bg: '#f3f4f6' });
+  }
+  // ①' 経由（元請グループ会社）— 北上時のアート等
+  if(record.relay){
+    var relayColor = _getCompanyColorByName_(record.relay);
+    chain.push({ icon:'🏢', label:'経由(元請)', name: relayColor ? relayColor.label : record.relay, color: relayColor ? relayColor.border : '#6b7280', bg: relayColor ? relayColor.bg : '#f9fafb' });
   }
   // ② 元請けグループ会社 (案件区分)
   var origin = (record.groupCompany || record.originating_company || '');
