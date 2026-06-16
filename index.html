@@ -16027,10 +16027,31 @@ function _useHistoryInEstTab_(idx){
 }
 
 // 問い合わせから見積を作成 (Approach A: ワンクリックで見積登録)
+// 全角数字→半角
+function _zen2han_(s){ return String(s||'').replace(/[０-９]/g,function(d){return String.fromCharCode(d.charCodeAt(0)-0xFEE0);}); }
+// メール/LINE本文から 数量・品目・サイズ を簡易抽出（AIを使わずローカル解析・AI抽出の補完）
+function _parseInquiryFields_(inq){
+  var t=_zen2han_(((inq&&inq.subject)||'')+'\n'+((inq&&inq.body)||'')).replace(/[，]/g,',');
+  var out={};
+  // 数量＋単位（カンマ区切りOK・2桁以上）。ページ/頁は仕様なので数量には採らない
+  var qm=t.replace(/,/g,'').match(/(\d{2,7})\s*(部|枚|冊|セット|通|箱|本|個|名)/);
+  if(qm){ out.qty=parseInt(qm[1]); out.unit=qm[2]; }
+  // ページ数（仕様）
+  var pm=t.replace(/,/g,'').match(/(\d{1,4})\s*(ページ|頁|P|ｐ)/i);
+  if(pm) out.pages=parseInt(pm[1]);
+  // 品目（よく使う品名キーワード）
+  var items=['チラシ','フライヤー','ポスター','名刺','封筒','パンフレット','パンフ','カタログ','リーフレット','冊子','シール','ラベル','伝票','チケット','はがき','葉書','ハガキ','カード','カレンダー','会報','広報','要覧','報告書','議案書','図録','のぼり','横断幕','クリアファイル','ステッカー'];
+  for(var i=0;i<items.length;i++){ if(t.indexOf(items[i])>=0){ out.item=items[i]; break; } }
+  // 仕上がりサイズ
+  var sm=t.match(/(A[0-8]ノビ|B[0-8]ノビ|A[0-8]|B[0-8]|長[34]|角[26]|名刺|往復はがき|はがき|葉書)/);
+  if(sm) out.size=sm[1];
+  return out;
+}
 async function createEstimateFromInquiry(inqId){
   var inq = (DB.inquiries || []).find(function(i){ return i.id === inqId; });
   if(!inq){ alert('問い合わせが見つかりません'); return; }
   var ex = inq.extracted_data || {};
+  var pf = _parseInquiryFields_(inq); // ローカル解析（AI抽出が無い/欠けている項目を補完）
 
   if(!DB.estimates) DB.estimates = [];
   var existing = DB.estimates.find(function(e){ return e.fromInquiryId === inq.id; });
@@ -16057,10 +16078,10 @@ async function createEstimateFromInquiry(inqId){
       companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
       createdAt: new Date().toISOString(),
       cust: ex.cust || inq.from_company || inq.custName || '',
-      item: ex.item || '',
-      spec: ex.spec || '',
-      qty: parseInt(ex.qty) || 0,
-      unit: ex.unit || '部',
+      item: ex.item || pf.item || '',
+      spec: ex.spec || [pf.size, pf.pages?(pf.pages+'ページ'):''].filter(Boolean).join(' ') || '',
+      qty: parseInt(ex.qty) || pf.qty || 0,
+      unit: ex.unit || pf.unit || '部',
       dueDate: ex.dueDate || '',
       memo: detailMemo,
       exTax: 0,
@@ -16106,10 +16127,10 @@ async function createEstimateFromInquiry(inqId){
       if(typeof applyIngestToEstimate === 'function'){
         applyIngestToEstimate({
           cust: ex.cust || inq.from_company || inq.custName || '',
-          item: ex.item || '',
-          spec: ex.spec || '',
-          qty: parseInt(ex.qty) || 0,
-          unit: ex.unit || '部',
+          item: ex.item || pf.item || '',
+          spec: ex.spec || [pf.size, pf.pages?(pf.pages+'ページ'):''].filter(Boolean).join(' ') || '',
+          qty: parseInt(ex.qty) || pf.qty || 0,
+          unit: ex.unit || pf.unit || '部',
           dueDate: ex.dueDate || '',
           memo: detailMemo
         });
