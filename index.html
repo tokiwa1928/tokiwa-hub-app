@@ -28937,39 +28937,68 @@ function importCustFile(input){
         rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
       }
       if(rows.length<2){ alert('データ行がありません'); input.value=''; return; }
-      var hdr=rows[0].map(function(h){return String(h||'').trim();});
+      // 見出し行を検出（タイトル行がある書式に対応）。取引先名/得意先名/会社名 を含む行をヘッダとする
+      var hi=-1;
+      for(var i=0;i<Math.min(rows.length,15);i++){
+        var joined=(rows[i]||[]).map(function(x){return String(x||'');}).join('|');
+        if(/取引先名|得意先名|会社名|顧客名/.test(joined)){ hi=i; break; }
+      }
+      if(hi<0) hi=0;
+      var hdr=rows[hi].map(function(h){return String(h||'').trim();});
+      var dataRows=rows.slice(hi+1);
       var find=function(keys,excl){ for(var i=0;i<hdr.length;i++){ var h=hdr[i]; if(!h) continue; if(excl&&excl.some(function(x){return h.indexOf(x)>=0;})) continue; if(keys.some(function(k){return h.indexOf(k)>=0;})) return i; } return -1; };
-      var ex=['略称','ﾌﾘｶﾞﾅ','フリガナ','カナ','No','ＮＯ','ＩＤ','ID'];
-      var iOrg=find(['得意先名','会社名','取引先名','顧客名','社名'],ex);
+      var ex=['略称','ﾌﾘｶﾞﾅ','フリガナ','カナ','コード','ｺｰﾄﾞ','グループ','No','ＮＯ','ＩＤ','ID'];
+      var iOrg=find(['取引先名','得意先名','会社名','顧客名','社名'],ex);
       if(iOrg<0) iOrg=find(['名称','名前','得意先','取引先','顧客'],ex);
-      var iUser=find(['担当者','ご担当','担当','氏名']);
+      var iUser=find(['ユーザー','担当者','ご担当','担当','氏名']);
       var iTel=find(['TEL','ＴＥＬ','電話']);
       var iFax=find(['FAX','ＦＡＸ']);
       var iMail=find(['ﾒｰﾙ','メール','Mail','mail','Email','E-mail']);
-      var iDept=find(['部署','所属']);
+      var iZip=find(['郵便']);
+      var iAddr=find(['住所']);
+      var iGroup=find(['取引先グループ','グループ名','顧客分類','分類','区分']);
       var iNote=find(['略称','ﾌﾘｶﾞﾅ','フリガナ','カナ','備考']);
-      if(iOrg<0){ alert('「得意先名」列が見つかりませんでした。\n1行目の見出しに「得意先名」または「会社名」等を入れてください。'); input.value=''; return; }
-      if(!confirm('「'+coName+'」の得意先として取込みます。\n対象: '+(rows.length-1)+'行\n得意先名列: '+hdr[iOrg]+'\n担当: '+(iUser>=0?hdr[iUser]:'なし')+' / TEL: '+(iTel>=0?hdr[iTel]:'なし')+'\n\nよろしいですか？')){ input.value=''; return; }
-      var added=0, skipped=0;
+      if(iOrg<0){ alert('「取引先名/得意先名」列が見つかりませんでした。'); input.value=''; return; }
+      // 分類テキスト→会社ID（村山/北上/トキワ等）。該当なしは null（=未分類）
+      var bunruiToCo=function(t){ t=String(t||'');
+        if(/村山/.test(t)) return 'COMP001';
+        if(/トキワ|常盤|常磐/.test(t)) return 'COMP002';
+        if(/津島/.test(t)) return 'COMP003';
+        if(/北上/.test(t)) return 'COMP004';
+        if(/アート|ｱｰﾄ/.test(t)) return 'COMP005';
+        if(/中尾/.test(t)) return 'COMP006';
+        if(/ヤマウチ|ﾔﾏｳﾁ|山内/.test(t)) return 'COMP007';
+        return null; };
+      var useGroup=(iGroup>=0);
+      if(!confirm('得意先を取込みます。\n対象: '+dataRows.length+'行\n取引先名列: '+hdr[iOrg]
+        +(useGroup?('\n分類列: '+hdr[iGroup]+' → 会社別に振分（未分類はトキワ印刷）'):('\n→ ログイン会社「'+coName+'」に追加'))
+        +'\n\nよろしいですか？')){ input.value=''; return; }
+      // 重複防止（org+companyId）
       DB.master.cust=DB.master.cust||[];
-      for(var r=1;r<rows.length;r++){
-        var row=rows[r]; if(!row) continue;
-        var org=String(row[iOrg]||'').trim(); if(!org){ skipped++; continue; }
+      var existing={}; DB.master.cust.forEach(function(c){ if(c&&c.org) existing[(c.companyId||'COMP002')+'|'+c.org]=1; });
+      var added=0, skipped=0, dup=0, byCo={};
+      dataRows.forEach(function(row){
+        if(!row) return;
+        var org=String(row[iOrg]||'').trim(); if(!org){ skipped++; return; }
+        var rco = useGroup ? (bunruiToCo(row[iGroup])||'COMP002') : co; // 分類→会社 / 未分類→トキワ
+        var key=rco+'|'+org; if(existing[key]){ dup++; return; } existing[key]=1;
         var user=iUser>=0?String(row[iUser]||'').trim():'';
-        var dept=iDept>=0?String(row[iDept]||'').trim():'';
-        if(dept) user=(user?(dept+' '+user):dept);
         DB.master.cust.push({ org:org, user:user,
           email:iMail>=0?String(row[iMail]||'').trim():'',
           tel:iTel>=0?String(row[iTel]||'').trim():'',
           fax:iFax>=0?String(row[iFax]||'').trim():'',
+          zip:iZip>=0?String(row[iZip]||'').trim():'',
+          addr:iAddr>=0?String(row[iAddr]||'').trim():'',
           note:iNote>=0?String(row[iNote]||'').trim():'',
-          type:'customer', companyId:co });
-        added++;
-      }
+          type:'customer', companyId:rco });
+        added++; byCo[rco]=(byCo[rco]||0)+1;
+      });
       saveDB();
       if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
       renderMaster('cust');
-      alert('📥 取込完了：'+added+'件を「'+coName+'」の得意先に追加しました'+(skipped?'（空行スキップ '+skipped+'件）':''));
+      var coNm=function(id){var c=(DB.companies||[]).find(function(x){return x.id===id;});return c?c.name:id;};
+      var bd=Object.keys(byCo).map(function(id){return coNm(id)+' '+byCo[id]+'件';}).join(' / ');
+      alert('📥 取込完了：'+added+'件追加'+(dup?'（重複スキップ '+dup+'）':'')+(skipped?'（空行 '+skipped+'）':'')+'\n\n会社別: '+(bd||'-'));
     }catch(e){ alert('取込エラー: '+(e&&e.message||e)); }
     input.value='';
   };
