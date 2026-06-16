@@ -113,7 +113,8 @@
         <option>未着手</option><option>TEL済</option><option>受注</option><option>発注済</option><option>納品済</option><option>見送り</option>
       </select>
       <span class="seg">
-        <button id="vTable" class="on" onclick="setView('table')">📋 表</button>
+        <button id="vMatrix" class="on" onclick="setView('matrix')">📅 1ページ</button>
+        <button id="vTable" onclick="setView('table')">📋 表</button>
         <button id="vBoard" onclick="setView('board')">🗂 看板</button>
       </span>
       <button class="btn" onclick="seedImport()" title="先ほどのExcel2つ(旧台帳＋受注用)をまとめて投入" style="background:#fef3c7;border-color:#fcd34d">📦 初期投入</button>
@@ -173,6 +174,33 @@
 
   <div id="boardView" style="display:none"><div class="board" id="board"></div></div>
 
+  <div id="matrixView">
+    <div class="tblwrap">
+      <table id="mtbl" class="mtbl"><thead id="mhead"></thead><tbody id="mbody"></tbody></table>
+    </div>
+    <p class="muted" style="margin-top:6px">📅 1ページ表示: 得意先×製品ごとに各年を横並び。<span class="pill" style="background:#fffdf5">黄=選択年(入力)</span> 過去年は西暦の参考（読取専用）。各年セル＝数量×単価／受注→納品／仕入・原価率。</p>
+  </div>
+  <style>
+    .mtbl{ font-size:11px; }
+    .mtbl thead th{ position:sticky; top:0; z-index:3; background:#1f2937; color:#fff; font-weight:700; padding:5px 6px; white-space:nowrap; text-align:center; border-right:1px solid #374151; }
+    .mtbl thead th.lead{ text-align:left; }
+    .mtbl thead th.curY{ background:#7c2d12; }
+    .mtbl tbody td{ padding:3px 5px; border-bottom:1px solid #eee; border-right:1px solid #f1f1ee; vertical-align:top; }
+    .mtbl td.mcust{ font-weight:700; max-width:150px; }
+    .mtbl td.mprod{ max-width:180px; color:#334155; }
+    .mtbl .ycell{ min-width:96px; line-height:1.35; }
+    .mtbl .ycell.cur{ background:#fffdf5; min-width:122px; }
+    .mtbl .ycell .qp{ font-weight:700; color:#0f172a; }
+    .mtbl .ycell .dt{ color:#475569; font-size:10px; }
+    .mtbl .ycell .cs{ color:#7c3aed; font-size:10px; }
+    .mtbl .ycell .cr{ font-weight:700; font-size:10px; }
+    .mtbl .ycell .none{ color:#cbd5e1; }
+    .mtbl .ycell input, .mtbl .ycell select{ width:100%; padding:2px 3px; border:1px solid #e2e0da; border-radius:4px; font-size:10px; font-family:inherit; background:#fff; margin-bottom:2px; }
+    .mtbl .ycell .mini2{ display:flex; gap:3px; }
+    .mtbl .ycell .mini2 input{ width:50%; }
+    .mtbl .addcur{ font-size:10px; padding:3px 8px; }
+  </style>
+
   <p class="muted" style="margin-top:8px">💾 本体アプリを開くと自動でクラウド同期・日次バックアップされます。／ 取込元: 基幹「受注用」エクスポート(.xlsx)＝今年分 ／ 旧台帳「2026_顧客リスト.xls」＝過去履歴(カテゴリ別)。再取込しても入力済みの動き・担当・備考は保持。</p>
 </main>
 <div id="toast"></div>
@@ -206,7 +234,7 @@ var STATUSES = ['未着手','TEL済','受注','発注済','納品済','見送り
 var STCOLOR = { '未着手':'#94a3b8','TEL済':'#0891b2','受注':'#2563eb','発注済':'#7c3aed','納品済':'#16a34a','見送り':'#9ca3af' };
 var CATCOLOR = { 'カレンダー':'#0891b2','ミニカレンダー':'#0ea5e9','業社':'#7c3aed','米屋':'#ca8a04','酒版':'#dc2626','うちわ':'#16a34a' };
 var CATORDER = ['カレンダー','ミニカレンダー','業社','米屋','酒版','うちわ'];
-var viewMode = 'table';
+var viewMode = 'matrix';
 var sortKey = '', sortDir = 1;
 // 手動並び順: カテゴリ順 → order(手動) → 未設定は末尾(安定)
 function byManual(a,b){
@@ -216,7 +244,8 @@ function byManual(a,b){
 }
 
 function loadAll(){ var db = hubLoad(); if(!db) return []; return Array.isArray(db[COLL]) ? db[COLL] : []; }
-function curYear(){ return Number(document.getElementById('yearSel').value || 2027); }
+var BASE_YEAR = 2026;   // 今年（入力対象の基準年）
+function curYear(){ return Number(document.getElementById('yearSel').value || BASE_YEAR); }
 function curCat(){ return document.getElementById('fCat').value || ''; }
 function num(v){ var n = parseFloat(v); return isNaN(n) ? '' : n; }
 function fmt(n){ return (n===''||n==null) ? '—' : Number(n).toLocaleString(); }
@@ -228,11 +257,11 @@ function fmtPct(v){ return v===''? '—' : (v*100).toFixed(1)+'%'; }
 
 function buildYears(){
   var rows = loadAll(); var years = {}; rows.forEach(function(r){ years[r.year] = 1; });
+  if(years[BASE_YEAR]===undefined) years[BASE_YEAR]=1;   // 今年(2026)は常に選べる
   var list = Object.keys(years).map(Number).sort(function(a,b){ return b-a; });
-  if(list.indexOf(2027) < 0) list.unshift(2027);
   var sel = document.getElementById('yearSel'); var cur = sel.value;
   sel.innerHTML = list.map(function(y){ return '<option value="'+y+'">'+y+'年</option>'; }).join('');
-  sel.value = cur && list.indexOf(Number(cur))>=0 ? cur : String(list[0]);
+  sel.value = cur && list.indexOf(Number(cur))>=0 ? cur : String(BASE_YEAR);
 }
 function buildCats(){
   var rows = loadAll(); var cats = {}; rows.forEach(function(r){ if(r.category) cats[r.category]=1; });
@@ -277,8 +306,10 @@ function viewRows(ignoreStatus){
 
 function setView(m){
   viewMode=m;
+  document.getElementById('vMatrix').classList.toggle('on', m==='matrix');
   document.getElementById('vTable').classList.toggle('on', m==='table');
   document.getElementById('vBoard').classList.toggle('on', m==='board');
+  document.getElementById('matrixView').style.display = m==='matrix'?'':'none';
   document.getElementById('tableView').style.display = m==='table'?'':'none';
   document.getElementById('boardView').style.display = m==='board'?'':'none';
   render();
@@ -306,7 +337,7 @@ function render(){
     + kpi('平均原価率', avgCR===''?'—':(avgCR*100).toFixed(1)+'%', avgCR===''?'#94a3b8':(avgCR>=0.7?'#dc2626':avgCR>=0.5?'#b45309':'#16a34a'));
   // ソート表示
   document.querySelectorAll('.sind').forEach(function(el){ el.textContent = (el.getAttribute('data-k')===sortKey) ? (sortDir>0?' ▲':' ▼') : ''; });
-  if(viewMode==='board') renderBoard(); else renderTable();
+  if(viewMode==='board') renderBoard(); else if(viewMode==='matrix') renderMatrix(); else renderTable();
 }
 function kpi(k,v,color){ return '<div class="kpi"><div class="k">'+k+'</div><div class="v" style="'+(color?'color:'+color:'')+'">'+v+'</div></div>'; }
 
@@ -354,6 +385,75 @@ function renderTable(){
       + '<td><button class="btn" style="padding:3px 8px;font-size:11px" onclick="delRow(\''+id+'\')" title="削除">🗑</button></td>'
       + '</tr>';
   }).join('');
+}
+
+// ─ 📅 1ページ（年表）ビュー: (区分×得意先×製品) で集約し、年度を横並びコンパクト表示 ─
+var _mGroups = [];
+function mYmd(s){ if(!s) return ''; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); return m?(Number(m[2])+'/'+Number(m[3])):String(s); }
+function matrixBase(){
+  // 年度では絞らない（全年表示）。カテゴリ＋検索のみ。
+  var q=(document.getElementById('q').value||'').trim().toLowerCase();
+  var cat=curCat();
+  return loadAll().filter(function(r){
+    if(cat && r.category!==cat) return false;
+    if(!q) return true;
+    return ((r.cust||'')+(r.user||'')+(r.product||'')+(r.staff||'')).toLowerCase().indexOf(q)>=0;
+  });
+}
+function renderMatrix(){
+  var rows=matrixBase(); var cur=curYear();
+  var groups={}, order=[];
+  rows.forEach(function(r){
+    var key=[r.category,r.cust,r.user||'',r.product].join('');
+    if(!groups[key]){ groups[key]={category:r.category,cust:r.cust,user:r.user||'',product:r.product,byYear:{}}; order.push(key); }
+    if(!groups[key].byYear[r.year]) groups[key].byYear[r.year]=r;
+  });
+  var yset={}; yset[cur]=1; rows.forEach(function(r){ if(r.year) yset[r.year]=1; });
+  var years=Object.keys(yset).map(Number).sort(function(a,b){ return b-a; });
+  document.getElementById('mhead').innerHTML='<tr><th class="lead">区分</th><th class="lead">得意先</th><th class="lead">製品名</th>'
+    + years.map(function(y){ return '<th class="'+(y===cur?'curY':'')+'">'+y+'年'+(y===cur?'<br><span style="font-weight:400;font-size:9px">今年・入力</span>':'')+'</th>'; }).join('') + '</tr>';
+  order.sort(function(a,b){ var ga=groups[a],gb=groups[b]; var ca=CATORDER.indexOf(ga.category),cb=CATORDER.indexOf(gb.category); ca=ca<0?99:ca;cb=cb<0?99:cb; if(ca!==cb)return ca-cb; return String(ga.cust||'').localeCompare(String(gb.cust||''),'ja'); });
+  _mGroups = order.map(function(k){ return groups[k]; });
+  var mb=document.getElementById('mbody');
+  if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="'+(3+years.length)+'" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
+  mb.innerHTML=_mGroups.map(function(g,i){
+    var cells=years.map(function(y){
+      var r=g.byYear[y];
+      return y===cur ? '<td class="ycell cur">'+curCell(g,r,i)+'</td>' : '<td class="ycell">'+pastCell(r)+'</td>';
+    }).join('');
+    return '<tr>'
+      + '<td><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span></td>'
+      + '<td class="mcust" title="'+hubEsc((g.cust||'')+(g.user?' / '+g.user:''))+'">'+hubEsc(g.cust||'(無名)')+(g.user?'<br><span class="muted" style="font-size:10px">'+hubEsc(g.user)+'</span>':'')+'</td>'
+      + '<td class="mprod" title="'+hubEsc(g.product||'')+'">'+hubEsc(g.product||'')+'</td>'
+      + cells + '</tr>';
+  }).join('');
+}
+function pastCell(r){
+  if(!r) return '<span class="none">—</span>';
+  var out='';
+  var q=(r.orderQty!==''&&r.orderQty!=null)?r.orderQty:r.pyQty, p=(r.orderPrice!==''&&r.orderPrice!=null)?r.orderPrice:r.pyPrice;
+  if((q!==''&&q!=null)||(p!==''&&p!=null)) out+='<div class="qp">'+((q!==''&&q!=null)?fmt(q):'')+((p!==''&&p!=null)?'×'+fmt(p):'')+'</div>';
+  var dts=[]; if(r.orderDate) dts.push('受'+mYmd(r.orderDate)); if(r.delivDate) dts.push('納'+mYmd(r.delivDate));
+  if(dts.length) out+='<div class="dt">'+hubEsc(dts.join(' '))+'</div>';
+  if(r.cost!==''&&r.cost!=null){ var cr=costRatioVal(r); out+='<div class="cs">仕'+fmt(r.cost)+(cr!==''?' <span class="cr" style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'">'+fmtPct(cr)+'</span>':'')+'</div>'; }
+  return out||'<span class="none">—</span>';
+}
+function curCell(g, r, gi){
+  if(!r) return '<button class="btn addcur" onclick="matrixAddCur('+gi+')">＋入力</button>';
+  var id=hubEsc(r.id);
+  function inp(f,type,ph){ var v=hubEsc(r[f]==null?'':r[f]); return '<input '+(type==='date'?'type="date"':type==='num'?'type="number" step="any"':'type="text"')+' value="'+v+'" placeholder="'+(ph||'')+'" data-id="'+id+'" data-f="'+f+'" onchange="onEdit(this)" title="'+(ph||'')+'">'; }
+  var st='<select data-id="'+id+'" data-f="status" onchange="onEdit(this)">'+STATUSES.map(function(s){return '<option'+(r.status===s?' selected':'')+'>'+s+'</option>';}).join('')+'</select>';
+  var cr=costRatioVal(r); var crBadge=cr!==''?'<span class="cr" style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'"> '+fmtPct(cr)+'</span>':'';
+  return st
+    + inp('orderDate','date','受注日')
+    + inp('delivDate','date','納品日')
+    + '<div class="mini2">'+inp('orderQty','num','数量')+inp('orderPrice','num','売価')+'</div>'
+    + '<div class="mini2">'+inp('cost','num','仕入')+'<span style="font-size:10px;align-self:center">'+crBadge+'</span></div>';
+}
+function matrixAddCur(gi){
+  var g=_mGroups[gi]; if(!g){ return; }
+  var rec=newRecord({ year:curYear(), category:g.category||'カレンダー', cust:g.cust||'', user:g.user||'', product:g.product||'' });
+  if(hubAppend(COLL, rec)){ hubToast('＋ '+curYear()+'年の入力欄を作成'); buildYears(); render(); }
 }
 
 function renderBoard(){
@@ -449,7 +549,7 @@ function addRow(){
 function newRecord(o){
   return Object.assign({
     id: 'co_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36),
-    year: 2027, category:'カレンダー', ref:'', prevDate:'', cust:'', user:'', product:'', unit:'冊',
+    year: BASE_YEAR, category:'カレンダー', ref:'', prevDate:'', cust:'', user:'', product:'', unit:'冊',
     pyQty:'', pyPrice:'', pyAmt:'', propQty:'', propPrice:'', propAmt:'', upPrice:'', upAmt:'', mkUpPrice:'', mkUpAmt:'',
     status:'未着手', telDate:'', orderDate:'', poDate:'', poDue:'', inDate:'', delivDate:'',
     orderQty:'', orderPrice:'', cost:'', staff:'', pay:'', note:'', _createdAt:new Date().toISOString()
@@ -635,7 +735,7 @@ function exportXlsx(){
 }
 
 // 起動
-buildYears(); buildCats(); render();
+buildYears(); buildCats(); setView('matrix');
 try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 </body>
