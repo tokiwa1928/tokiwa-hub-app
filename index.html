@@ -7286,7 +7286,6 @@ function buildPanel(id,initData){
   <div class="brow" id="est-actions1-${id}">
     <button class="btn btn-p" id="est-preview-btn-${id}" onclick="showPV([${id}])">🔍 この見積書をプレビュー</button>
     <button class="btn" style="background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6;font-weight:700" onclick="showHistoryAnalyzeModal(${id})" title="過去の類似案件と単価比較。流用や価格妥当性チェックができます">📊 過去実績と比較</button>
-    <button class="btn" onclick="saveHist(${id})">実績として保存</button>
     <button class="btn" style="background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(${id})">⭐ テンプレート保存</button>
     <button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="clearTab(${id})" title="この見積書の入力内容をクリア">🗑 クリア</button>
   </div>
@@ -7379,10 +7378,30 @@ function addQtyPat(id){const s=ts(id);s.qtyPats.push({v:(s.qtyPats[s.qtyPats.len
 function rmQtyPat(id,i){const s=ts(id);s.qtyPats.splice(i,1);calc(id);}
 
 // ═══════════════════ 過去実績 ════════════════
+// 過去実績プール = 実績(history) + 登録された金額(保存済み見積estimates + 受注案件projects)。会社スコープ。
+function _pastPool_(){
+  var myCo=(currentAuth&&currentAuth.loggedIn&&currentAuth.companyId)||null;
+  var out=[];
+  (DB.history||[]).forEach(function(r){ if(r) out.push(r); });
+  var conv=function(e){
+    var qty=parseInt(e.qty)||0, exTax=parseInt(e.exTax)||0;
+    var unitp = qty>0?Math.round(exTax/qty*10)/10:(e.unitp!=null?e.unitp:null);
+    var cr = (e.estCost&&exTax)?(e.estCost/exTax):(e.cr!=null?e.cr:(e.avgCr?e.avgCr/100:null));
+    return { id:e.id, cust:e.cust, item:e.item, spec:e.spec, qty:qty, unit:e.unit||'部',
+      unitp:unitp, exTax:exTax, cr:cr, cat:e.cat||'', sub:e.sub||'', companyId:e.companyId,
+      date:(e.createdAt||e.orderDate||'').slice(0,10),
+      // チェーンも引き継ぎ（流用時に復元）
+      end_user:e.end_user||e.endUser||'', relay:e.relay||'', endUserDept:e.endUserDept||'' };
+  };
+  (DB.estimates||[]).forEach(function(e){ if(e) out.push(conv(e)); });
+  (DB.projects||[]).forEach(function(p){ if(p) out.push(conv(p)); });
+  if(myCo) out=out.filter(function(r){ return !r.companyId || r.companyId===myCo; });
+  return out;
+}
 function renderPast(id){
   const s=ts(id);
   const q=(document.getElementById(`past-q-${id}`)?.value||'').toLowerCase();
-  const rows=DB.history.filter(r=>{
+  const rows=_pastPool_().filter(r=>{
     if(s.cat&&r.cat&&r.cat!==s.cat) return false;
     if(s.sub&&r.sub&&r.sub!==s.sub) return false;
     if(q&&!(r.item||'').toLowerCase().includes(q)&&!(r.cust||'').toLowerCase().includes(q)&&!(r.spec||'').toLowerCase().includes(q)) return false;
@@ -7390,14 +7409,14 @@ function renderPast(id){
   });
   document.getElementById(`past-sec-${id}`).style.display='block';
   const body=document.getElementById(`past-body-${id}`);
-  if(!rows.length){body.innerHTML='<div style="padding:.6rem 1rem;font-size:12px;color:#aaa">該当する過去実績がありません</div>';return;}
-  // 最新30件を逆順で
+  if(!rows.length){body.innerHTML='<div style="padding:.6rem 1rem;font-size:12px;color:#aaa">該当する過去実績がありません（見積書/受注案件を登録すると表示されます）</div>';return;}
+  // 最新30件を逆順で。クリック用に表示中リストをタブ状態にキャッシュ
   const disp=rows.slice().reverse().slice(0,30);
+  s._pastRows=disp;
   body.innerHTML=disp.map((r,ri)=>{
     const bc=r.cr==null?'bn':r.cr<0.7?'bg':r.cr<0.8?'ba':'br';
     const bl=r.cr==null?'—':(r.cr*100).toFixed(1)+'%';
-    const origI=DB.history.lastIndexOf(r);
-    return `<div class="p-row" onclick="applyHist(${id},${origI})">
+    return `<div class="p-row" onclick="applyPast(${id},${ri})">
       <div><div style="font-weight:700;font-size:12px">${r.item||''}</div><div style="font-size:10px;color:#aaa;margin-top:1px">${(r.spec||'').substring(0,40)}</div></div>
       <div style="font-size:11px;color:#888;padding-right:4px">${r.cust||''}</div>
       <div class="pn">${(r.qty||0).toLocaleString()}</div>
@@ -7405,9 +7424,14 @@ function renderPast(id){
       <div class="pn">${r.unitp!=null?fmtU(r.unitp):'—'}</div>
       <div class="pn" style="font-weight:700">${fmt(r.exTax)}</div>
       <div style="text-align:center"><span class="badge ${bc}">${bl}</span></div>
-      <div style="text-align:right"><button class="use-btn" onclick="event.stopPropagation();applyHist(${id},${origI})">参照</button></div>
+      <div style="text-align:right"><button class="use-btn" onclick="event.stopPropagation();applyPast(${id},${ri})">参照</button></div>
     </div>`;
   }).join('');
+}
+// 表示中の過去実績リスト(キャッシュ)から参照適用
+function applyPast(id,idx){
+  var s=ts(id); var r=(s._pastRows||[])[idx]; if(!r) return;
+  applyHistData(id,r);
 }
 function applyHist(id,histIdx){
   const r=DB.history[histIdx];if(!r)return;
@@ -19152,7 +19176,6 @@ function _renderEstModeCtrl_(tid){
     var prevA = isOrderC ? ('_previewSeizouFromTab_(' + tid + ')') : ('showPV([' + tid + '])');
     html = '<button class="btn" style="' + SBTN + 'background:#fff" onclick="' + prevA + '">' + prevL + '</button>'
       + '<button class="btn" style="' + SBTN + 'background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6" onclick="showHistoryAnalyzeModal(' + tid + ')">📊 過去実績と比較</button>'
-      + '<button class="btn" style="' + SBTN + 'background:#fff" onclick="saveHist(' + tid + ')">実績として保存</button>'
       + '<button class="btn" style="' + SBTN + 'background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(' + tid + ')">⭐ テンプレ保存</button>'
       + '<span class="est-view-badge" style="' + BADGE + 'background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.25)">🖊 作成中</span>'
       + (isOrderC
@@ -32192,7 +32215,7 @@ function renderHistory(){
     return true;
   });
   const body=document.getElementById('hist-body');if(!body)return;
-  if(!rows.length){body.innerHTML='<tr><td colspan="10" style="text-align:center;color:#aaa;padding:1rem">実績がありません。見積作成で「実績として保存」してください</td></tr>';return;}
+  if(!rows.length){body.innerHTML='<tr><td colspan="10" style="text-align:center;color:#aaa;padding:1rem">実績がありません。見積書の保存・受注案件の登録をすると蓄積されます</td></tr>';return;}
   // ⚡ パフォーマンス: 表示件数制限
   const _histTotalCount = rows.length;
   const _histShowLimit = _getShowCount_('hist-body', PAGE_LIMITS.history);
