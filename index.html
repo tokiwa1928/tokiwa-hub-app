@@ -3695,6 +3695,14 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
       _didMigrate=true;
     }
   }catch(e){}
+  // CUSTCO-1: 既存の得意先に所属会社(companyId)を一度だけ付与（現データはトキワ印刷の分）
+  try{
+    if(localStorage.getItem('_custCompanySeed_v1')!=='1' && d.master && Array.isArray(d.master.cust)){
+      d.master.cust.forEach(function(c){ if(c && typeof c==='object' && !c.companyId) c.companyId='COMP002'; });
+      localStorage.setItem('_custCompanySeed_v1','1');
+      _didMigrate=true;
+    }
+  }catch(e){}
   // 会社一覧をトキワ印刷を最上位に並べ替え
   if(d.companies && Array.isArray(d.companies)){
     var _priority = ['トキワ', '村山', '北上', 'アートエス', '津島', '中尾'];
@@ -9844,21 +9852,38 @@ function renderMaster(id){
     });
     html+='</tbody></table>';
   } else if(id==='cust'){
+    // CUSTCO-1: 会社別に分離。管理会社(トキワ)は会社フィルタで切替、他社は自社のみ
+    var _mgmtCust = (typeof _canSeeAllCompanies_==='function') ? _canSeeAllCompanies_() : true;
+    var _coList = (DB.companies||[]);
+    var _coName = function(cid){ var c=_coList.find(function(x){return x.id===cid;}); return c?(c.name||cid):cid; };
+    var _custCoFilter = _mgmtCust ? (window._custCoFilter_||'all') : ((currentAuth&&currentAuth.companyId)||'COMP002');
+    var custData = data.filter(function(r){
+      if(typeof r === 'string') return _mgmtCust; // 旧文字列データは管理会社のみ
+      var cid = r.companyId || 'COMP002';
+      if(_mgmtCust) return _custCoFilter==='all' ? true : cid===_custCoFilter;
+      return cid === ((currentAuth&&currentAuth.companyId)||'COMP002');
+    });
     // 得意先をグループ化して表示（同じorgでまとめる）
     const grouped = {};
-    data.forEach((r,i) => {
+    custData.forEach((r,i) => {
       const org = typeof r === 'string' ? r : (r.org || '');
-      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '' };
+      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '', companyId: (r.companyId||'COMP002') };
       grouped[org].items.push({ ...r, _idx: DB.master.cust.indexOf(r) });
       if(r.type) grouped[org].type = r.type;
       if(r.orgEmail) grouped[org].email = r.orgEmail;
+      if(r.companyId) grouped[org].companyId = r.companyId;
     });
-    
+
     html += `<div style="font-size:11px;color:#888;margin-bottom:.5rem">
-      💡 得意先と外注先を一元管理。メールアドレスを登録するとリマインダー送信ができます。
+      💡 得意先と外注先を会社ごとに管理。${_mgmtCust?'トキワは全社の得意先を会社別に切替表示できます。':'自社の得意先のみ表示しています。'}
     </div>`;
-    html += `<div style="display:flex;gap:8px;margin-bottom:.5rem">
+    html += `<div style="display:flex;gap:8px;margin-bottom:.5rem;align-items:center;flex-wrap:wrap">
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="addCustOrg()">＋ 新規取引先</button>
+      ${_mgmtCust?`<label style="font-size:11px;color:#555">所属会社で絞り込み:
+        <select style="font-size:11px;padding:3px 6px" onchange="window._custCoFilter_=this.value;renderMaster('cust')">
+          <option value="all"${_custCoFilter==='all'?' selected':''}>全社</option>
+          ${_coList.map(function(c){return '<option value="'+c.id+'"'+(_custCoFilter===c.id?' selected':'')+'>'+(c.name||c.id)+'</option>';}).join('')}
+        </select></label>`:''}
     </div>`;
     
     Object.keys(grouped).sort().forEach(org => {
@@ -9878,6 +9903,10 @@ function renderMaster(id){
             <option value="both"${g.type==='both'?' selected':''}>得意先/外注先</option>
           </select>
           <input type="email" value="${g.email||''}" placeholder="📧 メールアドレス" style="font-size:11px;padding:3px 8px;width:180px" onchange="updateCustOrgEmail('${org.replace(/'/g,"\\'")}',this.value)">
+          ${_mgmtCust?`<label style="font-size:10px;color:#555">所属:
+            <select style="font-size:10px;padding:2px 4px" onchange="setCustOrgCompany('${org.replace(/'/g,"\\'")}',this.value)">
+              ${_coList.map(function(c){return '<option value="'+c.id+'"'+((g.companyId||'COMP002')===c.id?' selected':'')+'>'+(c.name||c.id)+'</option>';}).join('')}
+            </select></label>`:`<span style="font-size:10px;color:#94a3b8">所属: ${_coName(g.companyId||'COMP002')}</span>`}
           <button class="add-btn" style="font-size:10px;padding:2px 8px;margin-left:auto" onclick="addCustUser('${org.replace(/'/g,"\\'")}')">＋ ユーザー追加</button>
           <button class="del-btn" onclick="if(confirm('「${org}」とその全ユーザーを削除？')){deleteCustOrg('${org.replace(/'/g,"\\'")}')}" style="font-size:14px">×</button>
         </div>
@@ -28685,14 +28714,25 @@ function addMR(id){
 function addCustOrg(){
   const name = prompt('取引先名を入力してください:');
   if(!name) return;
-  DB.master.cust.push({org: name, user: '', tel: '', note: '', type: 'customer'});
+  var _co=(currentAuth&&currentAuth.companyId)||'COMP002';
+  DB.master.cust.push({org: name, user: '', tel: '', note: '', type: 'customer', companyId:_co});
+  saveDB();
+  renderMaster('cust');
+}
+
+// CUSTCO-1: 取引先(org)の所属会社をまとめて変更（管理会社=トキワが整理用）
+function setCustOrgCompany(org, companyId){
+  (DB.master.cust||[]).forEach(function(c){ if(c && c.org===org) c.companyId=companyId; });
   saveDB();
   renderMaster('cust');
 }
 
 // 取引先にユーザーを追加
 function addCustUser(org){
-  DB.master.cust.push({org: org, user: '', tel: '', note: '', type: 'customer'});
+  // 同じ取引先の所属会社を引き継ぐ（無ければログイン会社）
+  var _ex=(DB.master.cust||[]).find(function(c){return c&&c.org===org&&c.companyId;});
+  var _co=(_ex&&_ex.companyId)||(currentAuth&&currentAuth.companyId)||'COMP002';
+  DB.master.cust.push({org: org, user: '', tel: '', note: '', type: 'customer', companyId:_co});
   saveDB();
   renderMaster('cust');
 }
