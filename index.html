@@ -12586,6 +12586,82 @@ function deleteInhouseJob(jobId){
   renderInhouseJobs();
 }
 
+// PROCDETAIL-1: 各後工程の細かい状態サイクル
+var PUR_CYCLE=['未発注','発注済','入荷済'];
+var OUT_CYCLE=['未発注','発注済','納品待ち','納品済'];
+var DLV_CYCLE=['準備','発送済','納品済'];
+var JOB_CYCLE=['待ち','作業中','完了'];
+function _normStatus_(s, cycle, legacy){
+  if(!s) return cycle[0];
+  if(legacy && legacy[s]) return legacy[s];
+  return cycle.indexOf(s)>=0 ? s : cycle[0];
+}
+// 後工程の状態を1段進める（製造指示書ビューを再描画）
+function advanceWorkStatus(type, id, projectId){
+  var arr, cycle, legacy;
+  if(type==='pur'){ arr=DB.purchaseOrders; cycle=PUR_CYCLE; legacy={planned:'未発注',ordered:'発注済',received:'入荷済'}; }
+  else if(type==='out'){ arr=DB.outsourceOrders; cycle=OUT_CYCLE; legacy={planned:'未発注',ordered:'発注済',delivered:'納品済'}; }
+  else if(type==='dlv'){ arr=DB.deliveryItems; cycle=DLV_CYCLE; legacy={planned:'準備',shipped:'発送済',delivered:'納品済'}; }
+  else if(type==='job'){ arr=DB.inhouseJobs; cycle=JOB_CYCLE; legacy={}; }
+  else return;
+  var it=(arr||[]).find(function(x){return x.id===id;}); if(!it) return;
+  var cur=_normStatus_(it.status,cycle,legacy);
+  it.status=cycle[(cycle.indexOf(cur)+1)%cycle.length];
+  if(type==='job') it.doneAt = (it.status==='完了') ? new Date().toISOString() : null;
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  var modal=document.querySelector('.proof-modal'); if(modal) modal.remove();
+  if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId);
+}
+var _WS_DONE_RE=/(入荷済|納品済|完了|校了)/;
+var _WS_MID_RE=/(発注済|作業中|発送済|納品待ち|進行|初校|2校|再校|校正中|approved|sent)/;
+function _wsBtn_(status, onclick){
+  var col=_WS_DONE_RE.test(status)?'#16a34a':(_WS_MID_RE.test(status)?'#f59e0b':'#9ca3af');
+  return '<button onclick="'+onclick+'" title="クリックで次の状態へ" style="cursor:pointer;border:none;background:'+col+';color:#fff;font-weight:700;font-size:11px;padding:4px 10px;border-radius:12px;min-width:64px">'+status+'</button>';
+}
+// 案件の「工程進捗」パネル（仕入/校正/社内ジョブ/外注/配送 を集約・各状態をクリックで進める）
+function _renderProjProcessPanel_(project){
+  var pid=project.id; var _pid=String(pid).replace(/'/g,'');
+  var purs=(DB.purchaseOrders||[]).filter(function(x){return x.projectId===pid;});
+  var outs=(DB.outsourceOrders||[]).filter(function(x){return x.projectId===pid;});
+  var dlvs=(DB.deliveryItems||[]).filter(function(x){return x.projectId===pid;});
+  var jobs=(DB.inhouseJobs||[]).filter(function(x){return x.projectId===pid;});
+  var prfs=(DB.proofings||[]).filter(function(x){return x.projectId===pid;});
+  function row(icon,label,ctrl,info){
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 6px;border-bottom:1px solid #f0efea;flex-wrap:wrap">'
+      +'<span style="min-width:104px;font-size:12px;font-weight:700">'+icon+' '+label+'</span>'+ctrl
+      +(info?'<span style="font-size:11px;color:#64748b">'+info+'</span>':'')+'</div>';
+  }
+  var rows='';
+  prfs.forEach(function(p){
+    var st=p.status||'waiting';
+    var col=_WS_DONE_RE.test(st)?'#16a34a':(_WS_MID_RE.test(st)?'#f59e0b':'#9ca3af');
+    rows+=row('📐','校正',
+      '<span style="background:'+col+';color:#fff;font-weight:700;font-size:11px;padding:4px 10px;border-radius:12px">'+st+'</span>'
+      +' <button class="btn" style="font-size:10px;padding:2px 8px" onclick="document.querySelector(\'.proof-modal\').remove();jumpToProofing(\''+p.id+'\')">校正BOXへ</button>','');
+  });
+  purs.forEach(function(x){
+    var st=_normStatus_(x.status,PUR_CYCLE,{planned:'未発注',ordered:'発注済',received:'入荷済'});
+    rows+=row('📦','用紙・仕入',_wsBtn_(st,"advanceWorkStatus('pur','"+x.id+"','"+_pid+"')"), x.item||'');
+  });
+  jobs.forEach(function(j){
+    var st=_normStatus_(j.status,JOB_CYCLE,{});
+    rows+=row('🏭','社内:'+(j.process||'工程'),_wsBtn_(st,"advanceWorkStatus('job','"+j.id+"','"+_pid+"')"),'');
+  });
+  outs.forEach(function(x){
+    var st=_normStatus_(x.status,OUT_CYCLE,{planned:'未発注',ordered:'発注済',delivered:'納品済'});
+    rows+=row('🤝','外注',_wsBtn_(st,"advanceWorkStatus('out','"+x.id+"','"+_pid+"')"), (x.item||'')+(x.vendor?(' / '+x.vendor):''));
+  });
+  dlvs.forEach(function(x){
+    var st=_normStatus_(x.status,DLV_CYCLE,{planned:'準備',shipped:'発送済',delivered:'納品済'});
+    rows+=row('🚚','配送/納品',_wsBtn_(st,"advanceWorkStatus('dlv','"+x.id+"','"+_pid+"')"),'');
+  });
+  if(!rows) rows='<div style="font-size:11px;color:#888;padding:8px">関連する後工程(仕入/校正/社内ジョブ/外注/配送)がまだありません。受注確定時に自動登録されます。</div>';
+  return '<div style="margin-top:16px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:10px">'
+    +'<div style="font-size:12px;font-weight:800;color:#0e7490;margin-bottom:6px">📊 工程進捗（各状態をクリックで進める：例 用紙=発注済→入荷済 / 校正=進行中 ）</div>'
+    +rows+'</div>';
+}
+
 // SCHED-2/HOLIDAY-1: 営業日(土日＋トキワ管理の共有休日を除く)で n 日ずらす。n<0=過去方向
 var JP_HOLIDAYS_2026 = ['2026-01-01','2026-01-12','2026-02-11','2026-02-23','2026-03-20','2026-04-29','2026-05-03','2026-05-04','2026-05-05','2026-05-06','2026-07-20','2026-08-11','2026-09-21','2026-09-22','2026-09-23','2026-10-13','2026-11-03','2026-11-23'];
 // 共有休日(トキワが管理し全社へ配布): DB.holidays = ['YYYY-MM-DD' or {date,name}]
@@ -27526,6 +27602,7 @@ function showWorkInstructionView(projectId){
               <div style="font-size:10px;color:#888;margin-top:6px">※ データ作成（版下・校了）は未確定でも進められます。印刷・加工・納品の工程ボタンは、対応項目が未確定だと警告が出ます。</div>
             </div>`;
           })()}
+          ${_renderProjProcessPanel_(project)}
           <div style="margin-top:16px;background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px">
             <div style="font-size:11px;font-weight:700;color:#888;letter-spacing:.05em;margin-bottom:8px">⚙ 工程ステータス (クリックで状態変更 → 指示書の実績欄に反映)</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">${stepsHtml}</div>
