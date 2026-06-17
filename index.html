@@ -1783,6 +1783,24 @@ setTimeout(_removeBootLoader_, 5000);
 
 <!-- スケジュール管理ページ -->
 <div class="page" id="page-schedule">
+  <!-- 🏭 社内ジョブ ボード (自社対応の工程を見える化) -->
+  <div class="sec" style="margin-bottom:1rem;border:1px solid #93c5fd;background:#f0f9ff">
+    <div class="st" style="color:#1e3a8a;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span>🏭 社内ジョブ（自社で対応する工程）</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="inhouse-filter" style="font-size:12px;padding:4px 8px" onchange="renderInhouseJobs()">
+          <option value="active">未完了のみ</option>
+          <option value="all">すべて</option>
+          <option value="待ち">待ち</option>
+          <option value="作業中">作業中</option>
+          <option value="完了">完了</option>
+        </select>
+        <input id="inhouse-q" placeholder="案件・得意先・工程で検索…" style="width:200px;font-size:12px;padding:4px 8px" oninput="renderInhouseJobs()">
+      </div>
+    </div>
+    <div style="font-size:11px;color:#1e40af;margin-bottom:.5rem">受注確定時に「自社対応」の工程が自動でジョブ化されます。状態をクリックで 待ち→作業中→完了 に切替。</div>
+    <div id="inhouse-jobs-list"></div>
+  </div>
   <div style="display:flex;gap:1rem;flex-wrap:wrap">
     <!-- リマインダー待機リスト -->
     <div class="sec" style="flex:1;min-width:350px;background:#fef3c7;border:1px solid #fcd34d">
@@ -12494,6 +12512,78 @@ function initSchedulePage(){
   renderScheduleTemplates();
   renderScheduleList();
   refreshReminders();
+  if(typeof renderInhouseJobs === 'function') renderInhouseJobs();
+}
+
+// ROUTING-1: 社内ジョブ ボード（自社対応の工程を見える化）
+var INHOUSE_PROC_ICON={ 'データ作成':'🎨','製版':'🖼','印刷':'🖨','製本':'📚','加工':'🔧','抜き':'✂','発送':'🚚' };
+function renderInhouseJobs(){
+  var container=document.getElementById('inhouse-jobs-list'); if(!container) return;
+  var q=(document.getElementById('inhouse-q')?.value||'').toLowerCase();
+  var filter=document.getElementById('inhouse-filter')?.value||'active';
+  // 会社スコープ: 自社の案件のみ（管理会社=トキワは全社）
+  var mgmt=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.companyId==='COMP002');
+  var myco=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.companyId)||'COMP002';
+  var jobs=(DB.inhouseJobs||[]).filter(function(j){
+    if(!j) return false;
+    var pr=(DB.projects||[]).find(function(p){return p.id===j.projectId;});
+    var cid=(pr&&pr.companyId)||'COMP002';
+    if(!mgmt && cid!==myco) return false;
+    if(filter==='active' && j.status==='完了') return false;
+    if(filter==='待ち'&&j.status!=='待ち') return false;
+    if(filter==='作業中'&&j.status!=='作業中') return false;
+    if(filter==='完了'&&j.status!=='完了') return false;
+    if(q){ var hay=((j.cust||'')+' '+(j.item||'')+' '+(j.process||'')+' '+(j.projectId||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    return true;
+  });
+  if(!jobs.length){ container.innerHTML='<div style="text-align:center;color:#888;padding:1.2rem;font-size:12px">該当する社内ジョブはありません</div>'; return; }
+  // 工程ごとにグループ化
+  var order=['データ作成','製版','印刷','製本','加工','抜き','発送'];
+  var byProc={}; jobs.forEach(function(j){ var k=j.process||'その他'; (byProc[k]=byProc[k]||[]).push(j); });
+  var procKeys=Object.keys(byProc).sort(function(a,b){ var ia=order.indexOf(a),ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
+  var today=new Date().toISOString().slice(0,10);
+  var stColor={ '待ち':'#9ca3af','作業中':'#f59e0b','完了':'#16a34a' };
+  var html='';
+  procKeys.forEach(function(pk){
+    var arr=byProc[pk];
+    html+='<div style="margin-bottom:10px"><div style="font-size:12px;font-weight:800;color:#1e3a8a;margin-bottom:4px">'+(INHOUSE_PROC_ICON[pk]||'🏭')+' '+pk+' <span style="color:#94a3b8;font-weight:400">('+arr.length+')</span></div>';
+    arr.forEach(function(j){
+      var late=j.dueDate && j.dueDate<today && j.status!=='完了';
+      html+='<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid '+(late?'#fca5a5':'#e0ddd6')+';border-radius:6px;padding:6px 10px;margin-bottom:4px;flex-wrap:wrap">'
+        +'<button onclick="cycleInhouseJobStatus(\''+j.id+'\')" style="cursor:pointer;border:none;background:'+(stColor[j.status]||'#9ca3af')+';color:#fff;font-weight:700;font-size:11px;padding:4px 10px;border-radius:12px;min-width:60px">'+(j.status||'待ち')+'</button>'
+        +'<span style="font-weight:700;font-size:13px">'+(j.cust||'─')+'</span>'
+        +'<span style="font-size:12px;color:#374151">'+(j.item||'─')+'</span>'
+        +'<span style="font-size:11px;color:#64748b">'+(j.qty?Number(j.qty).toLocaleString()+(j.unit||''):'')+'</span>'
+        +(j.dueDate?'<span style="font-size:11px;color:'+(late?'#dc2626':'#64748b')+'">納期 '+j.dueDate+(late?' ⚠':'')+'</span>':'')
+        +'<span style="font-size:10px;color:#94a3b8">'+(j.projectId||'')+'</span>'
+        +'<div style="margin-left:auto;display:flex;gap:4px">'
+        +'<button class="btn" style="font-size:10px;padding:2px 8px" onclick="openInhouseJobProject(\''+j.id+'\')" title="製造指示書を開く">📋 指示書</button>'
+        +'<button class="del-btn" style="font-size:12px" onclick="deleteInhouseJob(\''+j.id+'\')">×</button>'
+        +'</div></div>';
+    });
+    html+='</div>';
+  });
+  container.innerHTML=html;
+}
+function cycleInhouseJobStatus(jobId){
+  var j=(DB.inhouseJobs||[]).find(function(x){return x.id===jobId;}); if(!j) return;
+  var cyc=['待ち','作業中','完了']; var i=cyc.indexOf(j.status||'待ち');
+  j.status=cyc[(i+1)%cyc.length];
+  if(j.status==='完了') j.doneAt=new Date().toISOString(); else j.doneAt=null;
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  renderInhouseJobs();
+}
+function openInhouseJobProject(jobId){
+  var j=(DB.inhouseJobs||[]).find(function(x){return x.id===jobId;}); if(!j) return;
+  if(typeof showWorkInstructionView==='function') showWorkInstructionView(j.projectId);
+}
+function deleteInhouseJob(jobId){
+  if(!confirm('この社内ジョブを削除しますか？')) return;
+  DB.inhouseJobs=(DB.inhouseJobs||[]).filter(function(x){return x.id!==jobId;});
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  renderInhouseJobs();
 }
 
 // SCHED-2/HOLIDAY-1: 営業日(土日＋トキワ管理の共有休日を除く)で n 日ずらす。n<0=過去方向
@@ -30743,6 +30833,7 @@ function openOrderConfirmModal(tabId){
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;font-size:13px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="oc-step" id="oc-make-paper" checked> 📦 紙仕入を登録</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="oc-step" id="oc-make-inhouse" checked> 🏭 社内ジョブを登録（自社対応の工程／社内印刷など）</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="oc-step" id="oc-make-print" ${outsourceTotal>0?'checked':''}> 🤝 印刷外注を登録${outsourceTotal>0?' (外注あり)':''}</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="oc-step" id="oc-make-delivery" checked> 🚚 配送タスクを登録</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="oc-step" id="oc-make-proof" checked> 📐 校正セッションを登録</label>
@@ -30922,28 +31013,58 @@ function executeOrderConfirm(tabId){
     DB.intercoOrders.push(order);
   });
 
-  // PPPPPP-14: 後工程の自動登録 (チェックされたものを作成・案件に紐付け)
+  // PPPPPP-14 / ROUTING-1: 後工程の自動登録 (工程に従って 社内ジョブ/外注/仕入/配送/校正 を作成)
   var _ocCreated = [];
   try {
     var _now = new Date().toISOString();
+    var _uid = function(pfx){ return pfx+'-'+Date.now()+'-'+Math.floor(Math.random()*100000); };
+    // 工程別発注の内容（社内/グループ/外注の振分）
+    var _po = (typeof getProcessOrders==='function') ? (getProcessOrders(tabId)||[]) : [];
+    var _selfProcs = _po.filter(function(o){ return o.process && o.vendorType==='self'; });
+    var _extProcs  = _po.filter(function(o){ return o.process && o.vendorType==='external'; });
+    // 工程別発注を案件にも保存（後から参照・「後工程へ反映」で更新できる）
+    if(_po.length){ proj.processOrders = _po.map(function(o){ return {process:o.process, vendorType:o.vendorType, vendor:o.vendor, price:o.price, deliveryTo:o.deliveryTo, content:o.content}; }); }
+
     if(document.getElementById('oc-make-delivery')?.checked){
       if(!DB.deliveryItems) DB.deliveryItems = [];
-      DB.deliveryItems.push({ id:'DLV-'+Date.now(), projectId:proj.id, cust:proj.cust, item:proj.item, qty:proj.qty, unit:proj.unit, date:dueDate||'', taskType:'delivery', status:'planned', note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
+      DB.deliveryItems.push({ id:_uid('DLV'), projectId:proj.id, cust:proj.cust, item:proj.item, qty:proj.qty, unit:proj.unit, date:dueDate||'', taskType:'delivery', status:'planned', note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
       _ocCreated.push('🚚 配送');
     }
     if(document.getElementById('oc-make-proof')?.checked){
       if(!DB.proofings) DB.proofings = [];
-      DB.proofings.push({ id:'PRF-'+Date.now(), projectId:proj.id, cust:proj.cust, item:proj.item, status:'waiting', versions:[], note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
+      DB.proofings.push({ id:_uid('PRF'), projectId:proj.id, cust:proj.cust, item:proj.item, status:'waiting', versions:[], note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
       _ocCreated.push('📐 校正');
     }
     if(document.getElementById('oc-make-paper')?.checked){
       if(!DB.purchaseOrders) DB.purchaseOrders = [];
-      DB.purchaseOrders.push({ id:'PUR-'+Date.now(), projectId:proj.id, cust:proj.cust, item:(proj.item||'')+' 用紙', qty:proj.qty, unit:proj.unit, amount:0, status:'planned', orderDate:_now.slice(0,10), note:'受注 '+proj.id+' より自動作成 (数量・単価は要入力)', createdAt:_now, _autoFromOrder:true });
+      DB.purchaseOrders.push({ id:_uid('PUR'), projectId:proj.id, cust:proj.cust, item:(proj.item||'')+' 用紙', qty:proj.qty, unit:proj.unit, amount:0, status:'planned', orderDate:_now.slice(0,10), note:'受注 '+proj.id+' より自動作成 (数量・単価は要入力)', createdAt:_now, _autoFromOrder:true });
       _ocCreated.push('📦 紙仕入');
     }
-    if(document.getElementById('oc-make-print')?.checked && !groupOrders.length){
+    // 🏭 社内ジョブ: 工程別発注で「自社」の工程を社内ジョブ化。工程指定が無ければ自社一括として印刷ジョブ1件
+    if(document.getElementById('oc-make-inhouse')?.checked){
+      if(!DB.inhouseJobs) DB.inhouseJobs = [];
+      if(_selfProcs.length){
+        _selfProcs.forEach(function(o){
+          DB.inhouseJobs.push({ id:_uid('JOB'), projectId:proj.id, cust:proj.cust, item:proj.item, qty:proj.qty, unit:proj.unit, process:o.process, dept:'', dueDate:dueDate||'', status:'待ち', note:o.content||('受注 '+proj.id+' より自動作成'), createdAt:_now, _autoFromOrder:true });
+        });
+        _ocCreated.push('🏭 社内ジョブ'+_selfProcs.length+'件');
+      } else {
+        DB.inhouseJobs.push({ id:_uid('JOB'), projectId:proj.id, cust:proj.cust, item:proj.item, qty:proj.qty, unit:proj.unit, process:'印刷', dept:'', dueDate:dueDate||'', status:'待ち', note:'受注 '+proj.id+' より自動作成(自社一括)', createdAt:_now, _autoFromOrder:true });
+        _ocCreated.push('🏭 社内印刷ジョブ');
+      }
+    }
+    // 🤝 外注: 工程別発注で「外注先」の工程を外注発注化（工程ごと）
+    if(_extProcs.length){
       if(!DB.outsourceOrders) DB.outsourceOrders = [];
-      DB.outsourceOrders.push({ id:'OUT-'+Date.now(), projectId:proj.id, cust:proj.cust, item:(proj.item||'')+' 印刷', qty:proj.qty, unit:proj.unit, amount:outsourceTotal||0, status:'planned', dueDate:dueDate||'', note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
+      _extProcs.forEach(function(o){
+        DB.outsourceOrders.push({ id:_uid('OUT'), projectId:proj.id, cust:proj.cust, item:(proj.item||'')+' '+o.process, qty:proj.qty, unit:proj.unit, amount:o.price||0, vendor:o.vendor||'', status:'planned', dueDate:dueDate||'', note:'受注 '+proj.id+' '+o.process+'外注 自動作成', createdAt:_now, _autoFromOrder:true });
+      });
+      _ocCreated.push('🤝 外注'+_extProcs.length+'件');
+    }
+    // 旧来の単発「印刷外注」チェック: 工程別の外注が無い時のみ作成（二重作成を回避）
+    if(document.getElementById('oc-make-print')?.checked && !groupOrders.length && !_extProcs.length){
+      if(!DB.outsourceOrders) DB.outsourceOrders = [];
+      DB.outsourceOrders.push({ id:_uid('OUT'), projectId:proj.id, cust:proj.cust, item:(proj.item||'')+' 印刷', qty:proj.qty, unit:proj.unit, amount:outsourceTotal||0, status:'planned', dueDate:dueDate||'', note:'受注 '+proj.id+' より自動作成', createdAt:_now, _autoFromOrder:true });
       _ocCreated.push('🤝 印刷外注');
     }
   } catch(e){ console.warn('後工程自動作成エラー:', e); }
