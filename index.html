@@ -1790,6 +1790,7 @@ setTimeout(_removeBootLoader_, 5000);
       <div style="display:flex;gap:8px;align-items:center">
         <select id="inhouse-filter" style="font-size:12px;padding:4px 8px" onchange="renderInhouseJobs()">
           <option value="active">未完了のみ</option>
+          <option value="mine">自分の担当</option>
           <option value="all">すべて</option>
           <option value="待ち">待ち</option>
           <option value="作業中">作業中</option>
@@ -12530,6 +12531,7 @@ function renderInhouseJobs(){
     var cid=(pr&&pr.companyId)||'COMP002';
     if(!mgmt && cid!==myco) return false;
     if(filter==='active' && j.status==='完了') return false;
+    if(filter==='mine'){ var me=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||''; if(!me || j.worker!==me) return false; }
     if(filter==='待ち'&&j.status!=='待ち') return false;
     if(filter==='作業中'&&j.status!=='作業中') return false;
     if(filter==='完了'&&j.status!=='完了') return false;
@@ -12606,6 +12608,7 @@ function advanceWorkStatus(type, id, projectId){
     it.worker=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'';
     it.workerAt=new Date().toISOString();
   }
+  _logProcessTimeline_(it.projectId, _workTypeLabel_(type,it)+' → '+it.status+(it.worker?(' ('+it.worker+')'):''));
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   if(projectId){ var modal=document.querySelector('.proof-modal'); if(modal) modal.remove(); if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId); }
@@ -12655,15 +12658,41 @@ function _renderProjProcessPanel_(project){
     rows+=row('🚚','配送/納品',_wsBtn_(st,"advanceWorkStatus('dlv','"+x.id+"','"+_pid+"')")+_workMetaCtrl_('dlv',x,_pid),'');
   });
   if(!rows) rows='<div style="font-size:11px;color:#888;padding:8px">関連する後工程(仕入/校正/社内ジョブ/外注/配送)がまだありません。受注確定時に自動登録されます。</div>';
+  // 工程履歴(最近)
+  var _tl=(project.timeline||[]).filter(function(t){return t.type==='process';}).slice(-6).reverse();
+  var _tlHtml = _tl.length ? ('<div style="margin-top:8px;border-top:1px dashed #e0ddd6;padding-top:6px"><div style="font-size:10px;font-weight:700;color:#64748b;margin-bottom:3px">🕒 工程履歴(最近)</div>'
+    + _tl.map(function(t){ return '<div style="font-size:10px;color:#64748b">'+(t.at?t.at.slice(5,16).replace('T',' '):'')+' '+(t.by?('['+t.by+'] '):'')+((t.text||'').replace(/</g,'&lt;'))+'</div>'; }).join('')
+    + '</div>') : '';
   return '<div style="margin-top:16px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:10px">'
     +'<div style="font-size:12px;font-weight:800;color:#0e7490;margin-bottom:6px">📊 工程進捗（状態をクリックで進める／予定日・作業者を入力。進めると作業者に自分が記録されます）</div>'
-    +rows+'</div>';
+    +rows+_tlHtml+'</div>';
 }
+// 案件一覧用: 後工程の進捗を小さなバッジで要約
+function _projProcessSummaryMini_(p){
+  var pid=p.id, parts=[];
+  function badge(label,st){ var col=_WS_DONE_RE.test(st)?'#16a34a':(_WS_MID_RE.test(st)?'#f59e0b':'#9ca3af'); return '<span style="display:inline-block;font-size:9px;color:#fff;background:'+col+';padding:0 5px;border-radius:8px;white-space:nowrap;margin:1px">'+label+st+'</span>'; }
+  var prf=(DB.proofings||[]).filter(function(x){return x.projectId===pid;}); if(prf.length){ parts.push(badge('📐', prf[prf.length-1].status||'')); }
+  (DB.purchaseOrders||[]).filter(function(x){return x.projectId===pid;}).forEach(function(x){ parts.push(badge('📦', _normStatus_(x.status,PUR_CYCLE,{planned:'未発注',ordered:'発注済',received:'入荷済'}))); });
+  (DB.inhouseJobs||[]).filter(function(x){return x.projectId===pid;}).forEach(function(j){ parts.push(badge('🏭'+((j.process||'').slice(0,2)), _normStatus_(j.status,JOB_CYCLE,{}))); });
+  (DB.outsourceOrders||[]).filter(function(x){return x.projectId===pid;}).forEach(function(x){ parts.push(badge('🤝', _normStatus_(x.status,OUT_CYCLE,{planned:'未発注',ordered:'発注済',delivered:'納品済'}))); });
+  (DB.deliveryItems||[]).filter(function(x){return x.projectId===pid;}).forEach(function(x){ parts.push(badge('🚚', _normStatus_(x.status,DLV_CYCLE,{planned:'準備',shipped:'発送済',delivered:'納品済'}))); });
+  if(!parts.length) return '';
+  return '<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:1px">'+parts.join('')+'</div>';
+}
+// HIST-1: 工程の変更を案件タイムラインに記録（誰がいつ何を進めたか）
+function _logProcessTimeline_(projectId, text){
+  if(!projectId) return;
+  var p=(DB.projects||[]).find(function(x){return x.id===projectId;}); if(!p) return;
+  if(!p.timeline) p.timeline=[];
+  p.timeline.push({ type:'process', at:new Date().toISOString(), by:(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'', text:text||'' });
+  if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+projectId,'工程: '+(text||''));}catch(e){}
+}
+function _workTypeLabel_(type, it){ return type==='pur'?'📦用紙・仕入' : type==='out'?'🤝外注' : type==='dlv'?'🚚配送' : ('🏭社内:'+((it&&it.process)||'工程')); }
 // 予定日・作業者の操作（チームのプールから着手者が自分の名前を入れる運用）
 function _workArr_(type){ return type==='pur'?DB.purchaseOrders : type==='out'?DB.outsourceOrders : type==='dlv'?DB.deliveryItems : type==='job'?DB.inhouseJobs : null; }
 function _workFind_(type,id){ var a=_workArr_(type)||[]; return a.find(function(x){return x.id===id;}); }
-function setWorkDate(type,id,val){ var it=_workFind_(type,id); if(!it) return; it.plannedDate=val; if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){} if(typeof renderInhouseJobs==='function') try{renderInhouseJobs();}catch(e){} }
-function setWorkWorker(type,id,val){ var it=_workFind_(type,id); if(!it) return; it.worker=val; it.workerAt=new Date().toISOString(); if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){} if(typeof renderInhouseJobs==='function') try{renderInhouseJobs();}catch(e){} }
+function setWorkDate(type,id,val){ var it=_workFind_(type,id); if(!it) return; it.plannedDate=val; _logProcessTimeline_(it.projectId, _workTypeLabel_(type,it)+' 予定日を '+(val||'未設定')+' に設定'); if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){} if(typeof renderInhouseJobs==='function') try{renderInhouseJobs();}catch(e){} }
+function setWorkWorker(type,id,val){ var it=_workFind_(type,id); if(!it) return; it.worker=val; it.workerAt=new Date().toISOString(); _logProcessTimeline_(it.projectId, _workTypeLabel_(type,it)+' 作業者を '+(val||'未設定')+' に設定'); if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){} if(typeof renderInhouseJobs==='function') try{renderInhouseJobs();}catch(e){} }
 // ✋私が対応: 作業者に自分をセット＋未着手なら1段進める
 function claimWork(type,id,projectId){
   var it=_workFind_(type,id); if(!it) return;
@@ -12672,6 +12701,7 @@ function claimWork(type,id,projectId){
   var cyc = type==='pur'?PUR_CYCLE : type==='out'?OUT_CYCLE : type==='dlv'?DLV_CYCLE : JOB_CYCLE;
   var legacy = type==='pur'?{planned:'未発注',ordered:'発注済',received:'入荷済'} : type==='out'?{planned:'未発注',ordered:'発注済',delivered:'納品済'} : type==='dlv'?{planned:'準備',shipped:'発送済',delivered:'納品済'} : {};
   if(_normStatus_(it.status,cyc,legacy)===cyc[0]) it.status=cyc[1]; // 未着手→次の状態へ
+  _logProcessTimeline_(it.projectId, _workTypeLabel_(type,it)+' 着手 ('+(it.worker||'')+') → '+it.status);
   if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   if(projectId){ var m=document.querySelector('.proof-modal'); if(m) m.remove(); if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId); }
   else { if(typeof renderInhouseJobs==='function') renderInhouseJobs(); }
@@ -21019,6 +21049,13 @@ function showProjectTimeline(projectId){
       });
     });
   }
+
+  // 2b. 工程進捗の履歴 (advanceWorkStatus / claim / 予定日・作業者変更)
+  (p.timeline || []).forEach(function(t){
+    if(t && t.type === 'process'){
+      events.push({ at: t.at, icon: '🔧', type: 'process', title: '工程更新', detail: (t.by ? ('['+t.by+'] ') : '') + (t.text||''), color: '#0e7490' });
+    }
+  });
 
   // 3. 紐付く問い合わせ
   var linkedInqs = (DB.inquiries || []).filter(function(i){ return i.linked_project_id === p.id; });
@@ -31814,6 +31851,7 @@ function renderProjects(){
       <td><span style="font-size:11px;padding:2px 10px;color:#fff;font-weight:700;border-radius:10px;background:${sc};display:inline-block;white-space:nowrap">${r.status||'-'}</span></td>
       <td>
         <div style="display:flex;gap:3px;flex-wrap:wrap">${stepsHtml}</div>
+        ${_projProcessSummaryMini_(r)}
       </td>
       <td style="font-size:11px">${_escDiff(r.assignee||'-')}</td>
       <td style="white-space:nowrap" onclick="event.stopPropagation()">
