@@ -27405,6 +27405,26 @@ function showWorkInstructionView(projectId){
           </div>` : ''}
           ${instructionPane}
           ${proofPane}
+          ${(function(){
+            var _chk=(typeof _projInfoCheck_==='function')?_projInfoCheck_(project):{ok:true,missing:[]};
+            var _ready=!!project.mfgReady;
+            var _pid=String(projectId).replace(/'/g,'');
+            return `<div style="margin-top:16px;background:${_ready?'#f0fdf4':'#fef2f2'};border:2px solid ${_ready?'#86efac':'#fca5a5'};border-radius:8px;padding:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                <div>
+                  <div style="font-size:13px;font-weight:800;color:${_ready?'#166534':'#b91c1c'}">${_ready?'🟢 製造可（情報確定済み）':'🔴 情報未確定 — 印刷・加工・納品はロック中'}</div>
+                  ${_ready
+                    ? `<div style="font-size:11px;color:#15803d;margin-top:3px">${project.mfgReadyAt?('確定: '+project.mfgReadyAt.slice(0,10)+(project.mfgReadyBy?(' / '+project.mfgReadyBy):'')):''}</div>`
+                    : `<div style="font-size:11px;color:#7f1d1d;margin-top:3px">${_chk.missing.length?('未入力/未確定: '+_chk.missing.join('・')):'必須項目は揃っています。内容を確認のうえ「製造可」にしてください。'}</div>`}
+                  <div style="font-size:10px;color:#888;margin-top:4px">※ データ作成（版下・校了）は未確定でも進められます。印刷・加工・納品は「製造可」が必要です。</div>
+                </div>
+                <div>${_ready
+                  ? `<button class="btn" style="background:#fff;border-color:#fca5a5;color:#b91c1c;font-weight:700" onclick="setProjMfgReady('${_pid}',false)">↩ 情報未確定に戻す</button>`
+                  : `<button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="setProjMfgReady('${_pid}',true)">✅ 製造可にする（情報確定）</button>`}
+                </div>
+              </div>
+            </div>`;
+          })()}
           <div style="margin-top:16px;background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px">
             <div style="font-size:11px;font-weight:700;color:#888;letter-spacing:.05em;margin-bottom:8px">⚙ 工程ステータス (クリックで状態変更 → 指示書の実績欄に反映)</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">${stepsHtml}</div>
@@ -27456,6 +27476,17 @@ function toggleProjectStepInModal(projectId, step){
   const cycle = ['─', '進行中', '完了'];
   const idx = cycle.indexOf(cur);
   const next = cycle[(idx + 1) % cycle.length];
+  // MFGGATE-1: 製造工程(印刷/加工/納品)へ進む前に「製造可(情報確定)」を要求。未確定なら警告＋強制突破は記録
+  if(next !== '─' && MFG_GATE_STEPS.indexOf(step) >= 0 && !project.mfgReady){
+    var _chk = (typeof _projInfoCheck_==='function') ? _projInfoCheck_(project) : {missing:[]};
+    var _msg = '🔴 この案件はまだ「製造可（情報確定）」になっていません。\n\n';
+    if(_chk.missing && _chk.missing.length) _msg += '未入力/未確定:\n・' + _chk.missing.join('\n・') + '\n\n';
+    _msg += '情報不十分のまま製造工程（' + step + '）に進むと、誤った仕様で製造される恐れがあります。\n\n';
+    _msg += '推奨: いったん閉じて「✅ 製造可にする」を押してから進めてください。\n';
+    _msg += '緊急でこのまま進める場合のみ「OK」を押してください（記録されます）。';
+    if(!confirm(_msg)) return;
+    if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+project.id,'⚠製造ゲート強制突破: '+step+'→'+next+' (情報未確定 未入力:'+((_chk.missing&&_chk.missing.join(','))||'なし')+')');}catch(e){}
+  }
   project.steps[step] = next;
   if(!project.stepDates) project.stepDates = {};
   if(next === '完了') project.stepDates[step] = new Date().toISOString().slice(0,10);
@@ -29325,6 +29356,41 @@ function parseTiers(str){
 // HHHHHH-1: ステータス体系を刷新 (データ作成→校正サイクル→印刷→加工→納品)
 const PROJ_STATUSES=['データ作成中','初校提出待','初校中','2校提出待','2校中','校了作業待','印刷中','加工中','納品済','完了'];
 const PROC_STEPS=['版下','校了','印刷','加工','納品'];
+// MFGGATE-1: 製造工程（ここに入る前に「製造可(情報確定)」が必要）。版下・校了(データ作成)は未確定でも進める
+const MFG_GATE_STEPS=['印刷','加工','納品'];
+// 製造に必要な情報が揃っているかチェック → {ok, missing[]}
+function _projInfoCheck_(p){
+  var missing=[];
+  if(!p) return {ok:false, missing:['案件データなし']};
+  if(!String(p.cust||'').trim()) missing.push('得意先');
+  if(!String(p.item||'').trim()) missing.push('品名');
+  if(!(parseInt(p.qty)>0)) missing.push('数量');
+  if(!String(p.spec||'').trim()) missing.push('仕様');
+  if(!String(p.dueDate||'').trim()) missing.push('納期');
+  if(p._provisional) missing.push('未確定受注(校正先行)の確定');
+  return {ok: missing.length===0, missing: missing};
+}
+// 製造可（情報確定）フラグの設定 / 解除
+function setProjMfgReady(projectId, ready){
+  var p=(DB.projects||[]).find(function(x){return x.id===projectId;});
+  if(!p) return;
+  if(ready){
+    var chk=_projInfoCheck_(p);
+    if(!chk.ok){
+      if(!confirm('⚠ まだ未入力/未確定の項目があります:\n・'+chk.missing.join('\n・')+'\n\nそれでも「製造可（情報確定）」にしますか？\n(担当者の判断で確定する場合のみ。記録されます)')) return;
+    }
+    p.mfgReady=true; p.mfgReadyAt=new Date().toISOString(); p.mfgReadyBy=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'';
+    if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+p.id,'🟢製造可(情報確定)に設定'+(chk.ok?'':' ※未入力あり強制: '+chk.missing.join(',')));}catch(e){}
+  } else {
+    p.mfgReady=false; p.mfgReadyAt=null; p.mfgReadyBy='';
+    if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+p.id,'🔴情報未確定に戻す');}catch(e){}
+  }
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  var modal=document.querySelector('.proof-modal'); if(modal) modal.remove();
+  if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId);
+  if(typeof renderProjects==='function') try{renderProjects();}catch(e){}
+}
 
 // PPPPPP-20 (#6): ステータス変更ガード — 逆行/飛び越し選択は確認 (誤操作防止)
 function _changeProjStatus_(oi, newStatus, sel){
