@@ -27406,23 +27406,34 @@ function showWorkInstructionView(projectId){
           ${instructionPane}
           ${proofPane}
           ${(function(){
-            var _chk=(typeof _projInfoCheck_==='function')?_projInfoCheck_(project):{ok:true,missing:[]};
-            var _ready=!!project.mfgReady;
             var _pid=String(projectId).replace(/'/g,'');
-            return `<div style="margin-top:16px;background:${_ready?'#f0fdf4':'#fef2f2'};border:2px solid ${_ready?'#86efac':'#fca5a5'};border-radius:8px;padding:12px">
-              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-                <div>
-                  <div style="font-size:13px;font-weight:800;color:${_ready?'#166534':'#b91c1c'}">${_ready?'🟢 製造可（情報確定済み）':'🔴 情報未確定 — 印刷・加工・納品はロック中'}</div>
-                  ${_ready
-                    ? `<div style="font-size:11px;color:#15803d;margin-top:3px">${project.mfgReadyAt?('確定: '+project.mfgReadyAt.slice(0,10)+(project.mfgReadyBy?(' / '+project.mfgReadyBy):'')):''}</div>`
-                    : `<div style="font-size:11px;color:#7f1d1d;margin-top:3px">${_chk.missing.length?('未入力/未確定: '+_chk.missing.join('・')):'必須項目は揃っています。内容を確認のうえ「製造可」にしてください。'}</div>`}
-                  <div style="font-size:10px;color:#888;margin-top:4px">※ データ作成（版下・校了）は未確定でも進められます。印刷・加工・納品は「製造可」が必要です。</div>
-                </div>
-                <div>${_ready
-                  ? `<button class="btn" style="background:#fff;border-color:#fca5a5;color:#b91c1c;font-weight:700" onclick="setProjMfgReady('${_pid}',false)">↩ 情報未確定に戻す</button>`
-                  : `<button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="setProjMfgReady('${_pid}',true)">✅ 製造可にする（情報確定）</button>`}
+            var _allGo = GATE_ACTIONS.every(function(a){ return _projActionStatus_(project,a).go; });
+            var chkHtml = INFO_ITEMS.map(function(it){
+              var on=_projItemConfirmed_(project,it.key);
+              return `<label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:4px 9px;border-radius:6px;border:1px solid ${on?'#86efac':'#fca5a5'};background:${on?'#f0fdf4':'#fef2f2'};cursor:pointer;margin:2px;font-weight:700;color:${on?'#166534':'#b91c1c'}">
+                <input type="checkbox" ${on?'checked':''} onchange="toggleProjInfoConfirm('${_pid}','${it.key}')" style="width:auto"> ${on?'✅':'⬜'} ${it.label}</label>`;
+            }).join('');
+            var actHtml = GATE_ACTIONS.map(function(a){
+              var st=_projActionStatus_(project,a);
+              return `<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 9px;border-radius:6px;background:${st.go?'#f0fdf4':'#fff7ed'};border:1px solid ${st.go?'#86efac':'#fed7aa'};margin-bottom:4px">
+                <span style="font-weight:800;color:${st.go?'#166534':'#9a3412'};min-width:52px">${st.go?'🟢 GO':'🔴 待ち'}</span>
+                <span style="font-weight:700">${a.label}</span>
+                ${st.go?'':`<span style="color:#9a3412;font-size:11px">← 要確定: ${st.missing.join('・')}</span>`}
+              </div>`;
+            }).join('');
+            return `<div style="margin-top:16px;background:#fff;border:2px solid ${_allGo?'#86efac':'#fcd34d'};border-radius:8px;padding:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+                <div style="font-size:13px;font-weight:800;color:${_allGo?'#166534':'#92400e'}">${_allGo?'🟢 全項目 確定済み（全工程 着手可）':'⚠ 確定した情報に応じて作業ごとに着手可否を判定'}</div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn" style="font-size:11px;background:#16a34a;color:#fff;border-color:#16a34a" onclick="setAllProjInfo('${_pid}',true)">✅ 全項目を確定</button>
+                  <button class="btn" style="font-size:11px" onclick="setAllProjInfo('${_pid}',false)">↩ 全未確定</button>
                 </div>
               </div>
+              <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">① 確定した情報にチェック（チェックした項目に依存する作業だけ着手OKになります）</div>
+              <div style="display:flex;flex-wrap:wrap;margin-bottom:10px">${chkHtml}</div>
+              <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">② 着手判定（例: 用紙確定・穴数未確定 → 用紙仕入はGO / 加工は待ち）</div>
+              ${actHtml}
+              <div style="font-size:10px;color:#888;margin-top:6px">※ データ作成（版下・校了）は未確定でも進められます。印刷・加工・納品の工程ボタンは、対応項目が未確定だと警告が出ます。</div>
             </div>`;
           })()}
           <div style="margin-top:16px;background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:12px">
@@ -27476,16 +27487,18 @@ function toggleProjectStepInModal(projectId, step){
   const cycle = ['─', '進行中', '完了'];
   const idx = cycle.indexOf(cur);
   const next = cycle[(idx + 1) % cycle.length];
-  // MFGGATE-1: 製造工程(印刷/加工/納品)へ進む前に「製造可(情報確定)」を要求。未確定なら警告＋強制突破は記録
-  if(next !== '─' && MFG_GATE_STEPS.indexOf(step) >= 0 && !project.mfgReady){
-    var _chk = (typeof _projInfoCheck_==='function') ? _projInfoCheck_(project) : {missing:[]};
-    var _msg = '🔴 この案件はまだ「製造可（情報確定）」になっていません。\n\n';
-    if(_chk.missing && _chk.missing.length) _msg += '未入力/未確定:\n・' + _chk.missing.join('\n・') + '\n\n';
-    _msg += '情報不十分のまま製造工程（' + step + '）に進むと、誤った仕様で製造される恐れがあります。\n\n';
-    _msg += '推奨: いったん閉じて「✅ 製造可にする」を押してから進めてください。\n';
-    _msg += '緊急でこのまま進める場合のみ「OK」を押してください（記録されます）。';
-    if(!confirm(_msg)) return;
-    if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+project.id,'⚠製造ゲート強制突破: '+step+'→'+next+' (情報未確定 未入力:'+((_chk.missing&&_chk.missing.join(','))||'なし')+')');}catch(e){}
+  // MFGGATE-2: 工程ごとに必要な確定項目だけで判定（用紙未確定でなく穴数だけ未確定なら用紙仕入はGO 等）
+  var _actKey = STEP_ACTION_MAP[step];
+  if(next !== '─' && _actKey){
+    var _action = GATE_ACTIONS.find(function(a){return a.key===_actKey;});
+    var _st = _action ? _projActionStatus_(project, _action) : {go:true, missing:[]};
+    if(!_st.go){
+      var _msg = '🔴 「' + step + '」に進むには、次の項目の確定が必要です:\n・' + _st.missing.join('\n・') + '\n\n';
+      _msg += '未確定のまま進めると誤った仕様で製造される恐れがあります。\n';
+      _msg += '緊急でこのまま進める場合のみ「OK」を押してください（記録されます）。';
+      if(!confirm(_msg)) return;
+      if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+project.id,'⚠製造ゲート強制突破: '+step+'→'+next+' (未確定:'+_st.missing.join(',')+')');}catch(e){}
+    }
   }
   project.steps[step] = next;
   if(!project.stepDates) project.stepDates = {};
@@ -29385,6 +29398,78 @@ function setProjMfgReady(projectId, ready){
     p.mfgReady=false; p.mfgReadyAt=null; p.mfgReadyBy='';
     if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+p.id,'🔴情報未確定に戻す');}catch(e){}
   }
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  var modal=document.querySelector('.proof-modal'); if(modal) modal.remove();
+  if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId);
+  if(typeof renderProjects==='function') try{renderProjects();}catch(e){}
+}
+
+// MFGGATE-2: 確定項目（独立して確定/未確定にできる情報単位）
+const INFO_ITEMS=[
+  {key:'paper', label:'用紙'},
+  {key:'qty', label:'数量'},
+  {key:'size', label:'仕上りサイズ'},
+  {key:'colors', label:'色数/印刷仕様'},
+  {key:'postpress', label:'加工内容(穴/折/製本等)'},
+  {key:'data', label:'データ/校了'},
+  {key:'pack', label:'梱包/納品先'},
+  {key:'due', label:'納期'}
+];
+// 各アクション(着手したい作業)が必要とする確定項目
+const GATE_ACTIONS=[
+  {key:'paper_buy', label:'📄 用紙・材料の仕入', need:['paper','qty']},
+  {key:'pack_mat',  label:'📦 梱包材の手配',     need:['qty','size','pack']},
+  {key:'pack_label',label:'🏷 梱包ラベル作成',   need:['pack','qty']},
+  {key:'print',     label:'🖨 印刷',             need:['paper','qty','colors','data']},
+  {key:'postpress', label:'🔧 加工(穴あけ等)',   need:['postpress','qty']},
+  {key:'ship',      label:'🚚 発送/納品',        need:['pack','due']}
+];
+// 工程ステップ → 対応アクション(このアクションの必要項目が揃わないとステップに進めない)
+const STEP_ACTION_MAP={ '印刷':'print', '加工':'postpress', '納品':'ship' };
+// 項目が確定済みか (旧mfgReady=trueは全確定として後方互換)
+function _projItemConfirmed_(p,key){
+  if(!p) return false;
+  if(p.infoConfirm && typeof p.infoConfirm[key] !== 'undefined') return !!p.infoConfirm[key];
+  if(p.mfgReady) return true; // 後方互換
+  return false;
+}
+// アクションの着手可否 → {go, missing:[label...]}
+function _projActionStatus_(p, action){
+  var miss=[];
+  (action.need||[]).forEach(function(k){
+    if(!_projItemConfirmed_(p,k)){
+      var it=INFO_ITEMS.find(function(x){return x.key===k;});
+      miss.push(it?it.label:k);
+    }
+  });
+  return {go: miss.length===0, missing: miss};
+}
+// 確定項目のトグル
+function toggleProjInfoConfirm(projectId, key){
+  var p=(DB.projects||[]).find(function(x){return x.id===projectId;});
+  if(!p) return;
+  if(!p.infoConfirm){ p.infoConfirm={}; INFO_ITEMS.forEach(function(it){ p.infoConfirm[it.key]=!!p.mfgReady; }); }
+  p.infoConfirm[key]=!p.infoConfirm[key];
+  // 全項目確定なら全体の製造可フラグも同期
+  p.mfgReady = INFO_ITEMS.every(function(it){ return !!p.infoConfirm[it.key]; });
+  if(p.mfgReady && !p.mfgReadyAt){ p.mfgReadyAt=new Date().toISOString(); p.mfgReadyBy=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||''; }
+  if(!p.mfgReady){ p.mfgReadyAt=null; p.mfgReadyBy=''; }
+  if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+p.id,'確定項目変更: '+key+'='+(p.infoConfirm[key]?'確定':'未確定'));}catch(e){}
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  var modal=document.querySelector('.proof-modal'); if(modal) modal.remove();
+  if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId);
+  if(typeof renderProjects==='function') try{renderProjects();}catch(e){}
+}
+// 全項目を一括 確定/未確定
+function setAllProjInfo(projectId, val){
+  var p=(DB.projects||[]).find(function(x){return x.id===projectId;});
+  if(!p) return;
+  p.infoConfirm={}; INFO_ITEMS.forEach(function(it){ p.infoConfirm[it.key]=!!val; });
+  if(val){ p.mfgReady=true; p.mfgReadyAt=new Date().toISOString(); p.mfgReadyBy=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||''; }
+  else { p.mfgReady=false; p.mfgReadyAt=null; p.mfgReadyBy=''; }
+  if(typeof _addAuditLog_==='function') try{_addAuditLog_('update','project:'+p.id, val?'全項目を確定':'全項目を未確定に');}catch(e){}
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   var modal=document.querySelector('.proof-modal'); if(modal) modal.remove();
