@@ -10128,13 +10128,14 @@ function renderMaster(id){
     const grouped = {};
     custData.forEach((r,i) => {
       const org = typeof r === 'string' ? r : (r.org || '');
-      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '', companyId: (r.companyId||'COMP002'), quoteUndated:!!r.quoteUndated, needsAck:!!r.needsAck };
+      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '', companyId: (r.companyId||'COMP002'), quoteUndated:!!r.quoteUndated, needsAck:!!r.needsAck, sendMethod: r.sendMethod||'' };
       grouped[org].items.push({ ...r, _idx: DB.master.cust.indexOf(r) });
       if(r.type) grouped[org].type = r.type;
       if(r.orgEmail) grouped[org].email = r.orgEmail;
       if(r.companyId) grouped[org].companyId = r.companyId;
       if(r.quoteUndated) grouped[org].quoteUndated = true;
       if(r.needsAck) grouped[org].needsAck = true;
+      if(r.sendMethod) grouped[org].sendMethod = r.sendMethod;
     });
 
     html += `<div style="font-size:11px;color:#888;margin-bottom:.5rem">
@@ -10174,6 +10175,16 @@ function renderMaster(id){
             </select></label>`:`<span style="font-size:10px;color:#94a3b8">所属: ${_coName(g.companyId||'COMP002')}</span>`}
           <label style="font-size:10px;color:#555;display:inline-flex;align-items:center;gap:2px" title="この得意先は見積書を日付あり・日付なしの両方作成します"><input type="checkbox" ${g.quoteUndated?'checked':''} style="width:auto" onchange="setCustOrgFlag('${org.replace(/'/g,"\\'")}','quoteUndated',this.checked)">日付なし見積も</label>
           <label style="font-size:10px;color:#555;display:inline-flex;align-items:center;gap:2px" title="この得意先は見積と一緒に請書も自動作成します"><input type="checkbox" ${g.needsAck?'checked':''} style="width:auto" onchange="setCustOrgFlag('${org.replace(/'/g,"\\'")}','needsAck',this.checked)">請書も作成</label>
+          <label style="font-size:10px;color:#3730a3;display:inline-flex;align-items:center;gap:2px;font-weight:700" title="校正・データの既定送付方法。送信画面で自動選択されます（メールが弾かれる得意先はLINE WORKS/FAX/郵送に設定）">📤 送付方法:
+            <select style="font-size:10px;padding:2px 4px" onchange="setCustOrgSendMethod('${org.replace(/'/g,"\\'")}',this.value)">
+              <option value=""${!g.sendMethod?' selected':''}>未設定</option>
+              <option value="link"${g.sendMethod==='link'?' selected':''}>📧メール:確認リンク</option>
+              <option value="pdf"${g.sendMethod==='pdf'?' selected':''}>📎メール:PDF添付(PW別便)</option>
+              <option value="lineworks"${g.sendMethod==='lineworks'?' selected':''}>💼LINE WORKS</option>
+              <option value="line"${g.sendMethod==='line'?' selected':''}>💚LINE</option>
+              <option value="fax"${g.sendMethod==='fax'?' selected':''}>📠FAX</option>
+              <option value="postal"${g.sendMethod==='postal'?' selected':''}>📮郵送/持参</option>
+            </select></label>
           <button class="add-btn" style="font-size:10px;padding:2px 8px;margin-left:auto" onclick="addCustUser('${org.replace(/'/g,"\\'")}')">＋ ユーザー追加</button>
           <button class="del-btn" onclick="if(confirm('「${org}」とその全ユーザーを削除？')){deleteCustOrg('${org.replace(/'/g,"\\'")}')}" style="font-size:14px">×</button>
         </div>
@@ -13899,6 +13910,19 @@ function showSendProofToCustomerModal(proofingId){
   var _prod = (project ? (project.item || p.prodName) : p.prodName) || '';
   var defaultSubject = '【' + _dStr + '】【' + roundLabel + vLabel + '】' + _prod + ' [' + (p.custName||'') + ']';
 
+  // SENDMETHOD-1: 得意先マスタの「送付方法」を既定として自動選択（弾かれ対策の振分）
+  var _custRec = (DB.master && Array.isArray(DB.master.cust))
+    ? DB.master.cust.find(function(c){ return c && c.org && p.custName && c.org === p.custName; }) : null;
+  var custMethod = _custRec ? (_custRec.sendMethod || '') : '';
+  var dfltChannel = 'email', dfltMode = 'link';
+  if(custMethod === 'pdf'){ dfltChannel = 'email'; dfltMode = 'pdf'; }
+  else if(custMethod === 'link'){ dfltChannel = 'email'; dfltMode = 'link'; }
+  else if(custMethod === 'lineworks'){ dfltChannel = 'lineworks'; }
+  else if(custMethod === 'line'){ dfltChannel = 'line'; }
+  else if(custMethod === 'fax'){ dfltChannel = 'fax'; }
+  var _smLabels = { link:'📧 メール:確認リンク', pdf:'📎 メール:PDF添付(PW別便)', lineworks:'💼 LINE WORKS', line:'💚 LINE', fax:'📠 FAX', postal:'📮 郵送/持参' };
+  var _ck = function(name, val){ return (name === val) ? ' checked' : ''; };
+
   // モーダル
   var existing = document.getElementById('send-proof-customer-modal');
   if(existing) existing.remove();
@@ -13915,16 +13939,20 @@ function showSendProofToCustomerModal(proofingId){
         '送信は問い合わせ管理経由で行います。送信内容はタイムラインに自動記録されます。<br>' +
         '初校/2校等の文言は自動で件名・本文に挿入されています。' +
       '</div>' +
+      (custMethod ? ('<div style="font-size:11px;margin-bottom:8px;background:#eef2ff;padding:7px 10px;border-radius:6px;border:1px solid #c7d2fe;color:#3730a3">' +
+        '📌 この得意先の既定送付方法（マスタ設定）: <b>' + (_smLabels[custMethod]||custMethod) + '</b> を自動選択しました。' +
+        (custMethod==='postal' ? '<br><b style="color:#b91c1c">※郵送/持参の指定です。メール送信は行わない運用をご確認ください。</b>' : '') +
+      '</div>') : '') +
       '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">' +
-        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#dbeafe;border-radius:6px;cursor:pointer;border:1px solid #93c5fd"><input type="radio" name="send-channel" value="email" checked> 📧 メール</label>' +
-        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#dcfce7;border-radius:6px;cursor:pointer;border:1px solid #86efac"><input type="radio" name="send-channel" value="lineworks"> 💼 LINE WORKS</label>' +
-        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fef3c7;border-radius:6px;cursor:pointer;border:1px solid #fde047"><input type="radio" name="send-channel" value="line"> 💚 LINE Notify</label>' +
-        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fee2e2;border-radius:6px;cursor:pointer;border:1px solid #fca5a5"><input type="radio" name="send-channel" value="fax"> 📠 FAX(メール送信)</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#dbeafe;border-radius:6px;cursor:pointer;border:1px solid #93c5fd"><input type="radio" name="send-channel" value="email"' + _ck(dfltChannel,'email') + '> 📧 メール</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#dcfce7;border-radius:6px;cursor:pointer;border:1px solid #86efac"><input type="radio" name="send-channel" value="lineworks"' + _ck(dfltChannel,'lineworks') + '> 💼 LINE WORKS</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fef3c7;border-radius:6px;cursor:pointer;border:1px solid #fde047"><input type="radio" name="send-channel" value="line"' + _ck(dfltChannel,'line') + '> 💚 LINE Notify</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fee2e2;border-radius:6px;cursor:pointer;border:1px solid #fca5a5"><input type="radio" name="send-channel" value="fax"' + _ck(dfltChannel,'fax') + '> 📠 FAX(メール送信)</label>' +
       '</div>' +
       '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px">' +
         '<span style="font-size:11px;font-weight:700;color:#166534">送付方式:</span>' +
-        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="send-mode" value="link" checked onchange="_proofSendModeChange_(\'' + proofingId + '\')"> 🔗 Drive外部リンク(軽い)</label>' +
-        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="send-mode" value="pdf" onchange="_proofSendModeChange_(\'' + proofingId + '\')"> 📎 PDF添付(容量大)</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="send-mode" value="link"' + _ck(dfltMode,'link') + ' onchange="_proofSendModeChange_(\'' + proofingId + '\')"> 🔗 Drive外部リンク(軽い)</label>' +
+        '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="send-mode" value="pdf"' + _ck(dfltMode,'pdf') + ' onchange="_proofSendModeChange_(\'' + proofingId + '\')"> 📎 PDF添付(容量大)</label>' +
         '<span style="font-size:10px;color:#15803d">※重いデータは外部リンク推奨。受け取り側はリンクからDLでき、DL履歴が残ります</span>' +
       '</div>' +
       '<div id="proof-zip-pw-box" style="display:none;margin-bottom:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px">' +
@@ -13949,6 +13977,8 @@ function showSendProofToCustomerModal(proofingId){
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  // 既定送付方式に合わせて本文の案内行・パスワード欄を同期（PDF添付既定なら自動表示）
+  _proofSendModeChange_(proofingId);
 }
 
 // PPP-4: 送信実行
@@ -29225,6 +29255,11 @@ function setCustOrgCompany(org, companyId){
 // CUSTCO-8: 得意先(org)の書類フラグ（日付なし見積も/請書も）をまとめて変更
 function setCustOrgFlag(org, flag, val){
   (DB.master.cust||[]).forEach(function(c){ if(c && c.org===org) c[flag]=!!val; });
+  saveDB();
+}
+// SENDMETHOD-1: 得意先の既定送付方法を設定（校正送信時に自動選択 → 弾かれ対策の振分）
+function setCustOrgSendMethod(org, val){
+  (DB.master.cust||[]).forEach(function(c){ if(c && c.org===org) c.sendMethod=val; });
   saveDB();
 }
 
