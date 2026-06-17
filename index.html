@@ -1295,10 +1295,13 @@ setTimeout(_removeBootLoader_, 5000);
       </select>
       <button class="btn" style="font-size:11px;padding:3px 8px;color:#666" onclick="_clearProjFilters_()" title="絞り込みをすべて解除">✕ クリア</button>
     </div>
-    <!-- 行3: 作成中の見積書/受注案件 (条件表示) -->
+    <!-- 行3: 一時保存(下書き) / 進行中案件 で振り分け表示 -->
     <div id="proj-resume-row" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-height:0">
-      <button id="proj-resume-est" class="btn" style="display:none;background:#fef3c7;border-color:#fcd34d;color:#92400e;font-size:12px" onclick="if(typeof swPage==='function')swPage('est',null)" title="作りかけの見積に戻る">📝 作成中の見積書 (<span id="proj-resume-est-n">0</span>)</button>
-      <button id="proj-resume-order" class="btn" style="display:none;background:#fef3c7;border-color:#fcd34d;color:#92400e;font-size:12px" onclick="_resumeWorkingOrder_()" title="作りかけの受注案件に戻る">📋 作成中の受注案件 (<span id="proj-resume-order-n">0</span>)</button>
+      <span id="proj-save-label" style="display:none;font-size:11px;font-weight:700;color:#92400e">💾 一時保存:</span>
+      <button id="proj-resume-est" class="btn" style="display:none;background:#fef3c7;border-color:#fcd34d;color:#92400e;font-size:12px" onclick="if(typeof swPage==='function')swPage('est',null)" title="作りかけ・下書きの見積に戻る（開いているタブ＋下書き保存分）">📝 見積の下書き (<span id="proj-resume-est-n">0</span>)</button>
+      <button id="proj-resume-order" class="btn" style="display:none;background:#fef3c7;border-color:#fcd34d;color:#92400e;font-size:12px" onclick="_resumeWorkingOrder_()" title="作りかけの受注案件に戻る（金額・工程が未入力の案件）">📋 受注の作りかけ (<span id="proj-resume-order-n">0</span>)</button>
+      <span id="proj-active-label" style="display:none;font-size:11px;font-weight:700;color:#0e7490;margin-left:8px">🔄 進行中:</span>
+      <button id="proj-active-btn" class="btn" style="display:none;background:#ecfeff;border-color:#67e8f9;color:#0e7490;font-size:12px;font-weight:700" onclick="if(typeof swPage==='function')swPage('project',null)" title="進行中（着手済み・完了前）の案件一覧へ">🔄 進行中案件 (<span id="proj-active-n">0</span>)</button>
     </div>
   </div>
   <!-- NNNNN-1: ライフサイクル ステータスサブタブ (見積管理・受注管理を吸収) -->
@@ -19430,6 +19433,7 @@ function _renderEstModeCtrl_(tid){
       + '<button class="btn" style="' + SBTN + 'background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6" onclick="showHistoryAnalyzeModal(' + tid + ')">📊 過去実績と比較</button>'
       + '<button class="btn" style="' + SBTN + 'background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(' + tid + ')">⭐ テンプレ保存</button>'
       + '<span class="est-view-badge" style="' + BADGE + 'background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.25)">🖊 作成中</span>'
+      + '<button class="btn" style="' + SBTN + 'background:#ecfeff;border-color:#67e8f9;color:#0e7490" onclick="saveEstimateDraft(' + tid + ')" title="入力途中でも保存して後で再開できます（下書き・必須入力なし）">💾 一時保存</button>'
       + (isOrderC
         ? '<button class="btn" style="' + BTN + 'background:#065f46;color:#fff;border-color:#065f46;box-shadow:0 2px 6px rgba(6,95,70,.4)" onclick="openOrderConfirmModal(' + tid + ')">🟢 受注案件として登録</button>'
         : '<button class="btn" style="' + BTN + 'background:#0891b2;color:#fff;border-color:#0891b2;box-shadow:0 2px 6px rgba(8,145,178,.4)" onclick="saveEstimateAsQuote(' + tid + ')">🔵 見積書として保存</button>');
@@ -30402,6 +30406,60 @@ function saveEstimateAsQuote(tabId){
   }
 }
 
+// DRAFT-1: 一時保存（下書き）— 必須入力なしで現在の見積タブを status:'draft' でDBに保存（リロードしても残る）
+function saveEstimateDraft(tid){
+  var s = ts(tid);
+  var cust = document.getElementById('cust-' + tid)?.value || '';
+  var item = document.getElementById('prod-' + tid)?.value || '';
+  var enduser = document.getElementById('enduser-' + tid)?.value || '';
+  var qty = s.qtyPats?.[0]?.v || 0;
+  var unit = document.getElementById('unit-' + tid)?.value || '枚';
+  var adEl = document.getElementById('adopted-' + tid + '-0-0') || document.getElementById('adopted-' + tid + '-0');
+  var adopted = parseFloat(adEl?.value) || 0;
+  var exTax = Math.round(qty * adopted);
+  var costEl = document.getElementById('g-cost-' + tid);
+  var estCost = costEl ? (parseInt(costEl.textContent?.replace(/[^0-9]/g,'')) || 0) : 0;
+  var spec = '';
+  try { spec = (s.lines || []).map(function(l){ return [l.item, l.spec].filter(Boolean).join(' '); }).filter(Boolean).join(' / '); } catch(e){}
+  if(!spec) spec = item;
+  DB.estimates = DB.estimates || [];
+  var existingIdx = s._editingEstId ? DB.estimates.findIndex(function(e){ return e.id === s._editingEstId; }) : -1;
+  var isEdit = existingIdx >= 0;
+  var estId = isEdit ? s._editingEstId : ('EST-' + Date.now());
+  var prev = isEdit ? DB.estimates[existingIdx] : null;
+  var estData = {
+    id: estId,
+    companyId: currentAuth?.companyId || 'COMP001',
+    companyCode: (typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : '',
+    cust: cust, item: item, spec: spec, endUser: enduser,
+    relay: document.getElementById('relay-'+tid)?.value||'',
+    endUserDept: document.getElementById('enduser-dept-'+tid)?.value||'',
+    delivTarget: document.getElementById('deliv-target-'+tid)?.value||'auto',
+    delivOther: document.getElementById('deliv-other-'+tid)?.value||'',
+    delivMulti: !!document.getElementById('deliv-multi-'+tid)?.checked,
+    delivList: document.getElementById('deliv-multi-list-'+tid)?.value||'',
+    qty: qty, unit: unit, exTax: exTax, estCost: estCost,
+    repeatFrom: s._repeatFrom || '',
+    repeatRefs: (s._repeatRefs || []).slice(),
+    docKind: (typeof _estDocKind_ === 'function') ? _estDocKind_(tid) : 'final',
+    bidMayor: document.getElementById('bid-mayor-'+tid)?.value||'',
+    bidMember: document.getElementById('bid-member-'+tid)?.value||'',
+    status: 'draft',
+    source: 'estimator',
+    createdAt: prev ? prev.createdAt : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    createdBy: prev ? prev.createdBy : (currentAuth?.userName || '')
+  };
+  if(isEdit){ DB.estimates[existingIdx] = estData; } else { DB.estimates.push(estData); }
+  s._editingEstId = estId; // 以後の保存は同じ下書きを更新
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  if(typeof _addAuditLog_ === 'function') try { _addAuditLog_('update','estimate:'+estId,'見積を一時保存(下書き): '+(cust||'無題')+'/'+(item||'')); } catch(e){}
+  if(typeof renderProjStageTabs === 'function') try { renderProjStageTabs(); } catch(e){}
+  if(typeof _toastMsg === 'function') _toastMsg('💾 一時保存しました（下書き）— 見積一覧やホームの「一時保存」から再開できます');
+  else alert('💾 一時保存しました（下書き）');
+}
+
 function openOrderConfirmModal(tabId){
   const s = ts(tabId);
   const cust = document.getElementById(`cust-${tabId}`)?.value || '';
@@ -31997,29 +32055,41 @@ function _projStageOf_(status){
 }
 
 function renderProjStageTabs(){
-  // WPPPP-3: 作りかけ見積 (est タブ) があれば「作成中の見積」ボタンを表示
+  // WPPPP-3 / DRAFT-1: 「💾 一時保存(下書き)」と「🔄 進行中案件」で振り分け表示
   try {
+    // ① 見積の下書き = 開いているタブ + status:'draft' で保存済みの見積
+    var openTabs = (typeof tabs !== 'undefined' && Array.isArray(tabs)) ? tabs.length : 0;
+    var draftEst = (DB.estimates || []).filter(function(e){ return e && (e.status||'') === 'draft'; }).length;
+    var estN = openTabs + draftEst;
     var resumeBtn = document.getElementById('proj-resume-est');
     if(resumeBtn){
-      var n = (typeof tabs !== 'undefined' && Array.isArray(tabs)) ? tabs.length : 0;
-      if(n > 0){
-        resumeBtn.style.display = '';
-        var nEl = document.getElementById('proj-resume-est-n'); if(nEl) nEl.textContent = n;
-      } else {
-        resumeBtn.style.display = 'none';
-      }
+      resumeBtn.style.display = estN > 0 ? '' : 'none';
+      var nEl = document.getElementById('proj-resume-est-n'); if(nEl) nEl.textContent = estN;
     }
-    // 📋 作成中の受注案件 (=ステップ未着手 or 受注額0の案件) があればボタン表示
+    // ② 受注の作りかけ = ステップ未着手 or 受注額0 の案件（実質下書き）
+    var workingOrders = (typeof _isWorkingOrder_ === 'function') ? (DB.projects || []).filter(_isWorkingOrder_) : [];
     var orderBtn = document.getElementById('proj-resume-order');
-    if(orderBtn && typeof _isWorkingOrder_ === 'function'){
-      var workingOrders = (DB.projects || []).filter(_isWorkingOrder_);
-      if(workingOrders.length > 0){
-        orderBtn.style.display = '';
-        var oEl = document.getElementById('proj-resume-order-n'); if(oEl) oEl.textContent = workingOrders.length;
-      } else {
-        orderBtn.style.display = 'none';
-      }
+    if(orderBtn){
+      orderBtn.style.display = workingOrders.length > 0 ? '' : 'none';
+      var oEl = document.getElementById('proj-resume-order-n'); if(oEl) oEl.textContent = workingOrders.length;
     }
+    // ③ 進行中案件 = 作りかけでなく、完了前（着手済み）の案件
+    var doneSt = ['完了','納品済','失注','キャンセル'];
+    var activeProjects = (DB.projects || []).filter(function(p){
+      if(!p) return false;
+      if(typeof _isWorkingOrder_ === 'function' && _isWorkingOrder_(p)) return false; // 作りかけは一時保存側
+      return doneSt.indexOf(p.status || '') < 0;
+    });
+    var activeBtn = document.getElementById('proj-active-btn');
+    if(activeBtn){
+      activeBtn.style.display = activeProjects.length > 0 ? '' : 'none';
+      var aEl = document.getElementById('proj-active-n'); if(aEl) aEl.textContent = activeProjects.length;
+    }
+    // グループ見出しの表示制御
+    var saveLbl = document.getElementById('proj-save-label');
+    if(saveLbl) saveLbl.style.display = (estN > 0 || workingOrders.length > 0) ? '' : 'none';
+    var actLbl = document.getElementById('proj-active-label');
+    if(actLbl) actLbl.style.display = activeProjects.length > 0 ? '' : 'none';
   } catch(e){}
 
   var container = document.getElementById('proj-stage-tabs');
