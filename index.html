@@ -12621,6 +12621,7 @@ function advanceWorkStatus(type, id, projectId){
   var cur=_normStatus_(it.status,cycle,legacy);
   it.status=cycle[(cycle.indexOf(cur)+1)%cycle.length];
   if(type==='job') it.doneAt = (it.status==='完了') ? new Date().toISOString() : null;
+  it.statusDates=it.statusDates||{}; if(!it.statusDates[it.status]) it.statusDates[it.status]=new Date().toISOString();
   // 進行させたら作業者を記録（未記録なら操作中のユーザー＝「進める人が自分の名前を入れる」）
   if(it.status!==cycle[0] && !it.worker){
     it.worker=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'';
@@ -12696,6 +12697,75 @@ function _projProcessSummaryMini_(p){
   (DB.deliveryItems||[]).filter(function(x){return x.projectId===pid;}).forEach(function(x){ parts.push(badge('🚚', _normStatus_(x.status,DLV_CYCLE,{planned:'準備',shipped:'発送済',delivered:'納品済'}))); });
   if(!parts.length) return '';
   return '<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:1px">'+parts.join('')+'</div>';
+}
+
+// MILESTONE-1: 案件の進行マイルストーン（節目ごとに自動で日付が入る）
+function _projMilestones_(p){
+  var ms=[]; var d=function(iso){ return iso? String(iso).slice(0,10):''; };
+  // 1. 受注・案件スタート
+  var startD=p.orderDate || (p.createdAt? p.createdAt.slice(0,10):'');
+  ms.push({icon:'📝',label:'受注・案件スタート',date:startD,done:!!startD});
+  // 2. 材料発注済み（用紙等の仕入が発注済/入荷済）
+  var purs=(DB.purchaseOrders||[]).filter(function(x){return x.projectId===p.id;});
+  var purDone=purs.some(function(x){ var s=_normStatus_(x.status,PUR_CYCLE,{planned:'未発注',ordered:'発注済',received:'入荷済'}); return s==='発注済'||s==='入荷済'; });
+  var purDate=''; purs.forEach(function(x){ var sd=x.statusDates||{}; var dd=sd['発注済']||sd['入荷済']||x.orderDate||''; if(dd&&(!purDate||dd<purDate)) purDate=dd; });
+  if(purs.length) ms.push({icon:'📦',label:purDone?'材料発注済み':'材料発注待ち',date:d(purDate),done:purDone});
+  // 3. データ作成開始（DTP社内ジョブ着手 / 校正セッション作成 / 版下着手）
+  var jobs=(DB.inhouseJobs||[]).filter(function(x){return x.projectId===p.id;});
+  var dataJob=jobs.find(function(j){ return (j.process||'').indexOf('データ')>=0 && j.status && j.status!=='待ち'; });
+  var prfs=(DB.proofings||[]).filter(function(x){return x.projectId===p.id;});
+  var hanshita=p.steps&&p.steps['版下']&&p.steps['版下']!=='─';
+  var dataDone=!!dataJob||prfs.length>0||hanshita;
+  var dataDate='';
+  if(dataJob&&dataJob.statusDates) dataDate=dataJob.statusDates['作業中']||dataJob.statusDates['完了']||'';
+  if(!dataDate&&prfs.length){ dataDate=prfs.map(function(x){return x.createdAt;}).filter(Boolean).sort()[0]||''; }
+  if(!dataDate&&p.stepDates&&p.stepDates['版下']) dataDate=p.stepDates['版下'];
+  ms.push({icon:'🎨',label:dataDone?'データ作成開始':'データ未着手',date:d(dataDate),done:dataDone});
+  // 4. 校正（何校中 / 校了）
+  if(prfs.length){
+    var latest=prfs[prfs.length-1]; var ps=latest.status||'校正中';
+    var proofDone=/校了|完了|approved|final/.test(ps);
+    ms.push({icon:'📐',label:proofDone?'校了':(/校/.test(ps)?ps:'校正中'),date:d(latest.updatedAt||latest.createdAt),done:proofDone});
+  }
+  // 5. 印刷
+  var printJob=jobs.find(function(j){return (j.process||'').indexOf('印刷')>=0;});
+  var printStep=(p.steps&&p.steps['印刷'])||'';
+  if(printJob||(printStep&&printStep!=='─')){
+    var pDone=(printJob&&printJob.status==='完了')||printStep==='完了';
+    var pDate=''; if(printJob&&printJob.statusDates) pDate=printJob.statusDates['完了']||printJob.statusDates['作業中']||''; if(!pDate&&p.stepDates) pDate=p.stepDates['印刷']||'';
+    ms.push({icon:'🖨',label:pDone?'印刷完了':'印刷中',date:d(pDate),done:pDone});
+  }
+  // 6. 加工・製本
+  var kJob=jobs.find(function(j){var pr=j.process||'';return pr.indexOf('加工')>=0||pr.indexOf('製本')>=0||pr.indexOf('抜き')>=0;});
+  var kStep=(p.steps&&p.steps['加工'])||'';
+  if(kJob||(kStep&&kStep!=='─')){
+    var kDone=(kJob&&kJob.status==='完了')||kStep==='完了';
+    var kDate=''; if(kJob&&kJob.statusDates) kDate=kJob.statusDates['完了']||kJob.statusDates['作業中']||''; if(!kDate&&p.stepDates) kDate=p.stepDates['加工']||'';
+    ms.push({icon:'🔧',label:kDone?'加工完了':'加工中',date:d(kDate),done:kDone});
+  }
+  // 7. 発送
+  if(p.stockStatus==='発送済'||p.shippedAt||p.stockStatus==='納品済'||p.deliveredAt){ ms.push({icon:'📤',label:'発送済',date:d(p.shippedAt),done:true}); }
+  // 8. 納品
+  ms.push({icon:'🚚',label:'納品完了',date:d(p.deliveredAt),done:(p.stockStatus==='納品済'||!!p.deliveredAt)});
+  return ms;
+}
+function _renderProjMilestones_(p){
+  var ms=_projMilestones_(p);
+  var curIdx=-1; for(var i=0;i<ms.length;i++){ if(!ms[i].done){ curIdx=i; break; } }
+  var cells=ms.map(function(m,i){
+    var state=m.done?'done':(i===curIdx?'current':'todo');
+    var col=state==='done'?'#16a34a':state==='current'?'#f59e0b':'#cbd5e1';
+    var bg=state==='done'?'#f0fdf4':state==='current'?'#fffbeb':'#f8fafc';
+    return '<div style="flex:1;min-width:84px;text-align:center;padding:6px 3px;border-radius:8px;background:'+bg+';border:1px solid '+col+'">'
+      +'<div style="font-size:17px;line-height:1">'+m.icon+'</div>'
+      +'<div style="font-size:10px;font-weight:700;margin-top:2px;color:'+(state==='todo'?'#94a3b8':col)+'">'+m.label+'</div>'
+      +'<div style="font-size:9px;color:#64748b;min-height:12px">'+(m.date||(state==='todo'?'—':''))+'</div>'
+      +(state==='current'?'<div style="font-size:8px;color:#b45309;font-weight:700">▶ 進行中</div>':'')
+      +'</div>';
+  }).join('<div style="align-self:center;color:#cbd5e1;font-size:11px">▶</div>');
+  return '<div style="margin-top:12px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:10px">'
+    +'<div style="font-size:12px;font-weight:800;color:#0e7490;margin-bottom:6px">🚦 進行状況（節目で自動的に日付が入ります）</div>'
+    +'<div style="display:flex;align-items:stretch;gap:3px;flex-wrap:wrap">'+cells+'</div></div>';
 }
 
 // ════════ QRSHIP-1: QR出荷・在庫モジュール（製品QR＋場所/受領書QRのペアスキャン）════════
@@ -12887,6 +12957,7 @@ function claimWork(type,id,projectId){
   var cyc = type==='pur'?PUR_CYCLE : type==='out'?OUT_CYCLE : type==='dlv'?DLV_CYCLE : JOB_CYCLE;
   var legacy = type==='pur'?{planned:'未発注',ordered:'発注済',received:'入荷済'} : type==='out'?{planned:'未発注',ordered:'発注済',delivered:'納品済'} : type==='dlv'?{planned:'準備',shipped:'発送済',delivered:'納品済'} : {};
   if(_normStatus_(it.status,cyc,legacy)===cyc[0]) it.status=cyc[1]; // 未着手→次の状態へ
+  it.statusDates=it.statusDates||{}; if(!it.statusDates[it.status]) it.statusDates[it.status]=new Date().toISOString();
   _logProcessTimeline_(it.projectId, _workTypeLabel_(type,it)+' 着手 ('+(it.worker||'')+') → '+it.status);
   if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   if(projectId){ var m=document.querySelector('.proof-modal'); if(m) m.remove(); if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId); }
@@ -27816,6 +27887,7 @@ function showWorkInstructionView(projectId){
           </div>` : ''}
           ${instructionPane}
           ${proofPane}
+          ${_renderProjMilestones_(project)}
           ${(function(){
             var _pid=String(projectId).replace(/'/g,'');
             var _allGo = GATE_ACTIONS.every(function(a){ return _projActionStatus_(project,a).go; });
