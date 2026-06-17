@@ -7177,13 +7177,10 @@ function buildPanel(id,initData){
         <option value="partial">分離発注（一部外注）</option>
       </select>
     </div>
-    <div id="outsource-panel-${id}" style="display:none">
-      <div id="outsource-items-${id}"></div>
-      <button class="btn" style="font-size:11px;padding:3px 8px;margin-top:.5rem" onclick="addOutsourceItem(${id})">＋ 外注項目を追加</button>
-    </div>
-    <div id="outsource-summary-${id}" style="display:none;margin-top:.5rem;padding-top:.5rem;border-top:1px dashed #fcd34d">
+    <div id="outsource-summary-${id}" style="margin-top:.5rem;padding-top:.5rem;border-top:1px dashed #fcd34d">
+      <div style="font-size:10.5px;color:#92400e;margin-bottom:4px">💡 外注の明細（工程・外注先・金額・納品先）は右の「🏭 工程別発注」で入力。ここは合計の表示です。</div>
       <div style="display:flex;justify-content:space-between;font-size:12px">
-        <span>外注費合計</span>
+        <span>外注費合計（＝工程発注合計）</span>
         <strong id="outsource-total-${id}" style="color:#92400e">¥0</strong>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:2px">
@@ -10723,6 +10720,8 @@ function calcProcessTotal(id){
   const total = orders.reduce((sum, o) => sum + (o.price || 0), 0);
   const el = document.getElementById(`process-total-${id}`);
   if(el) el.textContent = '¥' + total.toLocaleString();
+  // 外注費合計/粗利（外注設定の表示）も同期
+  if(typeof calcOutsource === 'function') try{ calcOutsource(id); }catch(e){}
 }
 
 // ═══════════════════ 追加費用 ══════════════════
@@ -29744,28 +29743,14 @@ function confirmOrder(tabId){
 
 // 外注パネルの表示切替
 function toggleOutsourcePanel(tabId){
-  const type = document.getElementById(`outsource-type-${tabId}`)?.value || 'none';
-  const panel = document.getElementById(`outsource-panel-${tabId}`);
-  const summary = document.getElementById(`outsource-summary-${tabId}`);
-  
-  if(type === 'none'){
-    panel.style.display = 'none';
-    summary.style.display = 'none';
-  } else {
-    panel.style.display = 'block';
-    summary.style.display = 'block';
-    // 初回は1行追加
-    const items = document.getElementById(`outsource-items-${tabId}`);
-    if(!items.children.length){
-      addOutsourceItem(tabId);
-    }
-  }
+  // 外注の明細入力は「工程別発注」に一本化。ここは合計表示のみ（常時表示）。
   calcOutsource(tabId);
 }
 
 // 外注項目を追加
 function addOutsourceItem(tabId){
   const items = document.getElementById(`outsource-items-${tabId}`);
+  if(!items) return; // 外注明細は工程別発注に一本化済（手入力欄なし）
   const idx = items.children.length;
   
   // グループ会社の選択肢を生成
@@ -29798,17 +29783,13 @@ function addOutsourceItem(tabId){
 
 // 外注費を計算
 function calcOutsource(tabId){
-  const items = document.getElementById(`outsource-items-${tabId}`);
-  if(!items) return;
-  
-  let total = 0;
-  items.querySelectorAll('input[type=number]').forEach(inp=>{
-    total += parseFloat(inp.value) || 0;
-  });
-  
+  // 外注費合計＝工程別発注の合計に一本化（外注設定の手入力は廃止）
+  var total = (typeof getProcessOrders === 'function')
+    ? getProcessOrders(tabId).reduce(function(sum,o){ return sum + (parseFloat(o.price)||0); }, 0)
+    : 0;
   const totalEl = document.getElementById(`outsource-total-${tabId}`);
   if(totalEl) totalEl.textContent = '¥' + total.toLocaleString();
-  
+
   // 粗利計算（税抜売上 - 外注費）
   const s = ts(tabId);
   const qty = s.qtyPats[0]?.v || 0;
@@ -29816,30 +29797,16 @@ function calcOutsource(tabId){
   const adopted = parseFloat(adEl?.value) || 0;
   const exTax = Math.round(qty * adopted);
   const grossProfit = exTax - total;
-  
+
   const gpEl = document.getElementById(`gross-profit-${tabId}`);
   if(gpEl){
     gpEl.textContent = '¥' + grossProfit.toLocaleString();
     gpEl.style.color = grossProfit >= 0 ? '#065f46' : '#dc2626';
   }
-  
-  // タブ状態に保存
+
   if(!s.outsource) s.outsource = {};
   s.outsource.type = document.getElementById(`outsource-type-${tabId}`)?.value || 'none';
   s.outsource.total = total;
-  s.outsource.items = [];
-  items.querySelectorAll('& > div').forEach(row=>{
-    const sel = row.querySelector('select');
-    const txt = row.querySelector('input[type=text]');
-    const num = row.querySelector('input[type=number]');
-    if(sel && txt && num){
-      s.outsource.items.push({
-        vendorId: sel.value,
-        desc: txt.value,
-        amount: parseFloat(num.value) || 0
-      });
-    }
-  });
 }
 
 // 外注項目からグループ会社への発注を取得
