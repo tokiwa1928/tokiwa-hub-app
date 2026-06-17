@@ -13927,7 +13927,17 @@ function showSendProofToCustomerModal(proofingId){
         '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="send-mode" value="pdf" onchange="_proofSendModeChange_(\'' + proofingId + '\')"> 📎 PDF添付(容量大)</label>' +
         '<span style="font-size:10px;color:#15803d">※重いデータは外部リンク推奨。受け取り側はリンクからDLでき、DL履歴が残ります</span>' +
       '</div>' +
-      '<div class="f"><label style="font-size:11px">宛先 (メール/FAXはFAX番号@gateway / LWユーザーID / LINE token key)</label>' +
+      '<div id="proof-zip-pw-box" style="display:none;margin-bottom:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px">' +
+        '<div style="font-size:11px;font-weight:700;color:#92400e;margin-bottom:5px">🔐 パスワード付きZIP（パスワードは別便で自動送付）</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+          '<span style="font-size:11px;color:#666">ZIP用パスワード:</span>' +
+          '<input id="proof-zip-pw" readonly value="' + _genZipPassword_() + '" style="font-size:14px;font-family:monospace;font-weight:700;width:150px;background:#fff;letter-spacing:2px;padding:4px 6px;border:1px solid #fcd34d;border-radius:4px">' +
+          '<button type="button" class="btn" style="font-size:10px;padding:3px 8px" onclick="var e=document.getElementById(\'proof-zip-pw\');e.value=_genZipPassword_()">🔄 再生成</button>' +
+          '<label style="font-size:11px;display:inline-flex;align-items:center;gap:3px;margin-left:auto;cursor:pointer;font-weight:700;color:#166534"><input type="checkbox" id="proof-zip-pw-on" checked> 別便パスワード＋送付通知を自動送信</label>' +
+        '</div>' +
+        '<div style="font-size:10px;color:#a16207;margin-top:5px;line-height:1.5">① <b>このパスワードでPDFをZIP暗号化</b>して添付 → ② 本メール送信 → ③ パスワードと「送付しました」の通知を<b>別メールで自動送付</b>します。</div>' +
+      '</div>' +
+      '<div class="f"><label style="font-size:11px">宛先(メール/FAXはFAX番号@gateway / LWユーザーID / LINE token key)</label>' +
         '<input id="proof-send-to" placeholder="email@example.com / 0312345678@fax.gateway / lwuser123 / default" value="' + ((project && project.contactEmail) || '') + '" style="font-size:12px"></div>' +
       '<div class="f"><label style="font-size:11px">件名 (メール/FAX)</label>' +
         '<input id="proof-send-subject" value="' + defaultSubject.replace(/"/g, '&quot;') + '" style="font-size:12px"></div>' +
@@ -13958,6 +13968,11 @@ async function submitSendProofToCustomer(proofingId){
 
   var sendModeEl = document.querySelector('#send-proof-customer-modal input[name="send-mode"]:checked');
   var sendMode = sendModeEl ? sendModeEl.value : 'link';
+  // PPAP: パスワード付きZIP（別便パスワード＋送付通知の自動送信）— モーダル除去前に値を取得
+  var _pwEl = document.getElementById('proof-zip-pw');
+  var _pwOnEl = document.getElementById('proof-zip-pw-on');
+  var zipPw = _pwEl ? _pwEl.value : '';
+  var pwOn = (sendMode === 'pdf') && !!(_pwOnEl && _pwOnEl.checked) && !!zipPw;
   try {
     var apiResult;
     if(channel === 'email' || channel === 'fax'){
@@ -13997,12 +14012,51 @@ async function submitSendProofToCustomer(proofingId){
       saveDB();
       if(typeof _addAuditLog_ === 'function') _addAuditLog_('proofing', proofingId, '校正を ' + channel + ' でお客様送信: ' + to);
       document.getElementById('send-proof-customer-modal').remove();
-      showProofingDetail(proofingId);
-      // 送付後の確認メールを促す (○月○日に送りました。届いていなければご連絡ください)
-      if((channel === 'email' || channel === 'fax') && confirm('✅ 送信が完了しました。\n\n続けて「○月○日に送付しました。届いていなければご連絡ください」の確認メールを送りますか?')){
-        _composeProofConfirmMail_(proofingId, to);
+      // PPAP: パスワード付きZIP送付時は、別便パスワード＋送付通知を自動送信
+      if(pwOn && (channel === 'email' || channel === 'fax')){
+        var _proj = (DB.projects||[]).find(function(pr){ return pr.id===p.projectId; });
+        var _prodN = (_proj ? (_proj.item || p.prodName) : p.prodName) || '';
+        var _td2 = new Date();
+        var _dJ = (_td2.getMonth()+1) + '月' + _td2.getDate() + '日';
+        var _cn = p.custName || '';
+        // ② 別便: パスワード
+        var pwSubject = '【パスワードのお知らせ】' + _prodN + (_cn ? ' [' + _cn + ']' : '');
+        var pwBody = _cn + ' 様\n\n' +
+          'お世話になっております。\n' +
+          '先ほどお送りした校正データ（パスワード付きZIP）のパスワードを、\n' +
+          'セキュリティのため別メールにてお知らせいたします。\n\n' +
+          '【パスワード】' + zipPw + '\n\n' +
+          '何卒よろしくお願い申し上げます。';
+        // ③ 送付アナウンス
+        var anSubject = '【送付のご確認】' + _prodN + (_cn ? ' [' + _cn + ']' : '');
+        var anBody = _cn + ' 様\n\n' +
+          'お世話になっております。\n' +
+          '先ほど ' + _dJ + ' に校正データ（パスワード付きZIP）をお送りいたしました。\n\n' +
+          'お手元に届いていない場合や、ご覧になれない場合は\n' +
+          'お手数ですがご一報いただけますと幸いです。\n\n' +
+          'ご確認のほど、よろしくお願い申し上げます。';
+        try {
+          var r2 = await _sendProofSubMail_(to, pwSubject, pwBody);
+          var r3 = await _sendProofSubMail_(to, anSubject, anBody);
+          var ok2 = !!(r2 && r2.success), ok3 = !!(r3 && r3.success);
+          p.customerSentLog.push({ id:'SND'+Date.now()+'P', at:new Date().toISOString(), channel:channel, sub:'password', to:to, subject:pwSubject, body:'(パスワードは別便で自動送付しました)', by:(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'user' });
+          p.customerSentLog.push({ id:'SND'+Date.now()+'A', at:new Date().toISOString(), channel:channel, sub:'announce', to:to, subject:anSubject, body:anBody, by:(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'user' });
+          saveDB();
+          if(typeof _addAuditLog_ === 'function') _addAuditLog_('proofing', proofingId, '別便パスワード＋送付通知を自動送信: ' + to);
+          showProofingDetail(proofingId);
+          alert('✅ 送信が完了しました。\n\n別便で以下も自動送付しました:\n② パスワード … ' + (ok2?'送信成功':'⚠送信失敗') + '\n③ 送付通知 … ' + (ok3?'送信成功':'⚠送信失敗'));
+        } catch(e2){
+          showProofingDetail(proofingId);
+          alert('⚠ 本メールは送信済みですが、別便（パスワード／通知）でエラー: ' + e2.message);
+        }
       } else {
-        alert('✅ 送信が完了しました');
+        showProofingDetail(proofingId);
+        // 送付後の確認メールを促す (○月○日に送りました。届いていなければご連絡ください)
+        if((channel === 'email' || channel === 'fax') && confirm('✅ 送信が完了しました。\n\n続けて「○月○日に送付しました。届いていなければご連絡ください」の確認メールを送りますか?')){
+          _composeProofConfirmMail_(proofingId, to);
+        } else {
+          alert('✅ 送信が完了しました');
+        }
       }
     } else {
       alert('⚠ 送信失敗: ' + ((apiResult && apiResult.error) || 'unknown'));
@@ -14064,6 +14118,22 @@ function _proofSendModeChange_(proofingId){
   // 既存の案内行を入れ替え (なければ末尾に追記)
   var lines = ta.value.split('\n').filter(function(l){ return !/^※/.test(l.trim()); });
   ta.value = lines.join('\n').replace(/\n+$/,'') + '\n\n' + note;
+  // PDF添付時のみ「パスワード付きZIP（別便自動送付）」UIを表示
+  var pwBox = document.getElementById('proof-zip-pw-box');
+  if(pwBox) pwBox.style.display = (mode === 'pdf') ? 'block' : 'none';
+}
+// ZIPパスワード自動生成 (紛らわしい文字 0/O/o/1/l/I を除外した10桁)
+function _genZipPassword_(){
+  var cs='ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  var s=''; for(var i=0;i<10;i++){ s+=cs.charAt(Math.floor(Math.random()*cs.length)); }
+  return s;
+}
+// 校正の汎用メール送信 (別便パスワード/送付通知に使用) — 既存 forwardInquiryToEmail を流用
+async function _sendProofSubMail_(to, subject, body){
+  return await callCloudAPI('forwardInquiryToEmail', {}, {
+    replyTo: to, subject: subject, body: body,
+    by: (typeof currentAuth !== 'undefined' && currentAuth && currentAuth.userName) || 'user'
+  });
 }
 // 送付後の「確認メール」を作成 (○月○日に送付しました。届いていなければご連絡ください)
 function _composeProofConfirmMail_(proofingId, to){
