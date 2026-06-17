@@ -12556,6 +12556,7 @@ function renderInhouseJobs(){
         +'<span style="font-size:11px;color:#64748b">'+(j.qty?Number(j.qty).toLocaleString()+(j.unit||''):'')+'</span>'
         +(j.dueDate?'<span style="font-size:11px;color:'+(late?'#dc2626':'#64748b')+'">納期 '+j.dueDate+(late?' ⚠':'')+'</span>':'')
         +'<span style="font-size:10px;color:#94a3b8">'+(j.projectId||'')+'</span>'
+        +_workMetaCtrl_('job',j,'')
         +'<div style="margin-left:auto;display:flex;gap:4px">'
         +'<button class="btn" style="font-size:10px;padding:2px 8px" onclick="openInhouseJobProject(\''+j.id+'\')" title="製造指示書を開く">📋 指示書</button>'
         +'<button class="del-btn" style="font-size:12px" onclick="deleteInhouseJob(\''+j.id+'\')">×</button>'
@@ -12565,15 +12566,7 @@ function renderInhouseJobs(){
   });
   container.innerHTML=html;
 }
-function cycleInhouseJobStatus(jobId){
-  var j=(DB.inhouseJobs||[]).find(function(x){return x.id===jobId;}); if(!j) return;
-  var cyc=['待ち','作業中','完了']; var i=cyc.indexOf(j.status||'待ち');
-  j.status=cyc[(i+1)%cyc.length];
-  if(j.status==='完了') j.doneAt=new Date().toISOString(); else j.doneAt=null;
-  if(typeof saveDB==='function') saveDB();
-  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
-  renderInhouseJobs();
-}
+function cycleInhouseJobStatus(jobId){ advanceWorkStatus('job', jobId, ''); }
 function openInhouseJobProject(jobId){
   var j=(DB.inhouseJobs||[]).find(function(x){return x.id===jobId;}); if(!j) return;
   if(typeof showWorkInstructionView==='function') showWorkInstructionView(j.projectId);
@@ -12608,10 +12601,15 @@ function advanceWorkStatus(type, id, projectId){
   var cur=_normStatus_(it.status,cycle,legacy);
   it.status=cycle[(cycle.indexOf(cur)+1)%cycle.length];
   if(type==='job') it.doneAt = (it.status==='完了') ? new Date().toISOString() : null;
+  // 進行させたら作業者を記録（未記録なら操作中のユーザー＝「進める人が自分の名前を入れる」）
+  if(it.status!==cycle[0] && !it.worker){
+    it.worker=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'';
+    it.workerAt=new Date().toISOString();
+  }
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
-  var modal=document.querySelector('.proof-modal'); if(modal) modal.remove();
-  if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId);
+  if(projectId){ var modal=document.querySelector('.proof-modal'); if(modal) modal.remove(); if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId); }
+  else { if(typeof renderInhouseJobs==='function') renderInhouseJobs(); }
 }
 var _WS_DONE_RE=/(入荷済|納品済|完了|校了)/;
 var _WS_MID_RE=/(発注済|作業中|発送済|納品待ち|進行|初校|2校|再校|校正中|approved|sent)/;
@@ -12642,24 +12640,48 @@ function _renderProjProcessPanel_(project){
   });
   purs.forEach(function(x){
     var st=_normStatus_(x.status,PUR_CYCLE,{planned:'未発注',ordered:'発注済',received:'入荷済'});
-    rows+=row('📦','用紙・仕入',_wsBtn_(st,"advanceWorkStatus('pur','"+x.id+"','"+_pid+"')"), x.item||'');
+    rows+=row('📦','用紙・仕入',_wsBtn_(st,"advanceWorkStatus('pur','"+x.id+"','"+_pid+"')")+_workMetaCtrl_('pur',x,_pid), x.item||'');
   });
   jobs.forEach(function(j){
     var st=_normStatus_(j.status,JOB_CYCLE,{});
-    rows+=row('🏭','社内:'+(j.process||'工程'),_wsBtn_(st,"advanceWorkStatus('job','"+j.id+"','"+_pid+"')"),'');
+    rows+=row('🏭','社内:'+(j.process||'工程'),_wsBtn_(st,"advanceWorkStatus('job','"+j.id+"','"+_pid+"')")+_workMetaCtrl_('job',j,_pid),'');
   });
   outs.forEach(function(x){
     var st=_normStatus_(x.status,OUT_CYCLE,{planned:'未発注',ordered:'発注済',delivered:'納品済'});
-    rows+=row('🤝','外注',_wsBtn_(st,"advanceWorkStatus('out','"+x.id+"','"+_pid+"')"), (x.item||'')+(x.vendor?(' / '+x.vendor):''));
+    rows+=row('🤝','外注',_wsBtn_(st,"advanceWorkStatus('out','"+x.id+"','"+_pid+"')")+_workMetaCtrl_('out',x,_pid), (x.item||'')+(x.vendor?(' / '+x.vendor):''));
   });
   dlvs.forEach(function(x){
     var st=_normStatus_(x.status,DLV_CYCLE,{planned:'準備',shipped:'発送済',delivered:'納品済'});
-    rows+=row('🚚','配送/納品',_wsBtn_(st,"advanceWorkStatus('dlv','"+x.id+"','"+_pid+"')"),'');
+    rows+=row('🚚','配送/納品',_wsBtn_(st,"advanceWorkStatus('dlv','"+x.id+"','"+_pid+"')")+_workMetaCtrl_('dlv',x,_pid),'');
   });
   if(!rows) rows='<div style="font-size:11px;color:#888;padding:8px">関連する後工程(仕入/校正/社内ジョブ/外注/配送)がまだありません。受注確定時に自動登録されます。</div>';
   return '<div style="margin-top:16px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:10px">'
-    +'<div style="font-size:12px;font-weight:800;color:#0e7490;margin-bottom:6px">📊 工程進捗（各状態をクリックで進める：例 用紙=発注済→入荷済 / 校正=進行中 ）</div>'
+    +'<div style="font-size:12px;font-weight:800;color:#0e7490;margin-bottom:6px">📊 工程進捗（状態をクリックで進める／予定日・作業者を入力。進めると作業者に自分が記録されます）</div>'
     +rows+'</div>';
+}
+// 予定日・作業者の操作（チームのプールから着手者が自分の名前を入れる運用）
+function _workArr_(type){ return type==='pur'?DB.purchaseOrders : type==='out'?DB.outsourceOrders : type==='dlv'?DB.deliveryItems : type==='job'?DB.inhouseJobs : null; }
+function _workFind_(type,id){ var a=_workArr_(type)||[]; return a.find(function(x){return x.id===id;}); }
+function setWorkDate(type,id,val){ var it=_workFind_(type,id); if(!it) return; it.plannedDate=val; if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){} if(typeof renderInhouseJobs==='function') try{renderInhouseJobs();}catch(e){} }
+function setWorkWorker(type,id,val){ var it=_workFind_(type,id); if(!it) return; it.worker=val; it.workerAt=new Date().toISOString(); if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){} if(typeof renderInhouseJobs==='function') try{renderInhouseJobs();}catch(e){} }
+// ✋私が対応: 作業者に自分をセット＋未着手なら1段進める
+function claimWork(type,id,projectId){
+  var it=_workFind_(type,id); if(!it) return;
+  it.worker=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'';
+  it.workerAt=new Date().toISOString();
+  var cyc = type==='pur'?PUR_CYCLE : type==='out'?OUT_CYCLE : type==='dlv'?DLV_CYCLE : JOB_CYCLE;
+  var legacy = type==='pur'?{planned:'未発注',ordered:'発注済',received:'入荷済'} : type==='out'?{planned:'未発注',ordered:'発注済',delivered:'納品済'} : type==='dlv'?{planned:'準備',shipped:'発送済',delivered:'納品済'} : {};
+  if(_normStatus_(it.status,cyc,legacy)===cyc[0]) it.status=cyc[1]; // 未着手→次の状態へ
+  if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  if(projectId){ var m=document.querySelector('.proof-modal'); if(m) m.remove(); if(typeof showWorkInstructionView==='function') showWorkInstructionView(projectId); }
+  else { if(typeof renderInhouseJobs==='function') renderInhouseJobs(); }
+}
+// 予定日＋作業者＋✋私 のコントロール
+function _workMetaCtrl_(type,it,projectId){
+  var d=it.plannedDate||''; var w=(it.worker||'').replace(/"/g,'&quot;'); var pj=projectId||'';
+  return '<input type="date" value="'+d+'" onchange="setWorkDate(\''+type+'\',\''+it.id+'\',this.value)" style="font-size:11px;padding:2px 4px" title="予定日">'
+    +'<input type="text" value="'+w+'" placeholder="作業者" onchange="setWorkWorker(\''+type+'\',\''+it.id+'\',this.value)" style="font-size:11px;padding:2px 4px;width:74px" title="作業者">'
+    +'<button class="btn" style="font-size:10px;padding:2px 7px" onclick="claimWork(\''+type+'\',\''+it.id+'\',\''+pj+'\')" title="自分を作業者にして着手">✋私</button>';
 }
 
 // SCHED-2/HOLIDAY-1: 営業日(土日＋トキワ管理の共有休日を除く)で n 日ずらす。n<0=過去方向
