@@ -24121,29 +24121,27 @@ function _shouldAutoDraft_(inq){
 // 🆕 AI で要約を自動生成 (1件) — 連絡カードの要約欄を埋める
 async function generateInquirySummary(inq){
   if(!inq) return null;
+  if(inq.isSpam) return null;                                 // 迷惑メールは要約しない (コスト節約)
   if(inq.summary && inq.summary.trim()) return inq.summary;  // 既に要約があれば skip
   if(!inq.body || inq.body.length < 30) return null;          // 短すぎる本文は要約不要
-  // 🚨 AIREAD-1: 一度AIに読ませたメールは記録して二度と読まない (失敗しても再試行しない)
+  // 🚨 AIREAD-1: 要約済みは二度読まない (aiReadAt は「成功時のみ」記録 → 失敗は次回再試行)
   if(inq.aiReadAt) return null;
-  inq.aiReadAt = new Date().toISOString();
-  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
   try {
     var prompt = '以下のメール / 連絡を **2〜3 文の日本語要約** にしてください。\n' +
       '- 誰が何をしてほしいかを冒頭に\n' +
-      '- 数量・期限・品名など具体的な情報を含める\n' +
-      '- 装飾語や挨拶は省く\n' +
+      '- 数量・期限・品名・取消など具体的な情報を含める\n' +
+      '- 装飾語や挨拶・署名・宣伝フッターは省く\n' +
       '- 出力は要約本文のみ (前置き・引用符なし)\n\n' +
       '## 件名\n' + (inq.subject || '(件名なし)') + '\n\n' +
       '## 本文\n' + (inq.body || '');
-    var resp = await callCloudAPI('claudeChat', {}, {
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 300
-    });
+    // 💰 Gemini で要約 (安価)。claudeChat へはフォールバックしない = 誤課金防止。
+    //    本体GASに geminiSummary アクションが必要 (未デプロイ時は失敗→aiReadAt立てず次回再試行)
+    var resp = await callCloudAPI('geminiSummary', {}, { text: prompt });
     if(!resp || !resp.success) return null;
-    var summary = resp.text || (resp.content && resp.content[0]?.text) || '';
-    summary = summary.trim().replace(/^["「『]|["」』]$/g, '').substring(0, 250);
+    var summary = (resp.text || '').trim().replace(/^["「『]|["」』]$/g, '').substring(0, 250);
     if(summary){
       inq.summary = summary;
+      inq.aiReadAt = new Date().toISOString();                // 成功時のみ読了記録
       if(typeof saveDB === 'function') saveDB();
       return summary;
     }
@@ -24154,13 +24152,14 @@ async function generateInquirySummary(inq){
 // 一括: 要約が無いメール系問い合わせに自動生成 (sync 後 or 手動)
 async function autoGenerateAllSummaries(opts){
   opts = opts || {};
-  // 🚨 AIUSE-2: 自動要約は既定OFF (継続課金の最大源 — 毎同期5件×メール本文+巨大systemで課金されていた)
-  // メール設定で autoSummaryEnabled=true にした時だけ動く。手動実行(force)は可。
+  // 💰 自動要約は Gemini(安価) で実行するため既定ON。明示的に autoSummaryEnabled=false の時のみ停止。
+  // (旧: Claude で継続課金の最大源だったため OFF にしていた。要約は geminiSummary 経由・1メール1回・迷惑除外)
   var settings = (typeof _getMailSettings_ === 'function') ? _getMailSettings_() : {};
-  if(!settings.autoSummaryEnabled && !opts.force){ return { generated: 0, total: 0 }; }
+  if(settings.autoSummaryEnabled === false && !opts.force){ return { generated: 0, total: 0 }; }
   var targets = (DB.inquiries || []).filter(function(inq){
+    if(inq.isSpam) return false;   // 迷惑メールは要約しない
     if(inq.summary && inq.summary.trim()) return false;
-    if(inq.aiReadAt) return false; // AIREAD-1: 読了済みマーカーがあるメールは二度と読まない
+    if(inq.aiReadAt) return false; // AIREAD-1: 要約成功済みは二度読まない
     if(!inq.body || inq.body.length < 50) return false;
     var s = inq.source_type || '';
     return s === 'gmail' || s === 'web_form' || s === 'linesvc';
