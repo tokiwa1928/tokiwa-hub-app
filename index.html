@@ -38692,16 +38692,59 @@ function _onInqKanbanDrop_(ev, colKey){
   if(typeof renderInquiryFolderList === 'function') try { renderInquiryFolderList(); } catch(e){}
 }
 // 🚫 迷惑メール: マーク/解除
+// mail_triage Webアプリ (Gmail受信拒否=フィルタ作成+SPAM移動)。doGet UIはトークン保護・doPostはapiKey保護
+var MAIL_TRIAGE_BLOCK_URL = 'https://script.google.com/macros/s/AKfycbyb7_7LamGh9yemvEDGqUhxk64opbVZ9tbUVCqSJyhd1k88orcXh-90Yf8D2WF4xD15/exec';
+// 送信元を Gmail レベルで受信拒否/解除 (block=true で拒否, false で解除)
+function _gmailBlockSender_(email, block){
+  try {
+    var url = new URL(MAIL_TRIAGE_BLOCK_URL);
+    url.searchParams.set('action', block ? 'blockSender' : 'unblockSender');
+    url.searchParams.set('apiKey', 'mitsumori-2024');
+    url.searchParams.set('email', email);
+    return fetch(url.toString(), { method:'POST', body: JSON.stringify({ email: email }), redirect:'follow' })
+      .then(function(r){ return r.json().catch(function(){ return null; }); });
+  } catch(e){ return Promise.resolve(null); }
+}
 function _markInqSpam_(id, isSpam){
   var inq = (DB.inquiries||[]).find(function(x){ return x.id === id; }); if(!inq) return;
+  var email = ((inq.from_email || inq.email || '') + '').trim().toLowerCase();
+  var hasEmail = email.indexOf('@') > 0;
+  var doGmail = false;
+  if(isSpam){
+    if(hasEmail){
+      doGmail = confirm('🚫 迷惑メール設定\n\n送信元: ' + email + '\n\n［OK］今後この送信元を Gmail でも受信拒否します\n　（フィルタ作成＋受信トレイの該当メールを迷惑メールへ移動）\n\n［キャンセル］この案件を一覧から隠すだけ（Gmail はそのまま）');
+    }
+  } else {
+    if(hasEmail && inq.gmailBlocked){
+      doGmail = confirm('↩ 受信拒否の解除\n\n送信元: ' + email + '\n\n［OK］Gmail の受信拒否も解除します（フィルタ削除）\n［キャンセル］一覧に戻すだけ');
+    }
+  }
   inq.isSpam = !!isSpam;
   inq.spamAt = isSpam ? new Date().toISOString() : '';
+  if(isSpam){ if(doGmail) inq.gmailBlocked = true; }
+  else { if(doGmail) inq.gmailBlocked = false; }
   if(typeof saveDB === 'function') saveDB();
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
   try { if(window._inqViewMode_==='kanban'){ renderInquiryKanban(); } else if(typeof renderInquiryList==='function'){ renderInquiryList(); } } catch(e){}
   try { _updateInqSpamToggle_(); } catch(e){}
   if(typeof renderInquiryStats === 'function') try { renderInquiryStats(); } catch(e){}
   if(typeof _toastMsg === 'function') _toastMsg(isSpam ? '🚫 迷惑メールにしました（一覧から非表示）' : '↩ 受信箱に戻しました');
+  if(doGmail){
+    if(typeof _toastMsg === 'function') _toastMsg(isSpam ? '⏳ Gmail で受信拒否を設定中…' : '⏳ Gmail の受信拒否を解除中…');
+    _gmailBlockSender_(email, isSpam).then(function(res){
+      if(typeof _toastMsg !== 'function') return;
+      if(res && (res.ok || res.success)){
+        if(isSpam){
+          var mv = (res.movedToSpam!=null ? res.movedToSpam : 0);
+          _toastMsg('✅ Gmail で受信拒否しました（' + email + '）' + (mv ? '／既存' + mv + '件を迷惑メールへ' : ''));
+        } else {
+          _toastMsg('✅ Gmail の受信拒否を解除しました（' + email + '）');
+        }
+      } else {
+        _toastMsg('⚠ Gmail 連携に失敗しました。アプリ内の表示のみ反映しています');
+      }
+    });
+  }
 }
 // 迷惑メール表示モードの切替
 function _toggleInqSpamView_(){
