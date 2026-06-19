@@ -1039,6 +1039,7 @@ setTimeout(_removeBootLoader_, 5000);
     <!-- 【情報】グループ -->
     <div class="tb-group" data-label="情報">
       <button class="tb-btn" data-page="wiki" onclick="swPage('wiki',this)" draggable="true" title="📖 Wiki">📖 Wiki</button>
+      <button class="tb-btn" data-page="bookmarks" onclick="swPage('bookmarks',this)" draggable="true" title="🔖 リンク集 (URL・ブックマークをカテゴリ別に保管)">🔖 リンク集</button>
       <button class="tb-btn" data-rel="guide" draggable="true" onclick="showUsageGuide()" title="使い方ガイド">📗 ガイド</button>
       <button class="tb-btn" data-page="tools" onclick="swPage('tools',this)" draggable="true" title="🧰 業務効率化ツール (試作→運用→統合)">🧰 ツール</button>
     </div>
@@ -1774,6 +1775,37 @@ setTimeout(_removeBootLoader_, 5000);
       </div>
       <div id="tool-embed-content" class="sec" style="padding:.9rem 1.1rem"></div>
     </div>
+  </div>
+</div>
+
+<!-- 🔖 リンク集 (URL/ブックマーク カテゴリ管理) -->
+<div class="page" id="page-bookmarks">
+  <div class="sec">
+    <div class="st" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span>🔖 リンク集</span>
+      <button class="btn btn-p" onclick="_bmOpenForm_()">＋ リンクを追加</button>
+    </div>
+    <div style="font-size:12px;color:#777;margin:2px 0 10px">よく使うURLやブックマークをカテゴリ別に保管。クリックで新規タブで開きます。全社員で共有されます。</div>
+    <!-- 追加/編集フォーム -->
+    <div id="bm-form" style="display:none;background:#f8f7f4;border:1px solid #e5e2dc;border-radius:10px;padding:14px;margin-bottom:14px">
+      <input type="hidden" id="bm-edit-id">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <label style="font-size:12px;color:#555">タイトル<br><input id="bm-title" class="inp" placeholder="例: ヤマト B2クラウド" style="width:100%"></label>
+        <label style="font-size:12px;color:#555">カテゴリ<br><input id="bm-category" class="inp" list="bm-cat-list" placeholder="例: 配送 / 仕入先 / 社内" style="width:100%"><datalist id="bm-cat-list"></datalist></label>
+      </div>
+      <label style="font-size:12px;color:#555;display:block;margin-top:8px">URL<br><input id="bm-url" class="inp" placeholder="https://..." style="width:100%"></label>
+      <label style="font-size:12px;color:#555;display:block;margin-top:8px">メモ (任意)<br><input id="bm-memo" class="inp" placeholder="ログインID・用途など" style="width:100%"></label>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-p" onclick="_bmSave_()">保存</button>
+        <button class="btn" onclick="_bmCloseForm_()">キャンセル</button>
+      </div>
+    </div>
+    <!-- 検索 + カテゴリフィルタ -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <input id="bm-search" class="inp" placeholder="🔍 タイトル・URL・メモで検索" style="flex:1;min-width:200px;max-width:360px" oninput="renderBookmarksPage()">
+    </div>
+    <div id="bm-cat-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div id="bm-list"></div>
   </div>
 </div>
 
@@ -4180,6 +4212,7 @@ async function loadFromCloud() {
     if (typeof applyReleaseConfig === 'function') setTimeout(applyReleaseConfig, 100);
   }
   if (result.data.toolCompanyConfig) DB.toolCompanyConfig = result.data.toolCompanyConfig;
+  if (result.data.bookmarks) DB.bookmarks = result.data.bookmarks;
   if (result.data.inquirySettings) {
     DB.inquirySettings = result.data.inquirySettings;
   }
@@ -4313,7 +4346,7 @@ function _getNotifiedIds_(){
   catch(e){ return new Set(); }
 }
 function _saveNotifiedIds_(set){
-  try { localStorage.setItem(_NOTIFIED_KEY, JSON.stringify(Array.from(set).slice(-200))); } catch(e){}
+  try { localStorage.setItem(_NOTIFIED_KEY, JSON.stringify(Array.from(set).slice(-4000))); } catch(e){}
 }
 
 // 同期後にチェック → 新しい通知対象を表示
@@ -4322,11 +4355,19 @@ function _checkAndNotifyAlerts_(){
   var notified = _getNotifiedIds_();
   var newlyNotified = [];
 
-  // 1. 新規問い合わせ (status=new で未通知)
+  // 1. 新規問い合わせ (status=new・未読・直近のみ・未通知)
+  var nowMs = Date.now();
+  var RECENT_NOTIFY_MS = 3 * 24 * 60 * 60 * 1000; // 受信から3日より古いものは通知しない (再通知の暴発防止)
   (DB.inquiries || []).forEach(function(inq){
     if(inq.status !== 'new') return;
     var key = 'inq:' + inq.id;
     if(notified.has(key)) return;
+    // 一度開いた(既読)・迷惑メールは通知しない → 「読み込んだメールは通知なし」
+    if(inq.readAt || inq.isSpam){ notified.add(key); newlyNotified.push(key); return; }
+    // 受信から時間が経ったものは通知しない
+    var ts = inq.received_at || inq.createdAt || inq.created_at;
+    var tms = ts ? Date.parse(ts) : NaN;
+    if(!isNaN(tms) && (nowMs - tms) > RECENT_NOTIFY_MS){ notified.add(key); newlyNotified.push(key); return; }
     var src = (inq.source_type === 'gmail' ? '📧' : inq.source_type === 'linesvc' ? '💬' : inq.source_type === 'webform' ? '🌐' : '📋');
     _showNotification_(src + ' 新着問い合わせ', {
       body: (inq.from_name || '不明') + ': ' + (inq.subject || '(件名なし)').substring(0, 60),
@@ -4586,7 +4627,8 @@ async function saveToCloud() {
     drivers: DB.drivers || [],
     inquirySettings: DB.inquirySettings || {},
     releaseConfig: DB.releaseConfig || {},
-    toolCompanyConfig: DB.toolCompanyConfig || {}
+    toolCompanyConfig: DB.toolCompanyConfig || {},
+    bookmarks: DB.bookmarks || []
   };
   
   const result = await callCloudAPI('saveAll', {}, {
@@ -5691,7 +5733,8 @@ function swPage(id,btn){
     proofing:  function(){ initProofingPage(); },
     delivery:  function(){ initDeliveryPage(); },
     inquiry:   function(){ initInquiryPage(); },
-    wiki:      function(){ initWikiPage(); }
+    wiki:      function(){ initWikiPage(); },
+    bookmarks: function(){ renderBookmarksPage(); }
   };
   if(renderers[id]){
     try {
@@ -5707,6 +5750,121 @@ function swPage(id,btn){
       }
     }
   }
+}
+
+// ═══════════════════ 🔖 リンク集 (ブックマーク) ══════════════════
+function _bmEsc_(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// http/https のみ許可し、スキーム無しは https:// を補完 (javascript: 等は無効化)
+function _bmSafeUrl_(u){
+  u = String(u||'').trim();
+  if(!u) return '';
+  if(/^https?:\/\//i.test(u)) return u;
+  if(/^[a-z][a-z0-9+.-]*:/i.test(u)) return ''; // 他スキーム(javascript:等)は拒否
+  return 'https://' + u;
+}
+function _bmList_(){ return (window.DB && Array.isArray(DB.bookmarks)) ? DB.bookmarks : (DB.bookmarks = []); }
+function _bmOpenForm_(id){
+  document.getElementById('bm-form').style.display = 'block';
+  var b = id ? _bmList_().find(function(x){ return x.id===id; }) : null;
+  document.getElementById('bm-edit-id').value = b ? b.id : '';
+  document.getElementById('bm-title').value = b ? (b.title||'') : '';
+  document.getElementById('bm-category').value = b ? (b.category||'') : (window._bmCat_ && window._bmCat_!=='__all__' ? window._bmCat_ : '');
+  document.getElementById('bm-url').value = b ? (b.url||'') : '';
+  document.getElementById('bm-memo').value = b ? (b.memo||'') : '';
+  // カテゴリ候補
+  var cats = Array.from(new Set(_bmList_().map(function(x){ return x.category||''; }).filter(Boolean))).sort();
+  document.getElementById('bm-cat-list').innerHTML = cats.map(function(c){ return '<option value="'+_bmEsc_(c)+'">'; }).join('');
+  document.getElementById('bm-title').focus();
+}
+function _bmCloseForm_(){ document.getElementById('bm-form').style.display = 'none'; }
+function _bmSave_(){
+  var title = document.getElementById('bm-title').value.trim();
+  var urlRaw = document.getElementById('bm-url').value.trim();
+  var url = _bmSafeUrl_(urlRaw);
+  if(!title){ alert('タイトルを入力してください'); return; }
+  if(!url){ alert('正しいURL（http:// または https://）を入力してください'); return; }
+  var cat = document.getElementById('bm-category').value.trim() || '未分類';
+  var memo = document.getElementById('bm-memo').value.trim();
+  var editId = document.getElementById('bm-edit-id').value;
+  var list = _bmList_();
+  var who = (typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName) || '';
+  if(editId){
+    var b = list.find(function(x){ return x.id===editId; });
+    if(b){ b.title=title; b.url=url; b.category=cat; b.memo=memo; b.updatedAt=new Date().toISOString(); b.updatedBy=who; }
+  } else {
+    list.unshift({ id:'bm_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), title:title, url:url, category:cat, memo:memo, createdAt:new Date().toISOString(), createdBy:who });
+  }
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  _bmCloseForm_();
+  renderBookmarksPage();
+  if(typeof _toastMsg==='function') _toastMsg(editId ? '🔖 リンクを更新しました' : '🔖 リンクを追加しました');
+}
+function _bmEdit_(id){ _bmOpenForm_(id); try{ document.getElementById('bm-form').scrollIntoView({behavior:'smooth',block:'nearest'}); }catch(e){} }
+function _bmDelete_(id){
+  var b = _bmList_().find(function(x){ return x.id===id; });
+  if(!b) return;
+  if(!confirm('「'+(b.title||'')+'」を削除しますか？')) return;
+  DB.bookmarks = _bmList_().filter(function(x){ return x.id!==id; });
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  renderBookmarksPage();
+  if(typeof _toastMsg==='function') _toastMsg('🗑 削除しました');
+}
+function _bmSetCat_(c){ window._bmCat_ = c; renderBookmarksPage(); }
+function renderBookmarksPage(){
+  var listEl = document.getElementById('bm-list'); if(!listEl) return;
+  var all = _bmList_();
+  var q = (document.getElementById('bm-search')?.value || '').toLowerCase();
+  if(!window._bmCat_) window._bmCat_ = '__all__';
+  // カテゴリチップ
+  var cats = Array.from(new Set(all.map(function(x){ return x.category||'未分類'; }))).sort();
+  var chips = document.getElementById('bm-cat-chips');
+  if(chips){
+    var mk = function(key,label,n){
+      var sel = (window._bmCat_===key);
+      return '<button class="pill'+(sel?' sel':'')+'" onclick="_bmSetCat_(\''+_bmEsc_(key).replace(/'/g,"\\'")+'\')" style="cursor:pointer">'+_bmEsc_(label)+' <span style="opacity:.6">'+n+'</span></button>';
+    };
+    var html = mk('__all__','すべて',all.length);
+    cats.forEach(function(c){ html += mk(c, c, all.filter(function(x){ return (x.category||'未分類')===c; }).length); });
+    chips.innerHTML = html;
+  }
+  // フィルタ
+  var rows = all.filter(function(b){
+    if(window._bmCat_!=='__all__' && (b.category||'未分類')!==window._bmCat_) return false;
+    if(q){ var hay = ((b.title||'')+' '+(b.url||'')+' '+(b.memo||'')+' '+(b.category||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    return true;
+  });
+  if(!rows.length){
+    listEl.innerHTML = '<div style="padding:40px;text-align:center;color:#999">'+(all.length? '該当するリンクがありません':'まだリンクがありません。「＋ リンクを追加」から登録してください。')+'</div>';
+    return;
+  }
+  // カテゴリ別グループ表示
+  var groups = {};
+  rows.forEach(function(b){ var c=b.category||'未分類'; (groups[c]=groups[c]||[]).push(b); });
+  var out = '';
+  Object.keys(groups).sort().forEach(function(c){
+    out += '<div style="margin-bottom:18px">';
+    out += '<div style="font-size:13px;font-weight:700;color:#444;margin:0 0 8px;padding-left:2px;border-left:3px solid var(--rd-accent,#2563eb)">　'+_bmEsc_(c)+' <span style="font-weight:400;color:#999;font-size:11px">('+groups[c].length+')</span></div>';
+    out += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
+    groups[c].forEach(function(b){
+      var safe = _bmSafeUrl_(b.url);
+      var host=''; try{ host = safe ? new URL(safe).hostname : ''; }catch(e){}
+      out += '<div style="background:#fff;border:1px solid #e7e4de;border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">';
+      out +=   '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">';
+      out +=     '<a href="'+_bmEsc_(safe)+'" target="_blank" rel="noopener noreferrer" style="font-weight:600;color:#1d4ed8;text-decoration:none;font-size:14px;word-break:break-word">'+_bmEsc_(b.title||'(無題)')+' ↗</a>';
+      out +=     '<span style="white-space:nowrap;display:flex;gap:4px">'+
+                   '<button class="use-btn" title="編集" onclick="_bmEdit_(\''+b.id+'\')" style="font-size:11px;padding:2px 7px">✏</button>'+
+                   '<button class="use-btn" title="削除" onclick="_bmDelete_(\''+b.id+'\')" style="font-size:11px;padding:2px 7px;border-color:#fca5a5;color:#b91c1c">🗑</button>'+
+                 '</span>';
+      out +=   '</div>';
+      if(host) out += '<div style="font-size:11px;color:#999;word-break:break-all">'+_bmEsc_(host)+'</div>';
+      if(b.memo) out += '<div style="font-size:12px;color:#555;white-space:pre-wrap">'+_bmEsc_(b.memo)+'</div>';
+      out += '</div>';
+    });
+    out += '</div></div>';
+  });
+  listEl.innerHTML = out;
 }
 
 // ═══════════════════ 見積タブ ══════════════════
