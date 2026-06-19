@@ -1777,6 +1777,8 @@ setTimeout(_removeBootLoader_, 5000);
         <div id="ai-cost-estimate-box" style="font-size:12px;margin-top:6px"></div>
       </div>
     </div>
+    <!-- 状態で絞り込み (運用中/試作/開発中/停止中) -->
+    <div id="tools-status-filter" style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px"></div>
     <div id="tools-list"></div>
     <!-- TLPF-2: 内蔵ツール (面付/電卓/ひらがな) の埋め込み先 -->
     <div id="tool-embed" style="display:none">
@@ -1794,15 +1796,28 @@ setTimeout(_removeBootLoader_, 5000);
   <div class="sec">
     <div class="st" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <span>🔖 リンク集</span>
-      <button class="btn btn-p" onclick="_bmOpenForm_()">＋ リンクを追加</button>
+      <span style="display:flex;gap:8px">
+        <button class="btn" onclick="_bmOpenCatManager_()">⚙ カテゴリ管理</button>
+        <button class="btn btn-p" onclick="_bmOpenForm_()">＋ リンクを追加</button>
+      </span>
     </div>
     <div style="font-size:12px;color:#777;margin:2px 0 10px">よく使うURLやブックマークをカテゴリ別に保管。クリックで新規タブで開きます。全社員で共有されます。</div>
+    <!-- カテゴリ管理パネル -->
+    <div id="bm-cat-manager" style="display:none;background:#f0f7f4;border:1px solid #cfe3da;border-radius:10px;padding:14px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;color:#334;margin-bottom:8px">⚙ カテゴリの登録・管理</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <input id="bm-newcat" class="inp" placeholder="新しいカテゴリ名 (例: 配送)" style="flex:1;min-width:180px;max-width:280px" onkeydown="if(event.key==='Enter'){event.preventDefault();_bmCatAdd_();}">
+        <button class="btn btn-p" onclick="_bmCatAdd_()">＋ 追加</button>
+        <button class="btn" onclick="document.getElementById('bm-cat-manager').style.display='none'">閉じる</button>
+      </div>
+      <div id="bm-cat-manager-list" style="display:flex;flex-direction:column;gap:5px"></div>
+    </div>
     <!-- 追加/編集フォーム -->
     <div id="bm-form" style="display:none;background:#f8f7f4;border:1px solid #e5e2dc;border-radius:10px;padding:14px;margin-bottom:14px">
       <input type="hidden" id="bm-edit-id">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <label style="font-size:12px;color:#555">タイトル<br><input id="bm-title" class="inp" placeholder="例: ヤマト B2クラウド" style="width:100%"></label>
-        <label style="font-size:12px;color:#555">カテゴリ<br><input id="bm-category" class="inp" list="bm-cat-list" placeholder="例: 配送 / 仕入先 / 社内" style="width:100%"><datalist id="bm-cat-list"></datalist></label>
+        <label style="font-size:12px;color:#555">カテゴリ<br><select id="bm-category" class="inp" style="width:100%"></select></label>
       </div>
       <label style="font-size:12px;color:#555;display:block;margin-top:8px">URL<br><input id="bm-url" class="inp" placeholder="https://..." style="width:100%"></label>
       <label style="font-size:12px;color:#555;display:block;margin-top:8px">メモ (任意)<br><input id="bm-memo" class="inp" placeholder="ログインID・用途など" style="width:100%"></label>
@@ -4233,6 +4248,13 @@ async function loadFromCloud() {
     _cloudBm.forEach(function(b){ if(b && b.id){ if(!(b.id in _bmById)) _bmOrder.push(b.id); _bmById[b.id] = b; } });
     DB.bookmarks = _bmOrder.map(function(id){ return _bmById[id]; });
   }
+  // 🔖 リンク集カテゴリ: 同様に和集合マージ (ローカル順を保持しクラウドの新規分を追加)
+  if (Array.isArray(result.data.bookmarkCategories)) {
+    var _lc = Array.isArray(DB.bookmarkCategories) ? DB.bookmarkCategories : [];
+    var _seenC = {}, _mergedC = [];
+    _lc.concat(result.data.bookmarkCategories).forEach(function(c){ if(c && !_seenC[c]){ _seenC[c]=1; _mergedC.push(c); } });
+    DB.bookmarkCategories = _mergedC;
+  }
   if (result.data.inquirySettings) {
     DB.inquirySettings = result.data.inquirySettings;
   }
@@ -4648,7 +4670,8 @@ async function saveToCloud() {
     inquirySettings: DB.inquirySettings || {},
     releaseConfig: DB.releaseConfig || {},
     toolCompanyConfig: DB.toolCompanyConfig || {},
-    bookmarks: DB.bookmarks || []
+    bookmarks: DB.bookmarks || [],
+    bookmarkCategories: DB.bookmarkCategories || []
   };
   
   const result = await callCloudAPI('saveAll', {}, {
@@ -5783,20 +5806,73 @@ function _bmSafeUrl_(u){
   return 'https://' + u;
 }
 function _bmList_(){ return (window.DB && Array.isArray(DB.bookmarks)) ? DB.bookmarks : (DB.bookmarks = []); }
+// カテゴリは別管理 (DB.bookmarkCategories)。初回のみ既定値を投入 (空配列にされたら再投入しない)
+var _BM_DEFAULT_CATS_ = ['配送','仕入先','社内','調べ物','その他'];
+function _bmCats_(){
+  if(!window.DB) window.DB = {};
+  if(!Array.isArray(DB.bookmarkCategories)) DB.bookmarkCategories = _BM_DEFAULT_CATS_.slice();
+  return DB.bookmarkCategories;
+}
+function _bmPersist_(){ if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){} }
 function _bmOpenForm_(id){
+  // カテゴリ未登録なら先に登録を促す
+  if(!_bmCats_().length){ alert('先に「⚙ カテゴリ管理」でカテゴリを登録してください'); _bmOpenCatManager_(); return; }
   document.getElementById('bm-form').style.display = 'block';
   var b = id ? _bmList_().find(function(x){ return x.id===id; }) : null;
   document.getElementById('bm-edit-id').value = b ? b.id : '';
   document.getElementById('bm-title').value = b ? (b.title||'') : '';
-  document.getElementById('bm-category').value = b ? (b.category||'') : (window._bmCat_ && window._bmCat_!=='__all__' ? window._bmCat_ : '');
   document.getElementById('bm-url').value = b ? (b.url||'') : '';
   document.getElementById('bm-memo').value = b ? (b.memo||'') : '';
-  // カテゴリ候補
-  var cats = Array.from(new Set(_bmList_().map(function(x){ return x.category||''; }).filter(Boolean))).sort();
-  document.getElementById('bm-cat-list').innerHTML = cats.map(function(c){ return '<option value="'+_bmEsc_(c)+'">'; }).join('');
+  // カテゴリは選択式 (登録済みリストから選ぶ)。編集時の未登録カテゴリも選択肢に残す
+  var cur = b ? (b.category||'') : (window._bmCat_ && window._bmCat_!=='__all__' ? window._bmCat_ : '');
+  var cats = _bmCats_().slice();
+  if(cur && cats.indexOf(cur) < 0) cats.unshift(cur);
+  var selEl = document.getElementById('bm-category');
+  selEl.innerHTML = cats.map(function(c){ return '<option value="'+_bmEsc_(c)+'"'+(c===cur?' selected':'')+'>'+_bmEsc_(c)+'</option>'; }).join('');
   document.getElementById('bm-title').focus();
 }
 function _bmCloseForm_(){ document.getElementById('bm-form').style.display = 'none'; }
+// ── カテゴリ管理 ──
+function _bmOpenCatManager_(){ var p=document.getElementById('bm-cat-manager'); if(!p) return; p.style.display='block'; _bmRenderCatManager_(); try{ document.getElementById('bm-newcat').focus(); }catch(e){} }
+function _bmRenderCatManager_(){
+  var host=document.getElementById('bm-cat-manager-list'); if(!host) return;
+  var cats=_bmCats_();
+  if(!cats.length){ host.innerHTML='<div style="font-size:12px;color:#999">カテゴリ未登録。上の入力欄から追加してください。</div>'; return; }
+  host.innerHTML = cats.map(function(c,i){
+    var used=_bmList_().filter(function(x){ return (x.category||'')===c; }).length;
+    return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e2dc;border-radius:7px;padding:5px 10px">'
+      + '<span style="flex:1;font-size:13px">'+_bmEsc_(c)+' <span style="color:#999;font-size:11px">('+used+'件)</span></span>'
+      + '<button class="use-btn" style="font-size:11px;padding:2px 7px" onclick="_bmCatRename_('+i+')">✏ 改名</button>'
+      + '<button class="use-btn" style="font-size:11px;padding:2px 7px;border-color:#fca5a5;color:#b91c1c" onclick="_bmCatDelete_('+i+')">🗑</button>'
+      + '</div>';
+  }).join('');
+}
+function _bmCatAdd_(){
+  var inp=document.getElementById('bm-newcat'); var v=(inp.value||'').trim();
+  if(!v){ inp.focus(); return; }
+  var cats=_bmCats_();
+  if(cats.indexOf(v)>=0){ alert('「'+v+'」は既に登録済みです'); return; }
+  cats.push(v); inp.value='';
+  _bmPersist_(); _bmRenderCatManager_();
+  if(typeof _toastMsg==='function') _toastMsg('🏷 カテゴリ「'+v+'」を追加しました');
+}
+function _bmCatDelete_(i){
+  var cats=_bmCats_(); var c=cats[i]; if(c==null) return;
+  var used=_bmList_().filter(function(x){ return (x.category||'')===c; }).length;
+  if(!confirm('カテゴリ「'+c+'」を削除しますか？'+(used?('\n※このカテゴリの'+used+'件のリンクは「未分類」になります。'):''))) return;
+  cats.splice(i,1);
+  if(used){ _bmList_().forEach(function(x){ if((x.category||'')===c) x.category='未分類'; }); }
+  _bmPersist_(); _bmRenderCatManager_(); renderBookmarksPage();
+}
+function _bmCatRename_(i){
+  var cats=_bmCats_(); var c=cats[i]; if(c==null) return;
+  var v=prompt('カテゴリ名を変更', c); if(v===null) return; v=v.trim();
+  if(!v || v===c) return;
+  if(cats.indexOf(v)>=0){ alert('「'+v+'」は既に存在します'); return; }
+  cats[i]=v;
+  _bmList_().forEach(function(x){ if((x.category||'')===c) x.category=v; });
+  _bmPersist_(); _bmRenderCatManager_(); renderBookmarksPage();
+}
 function _bmSave_(){
   var title = document.getElementById('bm-title').value.trim();
   var urlRaw = document.getElementById('bm-url').value.trim();
@@ -18982,12 +19058,37 @@ function renderToolsPage(){
   var isAdminCompany = ((currentAuth && currentAuth.companyCode)===TOOLS_ADMIN_CODE) || ((currentAuth&&currentAuth.role)==='admin');
   var compMap = (DB && Array.isArray(DB.companies)) ? DB.companies : [];
   function compName(code){ var c=compMap.find(function(x){return x.code===code;}); return c?c.name:code; }
+  // 状態で絞り込み: まず会社的に見えるツールの状態を集計 → フィルタチップを描画
+  if(!window._toolStatusFilter_) window._toolStatusFilter_ = '__all__';
+  var _statusCount = {};
+  var _visibleN = 0;
+  TOOLS_REGISTRY.forEach(function(t){
+    var key = t.href || ('internal:'+t.internal);
+    var comps = cfg[key] || t.companies || [];
+    if(!_toolVisibleForCompany_(Object.assign({}, t, { companies: comps }))) return;
+    var s = stOv[key] || t.status || '—';
+    _statusCount[s] = (_statusCount[s]||0) + 1; _visibleN++;
+  });
+  var fbar = document.getElementById('tools-status-filter');
+  if(fbar){
+    var order = ['運用中','試作','開発中','停止中'];
+    var col = function(s){ return s==='運用中'?'#16a34a':s==='試作'?'#f59e0b':s==='開発中'?'#dc2626':s==='停止中'?'#64748b':'#94a3b8'; };
+    var chip = function(key,label,n,c){
+      var sel = (window._toolStatusFilter_===key);
+      return '<button onclick="_toolSetStatusFilter_(\''+key+'\')" style="cursor:pointer;font-size:11.5px;font-weight:700;border-radius:14px;padding:3px 12px;border:1.5px solid '+c+';'
+        + (sel?('background:'+c+';color:#fff'):('background:#fff;color:'+c))+'">'+label+' '+n+'</button>';
+    };
+    var html = chip('__all__','すべて',_visibleN,'#0891b2');
+    order.forEach(function(s){ if(_statusCount[s]) html += chip(s,s,_statusCount[s],col(s)); });
+    fbar.innerHTML = html;
+  }
   el.innerHTML = TOOLS_REGISTRY.map(function(t, i){
     var key = t.href || ('internal:'+t.internal);
     var comps = cfg[key] || t.companies || [];
     var status = stOv[key] || t.status;
     var tt = Object.assign({}, t, { companies: comps, _key:key });
     if(!_toolVisibleForCompany_(tt)) return '';
+    if(window._toolStatusFilter_ !== '__all__' && status !== window._toolStatusFilter_) return '';
     // 管理会社にだけ「公開範囲」バッジを表示
     var scopeBadge = isAdminCompany
       ? '<span style="font-size:9.5px;color:'+(comps.length?'#7c3aed':'#94a3b8')+';border:1px solid '+(comps.length?'#c4b5fd':'#e2e8f0')+';border-radius:4px;padding:1px 6px;cursor:pointer" onclick="event.preventDefault();event.stopPropagation();editToolCompanies('+i+')" title="公開する会社を設定">'
@@ -19008,6 +19109,8 @@ function renderToolsPage(){
       : '<a href="' + t.href + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">' + inner + '</a>';
   }).join('');
 }
+// ツールを状態で絞り込み (すべて/運用中/試作/開発中/停止中)
+function _toolSetStatusFilter_(s){ window._toolStatusFilter_ = s; renderToolsPage(); }
 // TLCOMP-1: 管理会社がツールの公開会社を設定
 function editToolCompanies(i){
   var t = TOOLS_REGISTRY[i]; if(!t) return;
