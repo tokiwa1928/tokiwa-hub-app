@@ -741,7 +741,17 @@ function loadGoogleMapsAPI() {
     .g4{ grid-template-columns:repeat(2,1fr) !important; }      /* 基本情報 4列→2列 */
     #page-est .est-2col{ display:block !important; }            /* 見積本体 2カラム→縦積み */
     #page-est input:not([type=checkbox]):not([type=radio]):not([type=range]), #page-est select, #page-est textarea{ font-size:16px !important; min-height:38px; }  /* iOS自動ズーム防止＋タップ高 */
-    #page-est .sec{ overflow-x:auto; -webkit-overflow-scrolling:touch; }  /* 明細表は横スクロールで収める */
+    /* カード化が効かない表(非標準構造)向けのフォールバック: 枠内で横スクロール */
+    #page-est .sec{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    /* 明細テーブルをカード化（1行=1カード・ヘッダー名をラベルに）。data-labelはJSが付与。 */
+    #page-est .m-tbl{ display:block; width:100%; }
+    #page-est .m-tbl thead{ display:none; }
+    #page-est .m-tbl tbody, #page-est .m-tbl tr, #page-est .m-tbl td{ display:block; width:auto; }
+    #page-est .m-tbl tr{ border:1px solid var(--rd-line) !important; border-radius:10px; margin:0 0 8px; padding:4px 8px 6px; background:#fff; }
+    #page-est .m-tbl td{ border:none !important; padding:4px 0 !important; display:flex; align-items:center; gap:8px; min-height:34px; }
+    #page-est .m-tbl td::before{ content:attr(data-label); flex:0 0 78px; font-size:11px; color:#8d897f; font-weight:700; white-space:normal; }
+    #page-est .m-tbl td:empty{ display:none; }
+    #page-est .m-tbl td > input, #page-est .m-tbl td > select, #page-est .m-tbl td > textarea{ flex:1 1 auto; width:100% !important; }
     #page-est .est-mode-ctrl{ position:static !important; max-width:none !important; justify-content:flex-start !important; margin:0 0 8px !important; }
     #page-est .est-mode-ctrl .btn{ flex:1 1 auto; }
     /* 問い合わせ かんばん: PC3列 → スマホ1列 */
@@ -5651,7 +5661,7 @@ function swPage(id,btn){
   // 大きなページヘッダーを動的挿入
   try { _injectPageHeader_(id, pageEl); } catch(e){ console.warn('page header inject failed:', e); }
   // est: ヘッダーを現在タブの種別タイトル・色で上書き（直接ナビで来ても統一ヘッダーに）
-  if(id === 'est'){ try { if(typeof activeTab !== 'undefined' && activeTab > 0 && typeof _updateEntryKind_ === 'function') _updateEntryKind_(activeTab); } catch(e){} }
+  if(id === 'est'){ try { if(typeof activeTab !== 'undefined' && activeTab > 0 && typeof _updateEntryKind_ === 'function') _updateEntryKind_(activeTab); } catch(e){} try { if(typeof _estCardifyInit_==='function') _estCardifyInit_(); } catch(e){} }
 
   // est-tabbar 表示制御
   try {
@@ -34302,6 +34312,35 @@ function _mnavSetActive_(pageId){
 function _mnav_(pageId){
   var btn=document.querySelector('.topbar .tb-btn[data-page="'+pageId+'"]');
   try{ swPage(pageId, btn||null); }catch(e){}
+}
+// 📱 見積明細をスマホでカード化するための data-label 付与（ヘッダー名を各セルに）。
+//   属性付与のみなのでPC表示には無影響。カード化の見た目はCSS(≤860px)側で行う。
+function _estCardifyLabels_(){
+  try{
+    var pg=document.getElementById('page-est'); if(!pg) return;
+    pg.querySelectorAll('.m-tbl').forEach(function(t){
+      if(t.querySelector('[rowspan],[colspan]')) return;           // 複雑な表は安全のためスキップ
+      var heads=[].slice.call(t.querySelectorAll('thead th'));
+      if(!heads.length){ var fr=t.querySelector('tr'); heads=fr?[].slice.call(fr.children):[]; }
+      var labels=heads.map(function(h){ return (h.textContent||'').replace(/\s+/g,' ').trim(); });
+      if(!labels.length) return;
+      t.querySelectorAll('tbody tr').forEach(function(tr){
+        var tds=tr.children; if(tds.length!==labels.length) return;  // 列数不一致はスキップ
+        for(var i=0;i<tds.length;i++){ if(labels[i]) tds[i].setAttribute('data-label', labels[i]); }
+      });
+    });
+  }catch(e){}
+}
+var _estCardifyObs_=null;
+function _estCardifyInit_(){
+  var pg=document.getElementById('page-est'); if(!pg) return;
+  _estCardifyLabels_();
+  if(_estCardifyObs_) return;
+  var tid=null;
+  try{
+    _estCardifyObs_=new MutationObserver(function(){ clearTimeout(tid); tid=setTimeout(_estCardifyLabels_, 200); });
+    _estCardifyObs_.observe(pg, { childList:true, subtree:true });   // 再描画(childList)に追従。属性変更では発火しない=ループ無し
+  }catch(e){}
 }
 // GEN風: 案件管理のフィルタ群を左の「表示条件」パネルへ移設（マークアップ最小・配線そのまま）
 function _projBuildFilterPanel_(){
