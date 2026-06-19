@@ -2377,6 +2377,7 @@ setTimeout(_removeBootLoader_, 5000);
           <option value="general">一般</option>
         </select>
         <button class="btn" style="font-size:11px;padding:3px 8px" onclick="document.getElementById('inq-search').value='';document.getElementById('inq-status-f').value='';document.getElementById('inq-cat-f').value='';document.getElementById('inq-prio-f').value='';document.getElementById('inq-assign-f').value='';document.getElementById('inq-source-f').value='';document.getElementById('inq-kind-f').value='';renderInquiryList()" title="フィルタをクリア">✕</button>
+        <button id="inq-spam-toggle" class="btn" style="font-size:11px;padding:3px 8px;margin-left:auto;border:1px solid #e5e7eb;background:#fff" onclick="_toggleInqSpamView_()" title="迷惑メールの表示/非表示を切替">🚫 迷惑メール</button>
       </div>
       <!-- ステータスバーは会社タブの上に移動済 (OOOO-1) -->
       <!-- IIII-1: レイアウト切替対応コンテナ (右/下プレビュー対応) -->
@@ -38387,6 +38388,9 @@ function _getInquiriesForKanban_(){
   var all = DB.inquiries || [];
   var period = (typeof _filterByPeriod_ === 'function') ? _filterByPeriod_(all, 'inq-list', ['received_at','createdAt']) : all;
   return period.filter(function(inq){
+    // 迷惑メール: 通常は除外。迷惑表示モード(_inqShowSpam_)では迷惑のみ表示
+    if(window._inqShowSpam_){ if(!inq.isSpam) return false; }
+    else if(inq.isSpam){ return false; }
     // COSCOPE-1: トキワ以外は自社のみ
     if(typeof _inqVisibleByCompany_ === 'function' && !_inqVisibleByCompany_(inq)) return false;
     if(companyTab !== 'all' && typeof _matchesCompanyTab_ === 'function' && !_matchesCompanyTab_(inq, companyTab)) return false;
@@ -38444,6 +38448,7 @@ function renderInquiryKanban(){
       '</div>';
     }).join('') +
     '</div>';
+  try { _updateInqSpamToggle_(); } catch(e){}
 }
 
 function _inqKanbanCard_(inq, col){
@@ -38488,6 +38493,11 @@ function _inqKanbanCard_(inq, col){
   var attN = (inq.attachments || []).length;
   var attMark = attN > 0 ? '<span style="font-size:10px;color:#7c3aed" title="添付' + attN + '件">📎' + attN + '</span>' : '';
 
+  // 迷惑メール ボタン (通常=迷惑にする / 迷惑表示モード=解除)
+  var spamBtn = window._inqShowSpam_
+    ? '<button onclick="event.stopPropagation();_markInqSpam_(\'' + _escAttr_(inq.id) + '\',false)" title="迷惑を解除して受信箱に戻す" style="font-size:9px;padding:1px 6px;border:1px solid #86efac;background:#f0fdf4;color:#15803d;border-radius:5px;cursor:pointer">↩ 戻す</button>'
+    : '<button onclick="event.stopPropagation();_markInqSpam_(\'' + _escAttr_(inq.id) + '\',true)" title="迷惑メールにして一覧から隠す" style="font-size:9px;padding:1px 6px;border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;border-radius:5px;cursor:pointer">🚫 迷惑</button>';
+
   // 経過時間 (未対応列で滞留が分かるように)
   var elapsed = (typeof getElapsedTime === 'function') ? getElapsedTime(when) : '';
   var stale = '';
@@ -38510,10 +38520,10 @@ function _inqKanbanCard_(inq, col){
     previewHtml +
     // 下段: 受信元バッジ
     '<div style="margin-bottom:5px">' + srcBadge + '</div>' +
-    // フッター: 担当・添付・日時
+    // フッター: 担当・迷惑・添付・日時
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;flex-wrap:wrap;border-top:1px solid #f1f5f9;padding-top:5px">' +
       assignee +
-      '<span style="display:flex;align-items:center;gap:6px;margin-left:auto">' + attMark + '<span style="font-size:10px;color:#94a3b8">' + whenStr + '</span></span>' +
+      '<span style="display:flex;align-items:center;gap:6px;margin-left:auto">' + spamBtn + attMark + '<span style="font-size:10px;color:#94a3b8">' + whenStr + '</span></span>' +
     '</div>' +
   '</div>';
 }
@@ -38538,6 +38548,31 @@ function _onInqKanbanDrop_(ev, colKey){
   // 統計・サイドバーも更新
   if(typeof renderInquiryStats === 'function') try { renderInquiryStats(); } catch(e){}
   if(typeof renderInquiryFolderList === 'function') try { renderInquiryFolderList(); } catch(e){}
+}
+// 🚫 迷惑メール: マーク/解除
+function _markInqSpam_(id, isSpam){
+  var inq = (DB.inquiries||[]).find(function(x){ return x.id === id; }); if(!inq) return;
+  inq.isSpam = !!isSpam;
+  inq.spamAt = isSpam ? new Date().toISOString() : '';
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  try { if(window._inqViewMode_==='kanban'){ renderInquiryKanban(); } else if(typeof renderInquiryList==='function'){ renderInquiryList(); } } catch(e){}
+  try { _updateInqSpamToggle_(); } catch(e){}
+  if(typeof renderInquiryStats === 'function') try { renderInquiryStats(); } catch(e){}
+  if(typeof _toastMsg === 'function') _toastMsg(isSpam ? '🚫 迷惑メールにしました（一覧から非表示）' : '↩ 受信箱に戻しました');
+}
+// 迷惑メール表示モードの切替
+function _toggleInqSpamView_(){
+  window._inqShowSpam_ = !window._inqShowSpam_;
+  try { if(window._inqViewMode_==='kanban'){ renderInquiryKanban(); } else if(typeof renderInquiryList==='function'){ renderInquiryList(); } } catch(e){}
+  _updateInqSpamToggle_();
+}
+function _updateInqSpamToggle_(){
+  var btn = document.getElementById('inq-spam-toggle'); if(!btn) return;
+  var n = (DB.inquiries||[]).filter(function(x){ return x.isSpam; }).length;
+  btn.innerHTML = window._inqShowSpam_ ? '📥 受信箱に戻る' : ('🚫 迷惑メール (' + n + ')');
+  btn.style.background = window._inqShowSpam_ ? '#fee2e2' : '#fff';
+  btn.style.borderColor = window._inqShowSpam_ ? '#fca5a5' : '#e5e7eb';
 }
 
 function renderInquiryList() {
@@ -38573,6 +38608,9 @@ function renderInquiryList() {
   var companyTab = window._inqCompanyTab_ || 'all';
 
   let items = periodFiltered.filter(inq => {
+    // 迷惑メール: 通常は除外。迷惑表示モードでは迷惑のみ
+    if(window._inqShowSpam_){ if(!inq.isSpam) return false; }
+    else if(inq.isSpam){ return false; }
     // COSCOPE-1: 会社別分離 — トキワ以外は自社宛のメール/LINE/連絡のみ
     if(typeof _inqVisibleByCompany_ === 'function' && !_inqVisibleByCompany_(inq)) return false;
     // 会社タブ判定
