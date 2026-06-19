@@ -1069,7 +1069,7 @@ setTimeout(_removeBootLoader_, 5000);
       <div id="global-search-results" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:#fff;color:#1a1a1a;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);min-width:360px;max-width:480px;max-height:480px;overflow-y:auto;z-index:9999"></div>
     </div>
     <!-- 通知トグル -->
-    <button class="tb-icon-btn" id="notify-toggle-btn" onclick="requestNotificationPermission(true)" title="ブラウザ通知の有効化" style="font-size:14px">🔔</button>
+    <button class="tb-icon-btn" id="notify-toggle-btn" onclick="_cycleNotifyMode_()" title="通知の切替（すべて / 新着のみ / オフ）" style="font-size:14px">🔔</button>
     <!-- クラウド同期ステータス -->
     <span id="cloud-sync-indicator" style="font-size:11px;margin-right:10px"></span>
     <!-- 互換用 (左側に統合済のため非表示) -->
@@ -3762,6 +3762,7 @@ async function doLoginByEmail(email, password){
   if(typeof requestNotificationPermission === 'function'){
     setTimeout(function(){ requestNotificationPermission(false); }, 1500);
   }
+  try{ _updateNotifyBtn_(); }catch(e){}
 
   // 初回ログイン時のオンボーディング表示
   if(typeof showOnboarding === 'function'){
@@ -4375,6 +4376,26 @@ function requestNotificationPermission(showToast){
 }
 
 // 通知を表示 (SW 経由 or 直接)
+// 🔔 通知モード: 'all'=すべて / 'new_only'=新着問い合わせのみ / 'off'=通知しない (既定=新着のみ)
+function _notifyMode_(){ try{ return localStorage.getItem('tokiwa_notify_mode') || 'new_only'; }catch(e){ return 'new_only'; } }
+function _notifyAllowed_(kind){ var m=_notifyMode_(); if(m==='off') return false; if(m==='new_only') return kind==='new'; return true; }
+function _updateNotifyBtn_(){
+  var b=document.getElementById('notify-toggle-btn'); if(!b) return;
+  var m=_notifyMode_();
+  b.textContent = (m==='off') ? '🔕' : '🔔';
+  b.style.opacity = (m==='off') ? '0.5' : '1';
+  b.title = '通知: '+({all:'すべて',new_only:'新着問い合わせのみ',off:'オフ'}[m]||'')+'（クリックで切替）';
+}
+function _cycleNotifyMode_(){
+  // 未許可ならまずブラウザ通知の許可を取得
+  if(('Notification' in window) && Notification.permission==='default'){ try{ requestNotificationPermission(true); }catch(e){} }
+  var order=['all','new_only','off'], cur=_notifyMode_();
+  var nx=order[(order.indexOf(cur)+1+order.length)%order.length] || 'new_only';
+  try{ localStorage.setItem('tokiwa_notify_mode', nx); }catch(e){}
+  _updateNotifyBtn_();
+  var label={all:'すべての通知',new_only:'新着問い合わせのみ',off:'通知オフ'}[nx];
+  if(typeof _toastMsg==='function') _toastMsg('🔔 通知設定 → '+label);
+}
 function _showNotification_(title, options){
   if(!('Notification' in window) || Notification.permission !== 'granted') return;
   options = options || {};
@@ -4417,12 +4438,14 @@ function _checkAndNotifyAlerts_(){
     var ts = inq.received_at || inq.createdAt || inq.created_at;
     var tms = ts ? Date.parse(ts) : NaN;
     if(!isNaN(tms) && (nowMs - tms) > RECENT_NOTIFY_MS){ notified.add(key); newlyNotified.push(key); return; }
-    var src = (inq.source_type === 'gmail' ? '📧' : inq.source_type === 'linesvc' ? '💬' : inq.source_type === 'webform' ? '🌐' : '📋');
-    _showNotification_(src + ' 新着問い合わせ', {
-      body: (inq.from_name || '不明') + ': ' + (inq.subject || '(件名なし)').substring(0, 60),
-      tag: key,
-      data: { url: '/tokiwa-hub-app/', inquiryId: inq.id }
-    });
+    if(_notifyAllowed_('new')){
+      var src = (inq.source_type === 'gmail' ? '📧' : inq.source_type === 'linesvc' ? '💬' : inq.source_type === 'webform' ? '🌐' : '📋');
+      _showNotification_(src + ' 新着問い合わせ', {
+        body: (inq.from_name || '不明') + ': ' + (inq.subject || '(件名なし)').substring(0, 60),
+        tag: key,
+        data: { url: '/tokiwa-hub-app/', inquiryId: inq.id }
+      });
+    }
     notified.add(key);
     newlyNotified.push(key);
   });
@@ -4438,11 +4461,13 @@ function _checkAndNotifyAlerts_(){
     if(notified.has(dueKey)) return;
     var daysLeft = Math.ceil((due - new Date()) / (1000*60*60*24));
     var dayLabel = daysLeft <= 0 ? '🚨 納期超過' : daysLeft === 1 ? '⚠️ 明日納期' : '⏰ 納期 ' + daysLeft + '日後';
-    _showNotification_(dayLabel + ': ' + (p.cust || ''), {
-      body: p.item + ' (' + p.id + ')',
-      tag: dueKey,
-      data: { url: '/tokiwa-hub-app/', projectId: p.id }
-    });
+    if(_notifyAllowed_('other')){
+      _showNotification_(dayLabel + ': ' + (p.cust || ''), {
+        body: p.item + ' (' + p.id + ')',
+        tag: dueKey,
+        data: { url: '/tokiwa-hub-app/', projectId: p.id }
+      });
+    }
     notified.add(dueKey);
     newlyNotified.push(dueKey);
   });
@@ -4458,7 +4483,7 @@ function _checkAndNotifyAlerts_(){
       else if(st.plannedDate && st.plannedDate < todayKey){ key = 'schlate:' + sch.id + ':' + idx + ':' + todayKey; title = '🚨 遅延工程: ' + st.name + '（予定 ' + st.plannedDate + '）'; }
       else return;
       if(notified.has(key)) return;
-      _showNotification_(title, { body: name, tag: key, data:{ url:'/tokiwa-hub-app/' } });
+      if(_notifyAllowed_('other')) _showNotification_(title, { body: name, tag: key, data:{ url:'/tokiwa-hub-app/' } });
       notified.add(key); newlyNotified.push(key);
     });
   });
@@ -4468,7 +4493,7 @@ function _checkAndNotifyAlerts_(){
     if(p.scheduleSendDate > todayKey) return;
     var key = 'schsend:' + p.id + ':' + p.scheduleSendDate;
     if(notified.has(key)) return;
-    _showNotification_('📨 日程表の送付日です: ' + (p.cust||''), { body: (p.item||'') + ' の日程表をお客様へ送付してください', tag: key, data:{ url:'/tokiwa-hub-app/' } });
+    if(_notifyAllowed_('other')) _showNotification_('📨 日程表の送付日です: ' + (p.cust||''), { body: (p.item||'') + ' の日程表をお客様へ送付してください', tag: key, data:{ url:'/tokiwa-hub-app/' } });
     notified.add(key); newlyNotified.push(key);
   });
 
@@ -5860,9 +5885,9 @@ function _bmRenderCatManager_(){
   host.innerHTML = cats.map(function(c,i){
     var used=_bmList_().filter(function(x){ return (x.category||'')===c; }).length;
     var head = '<div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #e5e2dc;border-radius:7px;padding:5px 10px">'
-      + '<span style="display:flex;flex-direction:column;gap:1px">'
-      +   '<button class="use-btn" title="上へ" onclick="_bmCatMove_('+i+',-1)" style="font-size:9px;padding:0 5px;line-height:1.3"'+(i===0?' disabled':'')+'>▲</button>'
-      +   '<button class="use-btn" title="下へ" onclick="_bmCatMove_('+i+',1)" style="font-size:9px;padding:0 5px;line-height:1.3"'+(i===cats.length-1?' disabled':'')+'>▼</button>'
+      + '<span style="display:flex;gap:3px">'
+      +   '<button class="use-btn" title="上へ移動" onclick="_bmCatMove_('+i+',-1)" style="font-size:13px;padding:2px 8px;line-height:1.2"'+(i===0?' disabled':'')+'>↑</button>'
+      +   '<button class="use-btn" title="下へ移動" onclick="_bmCatMove_('+i+',1)" style="font-size:13px;padding:2px 8px;line-height:1.2"'+(i===cats.length-1?' disabled':'')+'>↓</button>'
       + '</span>';
     if(i===editIdx){
       // インライン編集 (prompt不要・PWAでも確実)
@@ -36838,6 +36863,7 @@ function requestNotificationPermission() {
 
 // ブラウザ通知を表示
 function showBrowserNotification(title, body) {
+  if(typeof _notifyAllowed_==='function' && !_notifyAllowed_('new')) return; // 通知設定(オフ)を尊重
   if('Notification' in window && Notification.permission === 'granted') {
     const notification = new Notification(title, {
       body: body,
