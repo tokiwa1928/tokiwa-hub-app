@@ -1796,8 +1796,9 @@ setTimeout(_removeBootLoader_, 5000);
   <div class="sec">
     <div class="st" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <span>🔖 リンク集</span>
-      <span style="display:flex;gap:8px">
+      <span style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-p" onclick="_bmOpenForm_()">＋ リンクを追加</button>
+        <button class="btn" onclick="_bmOpenImport_()">📥 一括取込</button>
         <button class="btn" onclick="_bmOpenCatManager_()">⚙ カテゴリ管理</button>
       </span>
     </div>
@@ -1811,6 +1812,18 @@ setTimeout(_removeBootLoader_, 5000);
         <button class="btn" onclick="document.getElementById('bm-cat-manager').style.display='none'">閉じる</button>
       </div>
       <div id="bm-cat-manager-list" style="display:flex;flex-direction:column;gap:5px"></div>
+    </div>
+    <!-- 一括取込パネル -->
+    <div id="bm-import-panel" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;color:#1e40af;margin-bottom:6px">📥 ブックマークを一括取込</div>
+      <div style="font-size:11px;color:#555;line-height:1.6;margin-bottom:8px">1行に1件。<b>「カテゴリ | タイトル | URL」</b> または <b>「タイトル | URL」</b>（タブ区切りでも可）。同じURLは重複登録しません。未指定カテゴリは下の既定カテゴリになります。</div>
+      <textarea id="bm-import-text" rows="8" class="inp" style="width:100%;font-family:monospace;font-size:12px" placeholder="例:&#10;配送 | ヤマト B2クラウド | https://b2cloud.kuronekoyamato.co.jp&#10;国税庁 法人番号検索 | https://www.houjin-bangou.nta.go.jp/"></textarea>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <label style="font-size:12px;color:#555">既定カテゴリ: <input id="bm-import-defcat" class="inp" value="未分類" style="width:140px"></label>
+        <button class="btn btn-p" onclick="_bmDoImport_()">取込実行</button>
+        <button class="btn" onclick="document.getElementById('bm-import-panel').style.display='none'">閉じる</button>
+        <span id="bm-import-result" style="font-size:12px;color:#166534"></span>
+      </div>
     </div>
     <!-- 追加/編集フォーム -->
     <div id="bm-form" style="display:none;background:#f8f7f4;border:1px solid #e5e2dc;border-radius:10px;padding:14px;margin-bottom:14px">
@@ -5921,6 +5934,37 @@ function _bmCatDelete_(i){
   cats.splice(i,1);
   if(used){ _bmList_().forEach(function(x){ if((x.category||'')===c) x.category='未分類'; }); }
   _bmPersist_(); _bmRenderCatManager_(); renderBookmarksPage();
+}
+// ── 一括取込 ──
+function _bmOpenImport_(){ var p=document.getElementById('bm-import-panel'); if(!p) return; p.style.display='block'; var r=document.getElementById('bm-import-result'); if(r) r.textContent=''; try{ document.getElementById('bm-import-text').focus(); }catch(e){} }
+function _bmDoImport_(){
+  var ta=document.getElementById('bm-import-text'); var raw=(ta&&ta.value)||'';
+  var defCat=(document.getElementById('bm-import-defcat').value||'').trim()||'未分類';
+  var lines=raw.split(/\r?\n/);
+  var list=_bmList_(); var cats=_bmCats_();
+  var existUrls={}; list.forEach(function(b){ existUrls[(b.url||'').toLowerCase()]=1; });
+  var who=(typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName)||'';
+  var added=0, dup=0, bad=0, newCats=0;
+  lines.forEach(function(ln){
+    ln=ln.trim(); if(!ln) return;
+    var parts=ln.split(/\t|\s*\|\s*/).map(function(s){return s.trim();}).filter(function(s,i,a){ return true; });
+    var cat,title,url;
+    if(parts.length>=3){ cat=parts[0]; title=parts[1]; url=parts.slice(2).join(' | '); }
+    else if(parts.length===2){ cat=defCat; title=parts[0]; url=parts[1]; }
+    else { cat=defCat; url=parts[0]; title=''; }
+    url=_bmSafeUrl_(url);
+    if(!url){ bad++; return; }
+    if(existUrls[url.toLowerCase()]){ dup++; return; }
+    if(!title){ try{ title=new URL(url).hostname; }catch(e){ title=url; } }
+    cat=cat||defCat;
+    if(cats.indexOf(cat)<0){ cats.push(cat); newCats++; }
+    list.push({ id:'bm_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), title:title, url:url, category:cat, memo:'', createdAt:new Date().toISOString(), createdBy:who });
+    existUrls[url.toLowerCase()]=1; added++;
+  });
+  _bmPersist_(); renderBookmarksPage();
+  var msg='✅ '+added+'件を取込'+(dup?'／重複スキップ'+dup:'')+(bad?'／URL不正'+bad:'')+(newCats?'／新規カテゴリ'+newCats:'');
+  var r=document.getElementById('bm-import-result'); if(r) r.textContent=msg;
+  if(typeof _toastMsg==='function') _toastMsg(msg);
 }
 function _bmCatMove_(i,dir){
   var cats=_bmCats_(); var j=i+dir;
