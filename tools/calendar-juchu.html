@@ -117,8 +117,13 @@
         <button id="vTable" onclick="setView('table')">📋 表</button>
       </span>
       <span id="yearFilter" style="display:flex;align-items:center;gap:2px;flex-wrap:wrap"></span>
+      <select id="fFollow" onchange="render()" title="今年の進捗で絞り込み">
+        <option value="">絞り込みなし</option>
+        <option value="telEmpty">電話まだ（TEL空）</option>
+        <option value="calledNotOrdered">電話済・未受注</option>
+        <option value="orderedNotDelivered">受注済・未納品</option>
+      </select>
       <button class="btn" onclick="seedImport()" title="先ほどのExcel2つ(旧台帳＋受注用)をまとめて投入" style="background:#fef3c7;border-color:#fcd34d">📦 初期投入</button>
-      <button class="btn btn-p" onclick="document.getElementById('imp').click()">📥 取込</button>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
       <button class="btn" onclick="addRow()">＋ 行追加</button>
@@ -361,6 +366,7 @@ function setView(m){
   document.getElementById('matrixView').style.display = m==='matrix'?'':'none';
   document.getElementById('tableView').style.display = m==='table'?'':'none';
   var yf=document.getElementById('yearFilter'); if(yf) yf.style.display = m==='matrix'?'':'none';
+  var ffl=document.getElementById('fFollow'); if(ffl) ffl.style.display = m==='matrix'?'':'none';
   render();
 }
 function setSort(k){ if(sortKey===k){ sortDir=-sortDir; } else { sortKey=k; sortDir=1; } render(); }
@@ -438,7 +444,8 @@ function renderTable(){
 
 // ─ 📅 1ページ（年表）ビュー: (区分×得意先×製品) で集約し、年度を横並びコンパクト表示 ─
 var _mGroups = [];
-function mYmd(s){ if(!s) return ''; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); return m?(Number(m[2])+'/'+Number(m[3])):String(s); }
+function mYmd(s){ if(!s) return ''; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); return m?(String(m[1]).slice(2)+'/'+Number(m[2])+'/'+Number(m[3])):String(s); }
+function cleanProd(p){ return String(p||'').replace(/^20\d\d年カレンダー[_\s]?/,'').trim(); }
 function matrixBase(){
   // 年度では絞らない（全年表示）。カテゴリ＋検索のみ。
   var q=(document.getElementById('q').value||'').trim().toLowerCase();
@@ -483,8 +490,10 @@ function curSubs(r, prevP, prevC){
 var yearShow = {};
 function prevYearRec(g, y){ var best=null; for(var yy in g.byYear){ var n=Number(yy); if(n<y && mPrice(g.byYear[n])!==''){ if(best===null||n>best) best=n; } } return best; }
 function pctSigned(cur, prev, prevYear){ if(cur===''||prev===''||prevYear===null||prevYear==null) return '<span class="dim">—</span>'; var d=cur-prev, pct=d/prev*100; var col=d>0?'#b45309':(d<0?'#2563eb':'#94a3b8'); return '<span style="color:'+col+'">'+prevYear+'比 '+(d>=0?'+':'−')+Math.abs(pct).toFixed(1)+'%</span>'; }
-function buildYearFilter(allYears){ var box=document.getElementById('yearFilter'); if(!box) return; box.style.display = (viewMode==='matrix')?'':'none'; box.innerHTML='<span style="font-size:11px;color:#888">表示年:</span> '+allYears.slice().sort(function(a,b){return b-a;}).map(function(y){ var on=yearShow[y]!==false; return '<label class="yck"><input type="checkbox" '+(on?'checked':'')+' onchange="toggleYear('+y+',this.checked)"> '+y+'</label>'; }).join(''); }
+var _allYears=[];
+function buildYearFilter(allYears){ _allYears=allYears.slice(); var box=document.getElementById('yearFilter'); if(!box) return; box.style.display = (viewMode==='matrix')?'':'none'; box.innerHTML='<span style="font-size:11px;color:#888">表示年:</span> '+allYears.slice().sort(function(a,b){return b-a;}).map(function(y){ var on=yearShow[y]!==false; return '<label class="yck"><input type="checkbox" '+(on?'checked':'')+' onchange="toggleYear('+y+',this.checked)"> '+y+'</label>'; }).join('')+' <button class="btn" style="padding:2px 7px;font-size:10px" onclick="toggleAllYears(true)">全選択</button> <button class="btn" style="padding:2px 7px;font-size:10px" onclick="toggleAllYears(false)">全解除</button>'; }
 function toggleYear(y, on){ yearShow[y]=on; render(); }
+function toggleAllYears(on){ _allYears.forEach(function(y){ yearShow[y]=on; }); render(); }
 function renderTrend(){
   var rows=matrixBase(); var cur=curYear();
   var groups={}, order=[], custIdx={}, cn=0;
@@ -498,14 +507,19 @@ function renderTrend(){
   document.getElementById('mhead').innerHTML='<tr><th class="lead">得意先</th><th class="lead">製品</th><th class="ycol">年</th><th class="n">数量</th><th class="n">売価</th><th class="n">前年比</th><th class="n">仕入単価</th><th class="n">仕入額</th><th class="n">原価率</th><th class="d">TEL日</th><th class="d">受注日</th><th class="d">納品日</th></tr>';
   var mb=document.getElementById('mbody');
   if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="12" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
+  var ff=(document.getElementById('fFollow')||{}).value||'';
   var html='';
   _mGroups.forEach(function(g, gi){
+    var cu=g.byYear[cur], telD=cu&&cu.telDate, ordD=cu&&cu.orderDate, dlvD=cu&&cu.delivDate;
+    if(ff==='telEmpty' && telD) return;
+    if(ff==='calledNotOrdered' && !(telD&&!ordD)) return;
+    if(ff==='orderedNotDelivered' && !(ordD&&!dlvD)) return;
     var yrs=showYears.filter(function(y){ return g.byYear[y] || y===cur; });
     if(!yrs.length) return;
     yrs.forEach(function(y, ri){
       var r=g.byYear[y]; var isCur=(y===cur);
       html+='<tr class="'+(ri===0?'gstart':'')+(isCur?' curr':'')+'">';
-      if(ri===0){ html+='<td class="lead lcust" rowspan="'+yrs.length+'">'+hubEsc(g.cust||'(無名)')+(g.user?'<br><span class="muted" style="font-size:10px">'+hubEsc(g.user)+'</span>':'')+'</td><td class="lead lprod" rowspan="'+yrs.length+'" title="'+hubEsc(g.product||'')+'"><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span> '+hubEsc(g.product||'')+'</td>'; }
+      if(ri===0){ html+='<td class="lead lcust" rowspan="'+yrs.length+'">'+hubEsc(g.cust||'(無名)')+(g.user?'<br><span class="muted" style="font-size:10px">'+hubEsc(g.user)+'</span>':'')+'</td><td class="lead lprod" rowspan="'+yrs.length+'" title="'+hubEsc(g.product||'')+'"><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span> '+hubEsc(cleanProd(g.product))+'</td>'; }
       html+=yearRow(g, y, r, isCur, gi);
       html+='</tr>';
     });
