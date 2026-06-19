@@ -190,7 +190,17 @@
     .mtbl td.mcust{ font-weight:700; max-width:150px; }
     .mtbl td.mprod{ max-width:180px; color:#334155; }
     .mtbl .ycell{ min-width:104px; line-height:1.45; border-left:1px solid #d6d4cd; }   /* 年度ごとの縦区切り */
-    .mtbl .ycell.cur{ background:#fffdf5; min-width:128px; border-left:2px solid #d97706; }
+    .mtbl .ycell.cur{ background:#fffdf5; min-width:330px; border-left:2px solid #d97706; }
+    .mtbl .ycell.cur .stchips{ display:flex; flex-wrap:wrap; gap:3px; margin-bottom:4px; }
+    .mtbl .ycell.cur .chip{ font-size:10px; padding:1px 8px; border:1px solid #d0cec8; border-radius:10px; cursor:pointer; background:#fff; user-select:none; }
+    .mtbl .ycell.cur .chip:hover{ border-color:#0891b2; }
+    .mtbl .ycell.cur .frow{ display:flex; gap:4px; margin-bottom:3px; }
+    .mtbl .ycell.cur .ff{ flex:1; display:flex; flex-direction:column; gap:1px; min-width:0; }
+    .mtbl .ycell.cur .ff>span{ font-size:8.5px; color:#94a3b8; }
+    .mtbl .ycell.cur .ff input{ width:100%; margin:0; }
+    .mtbl .ycell.cur .mrow{ font-size:10.5px; margin-top:2px; color:#475569; }
+    .mtbl .ycell.cur .phist{ font-size:9.5px; color:#64748b; margin-top:3px; border-top:1px dashed #e2e0da; padding-top:2px; }
+    .mtbl .ycell.cur .dim{ color:#cbd5e1; }
     .mtbl tbody tr:nth-child(even) td{ background:#fbfbf9; }
     .mtbl tbody tr:nth-child(even) .ycell.cur{ background:#fff8e7; }
     .mtbl .ycell .qp{ color:#334155; white-space:nowrap; }
@@ -434,8 +444,9 @@ function renderMatrix(){
       for(var j=yi+1;j<years.length;j++){ var pp=mPrice(g.byYear[years[j]]); if(pp!==''){ prevP=pp; break; } }
       var prevC='';
       for(var k=yi+1;k<years.length;k++){ var cc=mCost(g.byYear[years[k]]); if(cc!==''){ prevC=cc; break; } }
+      var prevR=null; for(var m=yi+1;m<years.length;m++){ if(g.byYear[years[m]]){ prevR=g.byYear[years[m]]; break; } }
       var up=upHtml(curP, prevP);
-      return y===cur ? '<td class="ycell cur">'+curCell(g,r,i,prevC)+up+'</td>' : '<td class="ycell">'+pastCell(r,up,prevC)+'</td>';
+      return y===cur ? '<td class="ycell cur">'+curCell(g,r,i,prevR,prevP,prevC)+'</td>' : '<td class="ycell">'+pastCell(r,up,prevC)+'</td>';
     }).join('');
     return '<tr>'
       + '<td><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span></td>'
@@ -481,19 +492,27 @@ function pastCell(r, up, prevC){
   if(r.cost!==''&&r.cost!=null){ var cr=costRatioVal(r); out+='<div class="cs">仕¥'+fmt(r.cost)+costUpHtml(Number(r.cost),prevC)+(cr!==''?' <span class="cr" style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'">'+fmtPct(cr)+'</span>':'')+'</div>'; }
   return out||'<span class="none">—</span>';
 }
-function curCell(g, r, gi, prevC){
+function deltaInline(cur,prev,upColor){ if(cur===''||prev==='') return '<span class="dim">—</span>'; var d=cur-prev; if(d===0) return '<span class="dim">±0</span>'; var up=d>0,pct=d/prev*100; return '<b style="color:'+(up?upColor:'#2563eb')+'">'+(up?'▲':'▼')+'¥'+fmt(Math.abs(d))+' '+(up?'+':'−')+Math.abs(pct).toFixed(1)+'%</b>'; }
+function curCell(g, r, gi, prevR, prevP, prevC){
   if(!r) return '<button class="btn addcur" onclick="matrixAddCur('+gi+')">＋入力</button>';
   var id=hubEsc(r.id);
   function inp(f,type,ph){ var v=hubEsc(r[f]==null?'':r[f]); return '<input '+(type==='date'?'type="date"':type==='num'?'type="number" step="any"':'type="text"')+' value="'+v+'" placeholder="'+(ph||'')+'" data-id="'+id+'" data-f="'+f+'" onchange="onEdit(this)" title="'+(ph||'')+'">'; }
-  var st='<select data-id="'+id+'" data-f="status" onchange="onEdit(this)">'+STATUSES.map(function(s){return '<option'+(r.status===s?' selected':'')+'>'+s+'</option>';}).join('')+'</select>';
-  var cr=costRatioVal(r); var crBadge=cr!==''?'<span class="cr" style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'"> '+fmtPct(cr)+'</span>':'';
-  var costUp=(r.cost!==''&&r.cost!=null)?costUpHtml(Number(r.cost),prevC):'';
-  return st
-    + inp('orderDate','date','受注日')
-    + inp('delivDate','date','納品日')
-    + '<div class="mini2">'+inp('orderQty','num','数量(冊)')+inp('orderPrice','num','売価¥')+'</div>'
-    + '<div class="mini2">'+inp('cost','num','仕入¥')+'<span style="font-size:10px;align-self:center">'+crBadge+'</span></div>'
-    + (costUp?'<div class="cs" style="text-align:right">'+costUp+'</div>':'');
+  function ff(lbl,f,type,ph){ return '<label class="ff"><span>'+lbl+'</span>'+inp(f,type,ph)+'</label>'; }
+  // ステータス: ドロップダウンではなく横並びチップ
+  var chips='<div class="stchips">'+STATUSES.map(function(s){ var on=r.status===s; return '<span class="chip'+(on?' on':'')+'" style="'+(on?'background:'+STCOLOR[s]+';border-color:'+STCOLOR[s]+';color:#fff':'')+'" onclick="setStatus(\''+id+'\',\''+s+'\')">'+s+'</span>'; }).join('')+'</div>';
+  // 入力欄を横並びに: TEL/受注/納品 ・ 数量/売価/仕入
+  var dates='<div class="frow">'+ff('TEL','telDate','date')+ff('受注','orderDate','date')+ff('納品','delivDate','date')+'</div>';
+  var nums='<div class="frow">'+ff('数量(冊)','orderQty','num')+ff('売価¥','orderPrice','num')+ff('仕入¥','cost','num')+'</div>';
+  // 指標: 売価前年比 / 仕入前年比 / 原価率
+  var curP=mPrice(r), curC=mCost(r), cr=costRatioVal(r);
+  var metrics='<div class="mrow">売価'+deltaInline(curP,prevP,'#b45309')+' ／ 仕入'+deltaInline(curC,prevC,'#dc2626')+' ／ 原価率 '+(cr!==''?'<b style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'">'+fmtPct(cr)+'</b>':'<span class="dim">—</span>')+'</div>';
+  // 前年の履歴(参考): いつ電話/受注/納品したか＋数量×単価
+  var hist='';
+  if(prevR){ var hd=[]; if(prevR.telDate)hd.push('TEL'+mYmd(prevR.telDate)); if(prevR.orderDate)hd.push('受'+mYmd(prevR.orderDate)); if(prevR.delivDate)hd.push('納'+mYmd(prevR.delivDate));
+    var pq=(prevR.orderQty!==''&&prevR.orderQty!=null)?prevR.orderQty:prevR.pyQty, pmp=mPrice(prevR);
+    var pqp=(pmp!=='')?(fmt(pq)+(prevR.unit||'冊')+' × ¥'+fmt(pmp)):'';
+    hist='<div class="phist">前年('+(prevR.year||'')+'): '+(pqp||'—')+(hd.length?'　'+hd.join('  '):'')+'</div>'; }
+  return chips+dates+nums+metrics+hist;
 }
 function matrixAddCur(gi){
   var g=_mGroups[gi]; if(!g){ return; }
