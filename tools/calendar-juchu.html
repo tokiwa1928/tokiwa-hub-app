@@ -178,7 +178,7 @@
     <div class="tblwrap">
       <table id="mtbl" class="mtbl"><thead id="mhead"></thead><tbody id="mbody"></tbody></table>
     </div>
-    <p class="muted" style="margin-top:6px">📅 1ページ表示: 得意先×製品ごとに各年を横並び。<span class="pill" style="background:#fffdf5">黄=選択年(入力)</span> 過去年は西暦の参考（読取専用）。各年セル＝数量×単価／<b>売価の前年比（▲上げ/▼下げ）</b>／受注→納品／仕入¥＋<b>仕入の前年比（仕▲/▼）</b>・原価率。</p>
+    <p class="muted" style="margin-top:6px">📅 1ページ表示: 得意先×製品ごとに各年を横並び（項目を列ごとに分割／横スクロール可）。各年＝数量・単価・仕入・原価率・TEL日・受注日・納品日。<span class="pill" style="background:#fffdf5">黄=選択年(入力)</span>＝状態＋各欄を入力。単価/仕入には<b>前年比（▲上げ/▼下げ）</b>を表示。過去年は読取専用。</p>
   </div>
   <style>
     .mtbl{ font-size:11px; }
@@ -203,6 +203,21 @@
     .mtbl .ycell.cur .dim{ color:#cbd5e1; }
     .mtbl tbody tr:nth-child(even) td{ background:#fbfbf9; }
     .mtbl tbody tr:nth-child(even) .ycell.cur{ background:#fff8e7; }
+    /* 全項目を列ごとに分割するレイアウト */
+    .mtbl th.sub{ font-size:9.5px; font-weight:600; padding:3px 5px; background:#374151; text-align:center; }
+    .mtbl th.sub.curY{ background:#7c2d12; }
+    .mtbl td.s{ padding:2px 5px; border-bottom:1px solid #e7e5df; border-right:1px solid #efeee9; white-space:nowrap; text-align:right; font-size:11px; vertical-align:middle; }
+    .mtbl td.s.dt{ text-align:center; color:#475569; font-size:10px; }
+    .mtbl td.s.cur, .mtbl td.s.addtd{ background:#fffdf5; }
+    .mtbl tbody tr:nth-child(even) td.s.cur, .mtbl tbody tr:nth-child(even) td.s.addtd{ background:#fff8e7; }
+    .mtbl td.s.addtd{ text-align:center; }
+    .mtbl td.s b{ color:#0f172a; }
+    .mtbl .yb{ border-left:2px solid #cbd5e1; }
+    .mtbl .yb.curY, .mtbl td.s.yb.cur{ border-left:2px solid #d97706; }
+    .mtbl td.s .ni{ width:54px; text-align:right; padding:2px 3px; font-size:11px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
+    .mtbl td.s .di{ width:112px; padding:1px 2px; font-size:10px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
+    .mtbl td.s .stsel{ font-size:10px; padding:1px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
+    .mtbl td.s .pm{ font-size:8.5px; font-weight:700; margin-left:2px; }
     .mtbl .ycell .qp{ color:#334155; white-space:nowrap; }
     .mtbl .ycell .qp .pr{ font-weight:800; color:#0f172a; }    /* 単価を強調 */
     .mtbl .ycell .qp .x{ color:#9aa3af; margin:0 2px; }
@@ -420,6 +435,36 @@ function matrixBase(){
     return ((r.cust||'')+(r.user||'')+(r.product||'')+(r.staff||'')).toLowerCase().indexOf(q)>=0;
   });
 }
+function crColor(cr){ return cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a'; }
+function pctMini(cur,prev,upColor){ if(cur===''||prev==='')return ''; var d=cur-prev; if(d===0)return ''; var up=d>0,pct=d/prev*100; return '<span class="pm" style="color:'+(up?upColor:'#2563eb')+'">'+(up?'▲':'▼')+Math.abs(pct).toFixed(1)+'%</span>'; }
+function mQty(r){ return (r.orderQty!==''&&r.orderQty!=null)?r.orderQty:((r.pyQty!==''&&r.pyQty!=null)?r.pyQty:''); }
+// 過去年: 数量/単価/仕入/原価率/TEL/受注/納品 を列ごとに(読取専用)
+function pastSubs(r, prevP, prevC){
+  if(!r) return '<td class="s yb">—</td><td class="s">—</td><td class="s">—</td><td class="s">—</td><td class="s dt">—</td><td class="s dt">—</td><td class="s dt">—</td>';
+  var price=mPrice(r), cost=mCost(r), cr=costRatioVal(r), q=mQty(r);
+  return '<td class="s yb num">'+(q!==''?fmt(q):'—')+'</td>'
+   + '<td class="s num">'+(price!==''?'<b>¥'+fmt(price)+'</b>'+pctMini(price,prevP,'#b45309'):'—')+'</td>'
+   + '<td class="s num">'+(cost!==''?'¥'+fmt(cost)+pctMini(cost,prevC,'#dc2626'):'—')+'</td>'
+   + '<td class="s num">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'—')+'</td>'
+   + '<td class="s dt">'+(r.telDate?mYmd(r.telDate):'—')+'</td>'
+   + '<td class="s dt">'+(r.orderDate?mYmd(r.orderDate):'—')+'</td>'
+   + '<td class="s dt">'+(r.delivDate?mYmd(r.delivDate):'—')+'</td>';
+}
+// 今年: 状態(選択)＋各項目を入力欄として列ごとに
+function curSubs(r, prevP, prevC){
+  var id=hubEsc(r.id);
+  function inp(f,type){ var v=hubEsc(r[f]==null?'':r[f]); return '<input '+(type==='date'?'type="date" class="di"':'type="number" step="any" class="ni"')+' value="'+v+'" data-id="'+id+'" data-f="'+f+'" onchange="onEdit(this)">'; }
+  var st='<select class="stsel" data-id="'+id+'" data-f="status" onchange="onEdit(this)">'+STATUSES.map(function(s){return '<option'+(r.status===s?' selected':'')+'>'+s+'</option>';}).join('')+'</select>';
+  var price=mPrice(r), cost=mCost(r), cr=costRatioVal(r);
+  return '<td class="s yb cur cin">'+st+'</td>'
+   + '<td class="s cur cin">'+inp('orderQty','num')+'</td>'
+   + '<td class="s cur cin">'+inp('orderPrice','num')+pctMini(price,prevP,'#b45309')+'</td>'
+   + '<td class="s cur cin">'+inp('cost','num')+pctMini(cost,prevC,'#dc2626')+'</td>'
+   + '<td class="s cur num">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'—')+'</td>'
+   + '<td class="s cur cin">'+inp('telDate','date')+'</td>'
+   + '<td class="s cur cin">'+inp('orderDate','date')+'</td>'
+   + '<td class="s cur cin">'+inp('delivDate','date')+'</td>';
+}
 function renderMatrix(){
   var rows=matrixBase(); var cur=curYear();
   var groups={}, order=[], custIdx={}, cn=0;
@@ -430,23 +475,23 @@ function renderMatrix(){
   });
   var yset={}; yset[cur]=1; rows.forEach(function(r){ if(r.year) yset[r.year]=1; });
   var years=Object.keys(yset).map(Number).sort(function(a,b){ return b-a; });
-  document.getElementById('mhead').innerHTML='<tr><th class="lead">区分</th><th class="lead">得意先</th><th class="lead">製品名</th>'
-    + years.map(function(y){ return '<th class="yh '+(y===cur?'curY':'')+'">'+y+'年'+(y===cur?'<br><span style="font-weight:400;font-size:9px">今年・入力</span>':'')+'</th>'; }).join('') + '</tr>';
+  var subL=['数量','単価','仕入','原価率','TEL','受注','納品'];
+  var h1='<tr><th class="lead" rowspan="2">区分</th><th class="lead" rowspan="2">得意先</th><th class="lead" rowspan="2">製品名</th>';
+  var h2='<tr>';
+  years.forEach(function(y){ var cu=(y===cur); h1+='<th class="yh'+(cu?' curY':'')+'" colspan="'+(cu?8:7)+'">'+y+'年'+(cu?' <span style="font-weight:400;font-size:9px">今年・入力</span>':'')+'</th>'; if(cu) h2+='<th class="sub yb curY">状態</th>'; subL.forEach(function(l,si){ h2+='<th class="sub'+((si===0&&!cu)?' yb':'')+(cu?' curY':'')+'">'+l+'</th>'; }); });
+  document.getElementById('mhead').innerHTML=h1+'</tr>'+h2+'</tr>';
   order.sort(function(a,b){ var ga=groups[a],gb=groups[b]; var ca=CATORDER.indexOf(ga.category),cb=CATORDER.indexOf(gb.category); ca=ca<0?99:ca;cb=cb<0?99:cb; if(ca!==cb)return ca-cb; if(ga._ci!==gb._ci) return ga._ci-gb._ci; return ga._ai-gb._ai; });
   _mGroups = order.map(function(k){ return groups[k]; });
   var mb=document.getElementById('mbody');
-  if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="'+(3+years.length)+'" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
+  var totCols=3+years.reduce(function(s,y){return s+(y===cur?8:7);},0);
+  if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="'+totCols+'" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
   mb.innerHTML=_mGroups.map(function(g,i){
     var cells=years.map(function(y,yi){
+      var prevP='',prevC='';
+      for(var j=yi+1;j<years.length;j++){ if(prevP===''){ var pp=mPrice(g.byYear[years[j]]); if(pp!=='') prevP=pp; } if(prevC===''){ var cc=mCost(g.byYear[years[j]]); if(cc!=='') prevC=cc; } }
       var r=g.byYear[y];
-      // 前年（データのある直近の古い年）の単価／仕入値との差＝上げ幅
-      var curP=mPrice(r), prevP='';
-      for(var j=yi+1;j<years.length;j++){ var pp=mPrice(g.byYear[years[j]]); if(pp!==''){ prevP=pp; break; } }
-      var prevC='';
-      for(var k=yi+1;k<years.length;k++){ var cc=mCost(g.byYear[years[k]]); if(cc!==''){ prevC=cc; break; } }
-      var prevR=null; for(var m=yi+1;m<years.length;m++){ if(g.byYear[years[m]]){ prevR=g.byYear[years[m]]; break; } }
-      var up=upHtml(curP, prevP);
-      return y===cur ? '<td class="ycell cur">'+curCell(g,r,i,prevR,prevP,prevC)+'</td>' : '<td class="ycell">'+pastCell(r,up,prevC)+'</td>';
+      if(y===cur) return r ? curSubs(r,prevP,prevC) : '<td class="s yb cur addtd" colspan="8"><button class="btn addcur" onclick="matrixAddCur('+i+')">＋入力</button></td>';
+      return pastSubs(r,prevP,prevC);
     }).join('');
     return '<tr>'
       + '<td><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span></td>'
