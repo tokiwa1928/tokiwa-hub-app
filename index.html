@@ -1720,9 +1720,11 @@ setTimeout(_removeBootLoader_, 5000);
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-p" onclick="testGasAi()">🧪 AI接続テスト（GAS経由）</button>
           <button class="btn" style="background:#f0fdf4;border-color:#86efac;color:#166534" onclick="showAiUsage()">💰 今日の使用量・コストを確認</button>
+          <button class="btn" style="background:#eff6ff;border-color:#93c5fd;color:#1e40af" onclick="showAiCostEstimate()">📊 AI費用の目安（試算）</button>
         </div>
         <div id="aikey-test" style="font-size:12px;margin-top:6px"></div>
         <div id="ai-usage-box" style="font-size:12px;margin-top:6px"></div>
+        <div id="ai-cost-estimate-box" style="font-size:12px;margin-top:6px"></div>
       </div>
     </div>
     <div id="tools-list"></div>
@@ -18696,6 +18698,40 @@ async function showAiUsage(){
   } catch(e){
     box.innerHTML = '<span style="color:#dc2626">取得できませんでした: ' + _escDiff(e.message) + '（GASが旧バージョンの可能性）</span>';
   }
+}
+// 📊 AI費用の目安（試算）: 実データ(問い合わせ)から件数・トークンを概算し、モデル別コストを表示
+function showAiCostEstimate(){
+  var box = document.getElementById('ai-cost-estimate-box'); if(!box) return;
+  var all = DB.inquiries || [];
+  var mailSrc = ['gmail','linesvc','webform','web_form',''];
+  var targets = all.filter(function(x){ return !x.isSpam && x.body && x.body.length >= 50 && mailSrc.indexOf(x.source_type||'') >= 0; });
+  var spamN = all.filter(function(x){ return x.isSpam; }).length;
+  var chars = 0; targets.forEach(function(x){ chars += (x.subject||'').length + (x.body||'').length; });
+  var perChars = targets.length ? chars/targets.length : 0;
+  var now = Date.now();
+  var last30 = targets.filter(function(x){ var d = new Date(x.received_at||x.createdAt||0).getTime(); return d && (now - d) <= 30*864e5; }).length;
+  var JPY = 155;
+  // トークン概算: 日本語≒1tok/字 + プロンプト120/件、出力100/件
+  function cost(n, inP, outP){ var it = n*perChars + n*120, ot = n*100; return it/1e6*inP + ot/1e6*outP; }
+  function yen(n, inP, outP){ return '¥' + Math.round(cost(n,inP,outP)*JPY).toLocaleString(); }
+  var models = [
+    { name:'Gemini 2.5 Flash-Lite', inP:0.10, outP:0.40, note:'最安・無料枠あり' },
+    { name:'Gemini 3.1 Flash-Lite', inP:0.25, outP:1.50, note:'' },
+    { name:'Claude Haiku 4.5',      inP:1.00, outP:5.00, note:'高品質・高コスト' }
+  ];
+  box.innerHTML = '<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:10px 14px;line-height:1.7">'
+    + '<b>📊 AI要約コストの目安（試算）</b><br>'
+    + '対象メール <b>' + targets.length + '件</b>（迷惑除外 ' + spamN + '件）／ 平均 ' + Math.round(perChars) + '字 ／ 直近30日 ' + last30 + '件<br>'
+    + '<table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:6px">'
+    + '<thead><tr style="background:#dbeafe;text-align:left"><th style="padding:4px 6px">モデル</th><th style="padding:4px 6px;text-align:right">全件1回</th><th style="padding:4px 6px;text-align:right">月間(直近30日相当)</th></tr></thead><tbody>'
+    + models.map(function(m){
+        return '<tr style="border-bottom:1px solid #e0e7ff"><td style="padding:4px 6px">' + m.name + (m.note?(' <span style="color:#64748b;font-size:10px">'+m.note+'</span>'):'') + '</td>'
+          + '<td style="padding:4px 6px;text-align:right;font-weight:700">' + yen(targets.length, m.inP, m.outP) + '</td>'
+          + '<td style="padding:4px 6px;text-align:right">' + yen(last30, m.inP, m.outP) + '</td></tr>';
+      }).join('')
+    + '</tbody></table>'
+    + '<div style="font-size:10.5px;color:#64748b;margin-top:5px">※ 日本語1字≒1トークンの概算（署名/引用で±50%程度ぶれます）。Gemini無料枠内なら実質¥0の可能性あり。要約は1メール1回のみ・迷惑メールは対象外。実額は「💰今日の使用量」で確定します。</div>'
+    + '</div>';
 }
 async function testGasAi(){
   var out = document.getElementById('aikey-test');
