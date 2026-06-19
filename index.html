@@ -1827,11 +1827,14 @@ setTimeout(_removeBootLoader_, 5000);
         <button id="bm-delete-btn" class="btn" style="display:none;margin-left:auto;border-color:#fca5a5;color:#b91c1c" onclick="_bmDeleteFromForm_()">🗑 このリンクを削除</button>
       </div>
     </div>
-    <!-- 検索 + カテゴリフィルタ -->
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-      <input id="bm-search" class="inp" placeholder="🔍 タイトル・URL・メモで検索" style="flex:1;min-width:200px;max-width:360px" oninput="renderBookmarksPage()">
+    <!-- 検索窓 + カテゴリ選択ドロップダウン + 並べ替えモード -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <input id="bm-search" class="inp" placeholder="🔍 タイトル・URL・メモで検索" style="flex:1;min-width:180px;max-width:340px" oninput="renderBookmarksPage()">
+      <select id="bm-cat-filter" class="inp" style="max-width:220px" onchange="renderBookmarksPage()"></select>
+      <label style="font-size:11.5px;color:#666;display:flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap" title="ONにするとドラッグで並べ替え・カテゴリ移動ができます">
+        <input type="checkbox" id="bm-reorder-mode" onchange="renderBookmarksPage()"> ↕ 並べ替え
+      </label>
     </div>
-    <div id="bm-cat-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px"></div>
     <div id="bm-list"></div>
   </div>
 </div>
@@ -5825,7 +5828,8 @@ function _bmOpenForm_(id){
   document.getElementById('bm-url').value = b ? (b.url||'') : '';
   document.getElementById('bm-memo').value = b ? (b.memo||'') : '';
   // カテゴリは選択式 (登録済みリストから選ぶ)。編集時の未登録カテゴリも選択肢に残す
-  var cur = b ? (b.category||'') : (window._bmCat_ && window._bmCat_!=='__all__' ? window._bmCat_ : '');
+  var _ff = document.getElementById('bm-cat-filter'); var _fv = _ff && _ff.value && _ff.value!=='__all__' ? _ff.value : '';
+  var cur = b ? (b.category||'') : _fv;
   var cats = _bmCats_().slice();
   if(cur && cats.indexOf(cur) < 0) cats.unshift(cur);
   var selEl = document.getElementById('bm-category');
@@ -5918,57 +5922,91 @@ function _bmDelete_(id){
   renderBookmarksPage();
   if(typeof _toastMsg==='function') _toastMsg('🗑 削除しました');
 }
-function _bmSetCat_(c){ window._bmCat_ = c; renderBookmarksPage(); }
+// ── 折りたたみ状態 (localStorage) ──
+function _bmCollapsed_(){ try{ var a=JSON.parse(localStorage.getItem('bm_collapsed')||'[]'); var o={}; a.forEach(function(c){o[c]=1;}); return o; }catch(e){ return {}; } }
+function _bmToggleCollapse_(c){ var o=_bmCollapsed_(); if(o[c]) delete o[c]; else o[c]=1; try{ localStorage.setItem('bm_collapsed', JSON.stringify(Object.keys(o))); }catch(e){} renderBookmarksPage(); }
+// ── ドラッグ並べ替え／カテゴリ移動 ──
+var _bmDragId_ = null;
+function _bmDragStart_(ev,id){ _bmDragId_=id; try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain',id); }catch(e){} }
+function _bmDragEnd_(){ _bmDragId_=null; }
+function _bmDragOver_(ev){ ev.preventDefault(); try{ ev.dataTransfer.dropEffect='move'; }catch(e){} }
+function _bmDropOnCard_(ev,targetId){
+  ev.preventDefault(); ev.stopPropagation();
+  var src=_bmDragId_ || (ev.dataTransfer && ev.dataTransfer.getData('text/plain')); _bmDragEnd_();
+  if(!src || src===targetId) return;
+  var list=_bmList_();
+  var si=list.findIndex(function(x){return x.id===src;}); if(si<0) return;
+  var moved=list.splice(si,1)[0];
+  var ti=list.findIndex(function(x){return x.id===targetId;});
+  if(ti<0){ list.push(moved); }
+  else { moved.category=list[ti].category||'未分類'; list.splice(ti,0,moved); }
+  _bmPersist_(); renderBookmarksPage();
+}
+function _bmDropOnCat_(ev,cat){
+  ev.preventDefault();
+  var src=_bmDragId_ || (ev.dataTransfer && ev.dataTransfer.getData('text/plain')); _bmDragEnd_();
+  if(!src) return;
+  var list=_bmList_(); var si=list.findIndex(function(x){return x.id===src;}); if(si<0) return;
+  var moved=list.splice(si,1)[0]; moved.category=cat||'未分類'; list.push(moved);
+  _bmPersist_(); renderBookmarksPage();
+}
 function renderBookmarksPage(){
   var listEl = document.getElementById('bm-list'); if(!listEl) return;
   var all = _bmList_();
   var q = (document.getElementById('bm-search')?.value || '').toLowerCase();
-  if(!window._bmCat_) window._bmCat_ = '__all__';
-  // カテゴリチップ
-  var cats = Array.from(new Set(all.map(function(x){ return x.category||'未分類'; }))).sort();
-  var chips = document.getElementById('bm-cat-chips');
-  if(chips){
-    var mk = function(key,label,n){
-      var sel = (window._bmCat_===key);
-      return '<button class="pill'+(sel?' sel':'')+'" onclick="_bmSetCat_(\''+_bmEsc_(key).replace(/'/g,"\\'")+'\')" style="cursor:pointer">'+_bmEsc_(label)+' <span style="opacity:.6">'+n+'</span></button>';
-    };
-    var html = mk('__all__','すべて',all.length);
-    cats.forEach(function(c){ html += mk(c, c, all.filter(function(x){ return (x.category||'未分類')===c; }).length); });
-    chips.innerHTML = html;
+  var reorder = !!(document.getElementById('bm-reorder-mode') && document.getElementById('bm-reorder-mode').checked);
+  // カテゴリ選択ドロップダウン (登録カテゴリ ∪ 使用中) を構築
+  var used={}; all.forEach(function(b){ var c=b.category||'未分類'; used[c]=(used[c]||0)+1; });
+  var catList=_bmCats_().slice(); Object.keys(used).forEach(function(c){ if(catList.indexOf(c)<0) catList.push(c); });
+  var selEl=document.getElementById('bm-cat-filter');
+  var curFilter=(selEl && selEl.value) || '__all__';
+  if(curFilter!=='__all__' && catList.indexOf(curFilter)<0) curFilter='__all__';
+  if(selEl){
+    var opt='<option value="__all__">📁 すべてのカテゴリ ('+all.length+')</option>';
+    catList.forEach(function(c){ opt+='<option value="'+_bmEsc_(c)+'"'+(c===curFilter?' selected':'')+'>'+_bmEsc_(c)+' ('+(used[c]||0)+')</option>'; });
+    selEl.innerHTML=opt;
   }
-  // フィルタ
+  // 検索＋カテゴリでフィルタ
   var rows = all.filter(function(b){
-    if(window._bmCat_!=='__all__' && (b.category||'未分類')!==window._bmCat_) return false;
-    if(q){ var hay = ((b.title||'')+' '+(b.url||'')+' '+(b.memo||'')+' '+(b.category||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    if(curFilter!=='__all__' && (b.category||'未分類')!==curFilter) return false;
+    if(q){ var hay=((b.title||'')+' '+(b.url||'')+' '+(b.memo||'')+' '+(b.category||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
     return true;
   });
   if(!rows.length){
-    listEl.innerHTML = '<div style="padding:40px;text-align:center;color:#999">'+(all.length? '該当するリンクがありません':'まだリンクがありません。「＋ リンクを追加」から登録してください。')+'</div>';
+    listEl.innerHTML = '<div style="padding:40px;text-align:center;color:#999">'+(all.length?'該当するリンクがありません':'まだリンクがありません。「＋ リンクを追加」から登録してください。')+'</div>';
     return;
   }
-  // カテゴリ別グループ表示
-  var groups = {};
-  rows.forEach(function(b){ var c=b.category||'未分類'; (groups[c]=groups[c]||[]).push(b); });
-  var out = '';
-  Object.keys(groups).sort().forEach(function(c){
-    out += '<div style="margin-bottom:18px">';
-    out += '<div style="font-size:13px;font-weight:700;color:#444;margin:0 0 8px;padding-left:2px;border-left:3px solid var(--rd-accent,#2563eb)">　'+_bmEsc_(c)+' <span style="font-weight:400;color:#999;font-size:11px">('+groups[c].length+')</span></div>';
-    out += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
-    groups[c].forEach(function(b){
-      var safe = _bmSafeUrl_(b.url);
-      var host=''; try{ host = safe ? new URL(safe).hostname : ''; }catch(e){}
-      out += '<div style="background:#fff;border:1px solid #e7e4de;border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">';
-      out +=   '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">';
-      out +=     '<a href="'+_bmEsc_(safe)+'" target="_blank" rel="noopener noreferrer" style="font-weight:600;color:#1d4ed8;text-decoration:none;font-size:14px;word-break:break-word">'+_bmEsc_(b.title||'(無題)')+' ↗</a>';
-      out +=     '<span style="white-space:nowrap;display:flex;gap:4px">'+
-                   '<button class="use-btn" title="編集・削除" onclick="_bmEdit_(\''+b.id+'\')" style="font-size:11px;padding:2px 7px">✏ 編集</button>'+
-                 '</span>';
-      out +=   '</div>';
-      if(host) out += '<div style="font-size:11px;color:#999;word-break:break-all">'+_bmEsc_(host)+'</div>';
-      if(b.memo) out += '<div style="font-size:12px;color:#555;white-space:pre-wrap">'+_bmEsc_(b.memo)+'</div>';
+  var collapsed=_bmCollapsed_();
+  // グループ化 (配列順を保持) → カテゴリ名昇順
+  var groups={}, gorder=[];
+  rows.forEach(function(b){ var c=b.category||'未分類'; if(!groups[c]){groups[c]=[];gorder.push(c);} groups[c].push(b); });
+  gorder.sort();
+  var out = reorder ? '<div style="font-size:11.5px;color:#0e7490;background:#ecfeff;border:1px solid #a5f3fc;border-radius:7px;padding:6px 10px;margin-bottom:10px">↕ 並べ替えモード：カードをドラッグして順番変更・別カテゴリへ移動できます</div>' : '';
+  gorder.forEach(function(c){
+    var cEsc=_bmEsc_(c), cJs=cEsc.replace(/'/g,"\\'");
+    var isCol = q ? false : !!collapsed[c]; // 検索中は全部開く
+    out += '<div class="bm-group" '+(reorder?('ondragover="_bmDragOver_(event)" ondrop="_bmDropOnCat_(event,\''+cJs+'\')"'):'')+' style="margin-bottom:14px">';
+    out += '<div onclick="_bmToggleCollapse_(\''+cJs+'\')" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#444;margin:0 0 8px;padding:5px 8px;border-left:3px solid var(--rd-accent,#2563eb);background:#f6f5f2;border-radius:0 6px 6px 0">'
+      + '<span style="font-size:10px;color:#888;width:12px;text-align:center">'+(isCol?'▶':'▼')+'</span>'
+      + cEsc + ' <span style="font-weight:400;color:#999;font-size:11px">('+groups[c].length+')</span></div>';
+    if(!isCol){
+      out += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
+      groups[c].forEach(function(b){
+        var safe=_bmSafeUrl_(b.url); var host=''; try{ host=safe?new URL(safe).hostname:''; }catch(e){}
+        out += '<div class="bm-card"'+(reorder?(' draggable="true" ondragstart="_bmDragStart_(event,\''+b.id+'\')" ondragend="_bmDragEnd_()" ondragover="_bmDragOver_(event)" ondrop="_bmDropOnCard_(event,\''+b.id+'\')"'):'')
+          + ' style="background:#fff;border:1px solid #e7e4de;border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:5px'+(reorder?';cursor:grab':'')+'">';
+        out += '<div style="display:flex;align-items:flex-start;gap:6px">';
+        if(reorder) out += '<span style="color:#bbb;font-size:15px;cursor:grab;line-height:1.2" title="ドラッグで移動">⠿</span>';
+        out += '<a href="'+_bmEsc_(safe)+'" target="_blank" rel="noopener noreferrer" draggable="false" style="flex:1;min-width:0;font-weight:600;color:#1d4ed8;text-decoration:none;font-size:14px;word-break:break-word">'+_bmEsc_(b.title||'(無題)')+' ↗</a>';
+        out += '<button class="use-btn" title="編集・削除" onclick="event.stopPropagation();_bmEdit_(\''+b.id+'\')" style="font-size:11px;padding:2px 7px;white-space:nowrap">✏ 編集</button>';
+        out += '</div>';
+        if(host) out += '<div style="font-size:11px;color:#999;word-break:break-all">'+_bmEsc_(host)+'</div>';
+        if(b.memo) out += '<div style="font-size:12px;color:#555;white-space:pre-wrap">'+_bmEsc_(b.memo)+'</div>';
+        out += '</div>';
+      });
       out += '</div>';
-    });
-    out += '</div></div>';
+    }
+    out += '</div>';
   });
   listEl.innerHTML = out;
 }
