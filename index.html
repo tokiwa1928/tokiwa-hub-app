@@ -1832,7 +1832,10 @@ setTimeout(_removeBootLoader_, 5000);
       <input id="bm-search" class="inp" placeholder="🔍 タイトル・URL・メモで検索" style="flex:1;min-width:180px;max-width:340px" oninput="renderBookmarksPage()">
       <select id="bm-cat-filter" class="inp" style="max-width:220px" onchange="renderBookmarksPage()"></select>
       <label style="font-size:11.5px;color:#666;display:flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap" title="ONにするとドラッグで並べ替え・カテゴリ移動ができます">
-        <input type="checkbox" id="bm-reorder-mode" onchange="renderBookmarksPage()"> ↕ 並べ替え
+        <input type="checkbox" id="bm-reorder-mode" onchange="if(this.checked){var s=document.getElementById('bm-select-mode');if(s)s.checked=false;}renderBookmarksPage()"> ↕ 並べ替え
+      </label>
+      <label style="font-size:11.5px;color:#666;display:flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap" title="ONにするとチェックして複数まとめて削除できます">
+        <input type="checkbox" id="bm-select-mode" onchange="if(this.checked){var r=document.getElementById('bm-reorder-mode');if(r)r.checked=false;}renderBookmarksPage()"> ☑ 選択削除
       </label>
     </div>
     <div id="bm-list"></div>
@@ -5950,11 +5953,30 @@ function _bmDropOnCat_(ev,cat){
   var moved=list.splice(si,1)[0]; moved.category=cat||'未分類'; list.push(moved);
   _bmPersist_(); renderBookmarksPage();
 }
+// ── 複数選択して一括削除 ──
+function _bmSelSet_(){ if(!window._bmSel_) window._bmSel_ = {}; return window._bmSel_; }
+function _bmSelToggle_(id,on){ var s=_bmSelSet_(); if(on) s[id]=1; else delete s[id]; _bmSelUpdateCount_(); }
+function _bmSelCount_(){ return Object.keys(_bmSelSet_()).length; }
+function _bmSelUpdateCount_(){ var el=document.getElementById('bm-sel-count'); if(el) el.textContent=_bmSelCount_()+'件 選択中'; }
+function _bmSelAll_(){ var s=_bmSelSet_(); document.querySelectorAll('.bm-sel-cb').forEach(function(cb){ cb.checked=true; s[cb.getAttribute('data-id')]=1; }); _bmSelUpdateCount_(); }
+function _bmSelClear_(){ window._bmSel_={}; document.querySelectorAll('.bm-sel-cb').forEach(function(cb){ cb.checked=false; }); _bmSelUpdateCount_(); }
+function _bmBulkDelete_(){
+  var ids=Object.keys(_bmSelSet_());
+  if(!ids.length){ alert('削除する項目をチェックで選択してください'); return; }
+  if(!confirm('選択した '+ids.length+' 件のリンクを削除しますか？\nこの操作は元に戻せません。')) return;
+  var del={}; ids.forEach(function(i){ del[i]=1; });
+  DB.bookmarks=_bmList_().filter(function(x){ return !del[x.id]; });
+  window._bmSel_={};
+  _bmPersist_(); renderBookmarksPage();
+  if(typeof _toastMsg==='function') _toastMsg('🗑 '+ids.length+'件を削除しました');
+}
 function renderBookmarksPage(){
   var listEl = document.getElementById('bm-list'); if(!listEl) return;
   var all = _bmList_();
   var q = (document.getElementById('bm-search')?.value || '').toLowerCase();
   var reorder = !!(document.getElementById('bm-reorder-mode') && document.getElementById('bm-reorder-mode').checked);
+  var selMode = !!(document.getElementById('bm-select-mode') && document.getElementById('bm-select-mode').checked);
+  if(selMode) reorder = false; else window._bmSel_ = {}; // 選択モードOFFで選択をクリア
   // カテゴリ選択ドロップダウン (登録カテゴリ ∪ 使用中) を構築
   var used={}; all.forEach(function(b){ var c=b.category||'未分類'; used[c]=(used[c]||0)+1; });
   var catList=_bmCats_().slice(); Object.keys(used).forEach(function(c){ if(catList.indexOf(c)<0) catList.push(c); });
@@ -5982,6 +6004,14 @@ function renderBookmarksPage(){
   rows.forEach(function(b){ var c=b.category||'未分類'; if(!groups[c]){groups[c]=[];gorder.push(c);} groups[c].push(b); });
   gorder.sort();
   var out = reorder ? '<div style="font-size:11.5px;color:#0e7490;background:#ecfeff;border:1px solid #a5f3fc;border-radius:7px;padding:6px 10px;margin-bottom:10px">↕ 並べ替えモード：カードをドラッグして順番変更・別カテゴリへ移動できます</div>' : '';
+  if(selMode){
+    out += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 12px;margin-bottom:10px">'
+      + '<span id="bm-sel-count" style="font-size:12.5px;font-weight:700;color:#991b1b">'+_bmSelCount_()+'件 選択中</span>'
+      + '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_bmSelAll_()">表示中をすべて選択</button>'
+      + '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_bmSelClear_()">選択解除</button>'
+      + '<button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto;background:#dc2626;border-color:#dc2626;color:#fff" onclick="_bmBulkDelete_()">🗑 選択したリンクを削除</button>'
+      + '</div>';
+  }
   gorder.forEach(function(c){
     var cEsc=_bmEsc_(c), cJs=cEsc.replace(/'/g,"\\'");
     var isCol = q ? false : !!collapsed[c]; // 検索中は全部開く
@@ -5996,6 +6026,7 @@ function renderBookmarksPage(){
         out += '<div class="bm-card"'+(reorder?(' draggable="true" ondragstart="_bmDragStart_(event,\''+b.id+'\')" ondragend="_bmDragEnd_()" ondragover="_bmDragOver_(event)" ondrop="_bmDropOnCard_(event,\''+b.id+'\')"'):'')
           + ' style="background:#fff;border:1px solid #e7e4de;border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:5px'+(reorder?';cursor:grab':'')+'">';
         out += '<div style="display:flex;align-items:flex-start;gap:6px">';
+        if(selMode) out += '<input type="checkbox" class="bm-sel-cb" data-id="'+b.id+'"'+(_bmSelSet_()[b.id]?' checked':'')+' onclick="event.stopPropagation();_bmSelToggle_(\''+b.id+'\',this.checked)" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex:0 0 auto">';
         if(reorder) out += '<span style="color:#bbb;font-size:15px;cursor:grab;line-height:1.2" title="ドラッグで移動">⠿</span>';
         out += '<a href="'+_bmEsc_(safe)+'" target="_blank" rel="noopener noreferrer" draggable="false" style="flex:1;min-width:0;font-weight:600;color:#1d4ed8;text-decoration:none;font-size:14px;word-break:break-word">'+_bmEsc_(b.title||'(無題)')+' ↗</a>';
         out += '<button class="use-btn" title="編集・削除" onclick="event.stopPropagation();_bmEdit_(\''+b.id+'\')" style="font-size:11px;padding:2px 7px;white-space:nowrap">✏ 編集</button>';
