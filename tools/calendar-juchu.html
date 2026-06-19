@@ -238,6 +238,7 @@
     .mtbl td.n .ni{ width:62px; text-align:right; padding:2px 4px; font-size:11px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
     .mtbl td.d .di{ width:120px; padding:2px; font-size:10px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
     .yck{ font-size:11px; color:#475569; cursor:pointer; padding:1px 4px; white-space:nowrap; }
+    .mtbl .alrt{ display:inline-block; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:7px; margin-left:4px; white-space:nowrap; }
     .mtbl .ycell .qp{ color:#334155; white-space:nowrap; }
     .mtbl .ycell .qp .pr{ font-weight:800; color:#0f172a; }    /* 単価を強調 */
     .mtbl .ycell .qp .x{ color:#9aa3af; margin:0 2px; }
@@ -489,7 +490,20 @@ function curSubs(r, prevP, prevC){
 // ─ 📅 年推移ビュー: 製品ごとに「年=行」、項目を別列に。数量/売価/仕入額の推移を比較・今年だけ入力・日付別列・年度選択 ─
 var yearShow = {};
 function prevYearRec(g, y){ var best=null; for(var yy in g.byYear){ var n=Number(yy); if(n<y && mPrice(g.byYear[n])!==''){ if(best===null||n>best) best=n; } } return best; }
-function pctSigned(cur, prev, prevYear){ if(cur===''||prev===''||prevYear===null||prevYear==null) return '<span class="dim">—</span>'; var d=cur-prev, pct=d/prev*100; var col=d>0?'#b45309':(d<0?'#2563eb':'#94a3b8'); return '<span style="color:'+col+'">'+prevYear+'比 '+(d>=0?'+':'−')+Math.abs(pct).toFixed(1)+'%</span>'; }
+function pctSigned(cur, prev, prevYear){ if(cur===''||prev===''||prevYear===null||prevYear==null) return '<span class="dim">—</span>'; var d=cur-prev, pct=d/prev*100; var col=d>0?'#b45309':(d<0?'#2563eb':'#94a3b8'); var sg=(d>=0?'+':'−'); return '<span style="color:'+col+'">'+prevYear+'比 '+sg+'¥'+fmt(Math.abs(d))+' ('+sg+Math.abs(pct).toFixed(1)+'%)</span>'; }
+function prevAnyRec(g, y){ var best=null; for(var yy in g.byYear){ var n=Number(yy); if(n<y){ if(best===null||n>best) best=n; } } return best!=null?g.byYear[best]:null; }
+function _md2date(s, yr){ var m=String(s).match(/\d{4}-(\d{2})-(\d{2})/); return m?new Date(yr, Number(m[1])-1, Number(m[2])):null; }
+// ⑨ アラート: 昨年のTEL/受注/納品日を今年にずらし、1週間前～当日以降で「そろそろ/要」表示
+function trendAlert(cur, prev, yr){
+  if(!prev) return '';
+  var today=new Date(); today.setHours(0,0,0,0); var WK=7*86400000;
+  var telDone=cur&&cur.telDate, ordDone=cur&&cur.orderDate, dlvDone=cur&&cur.delivDate;
+  function bdg(t,c){ return '<span class="alrt" style="background:'+c+'">'+t+'</span>'; }
+  if(!telDone && prev.telDate){ var d=_md2date(prev.telDate,yr); if(d){ if(today>=d) return bdg('要電話','#dc2626'); if(today.getTime()>=d.getTime()-WK) return bdg('そろそろ電話','#b45309'); } }
+  if(telDone && !ordDone && prev.orderDate){ var d2=_md2date(prev.orderDate,yr); if(d2){ if(today>=d2) return bdg('要受注確認','#dc2626'); if(today.getTime()>=d2.getTime()-WK) return bdg('そろそろ受注','#b45309'); } }
+  if(ordDone && !dlvDone && prev.delivDate){ var d3=_md2date(prev.delivDate,yr); if(d3 && today.getTime()>=d3.getTime()-WK) return bdg('納期注意','#7c3aed'); }
+  return '';
+}
 var _allYears=[];
 function buildYearFilter(allYears){ _allYears=allYears.slice(); var box=document.getElementById('yearFilter'); if(!box) return; box.style.display = (viewMode==='matrix')?'':'none'; box.innerHTML='<span style="font-size:11px;color:#888">表示年:</span> '+allYears.slice().sort(function(a,b){return b-a;}).map(function(y){ var on=yearShow[y]!==false; return '<label class="yck"><input type="checkbox" '+(on?'checked':'')+' onchange="toggleYear('+y+',this.checked)"> '+y+'</label>'; }).join('')+' <button class="btn" style="padding:2px 7px;font-size:10px" onclick="toggleAllYears(true)">全選択</button> <button class="btn" style="padding:2px 7px;font-size:10px" onclick="toggleAllYears(false)">全解除</button>'; }
 function toggleYear(y, on){ yearShow[y]=on; render(); }
@@ -504,9 +518,9 @@ function renderTrend(){
   var allYears=Object.keys(yset).map(Number).sort(function(a,b){return a-b;});
   buildYearFilter(allYears);
   var showYears=allYears.filter(function(y){ return yearShow[y]!==false; });
-  document.getElementById('mhead').innerHTML='<tr><th class="lead">得意先</th><th class="lead">製品</th><th class="ycol">年</th><th class="n">数量</th><th class="n">売価</th><th class="n">前年比</th><th class="n">仕入単価</th><th class="n">仕入額</th><th class="n">原価率</th><th class="d">TEL日</th><th class="d">受注日</th><th class="d">納品日</th></tr>';
+  document.getElementById('mhead').innerHTML='<tr><th class="lead">得意先</th><th class="lead">製品</th><th class="ycol">年</th><th class="n">数量</th><th class="n">売価</th><th class="n">前年比(売価)</th><th class="n">金額</th><th class="n">仕入単価</th><th class="n">仕入額</th><th class="n">原価率</th><th class="d">TEL日</th><th class="d">受注日</th><th class="d">納品日</th></tr>';
   var mb=document.getElementById('mbody');
-  if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="12" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
+  if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="13" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
   var ff=(document.getElementById('fFollow')||{}).value||'';
   var html='';
   _mGroups.forEach(function(g, gi){
@@ -527,16 +541,20 @@ function renderTrend(){
   mb.innerHTML=html;
 }
 function yearRow(g, y, r, isCur, gi){
-  var py=prevYearRec(g,y); var prevP=py!=null?mPrice(g.byYear[py]):'';
-  if(isCur && !r){ return '<td class="ycol curr">'+y+'</td><td class="n curr addtd" colspan="9"><button class="btn addcur" onclick="matrixAddCur('+gi+')">＋入力</button></td>'; }
+  var py=prevYearRec(g,y); var prevR=py!=null?g.byYear[py]:null;
+  var prevP=prevR?mPrice(prevR):'', prevC=prevR?mCost(prevR):'';
+  var alert=isCur?trendAlert(r, prevAnyRec(g,y), y):'';
+  if(isCur && !r){ return '<td class="ycol curr">'+y+alert+'</td><td class="n curr addtd" colspan="10"><button class="btn addcur" onclick="matrixAddCur('+gi+')">＋入力</button></td>'; }
   var q=mQty(r), price=mPrice(r), cost=mCost(r), cr=costRatioVal(r);
   var siAmt=(q!==''&&q!=null&&cost!=='')?(Number(q)*Number(cost)):'';
+  var saAmt=(q!==''&&q!=null&&price!=='')?(Number(q)*Number(price)):'';
+  var costDiff=(cost!==''&&prevC!=='')?(function(){ var dd=cost-prevC; return ' <span style="font-size:9px;color:'+(dd>0?'#b45309':(dd<0?'#2563eb':'#94a3b8'))+'">'+(dd>=0?'+':'−')+'¥'+fmt(Math.abs(dd))+'</span>'; })():'';
   if(isCur){
     var id=hubEsc(r.id);
     var inp=function(f,type){ var v=hubEsc(r[f]==null?'':r[f]); return '<input '+(type==='date'?'type="date" class="di"':'type="number" step="any" class="ni"')+' value="'+v+'" data-id="'+id+'" data-f="'+f+'" onchange="onEdit(this)">'; };
-    return '<td class="ycol curr">'+y+'</td><td class="n curr">'+inp('orderQty','num')+'</td><td class="n curr">'+inp('orderPrice','num')+'</td><td class="n curr">'+pctSigned(price,prevP,py)+'</td><td class="n curr">'+inp('cost','num')+'</td><td class="n curr">'+(siAmt!==''?'¥'+fmt(siAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'<span class="dim">自動</span>')+'</td><td class="d curr">'+inp('telDate','date')+'</td><td class="d curr">'+inp('orderDate','date')+'</td><td class="d curr">'+inp('delivDate','date')+'</td>';
+    return '<td class="ycol curr">'+y+alert+'</td><td class="n curr">'+inp('orderQty','num')+'</td><td class="n curr">'+inp('orderPrice','num')+'</td><td class="n curr">'+pctSigned(price,prevP,py)+'</td><td class="n curr">'+(saAmt!==''?'¥'+fmt(saAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+inp('cost','num')+costDiff+'</td><td class="n curr">'+(siAmt!==''?'¥'+fmt(siAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'<span class="dim">自動</span>')+'</td><td class="d curr">'+inp('telDate','date')+'</td><td class="d curr">'+inp('orderDate','date')+'</td><td class="d curr">'+inp('delivDate','date')+'</td>';
   }
-  return '<td class="ycol">'+y+'</td><td class="n">'+(q!==''?fmt(q):'—')+'</td><td class="n"><b>'+(price!==''?'¥'+fmt(price):'—')+'</b></td><td class="n">'+pctSigned(price,prevP,py)+'</td><td class="n">'+(cost!==''?'¥'+fmt(cost):'—')+'</td><td class="n">'+(siAmt!==''?'¥'+fmt(siAmt):'—')+'</td><td class="n">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'—')+'</td><td class="d">'+(r&&r.telDate?mYmd(r.telDate):'—')+'</td><td class="d">'+(r&&r.orderDate?mYmd(r.orderDate):'—')+'</td><td class="d">'+(r&&r.delivDate?mYmd(r.delivDate):'—')+'</td>';
+  return '<td class="ycol">'+y+'</td><td class="n">'+(q!==''?fmt(q):'—')+'</td><td class="n"><b>'+(price!==''?'¥'+fmt(price):'—')+'</b></td><td class="n">'+pctSigned(price,prevP,py)+'</td><td class="n">'+(saAmt!==''?'¥'+fmt(saAmt):'—')+'</td><td class="n">'+(cost!==''?'¥'+fmt(cost):'—')+costDiff+'</td><td class="n">'+(siAmt!==''?'¥'+fmt(siAmt):'—')+'</td><td class="n">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'—')+'</td><td class="d">'+(r&&r.telDate?mYmd(r.telDate):'—')+'</td><td class="d">'+(r&&r.orderDate?mYmd(r.orderDate):'—')+'</td><td class="d">'+(r&&r.delivDate?mYmd(r.delivDate):'—')+'</td>';
 }
 function renderMatrix(){
   var rows=matrixBase(); var cur=curYear();
@@ -834,7 +852,7 @@ var SHEET_MAPS = [
   { match:/ﾐﾆ|ミニ/, cat:'ミニカレンダー', hr:1, cust:5, code:6, name:9, staff:3, note:23,
     years:[ {y:2022,q:21,p:22,o:1,d:11},{y:2023,q:19,p:20,o:0,d:10},{y:2024,q:17,p:18,o:2,d:12},{y:2025,q:15,p:16,o:4,d:13} ] },
   { match:/カレンダー/, cat:'カレンダー', hr:1, cust:28, code:33, name:34, staff:27, note:57,
-    years:[ {y:2022,q:39,p:44,o:1,d:4,c:47,t:0},{y:2023,q:43,p:45,o:6,d:10,c:48,t:5},{y:2025,q:41,p:42,o:12,d:17,c:50,t:11} ] },
+    years:[ {y:2023,q:39,p:44,o:1,d:4,c:47,t:0},{y:2024,q:43,p:45,o:6,d:10,c:48,t:5},{y:2025,q:41,p:42,o:12,d:17,c:50,t:11} ] },
   { match:/業社|業者/, cat:'業社', hr:1, cust:30, code:34, name:35, staff:29, note:57,
     years:[ {y:2021,q:46,p:47,o:2,d:null,c:50},{y:2022,q:44,p:45,o:3,d:8,c:51},{y:2023,q:42,p:43,o:9,d:13,c:52,t:1},{y:2024,q:40,p:41,o:15,d:20,c:53,t:14},{y:2025,q:38,p:39,o:22,d:27,c:54,t:21} ] },
   { match:/米屋/, cat:'米屋', hr:0, cust:33, code:null, name:36, staff:null, note:43,
@@ -891,11 +909,10 @@ function importOldLedger(wb, quiet){
   var added=0,updated=0;
   var ok=hubSave(function(db){
     var arr=db[COLL]||(db[COLL]=[]);
-    var pool={}; arr.forEach(function(x){ if(x._src!=='旧台帳移行') return; var k=keyOf(x); (pool[k]||(pool[k]=[])).push(x); });
-    allRecs.forEach(function(nr){ var k=keyOf(nr), q=pool[k];
-      if(q&&q.length){ var ex=q.shift(); Object.assign(ex,nr,{id:ex.id,_createdAt:ex._createdAt}); ex._updatedAt=new Date().toISOString(); updated++; }
-      else { arr.push(newRecord(nr)); added++; } });
-    db[COLL]=arr.filter(function(x){ return !(x._src==='旧台帳移行' && !x.cust); });   // 旧版で顧客名空のまま入った(無名)を掃除
+    var keep=arr.filter(function(x){ return x._src!=='旧台帳移行'; });   // 履歴以外(受注用2026・手入力)は残す
+    var fresh=allRecs.map(function(nr){ return newRecord(nr); });
+    db[COLL]=fresh.concat(keep);   // 履歴を入れ替え(ファイル順を先頭に)＝年の付け替えも確実・重複なし
+    added=fresh.length;
   });
   if(ok){ if(!quiet) hubToast('✅ 旧台帳履歴: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
   return { added:added, updated:updated };
