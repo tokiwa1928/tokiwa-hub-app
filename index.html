@@ -18280,11 +18280,21 @@ function _inqScopedAll_(){
 // 会社別の表示設定 (TK役員が決める)。DB.companyVisibility['COMP004'] = 表示する機能キーの配列。
 // 未設定(配列でない)=全表示。配列がある場合、そこに無いページは非表示。
 function _pageHiddenForMe_(pageId){
-  if(_isMgmtCompany_()) return false; // 管理会社(トキワ)は常に全部見える
-  var cv = (DB && DB.companyVisibility) || {};
-  var vis = cv[currentAuth && currentAuth.companyId];
-  if(!Array.isArray(vis)) return false; // 設定なし=全表示
-  return vis.indexOf(pageId) < 0;       // 表示リストに無い=非表示
+  // ① 会社レベル（管理会社トキワは会社レベルでは常に全表示）
+  if(!_isMgmtCompany_()){
+    var cv = (DB && DB.companyVisibility) || {};
+    var vis = cv[currentAuth && currentAuth.companyId];
+    if(Array.isArray(vis) && vis.indexOf(pageId) < 0) return true; // 会社で非表示
+  }
+  // ② 個人レベル（会社で見える範囲を、さらに担当者ごとに絞り込み）。
+  //    管理者・役員はロックアウト防止のため対象外。未設定の担当者は会社設定をそのまま継承。
+  if(typeof _isAdmin_==='function' && _isAdmin_()) return false;
+  if(typeof _isTkExec_==='function' && _isTkExec_()) return false;
+  var uv = (DB && DB.userVisibility) || {};
+  var ukey = (currentAuth && (currentAuth.userEmail || currentAuth.email)) || '';
+  var uvis = uv[ukey];
+  if(Array.isArray(uvis) && uvis.indexOf(pageId) < 0) return true; // 個人で非表示
+  return false;
 }
 function getReleaseConfig(){
   var rc = (DB && DB.releaseConfig) || {};
@@ -18367,30 +18377,63 @@ function renderCompanyVisibilityUI(){
   if(!box || !ui) return;
   if(typeof _isTkExec_ !== 'function' || !_isTkExec_()){ box.style.display = 'none'; return; }
   box.style.display = '';
-  var companies = (DB.companies || []).filter(function(c){ return c.id !== 'COMP002' && c.code !== 'TK'; }); // 管理会社トキワ以外
   DB.companyVisibility = DB.companyVisibility || {};
+  DB.userVisibility = DB.userVisibility || {};
+  var allCompanies = (DB.companies || []);
   var execs = (DB.conf && DB.conf.tkExecs) || [];
+  var allKeys = RELEASE_FEATURES.map(function(f){ return f.key; });
+  // 1担当者ぶんの追加制限グリッド（会社で許可された機能の中だけ・未設定は会社設定を継承）
+  function userBlock(c, companyAllowed){
+    var users = (DB.systemUsers || []).filter(function(u){ return u.companyId === c.id; });
+    if(!users.length) return '<div style="font-size:11px;color:#a78bfa;padding:4px 2px">登録ユーザーなし</div>';
+    return users.map(function(u){
+      var email = u.email || '';
+      var uv = DB.userVisibility[email];
+      var hasUv = Array.isArray(uv);
+      var cntFn = companyAllowed.filter(function(k){ return hasUv ? uv.indexOf(k)>=0 : true; }).length;
+      return '<div style="border-top:1px dashed #e9d5ff;padding:6px 0 2px">'
+        + '<div style="font-size:11.5px;font-weight:700;color:#5b21b6;margin-bottom:3px">👤 ' + _escDiff(u.name || email)
+        +   ' <span style="font-size:10px;color:#a78bfa;font-weight:400">' + _escDiff(email) + '</span>'
+        +   (hasUv ? ' <span style="font-size:10px;color:#7c3aed">(' + cntFn + '機能)</span>' : ' <span style="font-size:10px;color:#16a34a">(会社設定を継承)</span>') + '</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:3px">'
+        + companyAllowed.map(function(k){
+            var f = RELEASE_FEATURES.find(function(x){ return x.key === k; }); if(!f) return '';
+            var checked = !hasUv || uv.indexOf(k) >= 0;   // 未設定=会社の全機能を継承(全部チェック)
+            var dis = f.core ? 'disabled' : '';
+            return '<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer;padding:2px 5px;border:1px solid #eee;border-radius:4px;background:#fff">'
+              + '<input type="checkbox" class="uv-feat" data-email="' + _escAttr_(email) + '" value="' + k + '" ' + (checked?'checked':'') + ' ' + dis + ' onchange="_saveUserVisibility_(\'' + _escAttr_(email) + '\')"> ' + f.label + '</label>';
+          }).join('')
+        + '</div></div>';
+    }).join('');
+  }
   ui.innerHTML = ''
-    + '<div style="font-size:11.5px;color:#6b21a8;line-height:1.7;margin-bottom:10px">各会社で<b>表示する機能だけ</b>にチェック。チェックを外した機能は、その会社のアカウントでは非表示になります（ナビからも消え、直接リンクでも開けません）。トキワ印刷は管理会社として常に全機能が見えます。</div>'
+    + '<div style="font-size:11.5px;color:#6b21a8;line-height:1.7;margin-bottom:10px">各会社で<b>表示する機能だけ</b>にチェック（会社で見える範囲を限定）。さらに<b>担当者ごと</b>に、その会社の範囲内でより細かく絞り込めます（未設定の担当者は会社設定をそのまま継承）。トキワ印刷は管理会社として会社レベルでは常に全機能、担当者単位の制限のみ可能です。管理者・役員は常に全機能が見えます。</div>'
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;background:#fff;border:1px solid #d8b4fe;border-radius:6px;padding:6px 10px">'
     +   '<b style="font-size:11.5px;color:#6d28d9">設定できる役員(トキワ):</b>'
     +   '<input id="tk-execs-input" value="' + _escAttr_(execs.join(', ')) + '" placeholder="氏名をカンマ区切り (adminは常に可)" style="flex:1;min-width:200px;font-size:11.5px;padding:4px 8px">'
     +   '<button class="btn" style="font-size:10px;padding:3px 8px" onclick="_saveTkExecs_()">保存</button>'
     + '</div>'
-    + companies.map(function(c){
-        var vis = DB.companyVisibility[c.id]; // visible配列 (未設定=全表示)
+    + allCompanies.map(function(c){
+        var isMgmt = (c.id === 'COMP002' || c.code === 'TK');
+        var vis = DB.companyVisibility[c.id];
         var allVisible = !Array.isArray(vis);
-        return '<div style="border:1px solid #e9d5ff;border-radius:8px;margin-bottom:8px;overflow:hidden">'
-          + '<div style="background:#f5f3ff;padding:7px 12px;font-weight:700;font-size:13px;color:#5b21b6;display:flex;align-items:center;gap:8px">' + _escDiff(c.name || c.code) + ' <span style="font-size:10px;color:#a78bfa">(' + (c.code||'') + ')</span>'
-          + '<span style="margin-left:auto;font-size:10px;color:#7c3aed">' + (allVisible ? '全機能 表示中' : (vis.length + '機能 表示') ) + '</span></div>'
-          + '<div style="padding:8px 12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:3px">'
-          + RELEASE_FEATURES.map(function(f){
-              var checked = allVisible || vis.indexOf(f.key) >= 0;
-              var dis = f.core ? 'disabled' : '';
-              return '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer;padding:2px 5px;border:1px solid #eee;border-radius:4px;background:#fff">'
-                + '<input type="checkbox" class="cv-feat" data-cid="' + c.id + '" value="' + f.key + '" ' + (checked?'checked':'') + ' ' + dis + ' onchange="_saveCompanyVisibility_(\'' + c.id + '\')"> ' + f.label + '</label>';
-            }).join('')
-          + '</div></div>';
+        var companyAllowed = (isMgmt || allVisible) ? allKeys.slice() : vis.slice();
+        var head = '<div style="background:#f5f3ff;padding:7px 12px;font-weight:700;font-size:13px;color:#5b21b6;display:flex;align-items:center;gap:8px">' + _escDiff(c.name || c.code) + ' <span style="font-size:10px;color:#a78bfa">(' + (c.code||'') + ')</span>'
+          + '<span style="margin-left:auto;font-size:10px;color:#7c3aed">' + (isMgmt ? '管理会社=会社レベルは全機能' : (allVisible ? '全機能 表示中' : (vis.length + '機能 表示'))) + '</span></div>';
+        var companyGrid = isMgmt ? '' :
+          ('<div style="padding:8px 12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:3px">'
+            + RELEASE_FEATURES.map(function(f){
+                var checked = allVisible || vis.indexOf(f.key) >= 0;
+                var dis = f.core ? 'disabled' : '';
+                return '<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer;padding:2px 5px;border:1px solid #eee;border-radius:4px;background:#fff">'
+                  + '<input type="checkbox" class="cv-feat" data-cid="' + c.id + '" value="' + f.key + '" ' + (checked?'checked':'') + ' ' + dis + ' onchange="_saveCompanyVisibility_(\'' + c.id + '\')"> ' + f.label + '</label>';
+              }).join('')
+            + '</div>');
+        var userSec = '<div style="padding:4px 12px 10px;background:#faf5ff;border-top:1px solid #f0e6ff">'
+          + '<div style="font-size:11px;font-weight:700;color:#6d28d9;margin:4px 0 2px">👥 担当者別の追加制限（会社の範囲内でさらに絞り込み）</div>'
+          + userBlock(c, companyAllowed)
+          + '</div>';
+        return '<div style="border:1px solid #e9d5ff;border-radius:8px;margin-bottom:8px;overflow:hidden">' + head + companyGrid + userSec + '</div>';
       }).join('');
 }
 function _saveCompanyVisibility_(cid){
@@ -18403,6 +18446,17 @@ function _saveCompanyVisibility_(cid){
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
   renderCompanyVisibilityUI();
   if(typeof _toastMsg === 'function') _toastMsg('🔐 表示設定を保存しました (全PCに同期)');
+}
+// 担当者別の追加制限を保存。DB.userVisibility[email] = 表示する機能キーの配列。
+function _saveUserVisibility_(email){
+  DB.userVisibility = DB.userVisibility || {};
+  var keys = [].slice.call(document.querySelectorAll('.uv-feat[data-email="' + email + '"]:checked')).map(function(c){ return c.value; });
+  RELEASE_FEATURES.forEach(function(f){ if(f.core && keys.indexOf(f.key) < 0) keys.push(f.key); }); // core(ホーム)は常に表示
+  DB.userVisibility[email] = keys;
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  renderCompanyVisibilityUI();
+  if(typeof _toastMsg === 'function') _toastMsg('🔐 担当者の表示設定を保存しました (全PCに同期)');
 }
 function _saveTkExecs_(){
   DB.conf = DB.conf || {};
