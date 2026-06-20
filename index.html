@@ -14327,8 +14327,64 @@ function renderProofingList(){
       + '<thead><tr style="background:#211f1c;color:#cfcabd">'+thHtml+'</tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
   }
 
-  container.innerHTML = toggleHtml + metricsHtml + bodyHtml;
+  // 📥 校正戻りの候補 (件名に製番が含まれる連絡を自動検出 → ワンクリック承認で取込)
+  var returnsHtml = '';
+  try {
+    var pend = _proofPendingReturns_();
+    if(pend.length){
+      returnsHtml = '<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:8px 10px;margin:6px 0 10px">'
+        + '<div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px">📥 校正戻りの候補 ' + pend.length + '件（メール/LINEの件名から自動判定）</div>'
+        + pend.map(function(x){
+            var when=x.inq.received_at||x.inq.createdAt; var ws=when?new Date(when).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric'}):'';
+            return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #dbeafe;border-radius:6px;padding:6px 9px;margin-bottom:4px;flex-wrap:wrap">'
+              + '<span style="flex:1;min-width:160px;font-size:12px"><b>'+_escDiff((x.inq.subject||'(件名なし)').slice(0,40))+'</b><span style="color:#94a3b8;font-size:10px"> '+ws+'</span><br><span style="font-size:10.5px;color:#64748b">→ '+_escDiff(x.seiban)+' / '+_escDiff(x.prod||'')+'</span></span>'
+              + '<button class="btn btn-p" style="font-size:11px;padding:3px 10px;white-space:nowrap" onclick="event.stopPropagation();_proofApproveReturn_(\''+x.inq.id+'\',\''+x.proof.id+'\')">✅ 承認して取込</button>'
+              + '<button class="btn" style="font-size:10px;padding:3px 8px;color:#94a3b8" onclick="event.stopPropagation();_proofDismissReturn_(\''+x.inq.id+'\')" title="校正戻りではない">✕</button>'
+              + '</div>';
+          }).join('')
+        + '</div>';
+    }
+  } catch(e){}
+  container.innerHTML = toggleHtml + returnsHtml + metricsHtml + bodyHtml;
   if(typeof _updateAttentionBadge_ === 'function') try { _updateAttentionBadge_(); } catch(e){}
+}
+// 📥 戻り候補の検出: 連絡の件名に校正の製番(projectId)が含まれ、まだ取込/対象外でないもの
+function _proofPendingReturns_(){
+  var proofs=(DB.proofings||[]);
+  if(!proofs.length) return [];
+  var myCompany=(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'';
+  var seibanMap={};
+  proofs.forEach(function(p){
+    if(myCompany){ var o=p.companyCode||''; if(o && o!==myCompany && (p.sharedWithCompanies||[]).indexOf(myCompany)<0) return; }
+    var info=_proofInfo_(p); var sb=String(info.seiban||'').trim();
+    if(sb && sb.length>=4) seibanMap[sb]={p:p, info:info};
+  });
+  var keys=Object.keys(seibanMap); if(!keys.length) return [];
+  var out=[], now=Date.now();
+  (DB.inquiries||[]).forEach(function(i){
+    if(i.isSpam) return;
+    if(i.linked_proofing_id) return;          // 既に校正へ紐付け済
+    if(i._proofReturnDismissed) return;       // 候補から除外済
+    var when=new Date(i.received_at||i.createdAt||0).getTime();
+    if(when && (now-when) > 30*864e5) return; // 30日より古いものは対象外
+    var subj=String(i.subject||'');
+    for(var k=0;k<keys.length;k++){ if(subj.indexOf(keys[k])>=0){ var m=seibanMap[keys[k]]; out.push({ inq:i, proof:m.p, seiban:keys[k], prod:m.info.prod }); break; } }
+  });
+  out.sort(function(a,b){ return new Date(b.inq.received_at||b.inq.createdAt||0)-new Date(a.inq.received_at||a.inq.createdAt||0); });
+  return out;
+}
+function _proofApproveReturn_(inqId, proofId){
+  if(typeof _doInsertInquiryToProofing_==='function') _doInsertInquiryToProofing_(inqId, proofId);
+  window._proofSelId_=proofId;
+  if(typeof showProofingDetail==='function') showProofingDetail(proofId);
+  if(typeof renderProofingList==='function') renderProofingList();
+  if(typeof _toastMsg==='function') _toastMsg('✅ 校正戻りを修正指示として取り込みました');
+}
+function _proofDismissReturn_(inqId){
+  var i=(DB.inquiries||[]).find(function(x){ return x.id===inqId; }); if(!i) return;
+  i._proofReturnDismissed=true;
+  if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  if(typeof renderProofingList==='function') renderProofingList();
 }
 // 表示モード切替 (リスト/かんばん) ＋ 色を濃くするヘルパ
 function _proofSetViewMode_(v){ window._proofView_ = v; try{ localStorage.setItem('tokiwa_proof_view', v); }catch(e){} renderProofingList(); }
@@ -15298,11 +15354,13 @@ function showSendProofToCustomerModal(proofingId){
     '問題なければ「校了」のご返信をお願いいたします。\n\n' +
     '何卒よろしくお願い申し上げます。';
 
-  // 件名形式: 【日付】【初校】製品名 [顧客名]
+  // 件名形式: 【日付】【初校】製品名 [顧客名] 〔製番/校数〕 ← 〔〕は戻り自動判定用トークン
   var _td = new Date();
   var _dStr = (_td.getMonth()+1) + '/' + _td.getDate();
   var _prod = (project ? (project.item || p.prodName) : p.prodName) || '';
-  var defaultSubject = '【' + _dStr + '】【' + roundLabel + vLabel + '】' + _prod + ' [' + (p.custName||'') + ']';
+  var _seiban = (project ? project.id : (p.projectId || '')) || '';
+  var _retToken = _seiban ? ('〔' + _seiban + '/' + roundLabel + '〕') : '';
+  var defaultSubject = '【' + _dStr + '】【' + roundLabel + vLabel + '】' + _prod + ' [' + (p.custName||'') + ']' + (_retToken ? (' ' + _retToken) : '');
 
   // SENDMETHOD-1: 得意先マスタの「送付方法」を既定として自動選択（弾かれ対策の振分）
   var _custRec = (DB.master && Array.isArray(DB.master.cust))
