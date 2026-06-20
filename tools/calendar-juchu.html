@@ -237,6 +237,7 @@
     .mtbl .dim{ color:#cbd5e1; }
     .mtbl td.n .ni{ width:62px; text-align:right; padding:2px 4px; font-size:11px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
     .mtbl td.d .di{ width:120px; padding:2px; font-size:10px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
+    .mtbl td .ti{ width:140px; padding:2px 4px; font-size:11px; border:1px solid #e2e0da; border-radius:4px; background:#fff; font-family:inherit; }
     .yck{ font-size:11px; color:#475569; cursor:pointer; padding:1px 4px; white-space:nowrap; }
     .mtbl .alrt{ display:inline-block; color:#fff; font-size:9px; font-weight:700; padding:1px 5px; border-radius:7px; margin-left:4px; white-space:nowrap; }
     .mtbl .ycell .qp{ color:#334155; white-space:nowrap; }
@@ -446,6 +447,8 @@ function renderTable(){
 var _mGroups = [];
 function mYmd(s){ if(!s) return ''; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2})/); return m?(m[1]+'/'+Number(m[2])+'/'+Number(m[3])):String(s); }
 function cleanProd(p){ return String(p||'').replace(/^20\d\d年カレンダー[_\s]?/,'').trim(); }
+// 顧客名から担当者(◯◯様/さま/さん・担当◯◯)を分離 → {company, contact}
+function parseCust(s){ s=String(s||'').replace(/[　\s]+/g,' ').trim(); var contact=''; var m=s.match(/(?:担当\s*)?([^\s]+?)(様|さま|さん)$/); if(m){ contact=m[1]+m[2]; s=s.slice(0,m.index).replace(/担当\s*$/,'').trim(); } return { company:s, contact:contact }; }
 function matrixBase(){
   // 年度では絞らない（全年表示）。カテゴリ＋検索のみ。
   var q=(document.getElementById('q').value||'').trim().toLowerCase();
@@ -510,50 +513,50 @@ function toggleAllYears(on){ _allYears.forEach(function(y){ yearShow[y]=on; }); 
 function renderTrend(){
   var rows=matrixBase(); var cur=curYear();
   var groups={}, order=[], custIdx={}, cn=0;
-  rows.forEach(function(r){ var ckey=[r.category,r.cust,r.user||''].join('|'); if(custIdx[ckey]===undefined) custIdx[ckey]=cn++; var key=[r.category,r.cust,r.user||'',r.product].join(''); if(!groups[key]){ groups[key]={category:r.category,cust:r.cust,user:r.user||'',product:r.product,byYear:{},_ci:custIdx[ckey],_ai:order.length}; order.push(key); } if(!groups[key].byYear[r.year]) groups[key].byYear[r.year]=r; if(r.vendor && !groups[key]._vendor) groups[key]._vendor=r.vendor; });
+  rows.forEach(function(r){ var key=[r.category,r.cust,r.user||''].join('|'); if(custIdx[key]===undefined) custIdx[key]=cn++; if(!groups[key]){ groups[key]={category:r.category,cust:r.cust,contact:'',user:r.user||'',recs:[],_ci:custIdx[key],_ai:order.length}; order.push(key); } groups[key].recs.push(r); if(r.contact && !groups[key].contact) groups[key].contact=r.contact; });
   order.sort(function(a,b){ var ga=groups[a],gb=groups[b]; var ca=CATORDER.indexOf(ga.category),cb=CATORDER.indexOf(gb.category); ca=ca<0?99:ca;cb=cb<0?99:cb; if(ca!==cb)return ca-cb; if(ga._ci!==gb._ci) return ga._ci-gb._ci; return ga._ai-gb._ai; });
   _mGroups=order.map(function(k){return groups[k];});
   var yset={}; yset[cur]=1; rows.forEach(function(r){ if(r.year) yset[r.year]=1; });
   var allYears=Object.keys(yset).map(Number).sort(function(a,b){return a-b;});
   buildYearFilter(allYears);
   var showYears=allYears.filter(function(y){ return yearShow[y]!==false; });
-  document.getElementById('mhead').innerHTML='<tr><th class="lead">得意先</th><th class="lead">製品</th><th class="lead">外注先</th><th class="ycol">年</th><th class="n">数量</th><th class="n">売価</th><th class="n">前年比(売価)</th><th class="n">金額</th><th class="n">仕入単価</th><th class="n">仕入額</th><th class="n">原価率</th><th class="d">TEL日</th><th class="d">受注日</th><th class="d">納品日</th></tr>';
+  document.getElementById('mhead').innerHTML='<tr><th class="lead">得意先</th><th class="lead">担当者</th><th class="ycol">年</th><th class="lead">製品</th><th class="lead">外注先</th><th class="n">数量</th><th class="n">売価</th><th class="n">前年比(売価)</th><th class="n">金額</th><th class="n">仕入単価</th><th class="n">仕入額</th><th class="n">原価率</th><th class="d">TEL日</th><th class="d">受注日</th><th class="d">納品日</th></tr>';
   var mb=document.getElementById('mbody');
-  if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="14" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」または「📥 取込」で読み込んでください。</td></tr>'; return; }
+  if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="15" style="padding:30px;text-align:center;color:#94a3b8">データがありません。「📦 初期投入」で読み込んでください。</td></tr>'; return; }
   var ff=(document.getElementById('fFollow')||{}).value||'';
   var html='';
   _mGroups.forEach(function(g, gi){
-    var cu=g.byYear[cur], telD=cu&&cu.telDate, ordD=cu&&cu.orderDate, dlvD=cu&&cu.delivDate;
-    if(ff==='telEmpty' && telD) return;
-    if(ff==='calledNotOrdered' && !(telD&&!ordD)) return;
-    if(ff==='orderedNotDelivered' && !(ordD&&!dlvD)) return;
-    var yrs=showYears.filter(function(y){ return g.byYear[y] || y===cur; });
-    if(!yrs.length) return;
-    yrs.forEach(function(y, ri){
-      var r=g.byYear[y]; var isCur=(y===cur);
-      html+='<tr class="'+(ri===0?'gstart':'')+(isCur?' curr':'')+'">';
-      if(ri===0){ html+='<td class="lead lcust" rowspan="'+yrs.length+'">'+hubEsc(g.cust||'(無名)')+(g.user?'<br><span class="muted" style="font-size:10px">'+hubEsc(g.user)+'</span>':'')+'</td><td class="lead lprod" rowspan="'+yrs.length+'" title="'+hubEsc(g.product||'')+'"><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span> '+hubEsc(cleanProd(g.product))+'</td><td class="lead lvendor" rowspan="'+yrs.length+'">'+hubEsc(g._vendor||'—')+'</td>'; }
-      html+=yearRow(g, y, r, isCur, gi);
-      html+='</tr>';
-    });
+    var curRecs=g.recs.filter(function(r){ return r.year===cur; });
+    var anyTel=curRecs.some(function(r){return r.telDate;}), anyOrd=curRecs.some(function(r){return r.orderDate;}), anyDlv=curRecs.some(function(r){return r.delivDate;});
+    if(ff==='telEmpty' && anyTel) return;
+    if(ff==='calledNotOrdered' && !(anyTel&&!anyOrd)) return;
+    if(ff==='orderedNotDelivered' && !(anyOrd&&!anyDlv)) return;
+    var recs=g.recs.filter(function(r){ return showYears.indexOf(r.year)>=0; }).sort(function(a,b){ if(a.year!==b.year) return a.year-b.year; return String(a.product||'').localeCompare(String(b.product||''),'ja'); });
+    var nr=recs.length+1;
+    var lead='<td class="lead lcust" rowspan="'+nr+'"><span class="catbadge" style="background:'+catColor(g.category)+'">'+hubEsc(g.category||'')+'</span> '+hubEsc(g.cust||'(無名)')+(g.user?'<br><span class="muted" style="font-size:10px">'+hubEsc(g.user)+'</span>':'')+'</td><td class="lead" rowspan="'+nr+'">'+hubEsc(g.contact||'—')+'</td>';
+    recs.forEach(function(r, ri){ html+='<tr class="'+(ri===0?'gstart':'')+(r.year===cur?' curr':'')+'">'+(ri===0?lead:'')+yearRow2(r, g)+'</tr>'; });
+    html+='<tr class="'+(recs.length===0?'gstart':'')+' curr addrow">'+(recs.length===0?lead:'')+'<td class="ycol curr">'+cur+'</td><td class="curr addtd" colspan="12"><button class="btn addcur" onclick="addProductRow('+gi+')">＋ '+cur+'年の商品を追加</button></td></tr>';
   });
   mb.innerHTML=html;
 }
-function yearRow(g, y, r, isCur, gi){
-  var py=prevYearRec(g,y); var prevR=py!=null?g.byYear[py]:null;
-  var prevP=prevR?mPrice(prevR):'', prevC=prevR?mCost(prevR):'';
-  var alert=isCur?trendAlert(r, prevAnyRec(g,y), y):'';
-  if(isCur && !r){ return '<td class="ycol curr">'+y+alert+'</td><td class="n curr addtd" colspan="10"><button class="btn addcur" onclick="matrixAddCur('+gi+')">＋入力</button></td>'; }
+function prevRecOf(g, r){ var best=null, same=null; g.recs.forEach(function(x){ if(x.year<r.year && mPrice(x)!==''){ if(!best||x.year>best.year) best=x; if(x.product===r.product && (!same||x.year>same.year)) same=x; } }); return same||best; }
+function prevAnyRecOf(g, r){ var best=null; g.recs.forEach(function(x){ if(x.year<r.year){ if(!best||x.year>best.year) best=x; } }); return best; }
+function addProductRow(gi){ var g=_mGroups[gi]; if(!g) return; var rec=newRecord({ year:curYear(), category:g.category||'カレンダー', cust:g.cust||'', contact:g.contact||'', user:g.user||'', product:'' }); if(hubAppend(COLL, rec)){ hubToast('＋ '+curYear()+'年の商品を追加'); buildYears(); render(); } }
+function yearRow2(r, g){
+  var cur=curYear(); var isCur=(r.year===cur);
+  var pr=prevRecOf(g,r); var prevP=pr?mPrice(pr):'', prevC=pr?mCost(pr):'', pyl=pr?pr.year:null;
+  var alert=isCur?trendAlert(r, prevAnyRecOf(g,r), cur):'';
   var q=mQty(r), price=mPrice(r), cost=mCost(r), cr=costRatioVal(r);
-  var siAmt=(q!==''&&q!=null&&cost!=='')?(Number(q)*Number(cost)):'';
-  var saAmt=(q!==''&&q!=null&&price!=='')?(Number(q)*Number(price)):'';
+  var siAmt=(q!==''&&cost!=='')?(Number(q)*Number(cost)):'';
+  var saAmt=(q!==''&&price!=='')?(Number(q)*Number(price)):'';
   var costDiff=(cost!==''&&prevC!=='')?(function(){ var dd=cost-prevC; return ' <span style="font-size:9px;color:'+(dd>0?'#b45309':(dd<0?'#2563eb':'#94a3b8'))+'">'+(dd>=0?'+':'−')+'¥'+fmt(Math.abs(dd))+'</span>'; })():'';
+  var id=hubEsc(r.id);
+  var inp=function(f,type){ var v=hubEsc(r[f]==null?'':r[f]); return '<input '+(type==='date'?'type="date" class="di"':type==='num'?'type="number" step="any" class="ni"':'type="text" class="ti"')+' value="'+v+'" data-id="'+id+'" data-f="'+f+'" onchange="onEdit(this)">'; };
+  var crCell=(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':(isCur?'<span class="dim">自動</span>':'—'));
   if(isCur){
-    var id=hubEsc(r.id);
-    var inp=function(f,type){ var v=hubEsc(r[f]==null?'':r[f]); return '<input '+(type==='date'?'type="date" class="di"':'type="number" step="any" class="ni"')+' value="'+v+'" data-id="'+id+'" data-f="'+f+'" onchange="onEdit(this)">'; };
-    return '<td class="ycol curr">'+y+alert+'</td><td class="n curr">'+inp('orderQty','num')+'</td><td class="n curr">'+inp('orderPrice','num')+'</td><td class="n curr">'+pctSigned(price,prevP,py)+'</td><td class="n curr">'+(saAmt!==''?'¥'+fmt(saAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+inp('cost','num')+costDiff+'</td><td class="n curr">'+(siAmt!==''?'¥'+fmt(siAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'<span class="dim">自動</span>')+'</td><td class="d curr">'+inp('telDate','date')+'</td><td class="d curr">'+inp('orderDate','date')+'</td><td class="d curr">'+inp('delivDate','date')+'</td>';
+    return '<td class="ycol curr">'+r.year+alert+'</td><td class="lprod curr">'+inp('product','text')+'</td><td class="lvendor curr">'+inp('vendor','text')+'</td><td class="n curr">'+inp('orderQty','num')+'</td><td class="n curr">'+inp('orderPrice','num')+'</td><td class="n curr">'+pctSigned(price,prevP,pyl)+'</td><td class="n curr">'+(saAmt!==''?'¥'+fmt(saAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+inp('cost','num')+costDiff+'</td><td class="n curr">'+(siAmt!==''?'¥'+fmt(siAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+crCell+'</td><td class="d curr">'+inp('telDate','date')+'</td><td class="d curr">'+inp('orderDate','date')+'</td><td class="d curr">'+inp('delivDate','date')+'</td>';
   }
-  return '<td class="ycol">'+y+'</td><td class="n">'+(q!==''?fmt(q):'—')+'</td><td class="n"><b>'+(price!==''?'¥'+fmt(price):'—')+'</b></td><td class="n">'+pctSigned(price,prevP,py)+'</td><td class="n">'+(saAmt!==''?'¥'+fmt(saAmt):'—')+'</td><td class="n">'+(cost!==''?'¥'+fmt(cost):'—')+costDiff+'</td><td class="n">'+(siAmt!==''?'¥'+fmt(siAmt):'—')+'</td><td class="n">'+(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':'—')+'</td><td class="d">'+(r&&r.telDate?mYmd(r.telDate):'—')+'</td><td class="d">'+(r&&r.orderDate?mYmd(r.orderDate):'—')+'</td><td class="d">'+(r&&r.delivDate?mYmd(r.delivDate):'—')+'</td>';
+  return '<td class="ycol">'+r.year+'</td><td class="lprod">'+hubEsc(cleanProd(r.product))+'</td><td class="lvendor">'+hubEsc(r.vendor||'—')+'</td><td class="n">'+(q!==''?fmt(q):'—')+'</td><td class="n"><b>'+(price!==''?'¥'+fmt(price):'—')+'</b></td><td class="n">'+pctSigned(price,prevP,pyl)+'</td><td class="n">'+(saAmt!==''?'¥'+fmt(saAmt):'—')+'</td><td class="n">'+(cost!==''?'¥'+fmt(cost):'—')+costDiff+'</td><td class="n">'+(siAmt!==''?'¥'+fmt(siAmt):'—')+'</td><td class="n">'+crCell+'</td><td class="d">'+(r.telDate?mYmd(r.telDate):'—')+'</td><td class="d">'+(r.orderDate?mYmd(r.orderDate):'—')+'</td><td class="d">'+(r.delivDate?mYmd(r.delivDate):'—')+'</td>';
 }
 function renderMatrix(){
   var rows=matrixBase(); var cur=curYear();
@@ -748,7 +751,7 @@ function addRow(){
 function newRecord(o){
   return Object.assign({
     id: 'co_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36),
-    year: BASE_YEAR, category:'カレンダー', ref:'', prevDate:'', cust:'', user:'', product:'', unit:'冊',
+    year: BASE_YEAR, category:'カレンダー', ref:'', prevDate:'', cust:'', contact:'', user:'', product:'', unit:'冊',
     pyQty:'', pyPrice:'', pyAmt:'', propQty:'', propPrice:'', propAmt:'', upPrice:'', upAmt:'', mkUpPrice:'', mkUpAmt:'',
     status:'未着手', telDate:'', orderDate:'', poDate:'', poDue:'', inDate:'', delivDate:'',
     orderQty:'', orderPrice:'', cost:'', staff:'', pay:'', note:'', _createdAt:new Date().toISOString()
@@ -831,7 +834,7 @@ function importExport(aoa, quiet){
     var pool={}; arr.forEach(function(x){ if(x.year!==y||x.category!=='カレンダー'||x._src) return; var k=keyOf(x); (pool[k]||(pool[k]=[])).push(x); });
     parsed.forEach(function(p){ var row=p.row;
       var fields={ year:y, category:'カレンダー', ref:p.ref, prevDate:String(get(row,c.date)||''),
-        cust:String(get(row,c.cust)||''), user:String(get(row,c.user)||''), product:p.prod, unit:String(get(row,c.unit)||'冊'),
+        cust:parseCust(get(row,c.cust)).company, contact:parseCust(get(row,c.cust)).contact, user:String(get(row,c.user)||''), product:p.prod, unit:String(get(row,c.unit)||'冊'),
         pyQty:num(get(row,c.pyQty)), pyPrice:num(get(row,c.pyPrice)), pyAmt:num(get(row,c.pyAmt)),
         propQty:num(get(row,c.propQty)), propPrice:num(get(row,c.propPrice)), propAmt:num(get(row,c.propAmt)),
         upPrice:num(get(row,c.up)), upAmt:num(get(row,c.upAmt)), mkUpPrice:num(get(row,c.mkUp)), mkUpAmt:num(get(row,c.mkUpAmt)) };
@@ -878,6 +881,7 @@ function importOldLedger(wb, quiet){
       var cust=clean(at(row,map.cust)), name=clean(at(row,map.name)), hin=map.code!=null?clean(at(row,map.code)):'';
       if(!cust && !name && !hin) continue;
       if(cust) lastCust=cust; else cust=lastCust;   // 顧客名空欄は直前の得意先を引き継ぐ
+      var pc=parseCust(cust); var contact=pc.contact; cust=pc.company;   // 担当者を分離
       var product = hin ? (hin+' '+name).trim() : name;
       var baseNote = clean(at(row,map.note)), staff = map.staff!=null?clean(at(row,map.staff)):'';
       var vendor = map.out!=null?clean(at(row,map.out)):'';
@@ -885,7 +889,7 @@ function importOldLedger(wb, quiet){
         var sq=num(at(row,map.single.q)), sp=num(at(row,map.single.p));
         if(sq===''&&sp==='') continue;
         var sod=at(row,map.single.o); var sy=(typeof sod==='number'&&sod)?(XLSX.SSF.parse_date_code(sod)||{}).y:2025;
-        allRecs.push(mkHist(map.cat, sy||2025, cust, product, '', '', sq, sp, ymd(sod), '', staff, baseNote, '', '', vendor));
+        allRecs.push(mkHist(map.cat, sy||2025, cust, product, '', '', sq, sp, ymd(sod), '', staff, baseNote, '', '', vendor, contact));
       } else {
         var lastQ='', lastP='';
         map.years.forEach(function(Y){
@@ -894,7 +898,7 @@ function importOldLedger(wb, quiet){
           var od=at(row,Y.o), dv=Y.d!=null?at(row,Y.d):'', tl=Y.t!=null?at(row,Y.t):'';
           var cost=Y.c!=null?num(at(row,Y.c)):'';
           var extra=[]; if(typeof tl==='string'&&clean(tl)) extra.push('TEL:'+clean(tl)); if(typeof od==='string'&&clean(od)) extra.push('受注:'+clean(od)); if(typeof dv==='string'&&clean(dv)) extra.push('納品:'+clean(dv));
-          allRecs.push(mkHist(map.cat, Y.y, cust, product, lastQ, lastP, q, p, ymd(od), ymd(dv), staff, [baseNote].concat(extra).filter(Boolean).join(' / '), cost, ymd(tl), vendor));
+          allRecs.push(mkHist(map.cat, Y.y, cust, product, lastQ, lastP, q, p, ymd(od), ymd(dv), staff, [baseNote].concat(extra).filter(Boolean).join(' / '), cost, ymd(tl), vendor, contact));
           lastQ=q; lastP=p;
         });
       }
@@ -917,8 +921,8 @@ function importOldLedger(wb, quiet){
   if(ok){ if(!quiet) hubToast('✅ 旧台帳履歴: 新規 '+added+' / 更新 '+updated); buildYears(); buildCats(); render(); }
   return { added:added, updated:updated };
 }
-function mkHist(cat, y, cust, product, pq, pp, q, p, orderDate, delivDate, staff, note, cost, telDate, vendor){
-  return { year:y, category:cat, ref:'', cust:cust, user:'', product:product, unit:'冊',
+function mkHist(cat, y, cust, product, pq, pp, q, p, orderDate, delivDate, staff, note, cost, telDate, vendor, contact){
+  return { year:y, category:cat, ref:'', cust:cust, contact:(contact==null?'':contact), user:'', product:product, unit:'冊',
     pyQty:pq, pyPrice:pp, pyAmt:(pq!==''&&pp!=='')?pq*pp:'',
     propQty:'', propPrice:'', propAmt:'', upPrice:'', upAmt:'', mkUpPrice:'', mkUpAmt:'',
     status:'納品済', telDate:(telDate==null?'':telDate), orderDate:orderDate, poDate:'', poDue:'', inDate:'', delivDate:delivDate,
