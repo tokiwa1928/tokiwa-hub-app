@@ -14267,7 +14267,7 @@ function renderProofingList(){
   all.forEach(function(p){ var m=_proofStatusMeta_(_normProofStatus_(p.status)); if(m.done){ doneN++; var la=_lastAt_(p); if(la){ var d=new Date(la); if((d.getFullYear()+'-'+(d.getMonth()+1))===ym) doneMonthN++; } } });
   var activeN = all.length - doneN;
   var staleN = (typeof _staleProofings_==='function' ? _staleProofings_().length : 0);
-  function _mc(jp,val,bg){ return '<div style="background:'+bg+';border-radius:6px;padding:8px 12px;min-width:92px"><div style="font-size:10.5px;color:rgba(255,255,255,.7)">'+jp+'</div><div style="font-size:18px;font-weight:700;color:#fff;font-family:\'JetBrains Mono\',monospace">'+val+'</div></div>'; }
+  function _mc(jp,val,bg){ return '<div style="background:'+bg+';border-radius:6px;padding:5px 11px;min-width:84px"><div style="font-size:10px;color:rgba(255,255,255,.7)">'+jp+'</div><div style="font-size:16px;font-weight:700;color:#fff;font-family:\'JetBrains Mono\',monospace">'+val+'</div></div>'; }
   var metricsHtml = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">'
     + _mc('校正中', activeN, '#211f1c')
     + _mc('客先校正', custN, '#211f1c')
@@ -14303,7 +14303,7 @@ function renderProofingList(){
     var actCols = _proofColsActive_();
     var thHtml = actCols.map(function(col){
       var al = (col.align==='center')?'center':'left';
-      return '<th style="text-align:'+al+';padding:7px 8px;font-size:11px;font-weight:600'+(col.w?(';width:'+col.w):'')+'">'+col.label+'</th>';
+      return '<th style="text-align:'+al+';padding:5px 8px;font-size:11px;font-weight:600'+(col.w?(';width:'+col.w):'')+'">'+col.label+'</th>';
     }).join('');
     var rowsHtml = all.map(function(p){
       var k=_normProofStatus_(p.status), meta=_proofStatusMeta_(k);
@@ -14318,7 +14318,7 @@ function renderProofingList(){
       var tds = actCols.map(function(col,ci){
         var al=(col.align==='center')?'center':'left';
         var lb = (ci===0) ? ('border-left:8px solid '+bar+';') : '';
-        return '<td style="padding:7px 8px;'+lb+'text-align:'+al+';vertical-align:middle">'+_proofCell_(col.key, ctx, statuses)+'</td>';
+        return '<td style="padding:4px 8px;'+lb+'text-align:'+al+';vertical-align:middle">'+_proofCell_(col.key, ctx, statuses)+'</td>';
       }).join('');
       var _selBg = (window._proofSelId_===p.id) ? '#e8eefb' : '#fff';
       return '<tr data-pid="'+p.id+'" style="background:'+_selBg+';border-bottom:1px solid #ece8df;cursor:pointer" onclick="_proofRowClick_(\''+p.id+'\',this)">'+tds+'</tr>';
@@ -14424,6 +14424,40 @@ function _proofRowClick_(id, el){
   window._proofSelId_ = id;
   try{ document.querySelectorAll('#proofing-list tbody tr').forEach(function(r){ r.style.background = (r===el) ? '#e8eefb' : '#fff'; }); }catch(e){}
   if(typeof showProofingDetail==='function') showProofingDetail(id);
+}
+// 選択中の校正に手入力コメントを「修正指示」として追加
+function _proofAddComment_(id){
+  var p=(DB.proofings||[]).find(function(x){ return x.id===id; }); if(!p) return;
+  var ta=document.getElementById('proof-cmt-input'); var t=(ta&&ta.value||'').trim();
+  if(!t){ if(ta) ta.focus(); return; }
+  if(!p.versions) p.versions=[];
+  var r; try{ r=_calcCurrentProofRound_(p,'instruction'); }catch(e){ r={round:1,subVersion:1}; }
+  var who=(typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName)||'';
+  p.versions.push({ id:'VER'+Date.now(), fileName:'コメント/修正指示', kind:'instruction', round:r.round, subVersion:r.subVersion, uploadedAt:new Date().toISOString(), feedback:'【'+(who||'社内')+'】\n'+t, annotations:[], manual:true });
+  p.status='feedback'; p.lastMoveAt=new Date().toISOString();
+  if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  showProofingDetail(id); if(typeof renderProofingList==='function') renderProofingList();
+  if(typeof _toastMsg==='function') _toastMsg('💬 修正指示を追加しました');
+}
+// メール/LINEの連絡を選んでこの校正に修正指示として取り込む
+function _proofForwardPick_(proofId){
+  var inqs=(DB.inquiries||[]).filter(function(i){ return !i.isSpam; }).sort(function(a,b){ return new Date(b.received_at||b.createdAt||0)-new Date(a.received_at||a.createdAt||0); }).slice(0,50);
+  var rows=inqs.map(function(i){
+    var when=i.received_at||i.createdAt; var ws=when?new Date(when).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+    var att=(i.attachments||[]).length;
+    return '<div onclick="_doInsertInquiryToProofing_(\''+i.id+'\',\''+proofId+'\');this.closest(\'.proof-modal\').remove();showProofingDetail(\''+proofId+'\');if(typeof renderProofingList===\'function\')renderProofingList();" style="cursor:pointer;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;margin-bottom:5px;background:#fff" onmouseover="this.style.background=\'#f0f9ff\'" onmouseout="this.style.background=\'#fff\'">'
+      + '<div style="font-weight:600;font-size:12px">'+_escDiff((i.subject||'(件名なし)').slice(0,46))+(att?(' <span style="color:#7c3aed;font-size:10px">📎'+att+'</span>'):'')+'</div>'
+      + '<div style="font-size:10px;color:#64748b">'+_escDiff(((i.from_company||'')+' '+(i.from_name||'')).trim())+' ・ '+ws+'</div></div>';
+  }).join('');
+  var m=document.createElement('div'); m.className='proof-modal'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;max-width:560px;width:100%;max-height:86vh;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 16px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center"><b style="font-size:14px">📧 連絡を選んで修正指示に取込</b><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div>'
+    +'<div style="padding:12px 16px;overflow:auto"><input id="proof-fwd-q" placeholder="🔍 件名・送信元で絞り込み" oninput="_proofForwardFilter_()" style="width:100%;font-size:12px;padding:6px 8px;margin-bottom:8px;border:1px solid #d1d5db;border-radius:6px;box-sizing:border-box"><div id="proof-fwd-rows">'+(rows||'<div style="color:#888;font-size:12px;padding:10px">連絡がありません</div>')+'</div></div></div>';
+  document.body.appendChild(m);
+}
+function _proofForwardFilter_(){
+  var q=(document.getElementById('proof-fwd-q')?.value||'').toLowerCase();
+  document.querySelectorAll('#proof-fwd-rows > div').forEach(function(r){ r.style.display=(!q || r.textContent.toLowerCase().indexOf(q)>=0)?'':'none'; });
 }
 function _proofSetView_(k){ window._proofViewStatus_ = k; renderProofingList(); }
 // かんばん ドラッグ&ドロップ（PC）。スマホは各カードの選択メニューで変更
@@ -14813,6 +14847,15 @@ function showProofingDetail(proofingId){
     <div style="margin-bottom:.75rem">
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">📄 校正履歴</div>
       ${versionsHtml || '<div style="color:#888;font-size:11px">まだ校正がありません</div>'}
+    </div>
+    <div style="margin-bottom:.75rem;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px">
+      <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">💬 コメント・修正指示を追加</div>
+      <textarea id="proof-cmt-input" rows="3" placeholder="例: P2の電話番号を修正／表紙の色を前回見本に合わせる など" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #fcd34d;border-radius:6px;resize:vertical;box-sizing:border-box"></textarea>
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn btn-p" style="font-size:12px" onclick="_proofAddComment_('${p.id}')">💬 修正指示として追加</button>
+        <button class="btn" style="font-size:11px;background:#eff6ff;border-color:#93c5fd;color:#1e40af" onclick="_proofForwardPick_('${p.id}')" title="メール/LINEの連絡を選んでこの校正に修正指示として取り込む（添付ごと）">📧 メール/LINEから取込</button>
+      </div>
+      <div style="font-size:10px;color:#a16207;margin-top:4px">※ 追加すると「修正指示」として校正履歴に記録され、状態が「修正依頼あり」になります。</div>
     </div>
     ${_proofTimelineHtml_(p)}
     <div style="margin-bottom:.75rem;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px">
