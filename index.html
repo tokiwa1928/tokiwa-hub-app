@@ -14257,10 +14257,36 @@ function renderProofingList(){
     </div>`;
   }
 
-  let boardHtml;
+  // 最終活動日 / 停滞しきい値
+  function _lastAt_(p){ return p.lastMoveAt || (p.versions && p.versions.length ? p.versions[p.versions.length-1].uploadedAt : null) || p.createdAt; }
+  var staleTh = (typeof _alertDays_==='function' ? (_alertDays_().proof||3) : 3);
+
+  // ── 黒メトリクスカード ──
+  var doneN=0, custN=counts['s_cust']||0, doneMonthN=0;
+  var nowD=new Date(), ym=nowD.getFullYear()+'-'+(nowD.getMonth()+1);
+  all.forEach(function(p){ var m=_proofStatusMeta_(_normProofStatus_(p.status)); if(m.done){ doneN++; var la=_lastAt_(p); if(la){ var d=new Date(la); if((d.getFullYear()+'-'+(d.getMonth()+1))===ym) doneMonthN++; } } });
+  var activeN = all.length - doneN;
+  var staleN = (typeof _staleProofings_==='function' ? _staleProofings_().length : 0);
+  function _mc(en,jp,val,bg){ return '<div style="background:'+bg+';border-radius:6px;padding:8px 12px;min-width:92px"><div style="font-size:9.5px;letter-spacing:.05em;color:rgba(255,255,255,.65)">'+en+' '+jp+'</div><div style="font-size:18px;font-weight:700;color:#fff;font-family:\'JetBrains Mono\',monospace">'+val+'</div></div>'; }
+  var metricsHtml = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">'
+    + _mc('ACTIVE','校正中', activeN, '#211f1c')
+    + _mc('CUSTOMER','客先', custN, '#211f1c')
+    + _mc('STALLED','停滞'+staleTh+'日+', staleN, staleN>0?'#7f1d1d':'#211f1c')
+    + _mc('DONE','今月校了', doneMonthN, '#0f6e56')
+    + '</div>';
+
+  // ── 表示切替トグル ── (既定=リスト, 選択は記憶)
+  if(!window._proofView_){ try{ window._proofView_ = localStorage.getItem('tokiwa_proof_view') || 'list'; }catch(e){ window._proofView_ = 'list'; } }
+  var vm = window._proofView_;
+  function _vbtn_(key,label,icon){ var on=(vm===key); return '<button onclick="event.stopPropagation();_proofSetViewMode_(\''+key+'\')" style="font-size:12px;padding:4px 12px;border-radius:5px;border:none;cursor:pointer;'+(on?'background:#1f1e1b;color:#fff;font-weight:600':'background:transparent;color:#6f6c64')+'">'+icon+' '+label+'</button>'; }
+  var toggleHtml = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">'
+    + '<div style="display:flex;gap:3px;background:#ebe8e0;border-radius:7px;padding:3px">'+_vbtn_('list','リスト','▤')+_vbtn_('kanban','かんばん','▦')+'</div>'
+    + '<button class="btn" style="font-size:11px;color:#64748b" onclick="openProofStatusEditor()">⚙ 状態を編集</button></div>';
+
+  var bodyHtml;
   if(!all.length){
-    boardHtml = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正データがありません</div>';
-  } else {
+    bodyHtml = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正データがありません</div>';
+  } else if(vm === 'kanban'){
     var cols = statuses.map(function(s){
       var items = all.filter(function(p){ return _normProofStatus_(p.status) === s.key; });
       var cards = items.length ? items.map(cardHtml).join('') : '<div style="font-size:11px;color:#cbd5e1;text-align:center;padding:16px 4px">（なし）</div>';
@@ -14268,13 +14294,56 @@ function renderProofingList(){
         + '<div style="padding:8px 10px;border-radius:9px 9px 0 0;background:'+s.color+';font-size:12px;font-weight:800;color:#1a1a1a;border-bottom:2px solid #475569">'+_escDiff(s.label)+' <span style="float:right;color:#475569">'+(counts[s.key]||0)+'</span></div>'
         + '<div style="padding:8px;overflow-y:auto;flex:1">'+cards+'</div></div>';
     }).join('');
-    boardHtml = '<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:10px;align-items:flex-start">'+cols+'</div>';
+    bodyHtml = '<div style="font-size:11px;color:#94a3b8;margin:2px 0 6px">💡 カードをドラッグで列移動（スマホは各カードの選択メニューで変更）</div>'
+      + '<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:10px;align-items:flex-start">'+cols+'</div>';
+  } else {
+    // ── techC リスト（中間案・左帯8px） ──
+    var rowsHtml = all.map(function(p){
+      var k=_normProofStatus_(p.status), meta=_proofStatusMeta_(k);
+      var info=_proofInfo_(p);
+      var vc=(p.versions||[]).length, latest=(p.versions||[])[vc-1];
+      var roundLbl = meta.done ? '校了' : (latest&&latest.round ? _proofRoundLabel_(latest.round, latest.kind) : (vc?('第'+vc+'校'):'—'));
+      var la=_lastAt_(p), idle=(typeof _daysSince_==='function'?_daysSince_(la):0);
+      var stalled = !meta.done && !meta.wait && idle>=staleTh;
+      var bar=_proofDarken_(meta.color);
+      var upd = la ? new Date(la).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric'}) : '—';
+      var idleCell = meta.done ? '<span style="font-family:monospace;color:#c4c0b5">—</span>'
+        : (stalled ? '<span style="background:#dc2626;color:#fff;font-family:monospace;font-weight:700;padding:2px 7px;border-radius:4px;font-size:11px">'+idle+'日</span>'
+                   : '<span style="font-family:monospace;color:#6f6c64">'+idle+'日</span>');
+      var roundBadge = meta.done
+        ? '<span style="background:#dcfce7;color:#166534;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;font-family:monospace">校了</span>'
+        : '<span style="background:#1f2937;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;font-family:monospace">'+_escDiff(roundLbl)+'</span>';
+      var statusSel = '<select onclick="event.stopPropagation()" onchange="event.stopPropagation();updateProofingStatus(\''+p.id+'\',this.value)" style="font-size:11px;padding:3px 6px;border:1px solid '+bar+';border-radius:6px;background:'+meta.color+';color:'+bar+';font-weight:600;max-width:100%">'
+        + statuses.map(function(s){ return '<option value="'+s.key+'"'+(s.key===k?' selected':'')+'>'+_escDiff(s.label)+'</option>'; }).join('') + '</select>';
+      return '<tr style="background:#fff;border-bottom:1px solid #ece8df;cursor:pointer" onclick="showProofingDetail(\''+p.id+'\')">'
+        + '<td style="padding:7px 8px;border-left:8px solid '+bar+'">'+statusSel+'</td>'
+        + '<td style="padding:7px 8px"><div style="font-weight:600;font-size:12.5px;word-break:break-word">'+_escDiff(info.prod||'─')+'</div><div style="font-size:10px;color:#8a8780">'+_escDiff(String(info.seiban||''))+(info.cust?' ・ '+_escDiff(info.cust):'')+(info.user?' ・ '+_escDiff(info.user):'')+'</div></td>'
+        + '<td style="text-align:center;padding:7px 4px">'+roundBadge+'</td>'
+        + '<td style="text-align:center;padding:7px 4px;font-family:monospace;color:#6f6c64;font-size:11px">'+upd+'</td>'
+        + '<td style="text-align:center;padding:7px 4px">'+idleCell+'</td>'
+        + '</tr>';
+    }).join('');
+    bodyHtml = '<div style="overflow-x:auto;background:#f6f4ee;border:1px solid #e2ded4;border-radius:8px;padding:6px"><table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;min-width:540px">'
+      + '<thead><tr style="background:#211f1c;color:#cfcabd">'
+      + '<th style="text-align:left;padding:7px 8px;width:36%;font-size:10.5px;font-weight:600;letter-spacing:.04em">STATUS 状態</th>'
+      + '<th style="text-align:left;padding:7px 8px;font-size:10.5px;font-weight:600;letter-spacing:.04em">JOB 案件/品名</th>'
+      + '<th style="text-align:center;padding:7px 4px;width:13%;font-size:10.5px;font-weight:600">校数</th>'
+      + '<th style="text-align:center;padding:7px 4px;width:12%;font-size:10.5px;font-weight:600">更新</th>'
+      + '<th style="text-align:center;padding:7px 4px;width:12%;font-size:10.5px;font-weight:600">停滞</th>'
+      + '</tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
   }
-  container.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px">'
-    + '<span style="font-size:11px;color:#94a3b8">💡 カードをドラッグで列移動（スマホは各カードの選択メニューで変更）</span>'
-    + '<button class="btn" style="font-size:11px;color:#64748b" onclick="openProofStatusEditor()">⚙ 列(ステータス)を編集</button></div>'
-    + boardHtml;
+
+  container.innerHTML = toggleHtml + metricsHtml + bodyHtml;
   if(typeof _updateAttentionBadge_ === 'function') try { _updateAttentionBadge_(); } catch(e){}
+}
+// 表示モード切替 (リスト/かんばん) ＋ 色を濃くするヘルパ
+function _proofSetViewMode_(v){ window._proofView_ = v; try{ localStorage.setItem('tokiwa_proof_view', v); }catch(e){} renderProofingList(); }
+function _proofDarken_(hex){
+  hex = String(hex||'#888888').replace('#','');
+  if(hex.length===3) hex = hex.split('').map(function(c){ return c+c; }).join('');
+  var n = parseInt(hex,16); if(isNaN(n)) return '#555';
+  var r=Math.round(((n>>16)&255)*0.5), g=Math.round(((n>>8)&255)*0.5), b=Math.round((n&255)*0.5);
+  return 'rgb('+r+','+g+','+b+')';
 }
 function _proofSetView_(k){ window._proofViewStatus_ = k; renderProofingList(); }
 // かんばん ドラッグ&ドロップ（PC）。スマホは各カードの選択メニューで変更
