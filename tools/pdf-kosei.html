@@ -58,6 +58,12 @@
   <div class="sec">
     <div id="drop" onclick="document.getElementById('fi').click()">📂 PDFをドラッグ&ドロップ（複数OK）<div class="muted" style="margin-top:5px">並び順は↑↓で入替（連結の順番／一番上＝分割・回転・校正枠の対象）</div></div>
     <input type="file" id="fi" accept="application/pdf,.pdf" multiple style="display:none" onchange="addFiles(this.files)">
+    <div id="sel-bar" style="display:none;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <span class="muted" id="sel-count">0件選択</span>
+      <button class="btn" style="font-size:12px;padding:4px 10px" onclick="selAll()">☑ 全部選択</button>
+      <button class="btn" style="font-size:12px;padding:4px 10px" onclick="selNone()">☐ 全部解除</button>
+      <button class="btn" style="font-size:12px;padding:4px 10px;color:#b91c1c;border-color:#fca5a5" onclick="selDel()">🗑 選択を削除</button>
+    </div>
     <div id="flist"></div>
   </div>
 
@@ -118,7 +124,8 @@
     <div class="muted" style="margin-top:5px">※トンボは塗り足し3mmを自動表示（「塗り足し(bleed) mm」を入れた場合はその値）。データに塗り足しが無い時は「塗り足しを自動作成」で端を伸ばして埋めます（簡易・約1%拡大）。</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
       <button class="btn btn-c" id="btn-prev" onclick="genSize(false)" disabled>👁 プレビュー更新</button>
-      <button class="btn btn-g" id="btn-dl" onclick="genSize(true)" disabled>⬇ 校正PDFを出力</button>
+      <button class="btn btn-g" id="btn-dl" onclick="genSize(true)" disabled>⬇ 校正PDFを出力（一番上）</button>
+      <button class="btn" id="btn-dlz" onclick="genSizeBatch()" disabled>⬇ 選択をまとめて校正枠ZIP</button>
       <span class="muted" id="size-status"></span>
     </div>
     <iframe id="preview" title="プレビュー"></iframe>
@@ -134,8 +141,15 @@ function kb(n){ return n>1048576 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/10
 var MM=72/25.4;
 function mm(pt){ var v=Math.round(pt/MM*10)/10; return (Math.abs(v-Math.round(v))<0.05?String(Math.round(v)):v.toFixed(1)); }
 
-var files=[]; // {name, buf, pages, m}
-var _timer=null, _curUrl=null;
+var files=[]; // {id, name, buf, pages, m}
+var _timer=null, _curUrl=null, _idseq=0, sel={};
+function selCount(){ return files.filter(function(f){return sel[f.id];}).length; }
+function selected(){ return files.filter(function(f){return sel[f.id];}); }
+function toggleSel(id,on){ if(on) sel[id]=1; else delete sel[id]; updSelBar(); }
+function selAll(){ files.forEach(function(f){ sel[f.id]=1; }); render(); }
+function selNone(){ sel={}; render(); }
+function selDel(){ if(!selCount()){ toast('選択がありません'); return; } files=files.filter(function(f){ return !sel[f.id]; }); sel={}; render(); }
+function updSelBar(){ var c=selCount(); var el=document.getElementById('sel-count'); if(el) el.textContent=c?(c+'件選択'):'未選択'; }
 
 // 引き継ぎ(校正BOX等)
 var CTX=(function(){
@@ -190,7 +204,7 @@ function addFiles(fl){
   var pending=arr.length;
   arr.forEach(function(f){
     f.arrayBuffer().then(async function(buf){
-      var rec={ name:f.name, buf:buf, pages:0, m:null };
+      var rec={ id:++_idseq, name:f.name, buf:buf, pages:0, m:null };
       try{ var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true}); rec.pages=d.getPageCount(); }catch(e){}
       rec.m=await measureFile(buf);
       files.push(rec);
@@ -200,19 +214,24 @@ function addFiles(fl){
 }
 function render(){
   document.getElementById('flist').innerHTML=files.map(function(f,i){
-    return '<div class="frow'+(i===0?' top':'')+'"><span>'+(i===0?'⭐':'📄')+'</span>'
+    return '<div class="frow'+(i===0?' top':'')+'">'
+      + '<input type="checkbox" style="width:16px;height:16px;flex:0 0 auto" onclick="toggleSel('+f.id+',this.checked)"'+(sel[f.id]?' checked':'')+'>'
+      + '<span>'+(i===0?'⭐':'📄')+'</span>'
       + '<span class="nm">'+(i+1)+'. '+esc(f.name)+'</span>'
       + '<span class="muted" style="flex:1;text-align:right">'+(sizeLabel(f.m)||(f.pages+'ページ'))+' / '+kb(f.buf.byteLength)+'</span>'
       + '<span class="mv" onclick="mv('+i+',-1)" title="上へ">↑</span>'
       + '<span class="mv" onclick="mv('+i+',1)" title="下へ">↓</span>'
       + '<span class="mv" style="color:#b91c1c" onclick="removeAt('+i+')">✕</span></div>';
   }).join('');
+  document.getElementById('sel-bar').style.display=files.length?'flex':'none';
+  updSelBar();
   var tp=files.reduce(function(s,f){return s+(f.pages||0);},0);
   document.getElementById('merge-info').textContent=files.length?(files.length+'ファイル / 計'+tp+'ページ'):'';
   document.getElementById('split-info').textContent=files.length?('対象: '+files[0].name+' ('+files[0].pages+'ページ)'):'';
   var has=files.length>0;
   document.getElementById('btn-prev').disabled=!has;
   document.getElementById('btn-dl').disabled=!has;
+  document.getElementById('btn-dlz').disabled=!has;
   if(has) schedule(); else { var pv=document.getElementById('preview'); pv.style.display='none'; }
 }
 function mv(i,d){ var j=i+d; if(j<0||j>=files.length) return; var t=files[i]; files[i]=files[j]; files[j]=t; render(); }
@@ -222,13 +241,14 @@ function parseRange(str,max){ var out=[]; String(str||'').split(/[,、\s]+/).for
 
 // ── 連結 ──
 async function mergeAll(){
-  if(files.length<2){ toast('2ファイル以上入れてください'); return; }
+  var tg = selCount()>0 ? selected() : files;
+  if(tg.length<2){ toast(selCount()>0?'2ファイル以上を選択してください':'2ファイル以上入れてください'); return; }
   try{
     var out=await PDFLib.PDFDocument.create();
-    for(var i=0;i<files.length;i++){ var src=await PDFLib.PDFDocument.load(files[i].buf,{ignoreEncryption:true}); var pgs=await out.copyPages(src,src.getPageIndices()); pgs.forEach(function(p){out.addPage(p);}); }
+    for(var i=0;i<tg.length;i++){ var src=await PDFLib.PDFDocument.load(tg[i].buf,{ignoreEncryption:true}); var pgs=await out.copyPages(src,src.getPageIndices()); pgs.forEach(function(p){out.addPage(p);}); }
     var bytes=await out.save();
-    dl(bytes, ctxBase('連結_'+files[0].name.replace(/\.pdf$/i,'')+'_他'+(files.length-1)+'件')+'.pdf');
-    toast('✅ 連結完了 ('+out.getPageCount()+'ページ)');
+    dl(bytes, ctxBase('連結_'+tg[0].name.replace(/\.pdf$/i,'')+'_他'+(tg.length-1)+'件')+'.pdf');
+    toast('✅ 連結完了 ('+out.getPageCount()+'ページ / '+tg.length+'ファイル)');
   }catch(e){ toast('❌ 連結失敗: '+(e.message||e)); }
 }
 // ── 分割 ──
@@ -338,9 +358,22 @@ async function genSize(doDownload){
     if(doDownload){ var a=document.createElement('a'); a.href=_curUrl; a.download=_lastName; a.click(); }
   }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); }
 }
+async function genSizeBatch(){
+  var tg=selected();
+  if(!tg.length){ toast('ファイルを選択してください'); return; }
+  var opts=readOpts(); var st=document.getElementById('size-status'); st.textContent='⏳ まとめて生成中…';
+  try{
+    var zip=new JSZip();
+    for(var i=0;i<tg.length;i++){ var b=await buildProofPdf(tg[i].buf,opts); zip.file(tg[i].name.replace(/\.pdf$/i,'')+'_校正枠.pdf', b); }
+    var zb=await zip.generateAsync({type:'blob'}); var u=URL.createObjectURL(zb);
+    var a=document.createElement('a'); a.href=u; a.download='校正枠_'+tg.length+'件.zip'; a.click();
+    setTimeout(function(){URL.revokeObjectURL(u);},5000);
+    st.textContent='✅ '+tg.length+'件を校正枠ZIPで出力';
+  }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); }
+}
 
 window.__test={ measureFile:measureFile, sizeLabel:sizeLabel, buildProofPdf:buildProofPdf,
-  pushBuf:async function(name,buf){ var rec={name:name,buf:buf,pages:0,m:null}; try{var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true}); rec.pages=d.getPageCount();}catch(e){} rec.m=await measureFile(buf); files.push(rec); render(); return files.length-1; },
+  pushBuf:async function(name,buf){ var rec={id:++_idseq,name:name,buf:buf,pages:0,m:null}; try{var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true}); rec.pages=d.getPageCount();}catch(e){} rec.m=await measureFile(buf); files.push(rec); render(); return files.length-1; },
   rec:function(i){return files[i];}, state:function(){return {count:files.length, lastName:_lastName};} };
 </script>
 </body>
