@@ -180,6 +180,13 @@
     <div class="st">📦 3Dプレビュー・クイックチェック（一番上のファイル）</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-c" id="btn-3d" onclick="quick3D()">▶ 印刷イメージ(3D)を生成</button>
+      <label style="font-size:11px;color:#888;font-weight:600">仕上り
+        <select id="q3d-mode" onchange="_q3dRebuild()" style="font-size:12px;padding:3px 6px;border:1px solid #d0cec8;border-radius:6px">
+          <option value="flat">平面（表裏めくり）</option>
+          <option value="fold2">二つ折り</option>
+          <option value="fold3">三つ折り（巻き）</option>
+        </select>
+      </label>
       <span class="muted" id="q3d-status"></span>
     </div>
     <div id="q3d-check" style="margin-top:8px"></div>
@@ -542,32 +549,51 @@ async function quick3D(){
     ];
     document.getElementById('q3d-check').innerHTML='<div style="display:flex;flex-wrap:wrap;gap:6px">'+checks.map(function(c){ var ok=c[2]; return '<span style="font-size:11.5px;padding:3px 9px;border-radius:14px;border:1px solid '+(ok?'#86efac':'#fcd34d')+';background:'+(ok?'#f0fdf4':'#fffbeb')+';color:'+(ok?'#166534':'#92400e')+'">'+(ok?'✓ ':'⚠ ')+c[0]+'：'+c[1]+'</span>'; }).join('')+'</div>';
     try{
-      var img=await Promise.race([ renderPageImg(f.buf, 1, 1.6), new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('render-timeout')); }, 15000); }) ]);
-      _build3D(img);
-      st.textContent='✅ 生成しました（'+m.pages+'ページ／1ページ目を表示）';
+      var front=await Promise.race([ renderPageImg(f.buf, 1, 1.6), new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('render-timeout')); }, 15000); }) ]);
+      var back=null; if(m.pages>=2){ try{ back=await renderPageImg(f.buf, 2, 1.6); }catch(be){} }
+      window._q3dLast={ front:front, back:back };
+      _build3D(front, back, document.getElementById('q3d-mode').value);
+      st.textContent='✅ 生成しました（表'+(back?'＋裏（2ページ目）':'のみ')+'／全'+m.pages+'ページ）';
     }catch(reErr){
-      // 画像化できない環境向けフォールバック: 寸法だけの白紙3D
       var aspect=(H>0?H/W:1.4); var bw=300, bh=Math.round(bw*aspect);
       var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+bw+'" height="'+bh+'"><rect width="100%" height="100%" fill="white" stroke="%23cbd5e1"/><text x="'+(bw/2)+'" y="'+(bh/2)+'" font-size="18" fill="%23334" text-anchor="middle">'+mm(W)+' x '+mm(H)+' mm</text></svg>';
-      _build3D({ url:'data:image/svg+xml,'+encodeURIComponent(svg), w:bw, h:bh, pages:m.pages });
+      var blank={ url:'data:image/svg+xml,'+encodeURIComponent(svg), w:bw, h:bh, pages:m.pages };
+      window._q3dLast={ front:blank, back:null };
+      _build3D(blank, null, document.getElementById('q3d-mode').value);
       st.textContent='✅ チェック完了（プレビュー画像はこの環境では生成できませんでした／本番ブラウザでは表示されます）';
     }
   }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); console.error(e); }
 }
-function _build3D(img){
+function _q3dRebuild(){ if(window._q3dLast) _build3D(window._q3dLast.front, window._q3dLast.back, document.getElementById('q3d-mode').value); }
+function _build3D(front, back, mode){
+  mode=mode||'flat';
   var stage=document.getElementById('q3d-stage'); stage.style.display='flex'; document.getElementById('q3d-hint').style.display='block';
-  var scale=Math.min(320/img.h, 470/img.w, 1); var w=Math.round(img.w*scale), h=Math.round(img.h*scale);
+  var fit=Math.min(300/front.h, 470/front.w, 1.3); var W=Math.round(front.w*fit), H=Math.round(front.h*fit);
   stage.innerHTML='';
-  var card=document.createElement('div');
-  card.style.cssText='position:relative;width:'+w+'px;height:'+h+'px;transform-style:preserve-3d;box-shadow:0 26px 38px rgba(0,0,0,.32)';
-  var face=document.createElement('img'); face.src=img.url; face.style.cssText='width:100%;height:100%;display:block;border:1px solid #cbd5e1'; card.appendChild(face);
-  var edge=document.createElement('div'); edge.style.cssText='position:absolute;top:0;right:-5px;width:5px;height:100%;background:linear-gradient(#e5e7eb,#9aa3af);transform:rotateY(90deg);transform-origin:left center'; card.appendChild(edge);
-  stage.appendChild(card);
-  var rx=-12, ry=-20, sc=1, drag=false, lx=0, ly=0;
-  function apply(){ card.style.transform='scale('+sc+') rotateX('+rx+'deg) rotateY('+ry+'deg)'; }
+  var scene=document.createElement('div'); scene.style.cssText='transform-style:preserve-3d;position:relative;width:'+W+'px;height:'+H+'px;filter:drop-shadow(0 24px 30px rgba(0,0,0,.32))';
+  if(mode==='flat'){
+    var f=document.createElement('img'); f.src=front.url; f.style.cssText='position:absolute;inset:0;width:100%;height:100%;backface-visibility:hidden;border:1px solid #cbd5e1;transform:translateZ(1.2px)';
+    var b=document.createElement('div'); b.style.cssText='position:absolute;inset:0;width:100%;height:100%;backface-visibility:hidden;border:1px solid #cbd5e1;transform:rotateY(180deg) translateZ(1.2px);background:#fff;overflow:hidden';
+    if(back){ var bi=document.createElement('img'); bi.src=back.url; bi.style.cssText='width:100%;height:100%;display:block'; b.appendChild(bi); }
+    else { b.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9aa3af;font-size:13px">裏面（白紙）</div>'; }
+    scene.appendChild(f); scene.appendChild(b);
+  } else {
+    var n=(mode==='fold3')?3:2; var pw=W/n; var foldA=(mode==='fold3')?55:32;
+    var parent=scene;
+    for(var i=0;i<n;i++){
+      var p=document.createElement('div');
+      p.style.cssText='position:absolute;top:0;width:'+pw+'px;height:'+H+'px;background-image:url('+front.url+');background-size:'+W+'px '+H+'px;background-position:-'+(i*pw)+'px 0;border:1px solid #cbd5e1;transform-style:preserve-3d';
+      if(i===0){ p.style.left='0'; scene.appendChild(p); }
+      else { p.style.left=pw+'px'; p.style.transformOrigin='left center'; var ang=(mode==='fold3'?(i===1?-foldA:foldA):-foldA); p.style.transform='rotateY('+ang+'deg)'; parent.appendChild(p); }
+      parent=p;
+    }
+  }
+  stage.appendChild(scene);
+  var rx=-14, ry=-22, sc=1, drag=false, lx=0, ly=0;
+  function apply(){ scene.style.transform='scale('+sc+') rotateX('+rx+'deg) rotateY('+ry+'deg)'; }
   apply();
   stage.onmousedown=function(e){ drag=true; lx=e.clientX; ly=e.clientY; stage.style.cursor='grabbing'; };
-  document.onmousemove=function(e){ if(!drag) return; ry+=(e.clientX-lx)*0.4; rx-=(e.clientY-ly)*0.4; rx=Math.max(-85,Math.min(85,rx)); lx=e.clientX; ly=e.clientY; apply(); };
+  document.onmousemove=function(e){ if(!drag) return; ry+=(e.clientX-lx)*0.4; rx-=(e.clientY-ly)*0.4; rx=Math.max(-88,Math.min(88,rx)); lx=e.clientX; ly=e.clientY; apply(); };
   document.onmouseup=function(){ drag=false; stage.style.cursor='grab'; };
   stage.onwheel=function(e){ e.preventDefault(); sc*=(e.deltaY<0?1.08:0.93); sc=Math.max(0.4,Math.min(3,sc)); apply(); };
 }
