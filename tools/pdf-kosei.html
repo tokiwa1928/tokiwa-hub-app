@@ -15,6 +15,7 @@
 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
   *{ box-sizing:border-box; }
@@ -174,6 +175,16 @@
       <button class="btn btn-g" onclick="meImposeRun()">⬇ 面付してダウンロード</button>
       <span class="muted" id="me-status"></span>
     </div>
+  </div>
+  <div class="sec" id="sec-3d">
+    <div class="st">📦 3Dプレビュー・クイックチェック（一番上のファイル）</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-c" id="btn-3d" onclick="quick3D()">▶ 印刷イメージ(3D)を生成</button>
+      <span class="muted" id="q3d-status"></span>
+    </div>
+    <div id="q3d-check" style="margin-top:8px"></div>
+    <div id="q3d-stage" style="display:none;margin-top:10px;height:360px;border-radius:10px;background:linear-gradient(160deg,#eef2f7,#d7dee7);overflow:hidden;perspective:1500px;align-items:center;justify-content:center;cursor:grab;user-select:none"></div>
+    <div class="muted" id="q3d-hint" style="margin-top:5px;display:none">🖱 ドラッグで回転／ホイールで拡大・縮小</div>
   </div>
   <p class="muted">🔒 すべてPC内で処理（どこにも送信されません）。EPSはデスクトップの変換batでPDF化を。イラレ/フォトショの元データは「AI/PSD→PDF」ツールへ。</p>
 </main>
@@ -497,7 +508,71 @@ async function meImposeRun(){
   }catch(e){ st.textContent=''; toast('❌ 面付失敗: '+(e.message||e)); }
 }
 
-window.__test={ measureFile:measureFile, sizeLabel:sizeLabel, buildProofPdf:buildProofPdf, meImposeCore:meImposeCore,
+// ── 📦 3Dプレビュー＋クイックチェック ──
+try{ if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){}
+function mmNum(pt){ return Math.round(pt/MM); }
+function _paperStd(wpt,hpt){
+  var w=mmNum(wpt), h=mmNum(hpt); var L=[[210,297,'A4'],[297,420,'A3'],[148,210,'A5'],[105,148,'A6'],[182,257,'B5'],[257,364,'B4'],[128,182,'B6'],[91,55,'名刺'],[100,148,'ハガキ']];
+  for(var i=0;i<L.length;i++){ var a=L[i]; function near(x,y){ return Math.abs(x-y)<=2; } if((near(w,a[0])&&near(h,a[1]))||(near(w,a[1])&&near(h,a[0]))) return a[2]; }
+  return '';
+}
+async function renderPageImg(bytes, pageNum, scale){
+  var data=bytes.slice(0);
+  var pdf=await pdfjsLib.getDocument({data:data}).promise;
+  var page=await pdf.getPage(pageNum||1);
+  var vp=page.getViewport({scale:scale||1.6});
+  var cv=document.createElement('canvas'); cv.width=Math.ceil(vp.width); cv.height=Math.ceil(vp.height);
+  await page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
+  return { url:cv.toDataURL('image/jpeg',0.9), w:cv.width, h:cv.height, pages:pdf.numPages };
+}
+async function quick3D(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  if(typeof pdfjsLib==='undefined'){ toast('pdf.js読込中。少し待って再実行してください'); return; }
+  var f=files[0]; var st=document.getElementById('q3d-status'); st.textContent='⏳ 生成中…';
+  try{
+    var m=f.m||await measureFile(f.buf);
+    var W=m.hasTonbo?m.trimW:m.mediaW, H=m.hasTonbo?m.trimH:m.mediaH;
+    var std=_paperStd(W,H);
+    var checks=[
+      ['ページ数', (m.pages>1?'全':'')+m.pages+'ページ', true],
+      ['仕上りサイズ', mm(W)+'×'+mm(H)+'mm', true],
+      ['向き', (W>=H?'横（ランドスケープ）':'縦（ポートレート）'), true],
+      ['トンボ/塗り足し', m.hasTonbo?('あり（外形 '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm）'):'なし', m.hasTonbo],
+      ['定形サイズ', std||'非定形（要確認）', !!std]
+    ];
+    document.getElementById('q3d-check').innerHTML='<div style="display:flex;flex-wrap:wrap;gap:6px">'+checks.map(function(c){ var ok=c[2]; return '<span style="font-size:11.5px;padding:3px 9px;border-radius:14px;border:1px solid '+(ok?'#86efac':'#fcd34d')+';background:'+(ok?'#f0fdf4':'#fffbeb')+';color:'+(ok?'#166534':'#92400e')+'">'+(ok?'✓ ':'⚠ ')+c[0]+'：'+c[1]+'</span>'; }).join('')+'</div>';
+    try{
+      var img=await Promise.race([ renderPageImg(f.buf, 1, 1.6), new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('render-timeout')); }, 15000); }) ]);
+      _build3D(img);
+      st.textContent='✅ 生成しました（'+m.pages+'ページ／1ページ目を表示）';
+    }catch(reErr){
+      // 画像化できない環境向けフォールバック: 寸法だけの白紙3D
+      var aspect=(H>0?H/W:1.4); var bw=300, bh=Math.round(bw*aspect);
+      var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+bw+'" height="'+bh+'"><rect width="100%" height="100%" fill="white" stroke="%23cbd5e1"/><text x="'+(bw/2)+'" y="'+(bh/2)+'" font-size="18" fill="%23334" text-anchor="middle">'+mm(W)+' x '+mm(H)+' mm</text></svg>';
+      _build3D({ url:'data:image/svg+xml,'+encodeURIComponent(svg), w:bw, h:bh, pages:m.pages });
+      st.textContent='✅ チェック完了（プレビュー画像はこの環境では生成できませんでした／本番ブラウザでは表示されます）';
+    }
+  }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); console.error(e); }
+}
+function _build3D(img){
+  var stage=document.getElementById('q3d-stage'); stage.style.display='flex'; document.getElementById('q3d-hint').style.display='block';
+  var scale=Math.min(320/img.h, 470/img.w, 1); var w=Math.round(img.w*scale), h=Math.round(img.h*scale);
+  stage.innerHTML='';
+  var card=document.createElement('div');
+  card.style.cssText='position:relative;width:'+w+'px;height:'+h+'px;transform-style:preserve-3d;box-shadow:0 26px 38px rgba(0,0,0,.32)';
+  var face=document.createElement('img'); face.src=img.url; face.style.cssText='width:100%;height:100%;display:block;border:1px solid #cbd5e1'; card.appendChild(face);
+  var edge=document.createElement('div'); edge.style.cssText='position:absolute;top:0;right:-5px;width:5px;height:100%;background:linear-gradient(#e5e7eb,#9aa3af);transform:rotateY(90deg);transform-origin:left center'; card.appendChild(edge);
+  stage.appendChild(card);
+  var rx=-12, ry=-20, sc=1, drag=false, lx=0, ly=0;
+  function apply(){ card.style.transform='scale('+sc+') rotateX('+rx+'deg) rotateY('+ry+'deg)'; }
+  apply();
+  stage.onmousedown=function(e){ drag=true; lx=e.clientX; ly=e.clientY; stage.style.cursor='grabbing'; };
+  document.onmousemove=function(e){ if(!drag) return; ry+=(e.clientX-lx)*0.4; rx-=(e.clientY-ly)*0.4; rx=Math.max(-85,Math.min(85,rx)); lx=e.clientX; ly=e.clientY; apply(); };
+  document.onmouseup=function(){ drag=false; stage.style.cursor='grab'; };
+  stage.onwheel=function(e){ e.preventDefault(); sc*=(e.deltaY<0?1.08:0.93); sc=Math.max(0.4,Math.min(3,sc)); apply(); };
+}
+
+window.__test={ measureFile:measureFile, sizeLabel:sizeLabel, buildProofPdf:buildProofPdf, meImposeCore:meImposeCore, renderPageImg:renderPageImg, paperStd:_paperStd,
   pushBuf:async function(name,buf){ var rec={id:++_idseq,name:name,buf:buf,pages:0,m:null}; try{var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true}); rec.pages=d.getPageCount();}catch(e){} rec.m=await measureFile(buf); files.push(rec); render(); return files.length-1; },
   rec:function(i){return files[i];}, state:function(){return {count:files.length, lastName:_lastName};} };
 </script>
