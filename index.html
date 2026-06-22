@@ -6120,6 +6120,34 @@ function _bmDropOnCat_(ev,cat){
   var moved=list.splice(si,1)[0]; moved.category=cat||'未分類'; list.push(moved);
   _bmPersist_(); renderBookmarksPage();
 }
+// カテゴリ別の色 (名前ハッシュで安定割当・囲い/見出し用)
+var _BM_PAL_=[
+  {bg:'#e0e7ff',br:'#6366f1',tx:'#3730a3'},{bg:'#dcfce7',br:'#16a34a',tx:'#166534'},
+  {bg:'#fef3c7',br:'#d97706',tx:'#92400e'},{bg:'#dbeafe',br:'#2563eb',tx:'#1e40af'},
+  {bg:'#fce7f3',br:'#db2777',tx:'#9d174d'},{bg:'#f3e8ff',br:'#9333ea',tx:'#6b21a8'},
+  {bg:'#ffedd5',br:'#ea580c',tx:'#9a3412'},{bg:'#ccfbf1',br:'#0d9488',tx:'#115e59'},
+  {bg:'#fee2e2',br:'#dc2626',tx:'#991b1b'},{bg:'#e2e8f0',br:'#64748b',tx:'#334155'}
+];
+function _bmCatColor_(c){ c=String(c||''); var h=0; for(var i=0;i<c.length;i++) h=(h*31+c.charCodeAt(i))>>>0; return _BM_PAL_[h%_BM_PAL_.length]; }
+// カテゴリ見出しのドラッグ並べ替え (一覧で動かす→DB.bookmarkCategoriesを更新＝管理側と同一順)
+function _bmGroupDragStart_(ev,cat){ window._bmGroupDrag_=cat; try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain','cat:'+cat); }catch(e){} }
+function _bmGroupDragEnd_(ev){ window._bmGroupDrag_=null; }
+function _bmGroupDragOver_(ev){ if(!window._bmGroupDrag_) return; ev.preventDefault(); try{ ev.dataTransfer.dropEffect='move'; }catch(e){} ev.currentTarget.style.boxShadow='inset 0 3px 0 #2563eb'; }
+function _bmGroupDrop_(ev,targetCat){
+  if(!window._bmGroupDrag_) return; // カテゴリ並べ替え時のみ (カードドロップは無視)
+  ev.preventDefault(); ev.stopPropagation();
+  var from=window._bmGroupDrag_; window._bmGroupDrag_=null;
+  ev.currentTarget.style.boxShadow='';
+  if(!from || from===targetCat) return;
+  var cats=_bmCats_();
+  if(cats.indexOf(from)<0) cats.push(from);
+  if(cats.indexOf(targetCat)<0) cats.push(targetCat);
+  var fi=cats.indexOf(from); var moved=cats.splice(fi,1)[0];
+  var ti=cats.indexOf(targetCat); if(ti<0) ti=cats.length;
+  cats.splice(ti,0,moved);
+  _bmPersist_(); renderBookmarksPage();
+  try{ if(document.getElementById('bm-cat-manager') && document.getElementById('bm-cat-manager').style.display!=='none') _bmRenderCatManager_(); }catch(e){}
+}
 // ── 複数選択して一括削除 ──
 function _bmSelSet_(){ if(!window._bmSel_) window._bmSel_ = {}; return window._bmSel_; }
 function _bmSelToggle_(id,on){ var s=_bmSelSet_(); if(on) s[id]=1; else delete s[id]; _bmSelUpdateCount_(); }
@@ -6185,12 +6213,14 @@ function renderBookmarksPage(){
   gorder.forEach(function(c){
     var cEsc=_bmEsc_(c), cJs=cEsc.replace(/'/g,"\\'");
     var isCol = q ? false : !!collapsed[c]; // 検索中は全部開く
-    out += '<div class="bm-group" '+(reorder?('ondragover="_bmDragOver_(event)" ondrop="_bmDropOnCat_(event,\''+cJs+'\')"'):'')+' style="margin-bottom:14px">';
-    out += '<div onclick="_bmToggleCollapse_(\''+cJs+'\')" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#444;margin:0 0 8px;padding:5px 8px;border-left:3px solid var(--rd-accent,#2563eb);background:#f6f5f2;border-radius:0 6px 6px 0">'
-      + '<span style="font-size:10px;color:#888;width:12px;text-align:center">'+(isCol?'▶':'▼')+'</span>'
-      + cEsc + ' <span style="font-weight:400;color:#999;font-size:11px">('+groups[c].length+')</span></div>';
+    var col = _bmCatColor_(c);  // カテゴリ別の色 (囲い＋見出し色)
+    out += '<div class="bm-group" '+(reorder?('ondragover="_bmDragOver_(event)" ondrop="_bmDropOnCat_(event,\''+cJs+'\')"'):'')+' style="margin-bottom:14px;border:1px solid '+col.br+'55;border-left:5px solid '+col.br+';border-radius:8px;overflow:hidden">';
+    out += '<div draggable="true" ondragstart="_bmGroupDragStart_(event,\''+cJs+'\')" ondragend="_bmGroupDragEnd_(event)" ondragover="_bmGroupDragOver_(event)" ondragleave="this.style.boxShadow=\'\'" ondrop="_bmGroupDrop_(event,\''+cJs+'\')" onclick="_bmToggleCollapse_(\''+cJs+'\')" title="ドラッグでカテゴリの順番を変更 / クリックで開閉" style="cursor:grab;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:'+col.tx+';padding:7px 10px;background:'+col.bg+'">'
+      + '<span style="opacity:.55;font-size:13px" title="ドラッグで並べ替え">⠿</span>'
+      + '<span style="font-size:10px;width:12px;text-align:center">'+(isCol?'▶':'▼')+'</span>'
+      + cEsc + ' <span style="font-weight:400;opacity:.7;font-size:11px">('+groups[c].length+')</span></div>';
     if(!isCol){
-      out += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
+      out += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;padding:10px">';
       groups[c].forEach(function(b){
         var safe=_bmSafeUrl_(b.url); var host=''; try{ host=safe?new URL(safe).hostname:''; }catch(e){}
         out += '<div class="bm-card"'+(reorder?(' draggable="true" ondragstart="_bmDragStart_(event,\''+b.id+'\')" ondragend="_bmDragEnd_()" ondragover="_bmDragOver_(event)" ondrop="_bmDropOnCard_(event,\''+b.id+'\')"'):'')
