@@ -4276,6 +4276,7 @@ async function loadFromCloud() {
     _lc.concat(result.data.bookmarkCategories).forEach(function(c){ if(c && !_seenC[c]){ _seenC[c]=1; _mergedC.push(c); } });
     DB.bookmarkCategories = _mergedC;
   }
+  if (result.data.leadTimeMaster) DB.leadTimeMaster = Object.assign({}, result.data.leadTimeMaster, DB.leadTimeMaster||{});
   if (result.data.inquirySettings) {
     DB.inquirySettings = result.data.inquirySettings;
   }
@@ -4716,7 +4717,8 @@ async function saveToCloud() {
     releaseConfig: DB.releaseConfig || {},
     toolCompanyConfig: DB.toolCompanyConfig || {},
     bookmarks: DB.bookmarks || [],
-    bookmarkCategories: DB.bookmarkCategories || []
+    bookmarkCategories: DB.bookmarkCategories || [],
+    leadTimeMaster: DB.leadTimeMaster || {}
   };
   
   const result = await callCloudAPI('saveAll', {}, {
@@ -14127,32 +14129,95 @@ function viewScheduleDetail(scheduleId){
   alert(detail);
 }
 
-// 案件からスケジュールを作成
-function createScheduleFromProject(projectId){
-  const project = (DB.projects || []).find(p => p.id === projectId);
-  if(!project) return;
-  
-  const templates = DB.scheduleTemplates || [];
-  if(templates.length === 0){
-    alert('スケジュールテンプレートを先に作成してください');
-    return;
+// 案件からスケジュールを作成 → ざっくり自動計算モーダルへ
+function createScheduleFromProject(projectId){ showRoughScheduleModal(projectId); }
+
+// ── ざっくり工程予定の自動計算 (校正回数×製造日数→納期から逆算) ＋ 品目別リードタイム目安マスタ ──
+var _LEADTIME_DEFAULTS_ = {
+  '名刺・カード':{proofRounds:1, makeDays:2}, '封筒':{proofRounds:1, makeDays:3},
+  'チラシ・ポスター':{proofRounds:1, makeDays:3}, '冊子・パンフ':{proofRounds:2, makeDays:7},
+  '帳票・伝票':{proofRounds:1, makeDays:4}, 'シール・ラベル':{proofRounds:1, makeDays:4}, 'その他':{proofRounds:1, makeDays:4}
+};
+function _leadTimeFor_(project){
+  var cat = (typeof _projCategory_==='function') ? _projCategory_(project||{}) : 'その他';
+  var m = (DB.leadTimeMaster && DB.leadTimeMaster[cat]) || _LEADTIME_DEFAULTS_[cat] || {proofRounds:1, makeDays:3};
+  return { category:cat, proofRounds:(m.proofRounds!=null?m.proofRounds:1), makeDays:(m.makeDays||3), proofCycle:(m.proofCycle||3) };
+}
+function _buildRoughSteps_(proofRounds, makeDays, proofCycle){
+  proofRounds=Math.max(0,parseInt(proofRounds)||0); makeDays=Math.max(1,parseInt(makeDays)||1); proofCycle=Math.max(1,parseInt(proofCycle)||3);
+  var design=2, total=design + proofRounds*proofCycle + makeDays, off=-total, steps=[];
+  steps.push({name:'データ作成', daysFromEnd:off, customerRelated:true, reminderDays:1}); off+=design;
+  for(var i=1;i<=proofRounds;i++){ var nm=(i===1?'初校':(i+'校')); steps.push({name:nm+' 校正', daysFromEnd:off, customerRelated:true, reminderDays:0}); off+=proofCycle; }
+  steps.push({name:'校了', daysFromEnd:off, customerRelated:true, reminderDays:1});
+  if(makeDays>=2) steps.push({name:'製版・印刷', daysFromEnd:Math.min(-1, off+Math.ceil(makeDays/2)), customerRelated:false});
+  steps.push({name:'製本・加工', daysFromEnd:-1, customerRelated:false});
+  steps.push({name:'納品', daysFromEnd:0, customerRelated:true, reminderDays:0});
+  return steps;
+}
+function showRoughScheduleModal(projectId){
+  var p=(DB.projects||[]).find(function(x){return x.id===projectId;}); if(!p){ alert('案件が見つかりません'); return; }
+  var lt=_leadTimeFor_(p);
+  window._roughCtx_={ projectId:projectId, category:lt.category };
+  var due=p.dueDate||'';
+  var m=document.createElement('div'); m.className='proof-modal'; m.id='rough-sched-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;max-width:520px;width:100%;max-height:88vh;overflow:auto">'
+    +'<div style="padding:12px 16px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center"><b style="font-size:14px">📅 工程予定をざっくり自動作成</b><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div>'
+    +'<div style="padding:14px 16px">'
+      +'<div style="font-size:11px;color:#64748b;margin-bottom:8px">'+_escDiff(p.id)+' / '+_escDiff(p.item||'')+' ・ 品目目安: <b>'+_escDiff(lt.category)+'</b></div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">'
+        +'<label style="font-size:12px">納期<br><input type="date" id="rs-due" value="'+due+'" oninput="_roughRecalc_()" style="width:100%"></label>'
+        +'<label style="font-size:12px">校正回数<br><input type="number" id="rs-proof" min="0" max="10" value="'+lt.proofRounds+'" oninput="_roughRecalc_()" style="width:100%"></label>'
+        +'<label style="font-size:12px">製造日数(校了→納品)<br><input type="number" id="rs-make" min="1" max="60" value="'+lt.makeDays+'" oninput="_roughRecalc_()" style="width:100%"></label>'
+        +'<label style="font-size:12px">校正1往復の日数<br><input type="number" id="rs-cycle" min="1" max="14" value="'+lt.proofCycle+'" oninput="_roughRecalc_()" style="width:100%"></label>'
+      +'</div>'
+      +'<div id="rs-preview" style="background:#f6f4ee;border:1px solid #e2ded4;border-radius:8px;padding:8px 10px;font-size:12px"></div>'
+      +'<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:10px;cursor:pointer"><input type="checkbox" id="rs-savemaster" checked> この値を「'+_escDiff(lt.category)+'」の標準目安として保存（次回から自動）</label>'
+      +'<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-p" onclick="_roughApply_(\''+projectId+'\')">この予定で作成</button><button class="btn" onclick="this.closest(\'.proof-modal\').remove()">閉じる</button></div>'
+    +'</div></div>';
+  document.body.appendChild(m);
+  _roughRecalc_();
+}
+function _roughRecalc_(){
+  var box=document.getElementById('rs-preview'); if(!box) return;
+  var due=document.getElementById('rs-due').value;
+  var steps=_buildRoughSteps_(document.getElementById('rs-proof').value, document.getElementById('rs-make').value, document.getElementById('rs-cycle').value);
+  var total=-steps[0].daysFromEnd;
+  var html='<div style="font-weight:700;margin-bottom:4px">標準リードタイム 約 '+total+' 営業日</div>';
+  if(!due){ box.innerHTML=html+'<div style="color:#b45309">納期を入れると各工程の予定日を計算します</div>'; return; }
+  var delivery=new Date(due);
+  html+=steps.map(function(s){
+    var d=(typeof _addBizDays_==='function')?_addBizDays_(delivery,s.daysFromEnd):new Date(delivery.getTime()+s.daysFromEnd*864e5);
+    return '<div style="display:flex;justify-content:space-between;border-top:1px solid #ece8df;padding:3px 0"><span>'+_escDiff(s.name)+'</span><span style="font-family:monospace;color:#475569">'+d.toISOString().split('T')[0]+'</span></div>';
+  }).join('');
+  var start=(typeof _addBizDays_==='function')?_addBizDays_(delivery,steps[0].daysFromEnd):new Date(delivery.getTime()+steps[0].daysFromEnd*864e5);
+  var d2s=Math.ceil((start-new Date())/864e5);
+  html+='<div style="margin-top:6px;font-size:11px;color:'+(d2s<0?'#dc2626':'#166534')+'">'+(d2s<0?('⚠ 標準だと着手日を '+(-d2s)+'日 過ぎています（タイト）'):('着手目安まで あと '+d2s+'日'))+'</div>';
+  box.innerHTML=html;
+}
+function _roughApply_(projectId){
+  var due=document.getElementById('rs-due').value;
+  if(!due){ alert('納期を入力してください'); return; }
+  var pr=parseInt(document.getElementById('rs-proof').value)||0, mk=parseInt(document.getElementById('rs-make').value)||1, cy=parseInt(document.getElementById('rs-cycle').value)||3;
+  var steps0=_buildRoughSteps_(pr,mk,cy), delivery=new Date(due);
+  var steps=steps0.map(function(s){
+    var d=(typeof _addBizDays_==='function')?_addBizDays_(delivery,s.daysFromEnd):new Date(delivery.getTime()+s.daysFromEnd*864e5);
+    return { name:s.name, plannedDate:d.toISOString().split('T')[0], actualDate:null, status:'pending', customerRelated:!!s.customerRelated, reminderDays:s.reminderDays||0, reminderSent:false };
+  });
+  if(!DB.projectSchedules) DB.projectSchedules=[];
+  DB.projectSchedules = DB.projectSchedules.filter(function(s){ return s.projectId!==projectId; });
+  DB.projectSchedules.push({ id:'SCH'+Date.now(), projectId:projectId, templateId:'rough', deliveryDate:due, steps:steps, createdAt:new Date().toISOString(), rough:{proofRounds:pr, makeDays:mk, proofCycle:cy} });
+  var p=(DB.projects||[]).find(function(x){return x.id===projectId;}); if(p && !p.dueDate) p.dueDate=due;
+  if(document.getElementById('rs-savemaster') && document.getElementById('rs-savemaster').checked){
+    var cat=(window._roughCtx_&&window._roughCtx_.category)||((typeof _projCategory_==='function')?_projCategory_(p||{}):'その他');
+    if(!DB.leadTimeMaster) DB.leadTimeMaster={};
+    DB.leadTimeMaster[cat]={proofRounds:pr, makeDays:mk, proofCycle:cy};
   }
-  
-  // テンプレート選択
-  const tplList = templates.map((t, i) => `${i+1}. ${t.name}`).join('\n');
-  const choice = prompt(`テンプレートを選択（番号入力）:\n${tplList}`);
-  if(!choice) return;
-  
-  const tplIndex = parseInt(choice) - 1;
-  if(isNaN(tplIndex) || !templates[tplIndex]) return;
-  
-  // 納期入力
-  const deliveryDate = prompt('納期を入力（例: 2026-04-20）:', project.deliveryDate || '');
-  if(!deliveryDate) return;
-  
-  generateSchedule(projectId, templates[tplIndex].id, deliveryDate);
-  alert('スケジュールを作成しました');
-  renderScheduleList();
+  if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  document.querySelectorAll('#rough-sched-modal').forEach(function(x){ x.remove(); });
+  if(typeof renderScheduleList==='function') try{ renderScheduleList(); }catch(e){}
+  if(typeof renderProjects==='function') try{ renderProjects(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('📅 工程予定を作成しました（標準 約'+(-steps0[0].daysFromEnd)+'営業日）');
 }
 
 // ═══════════════════ 校正BOX ══════════════════
