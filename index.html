@@ -1731,6 +1731,17 @@ setTimeout(_removeBootLoader_, 5000);
       <button class="btn" style="background:#fff;border-color:#1e40af;color:#1e40af" onclick="document.getElementById('import-data-file').click()">📥 JSONをインポート</button>
       <input type="file" id="import-data-file" accept="application/json,.json" style="display:none" onchange="importDataJSON(event)">
     </div>
+    <div style="margin-top:12px;border-top:1px solid #93c5fd;padding-top:10px">
+      <button class="btn" style="background:#fff;border-color:#1e40af;color:#1e40af" onclick="_snapOpenPanel_()">📅 復元ポイント（日付を選んで戻す）</button>
+      <div id="snap-panel" style="display:none;margin-top:8px;background:#fff;border:1px solid #93c5fd;border-radius:8px;padding:10px 12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-size:12px;font-weight:700;color:#1e3a8a">復元ポイント（この端末に保存）</span>
+          <button class="btn" style="font-size:11px;padding:3px 10px" onclick="_snapSaveNow_()">＋ いま作成</button>
+        </div>
+        <div id="snap-list" style="font-size:12px"></div>
+        <div style="font-size:10.5px;color:#64748b;margin-top:6px">※毎日1回 自動保存・直近30点まで保持。戻す直前の状態も自動保存します。端末ごとの保険です（クラウドのDrive日次バックアップとは別）。</div>
+      </div>
+    </div>
   </div>
 
   <!-- 🧪 テストデータ管理 (動作確認用) -->
@@ -3780,6 +3791,8 @@ async function doLoginByEmail(email, password){
     setTimeout(function(){ requestNotificationPermission(false); }, 1500);
   }
   try{ _updateNotifyBtn_(); }catch(e){}
+  // 復元ポイント: ログイン後に日次自動スナップショット
+  if(typeof _snapAutoDaily_==='function'){ setTimeout(function(){ try{ _snapAutoDaily_(); }catch(e){} }, 4000); }
 
   // 初回ログイン時のオンボーディング表示
   if(typeof showOnboarding === 'function'){
@@ -19766,6 +19779,61 @@ try {
   };
 } catch(e){ /* BroadcastChannel 非対応ブラウザは無視 */ }
 
+// ── 復元ポイント (端末内IndexedDBに日次スナップショット→日付選択で復元) ──
+function _snapDB_(){ return new Promise(function(res,rej){ try{ var r=indexedDB.open('tokiwa_snaps',1); r.onupgradeneeded=function(e){ var db=e.target.result; if(!db.objectStoreNames.contains('snaps')) db.createObjectStore('snaps',{keyPath:'ts'}); }; r.onsuccess=function(){res(r.result);}; r.onerror=function(){rej(r.error);}; }catch(e){ rej(e); } }); }
+function _snapAll_(){ return _snapDB_().then(function(db){ return new Promise(function(res,rej){ var tx=db.transaction('snaps','readonly'); var rq=tx.objectStore('snaps').getAll(); rq.onsuccess=function(){res(rq.result||[]);}; rq.onerror=function(){rej(rq.error);}; }); }); }
+function _snapPut_(rec){ return _snapDB_().then(function(db){ return new Promise(function(res,rej){ var tx=db.transaction('snaps','readwrite'); tx.objectStore('snaps').put(rec); tx.oncomplete=function(){res();}; tx.onerror=function(){rej(tx.error);}; }); }); }
+function _snapDel_(ts){ return _snapDB_().then(function(db){ return new Promise(function(res){ var tx=db.transaction('snaps','readwrite'); tx.objectStore('snaps').delete(ts); tx.oncomplete=function(){res();}; tx.onerror=function(){res();}; }); }); }
+function _snapSave_(reason){
+  var rec={ ts:Date.now(), at:new Date().toISOString(), reason:reason||'手動', db:JSON.stringify(DB) };
+  return _snapPut_(rec).then(_snapAll_).then(function(all){
+    all.sort(function(a,b){return a.ts-b.ts;});
+    var p=Promise.resolve();
+    for(var i=0;i<all.length-30;i++){ (function(t){ p=p.then(function(){return _snapDel_(t);}); })(all[i].ts); }
+    return p;
+  }).catch(function(e){ console.warn('snap save fail', e); });
+}
+function _snapAutoDaily_(){
+  try{
+    if(!window.DB || !(DB.projects||DB.bookmarks||DB.inquiries)) return;
+    var today=new Date().toISOString().slice(0,10);
+    _snapAll_().then(function(all){
+      if(!all.some(function(s){ return (s.at||'').slice(0,10)===today; })) _snapSave_('自動(日次)');
+    }).catch(function(){});
+  }catch(e){}
+}
+function _snapSaveNow_(){ _snapSave_('手動').then(function(){ if(typeof _toastMsg==='function') _toastMsg('📌 復元ポイントを作成しました'); _snapRenderList_(); }); }
+function _snapOpenPanel_(){ var p=document.getElementById('snap-panel'); if(!p) return; p.style.display=(p.style.display==='none'?'block':'none'); if(p.style.display==='block') _snapRenderList_(); }
+function _snapRenderList_(){
+  var host=document.getElementById('snap-list'); if(!host) return;
+  host.innerHTML='<span style="color:#94a3b8">読込中…</span>';
+  _snapAll_().then(function(all){
+    all.sort(function(a,b){return b.ts-a.ts;});
+    if(!all.length){ host.innerHTML='<div style="color:#999">復元ポイントがまだありません（「＋いま作成」で作れます）</div>'; return; }
+    host.innerHTML=all.map(function(s){
+      var ds=new Date(s.at).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      var sz=''; try{ var o=JSON.parse(s.db); sz='案件'+((o.projects||[]).length)+'・リンク'+((o.bookmarks||[]).length); }catch(e){}
+      return '<div style="display:flex;align-items:center;gap:8px;border-top:1px solid #e5e7eb;padding:5px 0"><span style="flex:1">🕐 '+ds+' <span style="color:#94a3b8;font-size:10px">'+_escDiff(s.reason||'')+' / '+sz+'</span></span><button class="btn" style="font-size:11px;padding:3px 10px" onclick="_snapRestore_('+s.ts+')">この時点に戻す</button></div>';
+    }).join('');
+  }).catch(function(e){ host.innerHTML='<div style="color:#b91c1c">読込失敗: '+(e&&e.message||e)+'</div>'; });
+}
+function _snapRestore_(ts){
+  _snapAll_().then(function(all){
+    var s=all.find(function(x){return x.ts===ts;}); if(!s){ alert('復元ポイントが見つかりません'); return; }
+    var d=new Date(s.at).toLocaleString('ja-JP');
+    if(!confirm('【'+d+'】の状態に戻します。\n現在のデータは置き換わります。\n（戻す直前の状態も自動で復元ポイントに保存します）\n\n続行しますか？')) return;
+    _snapSave_('復元前の自動保存').then(function(){
+      try{
+        var imported=JSON.parse(s.db);
+        Object.keys(imported).forEach(function(k){ DB[k]=imported[k]; });
+        if(typeof saveDB==='function') saveDB();
+        if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+        alert('✅ '+d+' の状態に復元しました。画面をリロードします。');
+        setTimeout(function(){ location.reload(); }, 500);
+      }catch(e){ alert('復元に失敗: '+(e&&e.message||e)); }
+    });
+  });
+}
 function exportAllDataJSON(){
   var snapshot = {
     _exportedAt: new Date().toISOString(),
