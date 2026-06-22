@@ -193,6 +193,10 @@
           <option value="fold3">三つ折り（巻き）</option>
         </select>
       </label>
+      <button class="btn" id="q3d-flip" onclick="_q3dFlip()" style="display:none;font-size:12px;padding:5px 12px">🔄 裏返す</button>
+      <label id="q3d-foldwrap" style="display:none;align-items:center;gap:6px;font-size:11px;color:#888;font-weight:600">折り具合
+        <input type="range" id="q3d-fold" min="0" max="100" value="70" oninput="_q3dFoldChange(this.value)" style="width:120px">
+      </label>
       <span class="muted" id="q3d-status"></span>
     </div>
     <div id="q3d-check" style="margin-top:8px"></div>
@@ -603,38 +607,59 @@ async function quick3D(){
     }
   }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); console.error(e); }
 }
-function _q3dRebuild(){ if(window._q3dLast) _build3D(window._q3dLast.front, window._q3dLast.back, document.getElementById('q3d-mode').value); }
+var _q3dS=null;
 function _build3D(front, back, mode){
-  mode=mode||'flat';
+  _q3dS={ front:front, back:back, mode:mode||'flat', rx:-16, ry:-24, sc:1, foldPct:70, scene:null };
+  _q3dUpdateControls(); _q3dRender();
+}
+function _q3dUpdateControls(){
+  var fl=document.getElementById('q3d-flip'), fw=document.getElementById('q3d-foldwrap');
+  if(fl) fl.style.display=(_q3dS&&_q3dS.mode==='flat')?'inline-block':'none';
+  if(fw) fw.style.display=(_q3dS&&_q3dS.mode!=='flat')?'inline-flex':'none';
+}
+function _q3dRebuild(){
+  if(!_q3dS){ if(window._q3dLast) _build3D(window._q3dLast.front, window._q3dLast.back, document.getElementById('q3d-mode').value); return; }
+  _q3dS.mode=document.getElementById('q3d-mode').value; _q3dUpdateControls(); _q3dRender();
+}
+function _q3dApply(){ var s=_q3dS; if(s&&s.scene) s.scene.style.transform='scale('+s.sc+') rotateX('+s.rx+'deg) rotateY('+s.ry+'deg)'; }
+function _q3dFlip(){ var s=_q3dS; if(!s||!s.scene) return; s.scene.style.transition='transform .6s ease'; s.ry+=180; _q3dApply(); }
+function _q3dFoldChange(v){ var s=_q3dS; if(!s) return; s.foldPct=+v; _q3dRender(); }
+function _q3dRender(){
+  var s=_q3dS; if(!s) return;
   var stage=document.getElementById('q3d-stage'); stage.style.display='flex'; document.getElementById('q3d-hint').style.display='block';
+  var front=s.front, back=s.back;
   var fit=Math.min(300/front.h, 470/front.w, 1.3); var W=Math.round(front.w*fit), H=Math.round(front.h*fit);
   stage.innerHTML='';
-  var scene=document.createElement('div'); scene.style.cssText='transform-style:preserve-3d;position:relative;width:'+W+'px;height:'+H+'px;filter:drop-shadow(0 24px 30px rgba(0,0,0,.32))';
-  if(mode==='flat'){
-    var f=document.createElement('img'); f.src=front.url; f.style.cssText='position:absolute;inset:0;width:100%;height:100%;backface-visibility:hidden;border:1px solid #cbd5e1;transform:translateZ(1.2px)';
-    var b=document.createElement('div'); b.style.cssText='position:absolute;inset:0;width:100%;height:100%;backface-visibility:hidden;border:1px solid #cbd5e1;transform:rotateY(180deg) translateZ(1.2px);background:#fff;overflow:hidden';
-    if(back){ var bi=document.createElement('img'); bi.src=back.url; bi.style.cssText='width:100%;height:100%;display:block'; b.appendChild(bi); }
-    else { b.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9aa3af;font-size:13px">裏面（白紙）</div>'; }
-    scene.appendChild(f); scene.appendChild(b);
+  var scene=document.createElement('div'); s.scene=scene;
+  scene.style.cssText='position:relative;width:'+W+'px;height:'+H+'px;transform-style:preserve-3d;-webkit-transform-style:preserve-3d;transition:transform .5s ease;filter:drop-shadow(0 22px 28px rgba(0,0,0,.3))';
+  function faceDiv(url, rot, placeholder){
+    var f=document.createElement('div');
+    f.style.cssText='position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;border:1px solid #cbd5e1;background:#fff;'
+      +(url?('background-image:url('+url+');background-size:100% 100%;'):'')+(rot?'transform:rotateY(180deg);':'');
+    if(!url&&placeholder) f.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9aa3af;font-size:13px">裏面（白紙）</div>';
+    return f;
+  }
+  if(s.mode==='flat'){
+    scene.appendChild(faceDiv(front.url,false,false));
+    scene.appendChild(faceDiv(back?back.url:null,true,true));
   } else {
-    var n=(mode==='fold3')?3:2; var pw=W/n; var foldA=(mode==='fold3')?55:32;
+    var n=(s.mode==='fold3')?3:2; var pw=W/n; var maxA=(s.mode==='fold3')?80:55; var A=maxA*(s.foldPct/100);
     var parent=scene;
     for(var i=0;i<n;i++){
       var p=document.createElement('div');
-      p.style.cssText='position:absolute;top:0;width:'+pw+'px;height:'+H+'px;background-image:url('+front.url+');background-size:'+W+'px '+H+'px;background-position:-'+(i*pw)+'px 0;border:1px solid #cbd5e1;transform-style:preserve-3d';
+      p.style.cssText='position:absolute;top:0;height:'+H+'px;width:'+pw+'px;background-image:url('+front.url+');background-size:'+W+'px '+H+'px;background-position:-'+(i*pw)+'px 0;border:1px solid #cbd5e1;transform-style:preserve-3d;-webkit-transform-style:preserve-3d;backface-visibility:visible';
       if(i===0){ p.style.left='0'; scene.appendChild(p); }
-      else { p.style.left=pw+'px'; p.style.transformOrigin='left center'; var ang=(mode==='fold3'?(i===1?-foldA:foldA):-foldA); p.style.transform='rotateY('+ang+'deg)'; parent.appendChild(p); }
+      else { p.style.left=pw+'px'; p.style.transformOrigin='left center'; var ang=(s.mode==='fold3'?(i===1?-A:A):-A); p.style.transform='rotateY('+ang+'deg)'; parent.appendChild(p); }
       parent=p;
     }
   }
   stage.appendChild(scene);
-  var rx=-14, ry=-22, sc=1, drag=false, lx=0, ly=0;
-  function apply(){ scene.style.transform='scale('+sc+') rotateX('+rx+'deg) rotateY('+ry+'deg)'; }
-  apply();
-  stage.onmousedown=function(e){ drag=true; lx=e.clientX; ly=e.clientY; stage.style.cursor='grabbing'; };
-  document.onmousemove=function(e){ if(!drag) return; ry+=(e.clientX-lx)*0.4; rx-=(e.clientY-ly)*0.4; rx=Math.max(-88,Math.min(88,rx)); lx=e.clientX; ly=e.clientY; apply(); };
+  _q3dApply();
+  var drag=false,lx,ly;
+  stage.onmousedown=function(e){ drag=true; lx=e.clientX; ly=e.clientY; scene.style.transition='none'; stage.style.cursor='grabbing'; };
+  document.onmousemove=function(e){ if(!drag) return; s.ry+=(e.clientX-lx)*0.4; s.rx-=(e.clientY-ly)*0.4; s.rx=Math.max(-88,Math.min(88,s.rx)); lx=e.clientX; ly=e.clientY; _q3dApply(); };
   document.onmouseup=function(){ drag=false; stage.style.cursor='grab'; };
-  stage.onwheel=function(e){ e.preventDefault(); sc*=(e.deltaY<0?1.08:0.93); sc=Math.max(0.4,Math.min(3,sc)); apply(); };
+  stage.onwheel=function(e){ e.preventDefault(); s.sc*=(e.deltaY<0?1.08:0.93); s.sc=Math.max(0.4,Math.min(3,s.sc)); _q3dApply(); };
 }
 
 window.__test={ measureFile:measureFile, sizeLabel:sizeLabel, buildProofPdf:buildProofPdf, meImposeCore:meImposeCore, renderPageImg:renderPageImg, paperStd:_paperStd,
