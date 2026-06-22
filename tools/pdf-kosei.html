@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📄 PDFツール（連結・分割・校正枠） | Tokiwa Hub Tools</title>
+<!--
+  PDF連結ツール + 校正サイズ・枠付与ツール の統合版。
+  - 共通のファイル一覧(サイズ自動表示=トンボまで/データ/ページ数)
+  - 連結 / 分割 / 回転
+  - 校正サイズ・枠付与 (仕上り寸法＋枠＋トンボ自動付与・プレビュー/出力)
+  - 校正BOXからの引き継ぎ(URLパラメータ)に対応
+  - PC内処理(送信なし)。pdf-lib / JSZip 使用。
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:920px; margin:14px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .st{ font-size:11px; font-weight:800; color:#555; letter-spacing:.06em; margin-bottom:.5rem; }
+  .btn{ padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .btn-c{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  #drop{ border:2.5px dashed #94a3b8; border-radius:10px; padding:24px 16px; text-align:center; color:#64748b; font-size:14px; cursor:pointer; background:#fff; }
+  #drop.over{ border-color:var(--cyan); background:#ecfeff; }
+  .frow{ display:flex; gap:8px; align-items:center; padding:6px 9px; border:1px solid var(--line); border-radius:7px; margin-top:5px; background:#fff; font-size:13px; }
+  .frow.top{ border-color:var(--cyan); background:#ecfeff; }
+  .frow .nm{ flex:0 1 auto; max-width:42%; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .frow .mv{ cursor:pointer; padding:2px 8px; border:1px solid #d0cec8; border-radius:5px; font-size:12px; background:#fff; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px 14px; }
+  label{ font-size:11px; color:#888; display:block; margin-bottom:3px; font-weight:600; }
+  input[type=number],input[type=text],select{ width:100%; padding:7px 9px; border:1px solid #d0cec8; border-radius:6px; font-size:14px; font-family:inherit; background:#fff; }
+  input:focus,select:focus{ outline:none; border-color:#1a1a1a; }
+  .chk{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:#374151; cursor:pointer; }
+  .chk input{ width:16px; height:16px; }
+  #preview{ width:100%; height:520px; border:1px solid var(--line); border-radius:8px; background:#fff; display:none; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 📄</span>
+  <span class="tname">PDFツール（連結・分割・校正枠）</span>
+  <span class="user">🔒 PC内処理・送信なし</span>
+</header>
+<main>
+  <div id="ctx-banner" style="display:none;background:#ecfeff;border:1px solid #67e8f9;border-radius:8px;padding:8px 12px;margin-bottom:.7rem;font-size:12.5px;color:#155e75"></div>
+  <div class="sec">
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 PDFをドラッグ&ドロップ（複数OK）<div class="muted" style="margin-top:5px">並び順は↑↓で入替（連結の順番／一番上＝分割・回転・校正枠の対象）</div></div>
+    <input type="file" id="fi" accept="application/pdf,.pdf" multiple style="display:none" onchange="addFiles(this.files)">
+    <div id="flist"></div>
+  </div>
+
+  <div class="sec">
+    <div class="st">🔗 連結（上の順番で1本に）</div>
+    <button class="btn btn-g" onclick="mergeAll()">⬇ 連結してダウンロード</button>
+    <span class="muted" id="merge-info" style="margin-left:8px"></span>
+  </div>
+
+  <div class="sec">
+    <div class="st">✂ 分割（一番上のファイルが対象）</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" id="split-range" placeholder="例: 1-4,9" style="width:160px;font-family:Consolas,monospace">
+      <button class="btn btn-c" onclick="splitRange()">⬇ 指定ページ抜き出し</button>
+      <button class="btn" onclick="splitEach()">⬇ 1枚ずつ(ZIP)</button>
+      <button class="btn" onclick="splitHalf()">⬇ 前半/後半(ZIP)</button>
+      <span class="muted" id="split-info"></span>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="st">🔄 回転（一番上のファイル・全ページ）</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" onclick="rotateAll(90)">↻ 右90°</button>
+      <button class="btn" onclick="rotateAll(-90)">↺ 左90°</button>
+      <button class="btn" onclick="rotateAll(180)">↕ 180°</button>
+    </div>
+  </div>
+
+  <div class="sec" id="sec-size">
+    <div class="st">📐 校正サイズ・枠付与（一番上のファイルが対象）</div>
+    <div class="grid">
+      <div><label>塗り足し(bleed) mm</label><input type="number" id="o-bleed" value="0" min="0" step="0.5" oninput="schedule()"></div>
+      <div><label>校正用の余白 mm</label><input type="number" id="o-margin" value="25" min="8" step="1" oninput="schedule()"></div>
+      <div><label>仕上がりサイズ 手動(任意)</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" id="o-w" placeholder="幅" min="1" step="0.5" oninput="schedule()" style="text-align:right">
+          <span style="font-size:13px">×</span>
+          <input type="number" id="o-h" placeholder="高さ" min="1" step="0.5" oninput="schedule()" style="text-align:right">
+        </div>
+      </div>
+      <div><label>枠線の色</label>
+        <select id="o-color" onchange="schedule()">
+          <option value="0,0,0">黒</option><option value="0.86,0.08,0.24">赤</option>
+          <option value="0.91,0,0.56">マゼンタ</option><option value="0,0.55,0.78">シアン</option>
+          <option value="0.12,0.32,0.82">青</option>
+        </select>
+      </div>
+      <div><label>枠線の太さ pt</label><input type="number" id="o-lw" value="0.75" min="0.2" step="0.25" oninput="schedule()"></div>
+      <div><label>枠線の種類</label><select id="o-dash" onchange="schedule()"><option value="solid">実線</option><option value="dash">破線</option></select></div>
+    </div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
+      <label class="chk"><input type="checkbox" id="o-dim" checked onchange="schedule()"> 寸法を表示（縦×横 mm）</label>
+      <label class="chk"><input type="checkbox" id="o-tonbo" checked onchange="schedule()"> トンボ（コーナー）</label>
+      <label class="chk"><input type="checkbox" id="o-caption" checked onchange="schedule()"> 上部キャプション</label>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
+      <button class="btn btn-c" id="btn-prev" onclick="genSize(false)" disabled>👁 プレビュー更新</button>
+      <button class="btn btn-g" id="btn-dl" onclick="genSize(true)" disabled>⬇ 校正PDFを出力</button>
+      <span class="muted" id="size-status"></span>
+    </div>
+    <iframe id="preview" title="プレビュー"></iframe>
+  </div>
+  <p class="muted">🔒 すべてPC内で処理（どこにも送信されません）。EPSはデスクトップの変換batでPDF化を。イラレ/フォトショの元データは「AI/PSD→PDF」ツールへ。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2700); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function kb(n){ return n>1048576 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB'; }
+var MM=72/25.4;
+function mm(pt){ var v=Math.round(pt/MM*10)/10; return (Math.abs(v-Math.round(v))<0.05?String(Math.round(v)):v.toFixed(1)); }
+
+var files=[]; // {name, buf, pages, m}
+var _timer=null, _curUrl=null;
+
+// 引き継ぎ(校正BOX等)
+var CTX=(function(){
+  try{
+    var q=new URLSearchParams(location.search);
+    var c={ name:q.get('name')||'', seiban:q.get('seiban')||'', cust:q.get('cust')||'', prod:q.get('prod')||'' };
+    var w=parseFloat(q.get('w')), h=parseFloat(q.get('h')), b=parseFloat(q.get('bleed')), m=parseFloat(q.get('margin'));
+    if(w>0) document.getElementById('o-w').value=w;
+    if(h>0) document.getElementById('o-h').value=h;
+    if(b>=0&&!isNaN(b)) document.getElementById('o-bleed').value=b;
+    if(m>0) document.getElementById('o-margin').value=m;
+    if(c.seiban||c.cust||c.prod||c.name){
+      var bn=document.getElementById('ctx-banner'); bn.style.display='block';
+      bn.innerHTML='📐 校正BOXから引き継ぎ：'
+        +(c.seiban?('<b>製番</b> '+esc(c.seiban)+'　'):'')
+        +(c.cust?('<b>得意先</b> '+esc(c.cust)+'　'):'')
+        +(c.prod?('<b>品名</b> '+esc(c.prod)):'')
+        +'<div class="muted" style="margin-top:3px">PDFを入れて「📐校正サイズ・枠付与」で出力（出力名に製番が付きます）。</div>';
+      setTimeout(function(){ try{ document.getElementById('sec-size').scrollIntoView({behavior:'smooth',block:'start'}); }catch(e){} }, 300);
+    }
+    return c;
+  }catch(e){ return {name:'',seiban:'',cust:'',prod:''}; }
+})();
+function ctxBase(fallback){ return (CTX&&CTX.name)?CTX.name:fallback; }
+
+var drop=document.getElementById('drop');
+['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('over');}); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('over');}); });
+drop.addEventListener('drop',function(e){ addFiles(e.dataTransfer.files); });
+
+async function measureFile(buf){
+  try{
+    var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true});
+    var n=d.getPageCount(), p=d.getPage(0);
+    var mb=p.getMediaBox(), tb=p.getTrimBox(); var eps=2;
+    var hasTonbo=(mb.width-tb.width>eps)||(mb.height-tb.height>eps);
+    return { pages:n, mediaW:mb.width, mediaH:mb.height, trimW:tb.width, trimH:tb.height, hasTonbo:hasTonbo };
+  }catch(e){ return null; }
+}
+function sizeLabel(m){
+  if(!m) return '';
+  var parts=[];
+  if(m.pages>1) parts.push('全'+m.pages+'ページ');
+  if(m.hasTonbo){ parts.push('トンボまで '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm'); parts.push('データ '+mm(m.trimW)+'×'+mm(m.trimH)+'mm'); }
+  else parts.push('データ '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm');
+  return parts.join(' ／ ');
+}
+
+function addFiles(fl){
+  var arr=[].slice.call(fl).filter(function(f){ return /\.pdf$/i.test(f.name); });
+  if(!arr.length){ toast('PDFを入れてください'); return; }
+  var pending=arr.length;
+  arr.forEach(function(f){
+    f.arrayBuffer().then(async function(buf){
+      var rec={ name:f.name, buf:buf, pages:0, m:null };
+      try{ var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true}); rec.pages=d.getPageCount(); }catch(e){}
+      rec.m=await measureFile(buf);
+      files.push(rec);
+      if(--pending===0){ render(); }
+    }).catch(function(e){ pending--; toast('❌ '+f.name+': '+(e.message||e)); });
+  });
+}
+function render(){
+  document.getElementById('flist').innerHTML=files.map(function(f,i){
+    return '<div class="frow'+(i===0?' top':'')+'"><span>'+(i===0?'⭐':'📄')+'</span>'
+      + '<span class="nm">'+(i+1)+'. '+esc(f.name)+'</span>'
+      + '<span class="muted" style="flex:1;text-align:right">'+(sizeLabel(f.m)||(f.pages+'p'))+' / '+kb(f.buf.byteLength)+'</span>'
+      + '<span class="mv" onclick="mv('+i+',-1)" title="上へ">↑</span>'
+      + '<span class="mv" onclick="mv('+i+',1)" title="下へ">↓</span>'
+      + '<span class="mv" style="color:#b91c1c" onclick="removeAt('+i+')">✕</span></div>';
+  }).join('');
+  var tp=files.reduce(function(s,f){return s+(f.pages||0);},0);
+  document.getElementById('merge-info').textContent=files.length?(files.length+'ファイル / 計'+tp+'ページ'):'';
+  document.getElementById('split-info').textContent=files.length?('対象: '+files[0].name+' ('+files[0].pages+'p)'):'';
+  var has=files.length>0;
+  document.getElementById('btn-prev').disabled=!has;
+  document.getElementById('btn-dl').disabled=!has;
+  if(has) schedule(); else { var pv=document.getElementById('preview'); pv.style.display='none'; }
+}
+function mv(i,d){ var j=i+d; if(j<0||j>=files.length) return; var t=files[i]; files[i]=files[j]; files[j]=t; render(); }
+function removeAt(i){ files.splice(i,1); render(); }
+function dl(bytes,name){ var blob=new Blob([bytes],{type:'application/pdf'}); var url=URL.createObjectURL(blob); var a=document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(function(){URL.revokeObjectURL(url);},4000); }
+function parseRange(str,max){ var out=[]; String(str||'').split(/[,、\s]+/).forEach(function(tk){ if(!tk) return; var m=tk.match(/^(\d+)\s*[-〜~]\s*(\d+)$/); if(m){ for(var p=Math.min(+m[1],+m[2]); p<=Math.max(+m[1],+m[2]); p++) if(p>=1&&p<=max) out.push(p-1); } else { var n=parseInt(tk); if(n>=1&&n<=max) out.push(n-1); } }); return out; }
+
+// ── 連結 ──
+async function mergeAll(){
+  if(files.length<2){ toast('2ファイル以上入れてください'); return; }
+  try{
+    var out=await PDFLib.PDFDocument.create();
+    for(var i=0;i<files.length;i++){ var src=await PDFLib.PDFDocument.load(files[i].buf,{ignoreEncryption:true}); var pgs=await out.copyPages(src,src.getPageIndices()); pgs.forEach(function(p){out.addPage(p);}); }
+    var bytes=await out.save();
+    dl(bytes, ctxBase('連結_'+files[0].name.replace(/\.pdf$/i,'')+'_他'+(files.length-1)+'件')+'.pdf');
+    toast('✅ 連結完了 ('+out.getPageCount()+'ページ)');
+  }catch(e){ toast('❌ 連結失敗: '+(e.message||e)); }
+}
+// ── 分割 ──
+async function splitRange(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0]; var idx=parseRange(document.getElementById('split-range').value, f.pages);
+  if(!idx.length){ toast('ページを指定 (例: 1-4,9)'); return; }
+  try{ var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true}); var out=await PDFLib.PDFDocument.create(); var pgs=await out.copyPages(src,idx); pgs.forEach(function(p){out.addPage(p);}); dl(await out.save(), f.name.replace(/\.pdf$/i,'')+'_抜粋.pdf'); toast('✅ '+idx.length+'ページ抜き出し'); }catch(e){ toast('❌ '+(e.message||e)); }
+}
+async function splitEach(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0]; if(!confirm(f.name+' を '+f.pages+'個に分割しZIP保存します。続行?')) return;
+  try{ var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true}); var zip=new JSZip(); var base=f.name.replace(/\.pdf$/i,''); for(var p=0;p<f.pages;p++){ var out=await PDFLib.PDFDocument.create(); var pg=await out.copyPages(src,[p]); out.addPage(pg[0]); zip.file(base+'_p'+String(p+1).padStart(3,'0')+'.pdf', await out.save()); } var zb=await zip.generateAsync({type:'blob'}); var u=URL.createObjectURL(zb); var a=document.createElement('a'); a.href=u; a.download=base+'_分割.zip'; a.click(); setTimeout(function(){URL.revokeObjectURL(u);},5000); toast('✅ '+f.pages+'ファイルに分割'); }catch(e){ toast('❌ '+(e.message||e)); }
+}
+async function splitHalf(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0]; if(f.pages<2){ toast('2ページ以上が対象'); return; }
+  try{ var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true}); var half=Math.ceil(f.pages/2); var zip=new JSZip(); var base=f.name.replace(/\.pdf$/i,''); var ranges=[[0,half],[half,f.pages]]; for(var r=0;r<2;r++){ var out=await PDFLib.PDFDocument.create(); var idx=[]; for(var p=ranges[r][0];p<ranges[r][1];p++) idx.push(p); var pgs=await out.copyPages(src,idx); pgs.forEach(function(pg){out.addPage(pg);}); zip.file(base+(r===0?'_前半':'_後半')+'.pdf', await out.save()); } var zb=await zip.generateAsync({type:'blob'}); var u=URL.createObjectURL(zb); var a=document.createElement('a'); a.href=u; a.download=base+'_2分割.zip'; a.click(); setTimeout(function(){URL.revokeObjectURL(u);},5000); toast('✅ 前半'+half+'p/後半'+(f.pages-half)+'p'); }catch(e){ toast('❌ '+(e.message||e)); }
+}
+// ── 回転 ──
+async function rotateAll(deg){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0];
+  try{ var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true}); src.getPages().forEach(function(p){ var cur=p.getRotation().angle||0; p.setRotation(PDFLib.degrees(((cur+deg)%360+360)%360)); }); dl(await src.save(), f.name.replace(/\.pdf$/i,'')+'_回転.pdf'); toast('✅ 回転しました'); }catch(e){ toast('❌ '+(e.message||e)); }
+}
+
+// ── 校正サイズ・枠付与 ──
+function readOpts(){
+  var w=parseFloat(document.getElementById('o-w').value), h=parseFloat(document.getElementById('o-h').value);
+  return { bleed:Math.max(0,parseFloat(document.getElementById('o-bleed').value)||0), margin:Math.max(8,parseFloat(document.getElementById('o-margin').value)||25),
+    finW:(w>0?w:null), finH:(h>0?h:null), color:document.getElementById('o-color').value.split(',').map(Number),
+    lw:Math.max(0.2,parseFloat(document.getElementById('o-lw').value)||0.75), dash:document.getElementById('o-dash').value==='dash',
+    dim:document.getElementById('o-dim').checked, tonbo:document.getElementById('o-tonbo').checked, caption:document.getElementById('o-caption').checked };
+}
+async function buildProofPdf(srcBytes, opts){
+  var P=PDFLib;
+  var src=await P.PDFDocument.load(srcBytes,{ignoreEncryption:true});
+  var out=await P.PDFDocument.create();
+  var font=await out.embedFont(P.StandardFonts.Helvetica), fontB=await out.embedFont(P.StandardFonts.HelveticaBold);
+  var col=P.rgb(opts.color[0],opts.color[1],opts.color[2]);
+  var marginPt=opts.margin*MM, bleedPt=opts.bleed*MM, dash=opts.dash?[3,2]:undefined;
+  var idxs=src.getPageIndices();
+  for(var pi=0;pi<idxs.length;pi++){
+    var sp=src.getPage(idxs[pi]); var ssz=sp.getSize(); var srcW=ssz.width, srcH=ssz.height;
+    var frW,frH,frX,frY;
+    if(opts.finW&&opts.finH){ frW=opts.finW*MM; frH=opts.finH*MM; frX=marginPt+(srcW-frW)/2; frY=marginPt+(srcH-frH)/2; }
+    else { frW=srcW-2*bleedPt; frH=srcH-2*bleedPt; frX=marginPt+bleedPt; frY=marginPt+bleedPt; }
+    var pageW=srcW+2*marginPt, pageH=srcH+2*marginPt;
+    var page=out.addPage([pageW,pageH]);
+    var emb=await out.embedPage(sp); page.drawPage(emb,{x:marginPt,y:marginPt,width:srcW,height:srcH});
+    var L=frX,R=frX+frW,B=frY,T=frY+frH;
+    function line(x1,y1,x2,y2,th,c,ds){ page.drawLine({start:{x:x1,y:y1},end:{x:x2,y:y2},thickness:th,color:(c||col),dashArray:ds}); }
+    line(L,B,R,B,opts.lw,col,dash); line(L,T,R,T,opts.lw,col,dash); line(L,B,L,T,opts.lw,col,dash); line(R,B,R,T,opts.lw,col,dash);
+    if(opts.tonbo){ var g=3,ln=9,tw=opts.lw;
+      line(L-g-ln,B,L-g,B,tw); line(L,B-g-ln,L,B-g,tw); line(R+g,B,R+g+ln,B,tw); line(R,B-g-ln,R,B-g,tw);
+      line(L-g-ln,T,L-g,T,tw); line(L,T+g,L,T+g+ln,tw); line(R+g,T,R+g+ln,T,tw); line(R,T+g,R,T+g+ln,tw); }
+    if(opts.dim){ var tick=4, fs=Math.max(7,Math.min(11,marginPt*0.30));
+      var yW=B-Math.min(marginPt*0.5,marginPt-12);
+      if(yW>4){ line(L,yW,R,yW,0.5); line(L,yW-tick,L,yW+tick,0.5); line(R,yW-tick,R,yW+tick,0.5);
+        var wTxt=mm(frW)+' mm', ww=font.widthOfTextAtSize(wTxt,fs);
+        page.drawRectangle({x:(L+R)/2-ww/2-2,y:yW-fs/2-1,width:ww+4,height:fs+2,color:P.rgb(1,1,1)});
+        page.drawText(wTxt,{x:(L+R)/2-ww/2,y:yW-fs/2+1,size:fs,font:font,color:col}); }
+      var xH=L-Math.min(marginPt*0.5,marginPt-12);
+      if(xH>4){ line(xH,B,xH,T,0.5); line(xH-tick,B,xH+tick,B,0.5); line(xH-tick,T,xH+tick,T,0.5);
+        var hTxt=mm(frH)+' mm', hw=font.widthOfTextAtSize(hTxt,fs);
+        page.drawRectangle({x:xH-fs/2-1,y:(B+T)/2-hw/2-2,width:fs+2,height:hw+4,color:P.rgb(1,1,1)});
+        page.drawText(hTxt,{x:xH-fs/2+1,y:(B+T)/2-hw/2,size:fs,font:font,color:col,rotate:P.degrees(90)}); } }
+    if(opts.caption){ var cs=Math.max(8,Math.min(12,marginPt*0.34));
+      var cap=mm(frW)+' x '+mm(frH)+' mm'+(idxs.length>1?('   (p'+(pi+1)+'/'+idxs.length+')'):'');
+      var cw=fontB.widthOfTextAtSize(cap,cs), cy=T+(marginPt-cs)/2+1;
+      if(cy+cs<pageH) page.drawText(cap,{x:pageW/2-cw/2,y:cy,size:cs,font:fontB,color:col}); }
+  }
+  return await out.save();
+}
+function schedule(){ if(!files.length) return; clearTimeout(_timer); _timer=setTimeout(function(){ genSize(false); },350); }
+var _lastBytes=null, _lastName='';
+async function genSize(doDownload){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0]; var opts=readOpts(); var st=document.getElementById('size-status'); st.textContent='⏳ 生成中…';
+  try{
+    var bytes=await buildProofPdf(f.buf, opts);
+    _lastBytes=bytes; _lastName=ctxBase(f.name.replace(/\.pdf$/i,''))+'_校正枠.pdf';
+    if(_curUrl) URL.revokeObjectURL(_curUrl);
+    var blob=new Blob([bytes],{type:'application/pdf'}); _curUrl=URL.createObjectURL(blob);
+    var pv=document.getElementById('preview'); pv.src=_curUrl; pv.style.display='block';
+    st.textContent='✅ '+esc(f.name)+'  '+(sizeLabel(f.m)||'')+' / '+kb(bytes.byteLength);
+    if(doDownload){ var a=document.createElement('a'); a.href=_curUrl; a.download=_lastName; a.click(); }
+  }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); }
+}
+
+window.__test={ measureFile:measureFile, sizeLabel:sizeLabel, buildProofPdf:buildProofPdf,
+  pushBuf:async function(name,buf){ var rec={name:name,buf:buf,pages:0,m:null}; try{var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true}); rec.pages=d.getPageCount();}catch(e){} rec.m=await measureFile(buf); files.push(rec); render(); return files.length-1; },
+  rec:function(i){return files[i];}, state:function(){return {count:files.length, lastName:_lastName};} };
+</script>
+</body>
+</html>
