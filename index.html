@@ -31745,7 +31745,10 @@ function confirmOrder(tabId){
   // 案件管理タブに切り替え
   const btn=document.querySelector('.tb-btn[onclick*="project"]');
   swPage('project',btn);
-  alert(`案件番号 ${proj.id} で登録しました\n💡 見積詳細は 案件管理 の 「📋 見積を見る」 で確認できます`);
+  if(typeof _toastMsg==='function') _toastMsg('✅ 案件 '+proj.id+' を登録しました');
+  // LEADTIME-1: 登録時に工程予定をざっくり自動作成（確認付き・閉じてもOK）
+  if(typeof showRoughScheduleModal==='function'){ setTimeout(function(){ showRoughScheduleModal(proj.id); }, 250); }
+  else alert('案件番号 '+proj.id+' で登録しました');
 }
 
 // ═══════════════════ 外注管理 ════════════════════
@@ -32710,6 +32713,8 @@ function executeOrderConfirm(tabId){
       }
     }, 300);
   }
+  // LEADTIME-1: 登録時に工程予定をざっくり自動作成（確認付き・閉じてもOK）
+  if(typeof showRoughScheduleModal==='function'){ setTimeout(function(){ showRoughScheduleModal(proj.id); }, hasData?700:250); }
 }
 
 // データ作成/修正費が見積に含まれているか判定
@@ -33103,6 +33108,35 @@ function _populateProjFilterOptions_(){
   }
 }
 
+// 案件の納期×標準リードタイム情報 (残日数・標準営業日・タイト/超過)
+function _projLeadInfo_(r){
+  if(!r || !r.dueDate) return null;
+  var done = (r.status==='完了'||r.status==='納品済'||r.status==='失注');
+  var today=new Date(); today.setHours(0,0,0,0);
+  var due=new Date(r.dueDate); if(isNaN(due)) return null; due.setHours(0,0,0,0);
+  var calDays=Math.round((due-today)/864e5);
+  var lt=(typeof _leadTimeFor_==='function')?_leadTimeFor_(r):{proofRounds:1,makeDays:3,proofCycle:3,category:'その他'};
+  var std=2 + (lt.proofRounds||1)*(lt.proofCycle||3) + (lt.makeDays||3);
+  var bizLeft=Math.floor(calDays*5/7);
+  var over=calDays<0;
+  var tight=!done && !over && bizLeft<std;
+  return { calDays:calDays, std:std, tight:tight, over:over, done:done, cat:lt.category };
+}
+function _projDueCellHtml_(r){
+  if(!r.dueDate) return '-';
+  var info=_projLeadInfo_(r);
+  var html='<div style="font-family:monospace">'+_escDiff(String(r.dueDate))+'</div>';
+  if(info && !info.done){
+    var d=info.calDays;
+    var rem = d<0 ? ('<span style="background:#dc2626;color:#fff;font-size:9.5px;padding:1px 6px;border-radius:8px;font-weight:700">'+(-d)+'日超過</span>')
+      : d===0 ? '<span style="background:#dc2626;color:#fff;font-size:9.5px;padding:1px 6px;border-radius:8px;font-weight:700">本日</span>'
+      : '<span style="font-size:9.5px;padding:1px 6px;border-radius:8px;font-weight:700;'+(d<=3?'background:#fef3c7;color:#92400e':'background:#ecfdf5;color:#166534')+'">あと'+d+'日</span>';
+    var stdb='<span style="font-size:9px;color:#94a3b8" title="品目「'+_escDiff(info.cat)+'」の標準リードタイム(営業日)">標準'+info.std+'日</span>';
+    var tightb=info.tight ? ' <span style="background:#fed7aa;color:#9a3412;font-size:9px;padding:1px 5px;border-radius:8px;font-weight:700" title="標準リードタイムに対し残り日数が不足気味です">タイト</span>' : '';
+    html+='<div style="margin-top:2px;display:flex;gap:3px;align-items:center;flex-wrap:wrap">'+rem+stdb+tightb+'</div>';
+  }
+  return html;
+}
 function renderProjects(){
   if(typeof _migrateProjStatuses_ === 'function') _migrateProjStatuses_();
   if(typeof _checkMasterPriceRises_ === 'function') _checkMasterPriceRises_();
@@ -33324,7 +33358,7 @@ function renderProjects(){
         ${r.master_no ? `<button class="use-btn" style="background:#1e40af;color:#fff;border-color:#1e40af;font-size:10px;padding:1px 6px;margin-left:4px;border-radius:4px;font-weight:700" onclick="event.stopPropagation();showRelatedDocsModal('${r.master_no}')" title="関連書類 (見積書/外注/仕入/請求書) を表示">P${r.master_no} 🔗</button>` : ''}
       </td>
       <td style="white-space:nowrap">${_quoteCell}</td>
-      <td style="font-size:11px;white-space:nowrap">${r.dueDate||'-'}</td>
+      <td style="font-size:11px;white-space:nowrap">${_projDueCellHtml_(r)}</td>
       <td style="font-size:11px;white-space:nowrap">${r.orderDate||'-'}</td>
       <td>
         ${groupTag}<span style="font-size:12px">${_escDiff(r.cust||'')}</span>
