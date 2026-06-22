@@ -4271,13 +4271,15 @@ async function loadFromCloud() {
     var _bmById = {}, _bmOrder = [];
     _localBm.forEach(function(b){ if(b && b.id){ if(!(b.id in _bmById)) _bmOrder.push(b.id); _bmById[b.id] = b; } });
     _cloudBm.forEach(function(b){ if(b && b.id){ if(!(b.id in _bmById)) _bmOrder.push(b.id); _bmById[b.id] = b; } });
-    DB.bookmarks = _bmOrder.map(function(id){ return _bmById[id]; });
+    var _tomb={}; (DB.bookmarksDeleted||[]).forEach(function(id){ _tomb[id]=1; });
+    DB.bookmarks = _bmOrder.filter(function(id){ return !_tomb[id]; }).map(function(id){ return _bmById[id]; });
   }
-  // 🔖 リンク集カテゴリ: 同様に和集合マージ (ローカル順を保持しクラウドの新規分を追加)
+  // 🔖 リンク集カテゴリ: 同様に和集合マージ (ローカル順を保持しクラウドの新規分を追加, 削除済は除外)
   if (Array.isArray(result.data.bookmarkCategories)) {
     var _lc = Array.isArray(DB.bookmarkCategories) ? DB.bookmarkCategories : [];
+    var _tombC={}; (DB.bookmarkCategoriesDeleted||[]).forEach(function(c){ _tombC[c]=1; });
     var _seenC = {}, _mergedC = [];
-    _lc.concat(result.data.bookmarkCategories).forEach(function(c){ if(c && !_seenC[c]){ _seenC[c]=1; _mergedC.push(c); } });
+    _lc.concat(result.data.bookmarkCategories).forEach(function(c){ if(c && !_seenC[c] && !_tombC[c]){ _seenC[c]=1; _mergedC.push(c); } });
     DB.bookmarkCategories = _mergedC;
   }
   if (result.data.leadTimeMaster) DB.leadTimeMaster = Object.assign({}, result.data.leadTimeMaster, DB.leadTimeMaster||{});
@@ -4722,7 +4724,9 @@ async function saveToCloud() {
     toolCompanyConfig: DB.toolCompanyConfig || {},
     bookmarks: DB.bookmarks || [],
     bookmarkCategories: DB.bookmarkCategories || [],
-    leadTimeMaster: DB.leadTimeMaster || {}
+    leadTimeMaster: DB.leadTimeMaster || {},
+    bookmarksDeleted: (DB.bookmarksDeleted || []).slice(-500),
+    bookmarkCategoriesDeleted: (DB.bookmarkCategoriesDeleted || []).slice(-200)
   };
   
   const result = await callCloudAPI('saveAll', {}, {
@@ -5865,6 +5869,13 @@ function _bmCats_(){
   return DB.bookmarkCategories;
 }
 function _bmPersist_(){ if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){} }
+// 削除マーカー(トムストーン): マージ保存でも「削除」が確実に効くように
+function _bmTomb_(key, vals){
+  if(!window.DB) window.DB={};
+  if(!Array.isArray(DB[key])) DB[key]=[];
+  (Array.isArray(vals)?vals:[vals]).forEach(function(v){ if(v!=null && DB[key].indexOf(v)<0) DB[key].push(v); });
+  if(DB[key].length>600) DB[key]=DB[key].slice(-600);
+}
 function _bmOpenForm_(id){
   // カテゴリ未登録なら先に登録を促す
   if(!_bmCats_().length){ alert('先に「⚙ カテゴリ管理」でカテゴリを登録してください'); _bmOpenCatManager_(); return; }
@@ -5947,7 +5958,7 @@ function _bmCatDelete_(i){
   var cats=_bmCats_(); var c=cats[i]; if(c==null) return;
   var used=_bmList_().filter(function(x){ return (x.category||'')===c; }).length;
   if(!confirm('カテゴリ「'+c+'」を削除しますか？'+(used?('\n※このカテゴリの'+used+'件のリンクは「未分類」になります。'):''))) return;
-  cats.splice(i,1);
+  cats.splice(i,1); _bmTomb_('bookmarkCategoriesDeleted', c);
   if(used){ _bmList_().forEach(function(x){ if((x.category||'')===c) x.category='未分類'; }); }
   _bmPersist_(); _bmRenderCatManager_(); renderBookmarksPage();
 }
@@ -5999,6 +6010,7 @@ function _bmCatBulkDelete_(){
   var affected=_bmList_().filter(function(x){ return del[x.category||'']; }).length;
   if(!confirm('選択した '+sel.length+' カテゴリを削除しますか？'+(affected?('\n※該当する'+affected+'件のリンクは「未分類」になります。'):''))) return;
   DB.bookmarkCategories=_bmCats_().filter(function(c){ return !del[c]; });
+  _bmTomb_('bookmarkCategoriesDeleted', sel);
   if(affected) _bmList_().forEach(function(x){ if(del[x.category||'']) x.category='未分類'; });
   window._bmCatSelSet_={};
   _bmPersist_(); _bmRenderCatManager_(); renderBookmarksPage();
@@ -6061,6 +6073,7 @@ function _bmDelete_(id){
   if(!b) return;
   if(!confirm('「'+(b.title||'')+'」を削除しますか？')) return;
   DB.bookmarks = _bmList_().filter(function(x){ return x.id!==id; });
+  _bmTomb_('bookmarksDeleted', id);
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
   renderBookmarksPage();
@@ -6107,6 +6120,7 @@ function _bmBulkDelete_(){
   if(!confirm('選択した '+ids.length+' 件のリンクを削除しますか？\nこの操作は元に戻せません。')) return;
   var del={}; ids.forEach(function(i){ del[i]=1; });
   DB.bookmarks=_bmList_().filter(function(x){ return !del[x.id]; });
+  _bmTomb_('bookmarksDeleted', ids);
   window._bmSel_={};
   _bmPersist_(); renderBookmarksPage();
   if(typeof _toastMsg==='function') _toastMsg('🗑 '+ids.length+'件を削除しました');
