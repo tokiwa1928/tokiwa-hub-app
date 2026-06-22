@@ -4275,6 +4275,8 @@ async function loadFromCloud() {
     if (typeof applyReleaseConfig === 'function') setTimeout(applyReleaseConfig, 100);
   }
   if (result.data.toolCompanyConfig) DB.toolCompanyConfig = result.data.toolCompanyConfig;
+  if (result.data.toolStatusOverride) DB.toolStatusOverride = result.data.toolStatusOverride;
+  if (result.data.toolDeleted) DB.toolDeleted = result.data.toolDeleted;
   // 🔖 リンク集: 単純上書きだと自動同期が「追加直後のローカル分」を空配列で消してしまうため
   // id単位でマージ (クラウド優先で編集反映, ローカルだけにある未同期分は保持)
   if (Array.isArray(result.data.bookmarks)) {
@@ -4734,6 +4736,8 @@ async function saveToCloud() {
     inquirySettings: DB.inquirySettings || {},
     releaseConfig: DB.releaseConfig || {},
     toolCompanyConfig: DB.toolCompanyConfig || {},
+    toolStatusOverride: DB.toolStatusOverride || {},
+    toolDeleted: DB.toolDeleted || {},
     bookmarks: DB.bookmarks || [],
     bookmarkCategories: DB.bookmarkCategories || [],
     leadTimeMaster: DB.leadTimeMaster || {},
@@ -19732,7 +19736,7 @@ function renderToolsPage(){
   // カテゴリ別グリッド・D&Dで並べ替え＆カテゴリ移動（端末に保存）
   var idxByKey = {}; TOOLS_REGISTRY.forEach(function(t,i){ idxByKey[t.href||('internal:'+t.internal)] = i; });
   var visKeys = {};
-  TOOLS_REGISTRY.forEach(function(t){ var key=t.href||('internal:'+t.internal); var comps=cfg[key]||t.companies||[]; if(_toolVisibleForCompany_(Object.assign({},t,{companies:comps}))) visKeys[key]=1; });
+  TOOLS_REGISTRY.forEach(function(t){ var key=t.href||('internal:'+t.internal); var comps=cfg[key]||t.companies||[]; if(_toolVisibleForCompany_(Object.assign({},t,{companies:comps})) && !_toolIsDeleted_(key)) visKeys[key]=1; });
   var ordered = _toolCurrentOrder_().filter(function(k){ return visKeys[k]; });
   var allCats = _toolCats_();
   function buildCard(key){
@@ -19753,8 +19757,9 @@ function renderToolsPage(){
     return '<div class="tool-card" draggable="true" data-key="'+key+'"'
       + ' ondragstart="_toolDragStart_(event,\''+jsKey+'\')" ondragover="_toolDragOver_(event)" ondrop="_toolDrop_(event,\''+jsKey+'\')" ondragend="_toolDragEnd_(event)"'
       + ' onclick="'+open+'" onmouseover="this.style.borderColor=\'#0891b2\'" onmouseout="this.style.borderColor=\'#e0ddd6\'"'
-      + ' style="background:#fff;border:1px solid #e0ddd6;border-radius:9px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px">'
+      + ' style="background:'+(_toolSel_()[key]?'#eff6ff':'#fff')+';border:1px solid '+(_toolSel_()[key]?'#0891b2':'#e0ddd6')+';border-radius:9px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px">'
       + '<div style="display:flex;align-items:center;gap:6px">'
+      +   (isAdminCompany?('<input type="checkbox" class="tool-cb" data-key="'+key+'" onclick="event.stopPropagation();_toolSelToggle_(\''+jsKey+'\',this.checked)"'+(_toolSel_()[key]?' checked':'')+' style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">'):'')
       +   '<span style="color:#bbb;font-size:14px;cursor:grab;flex:0 0 auto" title="ドラッグで並べ替え/カテゴリ移動">⠿</span>'
       +   '<span style="font-size:19px;flex:0 0 auto">'+t.icon+'</span>'
       +   '<strong style="font-size:12.5px;flex:1;min-width:0;line-height:1.25;word-break:break-word">'+t.name+'</strong>'
@@ -19778,8 +19783,29 @@ function renderToolsPage(){
     return '<div class="tool-sec" ondragover="_toolDragOver_(event);this.style.background=\'#ecfeff\'" ondragleave="this.style.background=\'\'" ondrop="this.style.background=\'\';_toolDropCat_(event,\''+cJs+'\')" title="ここにカードを落とすと「'+_escDiff(cat)+'」へ移動" style="border:1px dashed #e2e8f0;border-radius:10px;padding:8px;margin-bottom:8px;transition:background .1s">'
       + head + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:8px;align-items:start;min-height:40px">'+cardsIn.join('')+'</div></div>';
   }).filter(Boolean);
-  el.innerHTML = '<div style="font-size:11px;color:#0e7490;background:#ecfeff;border:1px solid #a5f3fc;border-radius:7px;padding:5px 10px;margin-bottom:8px">💡 カードを ⠿ でドラッグ→別カテゴリの見出しやカードに落とすと移動。📁でも変更。順番・分類は自動保存。</div>'
-    + (sections.length ? sections.join('') : '<div style="color:#999;padding:20px">該当ツールがありません</div>');
+  // 一括操作バー（管理会社のみ）
+  var toolbar = isAdminCompany ? ('<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px">'
+    + '<span id="tool-sel-count" style="font-size:12px;font-weight:700;color:#334155">選択 '+_toolSelCount_()+'件</span>'
+    + '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_toolSelAll_()">全選択</button>'
+    + '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_toolSelClear_()">全解除</button>'
+    + '<span style="width:1px;height:18px;background:#cbd5e1"></span>'
+    + '<select id="tool-bulk-status" style="font-size:11.5px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:6px"><option value="運用中">運用中</option><option value="試作">試作</option><option value="開発中">開発中</option><option value="停止中">停止中</option></select>'
+    + '<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_toolBulkStatus_()">状態を一括変更</button>'
+    + '<button class="btn" style="font-size:11px;padding:3px 10px;color:#b91c1c;border-color:#fca5a5" onclick="_toolBulkDelete_()">🗑 選択を削除</button>'
+    + '<button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto;'+(window._toolShowTrash_?'background:#fed7aa;border-color:#fdba74;color:#9a3412':'')+'" onclick="_toolToggleTrash_()">🗑 削除済み ('+_toolDeletedCount_()+')</button>'
+    + '</div>') : '';
+  // 削除済み（ゴミ箱）セクション
+  var trashHtml='';
+  if(window._toolShowTrash_ && isAdminCompany){
+    var del=_toolDeleted_(); var delKeys=Object.keys(del).filter(function(k){ return del[k] && _toolKeyIdx_(k)>=0; });
+    var rows=delKeys.map(function(k){ var t=TOOLS_REGISTRY[_toolKeyIdx_(k)]; var kJs=k.replace(/'/g,"\\'");
+      return '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid #e5e2dc;border-radius:7px;margin-bottom:5px;background:#fff"><span style="font-size:18px">'+t.icon+'</span><span style="flex:1;font-size:12.5px">'+_escDiff(t.name)+'</span><button class="btn" style="font-size:11px;padding:3px 10px" onclick="_toolRestore_(\''+kJs+'\')">↩ 復活</button></div>'; }).join('');
+    trashHtml='<div style="margin-top:14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b style="font-size:13px;color:#9a3412">🗑 削除済みツール（完全削除ではありません）</b>'+(delKeys.length?'<button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="_toolRestoreAll_()">すべて復活</button>':'')+'</div>'+(rows||'<div style="color:#999;font-size:12px">削除済みはありません</div>')+'</div>';
+  }
+  el.innerHTML = toolbar
+    + '<div style="font-size:11px;color:#0e7490;background:#ecfeff;border:1px solid #a5f3fc;border-radius:7px;padding:5px 10px;margin-bottom:8px">💡 カードを ⠿ でドラッグ→別カテゴリの枠に落とすと移動。📁でも変更。チェックで複数選択し状態の一括変更/削除（削除は復活可）。順番・分類は自動保存。</div>'
+    + (sections.length ? sections.join('') : '<div style="color:#999;padding:20px">該当ツールがありません</div>')
+    + trashHtml;
 }
 // ツール並び順 (端末保存) ＆ ドラッグ&ドロップ
 function _toolOrder_(){ try{ return JSON.parse(localStorage.getItem('tokiwa_tool_order')||'[]'); }catch(e){ return []; } }
@@ -19800,6 +19826,20 @@ function _toolCatOf_(key){ var m=_toolCatMap_(); if(m[key]) return m[key]; var i
 function _toolCats_(){ var set={},out=[]; ['受注・案件管理','業務効率化ツール'].forEach(function(c){ set[c]=1; out.push(c); }); var m=_toolCatMap_(); TOOLS_REGISTRY.forEach(function(t){ var k=t.href||('internal:'+t.internal); var c=_toolCatOf_(k); if(c&&!set[c]){ set[c]=1; out.push(c); } }); Object.keys(m).forEach(function(k){ var c=m[k]; if(c&&!set[c]){ set[c]=1; out.push(c); } }); return out; }
 function _toolSetCat_(key,cat){ var m=_toolCatMap_(); m[key]=cat||'業務効率化ツール'; _toolCatSave_(m); renderToolsPage(); }
 function _toolAddCatTo_(key){ var c=prompt('新しいカテゴリ名を入力'); if(c&&c.trim()){ _toolSetCat_(key, c.trim()); } else { renderToolsPage(); } }
+// ツールの選択／一括ステータス変更／ソフト削除（復活可）
+function _toolSel_(){ if(!window.__toolSelSet) window.__toolSelSet={}; return window.__toolSelSet; }
+function _toolSelCount_(){ var s=_toolSel_(); return Object.keys(s).filter(function(k){return s[k];}).length; }
+function _toolSelToggle_(k,on){ var s=_toolSel_(); if(on) s[k]=1; else delete s[k]; var el=document.getElementById('tool-sel-count'); if(el) el.textContent='選択 '+_toolSelCount_()+'件'; }
+function _toolSelAll_(){ var s=_toolSel_(); document.querySelectorAll('#tools-list .tool-cb').forEach(function(cb){ cb.checked=true; s[cb.getAttribute('data-key')]=1; }); renderToolsPage(); }
+function _toolSelClear_(){ window.__toolSelSet={}; renderToolsPage(); }
+function _toolDeleted_(){ return (typeof DB!=='undefined' && DB.toolDeleted) ? DB.toolDeleted : {}; }
+function _toolIsDeleted_(key){ return !!_toolDeleted_()[key]; }
+function _toolDeletedCount_(){ var d=_toolDeleted_(); return Object.keys(d).filter(function(k){ return d[k] && _toolKeyIdx_(k)>=0; }).length; }
+function _toolBulkStatus_(){ var s=document.getElementById('tool-bulk-status').value; var sel=_toolSel_(); var keys=Object.keys(sel).filter(function(k){return sel[k];}); if(!keys.length){ if(typeof _toastMsg==='function')_toastMsg('ツールを選択してください'); return; } if(!DB.toolStatusOverride) DB.toolStatusOverride={}; keys.forEach(function(k){ DB.toolStatusOverride[k]=s; }); if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){} if(typeof _toastMsg==='function')_toastMsg('✅ '+keys.length+'件を「'+s+'」に変更'); renderToolsPage(); }
+function _toolBulkDelete_(){ var sel=_toolSel_(); var keys=Object.keys(sel).filter(function(k){return sel[k];}); if(!keys.length){ if(typeof _toastMsg==='function')_toastMsg('ツールを選択してください'); return; } if(!confirm(keys.length+'件をツール一覧から削除します。\n※完全削除ではありません。「🗑 削除済み」からいつでも復活できます。')) return; if(!DB.toolDeleted) DB.toolDeleted={}; keys.forEach(function(k){ DB.toolDeleted[k]=true; }); window.__toolSelSet={}; if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){} if(typeof _toastMsg==='function')_toastMsg('🗑 '+keys.length+'件を削除（復活可）'); renderToolsPage(); }
+function _toolRestore_(key){ if(DB.toolDeleted){ delete DB.toolDeleted[key]; } if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){} if(typeof _toastMsg==='function')_toastMsg('↩ 復活しました'); renderToolsPage(); }
+function _toolRestoreAll_(){ DB.toolDeleted={}; if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){} if(typeof _toastMsg==='function')_toastMsg('↩ すべて復活しました'); renderToolsPage(); }
+function _toolToggleTrash_(){ window._toolShowTrash_=!window._toolShowTrash_; renderToolsPage(); }
 // ツールを状態で絞り込み (すべて/運用中/試作/開発中/停止中)
 function _toolSetStatusFilter_(s){ window._toolStatusFilter_ = s; renderToolsPage(); }
 // TLCOMP-1: 管理会社がツールの公開会社を設定
