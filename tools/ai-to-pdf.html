@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>🅰 AI→PDF プレビュー・印刷 | Tokiwa Hub Tools</title>
+<!--
+  Illustrator(.ai) を PDF として プレビュー / PDF保存 / 印刷 するツール。
+  - 最近の .ai は「PDF互換ファイルを作成」で保存されていれば中身が PDF。
+    その PDF 部分をそのまま使う(最も忠実)。任意で pdf-lib 再保存による軽量化も可。
+  - PC内処理(どこにも送信しない)。
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:920px; margin:14px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .btn{ padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .btn-c{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  #drop{ border:2.5px dashed #94a3b8; border-radius:10px; padding:26px 16px; text-align:center; color:#64748b; font-size:14px; cursor:pointer; background:#fff; }
+  #drop.over{ border-color:var(--cyan); background:#ecfeff; }
+  .frow{ display:flex; gap:8px; align-items:center; padding:6px 9px; border:1px solid var(--line); border-radius:7px; margin-top:5px; background:#fff; font-size:13px; cursor:pointer; }
+  .frow.cur{ border-color:var(--cyan); background:#ecfeff; }
+  .frow .nm{ flex:1; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chk{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:#374151; cursor:pointer; }
+  .chk input{ width:16px; height:16px; }
+  #preview{ width:100%; height:560px; border:1px solid var(--line); border-radius:8px; background:#fff; display:none; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🅰</span>
+  <span class="tname">AI→PDF プレビュー・印刷</span>
+  <span class="user">🔒 PC内処理・送信なし</span>
+</header>
+<main>
+  <div class="sec">
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 .ai（または .pdf）をドラッグ&ドロップ（複数OK）<div class="muted" style="margin-top:6px">※ Illustratorで「PDF互換ファイルを作成」にチェックして保存した .ai が対象です</div></div>
+    <input type="file" id="fi" accept=".ai,.pdf,application/pdf,application/postscript,application/illustrator" multiple style="display:none" onchange="addFiles(this.files)">
+    <div id="flist"></div>
+  </div>
+
+  <div class="sec">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-c" id="btn-print" onclick="printCurrent()" disabled>🖨 印刷</button>
+      <button class="btn btn-g" id="btn-dl" onclick="downloadCurrent()" disabled>⬇ PDFで保存</button>
+      <button class="btn" id="btn-zip" onclick="downloadAllZip()" disabled>⬇ 全部まとめてZIP</button>
+      <label class="chk" style="margin-left:auto"><input type="checkbox" id="o-slim" onchange="refreshPreview()"> 軽量化（PDFのみ再保存）</label>
+    </div>
+    <div class="muted" id="status" style="margin-top:6px"></div>
+    <iframe id="preview" title="プレビュー"></iframe>
+  </div>
+  <p class="muted">🔒 すべてPC内で処理（どこにも送信されません）。「PDF互換」なしで保存された .ai は変換できません→ Illustratorで保存し直してください。EPSはデスクトップの変換batでPDF化を。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},2800); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function kb(n){ return n>1048576 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB'; }
+
+var files=[];   // {name, buf, ok}
+var cur=-1;     // 現在プレビュー中のindex
+var _curUrl=null;
+
+// %PDF ヘッダを先頭付近から探す (PDF互換 .ai は %PDF- で始まる/含む)
+function isPdfCompatible(buf){
+  try{
+    var head=new TextDecoder('latin1').decode(new Uint8Array(buf.slice(0, 2048)));
+    return head.indexOf('%PDF-')>=0;
+  }catch(e){ return false; }
+}
+
+var drop=document.getElementById('drop');
+['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('over');}); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('over');}); });
+drop.addEventListener('drop',function(e){ addFiles(e.dataTransfer.files); });
+
+function addFiles(fl){
+  var arr=[].slice.call(fl).filter(function(f){ return /\.(ai|pdf)$/i.test(f.name); });
+  if(!arr.length){ toast('.ai または .pdf を入れてください'); return; }
+  var pending=arr.length;
+  arr.forEach(function(f){
+    f.arrayBuffer().then(function(buf){
+      files.push({ name:f.name, buf:buf, ok:isPdfCompatible(buf) });
+      if(--pending===0){ render(); if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); } }
+    }).catch(function(e){ pending--; toast('❌ '+f.name+': '+(e.message||e)); });
+  });
+}
+function render(){
+  document.getElementById('flist').innerHTML=files.map(function(f,i){
+    return '<div class="frow'+(i===cur?' cur':'')+'" onclick="select('+i+')">'
+      + '<span>'+(f.ok?'🅰':'⚠')+'</span><span class="nm">'+(i+1)+'. '+esc(f.name)+'</span>'
+      + '<span class="muted">'+(f.ok?kb(f.buf.byteLength):'PDF互換なし')+'</span>'
+      + '<span class="frow-x" style="color:#b91c1c;padding:2px 8px;border:1px solid #d0cec8;border-radius:5px" onclick="event.stopPropagation();removeAt('+i+')">✕</span></div>';
+  }).join('');
+  var anyOk=files.some(function(f){return f.ok;});
+  document.getElementById('btn-zip').disabled=!(files.filter(function(f){return f.ok;}).length>1);
+  if(!anyOk){ document.getElementById('btn-print').disabled=true; document.getElementById('btn-dl').disabled=true; }
+}
+function removeAt(i){
+  files.splice(i,1);
+  if(cur===i){ cur=-1; var pv=document.getElementById('preview'); pv.style.display='none'; document.getElementById('btn-print').disabled=true; document.getElementById('btn-dl').disabled=true; document.getElementById('status').textContent=''; }
+  else if(cur>i){ cur--; }
+  render();
+  if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); }
+}
+
+// PDFバイト取得 (軽量化ONなら pdf-lib 再保存、OFFなら .ai 内のPDFをそのまま)
+async function toPdfBytes(f){
+  if(document.getElementById('o-slim').checked){
+    try{
+      var d=await PDFLib.PDFDocument.load(f.buf,{ ignoreEncryption:true, updateMetadata:false });
+      return await d.save({ useObjectStreams:true });
+    }catch(e){ /* 失敗時は素のまま */ }
+  }
+  return new Uint8Array(f.buf);
+}
+
+async function select(i){
+  var f=files[i]; if(!f) return;
+  if(!f.ok){ toast('この .ai はPDF互換で保存されていません'); return; }
+  cur=i; render();
+  await refreshPreview();
+}
+async function refreshPreview(){
+  if(cur<0 || !files[cur] || !files[cur].ok) return;
+  var f=files[cur];
+  var st=document.getElementById('status'); st.textContent='⏳ 変換中…';
+  try{
+    var bytes=await toPdfBytes(f);
+    if(_curUrl){ URL.revokeObjectURL(_curUrl); }
+    var blob=new Blob([bytes],{type:'application/pdf'});
+    _curUrl=URL.createObjectURL(blob);
+    window._curBytes=bytes;
+    var pv=document.getElementById('preview'); pv.src=_curUrl; pv.style.display='block';
+    document.getElementById('btn-print').disabled=false;
+    document.getElementById('btn-dl').disabled=false;
+    st.textContent='✅ '+esc(f.name)+' → PDF ('+kb(bytes.byteLength)+')'+(document.getElementById('o-slim').checked?' / 軽量化':' / 忠実');
+  }catch(e){ st.textContent=''; toast('❌ 変換失敗: '+(e.message||e)); }
+}
+function pdfName(f){ return f.name.replace(/\.(ai|pdf)$/i,'')+'.pdf'; }
+
+function downloadCurrent(){
+  if(cur<0 || !window._curBytes){ toast('プレビューがありません'); return; }
+  var blob=new Blob([window._curBytes],{type:'application/pdf'});
+  var url=URL.createObjectURL(blob); var a=document.createElement('a');
+  a.href=url; a.download=pdfName(files[cur]); a.click();
+  setTimeout(function(){URL.revokeObjectURL(url);},4000);
+  toast('✅ PDFを保存しました');
+}
+function printCurrent(){
+  if(cur<0){ toast('プレビューがありません'); return; }
+  var pv=document.getElementById('preview');
+  try{ pv.contentWindow.focus(); pv.contentWindow.print(); }
+  catch(e){
+    // フォールバック: 別タブで開いて印刷
+    var w=window.open(_curUrl,'_blank');
+    if(w){ try{ w.onload=function(){ w.focus(); w.print(); }; }catch(e2){} }
+    else toast('ポップアップを許可してください');
+  }
+}
+async function downloadAllZip(){
+  var oks=files.filter(function(f){return f.ok;});
+  if(oks.length<2){ toast('PDF互換の .ai が2件以上必要です'); return; }
+  var st=document.getElementById('status'); st.textContent='⏳ まとめて変換中…';
+  try{
+    var zip=new JSZip();
+    for(var i=0;i<oks.length;i++){ var b=await toPdfBytes(oks[i]); zip.file(pdfName(oks[i]), b); }
+    var zb=await zip.generateAsync({type:'blob'});
+    var url=URL.createObjectURL(zb); var a=document.createElement('a');
+    a.href=url; a.download='AI_PDF変換_'+oks.length+'件.zip'; a.click();
+    setTimeout(function(){URL.revokeObjectURL(url);},5000);
+    st.textContent='✅ '+oks.length+'件をZIPで保存';
+  }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); }
+}
+
+// 検証用フック
+window.__test = {
+  isPdf: isPdfCompatible,
+  pushBuf:function(name,buf){ files.push({name:name,buf:buf,ok:isPdfCompatible(buf)}); render(); return files.length-1; },
+  toPdfBytes: toPdfBytes,
+  state:function(){ return { count:files.length, cur:cur, oks:files.filter(function(f){return f.ok;}).length }; }
+};
+</script>
+</body>
+</html>
