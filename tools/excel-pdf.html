@@ -232,7 +232,8 @@ function applyLum(hex, node){
   if(shade){ var sv=+shade.getAttribute('val')/100000; hsl[2]=hsl[2]*sv; }
   var rgb=hsl2rgb(hsl[0],hsl[1],hsl[2]); return 'rgb('+rgb[0]+','+rgb[1]+','+rgb[2]+')';
 }
-function hex2rgb(h){ h=h.replace('#',''); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)]; }
+function _okColor(c){ return typeof c==='string' && c.indexOf('NaN')<0 && c.indexOf('undefined')<0; }
+function hex2rgb(h){ h=String(h||'').replace('#',''); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)]; }
 function rgb2hsl(r,g,b){ r/=255;g/=255;b/=255; var mx=Math.max(r,g,b),mn=Math.min(r,g,b),h,s,l=(mx+mn)/2; if(mx===mn){h=s=0;}else{var dd=mx-mn;s=l>0.5?dd/(2-mx-mn):dd/(mx+mn);switch(mx){case r:h=(g-b)/dd+(g<b?6:0);break;case g:h=(b-r)/dd+2;break;default:h=(r-g)/dd+4;}h/=6;} return [h,s,l]; }
 function hsl2rgb(h,s,l){ var r,g,b; if(s===0){r=g=b=l;}else{function hue(p,q,t){if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p;}var q=l<0.5?l*(1+s):l+s-l*s,p=2*l-q;r=hue(p,q,h+1/3);g=hue(p,q,h);b=hue(p,q,h-1/3);} return [Math.round(r*255),Math.round(g*255),Math.round(b*255)]; }
 
@@ -257,15 +258,20 @@ function renderNow(){
     var ctx=cv.getContext('2d'); ctx.setTransform(scale,0,0,scale,0,0); ctx.fillStyle='#fff'; ctx.fillRect(0,0,maxX,maxY);
     // cells
     if(withCells){ ctx.textBaseline='top'; layout.cells.forEach(function(c){ ctx.fillStyle='#000'; ctx.font='12px "Yu Gothic","Meiryo",sans-serif'; drawWrapped(ctx, c.text, c.x+2, c.y+2, c.w-3, 12, 'l', false); }); }
-    // shapes
+    // ① 塗り・枠を先に全部描く（後から文字を上に重ねるので、塗りが文字を隠さない）
+    if(withFill){
+      shapes.forEach(function(s){
+        if(s.fill && _okColor(s.fill)){ ctx.fillStyle=s.fill; roundRect(ctx,s.x,s.y,s.w,s.h,4); ctx.fill(); }
+        if(s.line && _okColor(s.line)){ ctx.strokeStyle=s.line; ctx.lineWidth=0.8; roundRect(ctx,s.x,s.y,s.w,s.h,4); ctx.stroke(); }
+      });
+    }
+    // ② 文字を全図形ぶん最後に描く（必ず最前面＝テキストボックスが隠れない）
+    ctx.textBaseline='top';
     shapes.forEach(function(s){
-      if(withFill){ if(s.fill){ ctx.fillStyle=s.fill; roundRect(ctx,s.x,s.y,s.w,s.h,4); ctx.fill(); } if(s.line){ ctx.strokeStyle=s.line; ctx.lineWidth=0.8; roundRect(ctx,s.x,s.y,s.w,s.h,4); ctx.stroke(); } }
-      // text
+      if(!s.paras||!s.paras.length) return;
       var pad=3; var lines=[];
-      s.paras.forEach(function(p){ var size=p.runs[0]?p.runs[0].sz:11; var text=p.runs.map(function(r){return r.t;}).join(''); var col=p.runs[0]?p.runs[0].col:'#000'; var b=p.runs[0]?p.runs[0].b:false; lines.push({text:text,size:size,col:col,b:b,algn:p.algn}); });
-      // measure total height
-      ctx.textBaseline='top';
-      var totalH=0; lines.forEach(function(L){ var lh=L.size*1.45*1.0; var n=wrapCount(ctx,L,s.w-pad*2); totalH+=lh*n; });
+      s.paras.forEach(function(p){ var size=p.runs[0]?p.runs[0].sz:11; var text=p.runs.map(function(r){return r.t;}).join(''); var col=(p.runs[0]&&_okColor(p.runs[0].col))?p.runs[0].col:'#000'; var b=p.runs[0]?p.runs[0].b:false; lines.push({text:text,size:size,col:col,b:b,algn:p.algn}); });
+      var totalH=0; lines.forEach(function(L){ var lh=L.size*1.45; var n=wrapCount(ctx,L,s.w-pad*2); totalH+=lh*n; });
       var startY=s.y+pad; if(s.anchorV==='ctr') startY=s.y+Math.max(pad,(s.h-totalH)/2); else if(s.anchorV==='b') startY=s.y+Math.max(pad,s.h-totalH-pad);
       var yy=startY;
       lines.forEach(function(L){ ctx.fillStyle=L.col||'#000'; ctx.font=(L.b?'bold ':'')+(L.size)+'px "UD デジタル教科書体 NK-R","Yu Gothic","Meiryo",sans-serif'; var lh=L.size*1.45; yy=drawWrapped(ctx, L.text, s.x+pad, yy, s.w-pad*2, lh, L.algn, true); });
