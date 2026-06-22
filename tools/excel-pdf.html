@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📊 Excel→PDF（テキストボックス対応） | Tokiwa Hub Tools</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2365a30d'/><circle cx='50' cy='50' r='30' fill='none' stroke='%23ffffff' stroke-width='6'/><circle cx='50' cy='20' r='9.5' fill='%23ffffff'/><circle cx='50' cy='50' r='8' fill='%23ffffff'/></svg>">
+<!--
+  Excel(.xlsx) を PDF 化。テキストボックス(図形)内の文字も拾って描画する。
+  - .xlsx は ZIP。xl/drawings/drawingN.xml の図形(座標EMU+テキスト)と、セル値を読む。
+  - ブラウザのCanvasに描画(システム日本語フォント使用)→画像としてPDF化(pdf-lib)。
+  - 「テキストボックスが印刷で消える」xlsxの救済用。PC内処理・送信なし。
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --grn:#16a34a; --cyan:#0891b2; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:1000px; margin:14px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .btn{ padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; }
+  .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
+  .muted{ font-size:11px; color:#94a3b8; }
+  #drop{ border:2.5px dashed #94a3b8; border-radius:10px; padding:24px 16px; text-align:center; color:#64748b; font-size:14px; cursor:pointer; background:#fff; }
+  #drop.over{ border-color:var(--cyan); background:#ecfeff; }
+  label{ font-size:11px; color:#888; font-weight:600; }
+  input[type=number],select{ padding:6px 8px; border:1px solid #d0cec8; border-radius:6px; font-size:13.5px; }
+  #cv-wrap{ overflow:auto; max-height:560px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-top:8px; display:none; }
+  canvas{ display:block; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 📊</span>
+  <span class="tname">Excel→PDF（テキストボックス対応）</span>
+  <span class="user">🔒 PC内処理・送信なし</span>
+</header>
+<main>
+  <div class="sec">
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 .xlsx をドラッグ&ドロップ<div class="muted" style="margin-top:5px">テキストボックス内の文字も拾ってPDFにします（印刷で図形の文字が消える時の救済）</div></div>
+    <input type="file" id="fi" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" onchange="loadFile(this.files[0])">
+    <div id="finfo" class="muted" style="margin-top:8px"></div>
+  </div>
+  <div class="sec">
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+      <span><label>シート</label> <select id="sheetSel" onchange="renderNow()"></select></span>
+      <span><label>解像度</label> <select id="dpiSel" onchange="renderNow()"><option value="2">標準</option><option value="3">高精細</option></select></span>
+      <label style="display:inline-flex;align-items:center;gap:5px;font-weight:600"><input type="checkbox" id="optCells" checked onchange="renderNow()"> セルの文字も入れる</label>
+      <label style="display:inline-flex;align-items:center;gap:5px;font-weight:600"><input type="checkbox" id="optFill" checked onchange="renderNow()"> 図形の色/枠</label>
+      <button class="btn btn-g" id="btnPdf" onclick="downloadPdf()" disabled style="margin-left:auto">⬇ PDFで保存</button>
+    </div>
+    <div id="status" class="muted" style="margin-top:6px"></div>
+    <div id="cv-wrap"><canvas id="cv"></canvas></div>
+  </div>
+  <p class="muted">🔒 すべてPC内で処理（どこにも送信されません）。図形の文字・位置・色を読み取り、ブラウザのフォントで描いてPDF化します。フォントや細かな枠線は元と多少異なる場合があります。</p>
+</main>
+<div id="toast"></div>
+
+<script>
+var EMU=9525; // 1px(96dpi)
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},3000); }
+function esc(s){ return String(s==null?'':s); }
+function emu(v){ return (parseFloat(v)||0)/EMU; }
+var DOC=null; // {sheets:[{name, drawing, xml, rels}], shared, theme}
+
+function loadFile(f){
+  if(!f){ return; }
+  if(!/\.xlsx$/i.test(f.name)){ toast('.xlsx を入れてください'); return; }
+  document.getElementById('status').textContent='⏳ 読み込み中…';
+  f.arrayBuffer().then(function(buf){ return JSZip.loadAsync(buf); }).then(async function(zip){
+    DOC=await parseWorkbook(zip);
+    document.getElementById('finfo').textContent='📄 '+f.name+' / シート'+DOC.sheets.length+'件';
+    var ss=document.getElementById('sheetSel'); ss.innerHTML=DOC.sheets.map(function(s,i){ return '<option value="'+i+'">'+esc(s.name)+'</option>'; }).join('');
+    renderNow();
+  }).catch(function(e){ document.getElementById('status').textContent=''; toast('❌ 読込失敗: '+(e.message||e)); console.error(e); });
+}
+var drop=document.getElementById('drop');
+['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('over');}); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('over');}); });
+drop.addEventListener('drop',function(e){ if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+
+function px(node,sel){ var n=node.getElementsByTagName(sel); return n.length?n[0]:null; }
+async function parseWorkbook(zip){
+  var P=new DOMParser();
+  async function txt(path){ var f=zip.file(path); return f? await f.async('string') : null; }
+  // shared strings
+  var shared=[]; var ssx=await txt('xl/sharedStrings.xml');
+  if(ssx){ var sd=P.parseFromString(ssx,'application/xml'); var sis=sd.getElementsByTagName('si'); for(var i=0;i<sis.length;i++){ var ts=sis[i].getElementsByTagName('t'); var s=''; for(var j=0;j<ts.length;j++) s+=ts[j].textContent; shared.push(s); } }
+  // theme colors
+  var theme={}; var thx=await txt('xl/theme/theme1.xml');
+  if(thx){ var td=P.parseFromString(thx,'application/xml'); var cs=td.getElementsByTagName('a:clrScheme'); if(cs.length){ var kids=cs[0].children; var names=['dk1','lt1','dk2','lt2','accent1','accent2','accent3','accent4','accent5','accent6','hlink','folHlink']; var idx=0; for(var k=0;k<kids.length;k++){ var el=kids[k]; var c=el.getElementsByTagName('a:srgbClr')[0]||el.getElementsByTagName('a:sysClr')[0]; if(c){ var hex=c.getAttribute('val')||c.getAttribute('lastClr'); theme[names[idx]]= hex?('#'+hex):'#000000'; } idx++; } } }
+  // workbook sheets
+  var wbx=await txt('xl/workbook.xml'); var wbrelsx=await txt('xl/_rels/workbook.xml.rels');
+  var wd=P.parseFromString(wbx,'application/xml'); var rd=P.parseFromString(wbrelsx,'application/xml');
+  var relMap={}; var rels=rd.getElementsByTagName('Relationship'); for(var i=0;i<rels.length;i++){ relMap[rels[i].getAttribute('Id')]=rels[i].getAttribute('Target'); }
+  var sheetEls=wd.getElementsByTagName('sheet'); var sheets=[];
+  for(var i=0;i<sheetEls.length;i++){
+    var nm=sheetEls[i].getAttribute('name'); var rid=sheetEls[i].getAttribute('r:id')||sheetEls[i].getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id');
+    var target=relMap[rid]; if(!target) continue; if(target.charAt(0)!=='/'&&target.indexOf('xl/')!==0) target='xl/'+target.replace(/^\//,'');
+    var sxml=await txt(target); if(!sxml) continue;
+    // drawing rel
+    var sheetDir=target.replace(/[^/]+$/,''); var srelsPath=sheetDir+'_rels/'+target.split('/').pop()+'.rels';
+    var srels=await txt(srelsPath); var drawingXml=null;
+    if(srels){ var srd=P.parseFromString(srels,'application/xml'); var sr=srd.getElementsByTagName('Relationship'); var sm={}; for(var k=0;k<sr.length;k++) sm[sr[k].getAttribute('Id')]=sr[k].getAttribute('Target');
+      var sdoc=P.parseFromString(sxml,'application/xml'); var drEl=sdoc.getElementsByTagName('drawing')[0];
+      if(drEl){ var drid=drEl.getAttribute('r:id')||drEl.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id'); var dt=sm[drid]; if(dt){ dt=dt.replace(/^\.\.\//,'xl/').replace(/^\//,''); if(dt.indexOf('xl/')!==0) dt='xl/'+dt; drawingXml=await txt(dt); } } }
+    sheets.push({ name:nm, xml:sxml, drawingXml:drawingXml });
+  }
+  return { sheets:sheets, shared:shared, theme:theme };
+}
+
+// ── セル/列幅/行高 ──
+function parseSheet(sheet, shared){
+  var P=new DOMParser(); var d=P.parseFromString(sheet.xml,'application/xml');
+  var fmt=d.getElementsByTagName('sheetFormatPr')[0];
+  var defW=fmt?parseFloat(fmt.getAttribute('defaultColWidth')||fmt.getAttribute('baseColWidth')||'8.43'):8.43;
+  var defH=fmt?parseFloat(fmt.getAttribute('defaultRowHeight')||'15'):15;
+  // col widths (1-based ranges)
+  var colW={}; var cols=d.getElementsByTagName('col');
+  for(var i=0;i<cols.length;i++){ var mn=+cols[i].getAttribute('min'), mx=+cols[i].getAttribute('max'), w=parseFloat(cols[i].getAttribute('width')||defW); for(var c=mn;c<=mx;c++) colW[c-1]=w; }
+  function cwPx(c){ var w=(c in colW)?colW[c]:defW; return Math.round(w*7)+5; }
+  function rhPx(h){ return Math.round((h||defH)*4/3); }
+  // dimension
+  var dim=d.getElementsByTagName('dimension')[0]; var maxC=60, maxR=60;
+  if(dim){ var ref=dim.getAttribute('ref'); var m=ref.split(':'); var p=m[m.length-1].match(/([A-Z]+)(\d+)/); if(p){ maxC=colToNum(p[1]); maxR=+p[2]; } }
+  // colX / rowY cumulative
+  var colX=[0]; for(var c=0;c<maxC+2;c++) colX[c+1]=colX[c]+cwPx(c);
+  var rowEl=d.getElementsByTagName('row'); var rowH={}; for(var i=0;i<rowEl.length;i++){ var r=+rowEl[i].getAttribute('r'); rowH[r]= rowEl[i].getAttribute('ht')?parseFloat(rowEl[i].getAttribute('ht')):defH; }
+  var rowY=[0]; for(var r=0;r<maxR+2;r++) rowY[r+1]=rowY[r]+rhPx(rowH[r+1]||defH);
+  // cells
+  var cells=[]; var cEls=d.getElementsByTagName('c');
+  for(var i=0;i<cEls.length;i++){ var ce=cEls[i]; var ref=ce.getAttribute('r'); if(!ref) continue; var pm=ref.match(/([A-Z]+)(\d+)/); if(!pm) continue; var cc=colToNum(pm[1])-1, rr=(+pm[2])-1; var t=ce.getAttribute('t'); var v=''; var vEl=ce.getElementsByTagName('v')[0]; var isEl=ce.getElementsByTagName('is')[0];
+    if(t==='s'&&vEl){ v=shared[+vEl.textContent]||''; } else if(t==='inlineStr'&&isEl){ v=isEl.textContent; } else if(vEl){ v=vEl.textContent; }
+    if(v!=='') cells.push({ c:cc, r:rr, x:colX[cc], y:rowY[rr], w:colX[cc+1]-colX[cc], h:rowY[rr+1]-rowY[rr], text:v }); }
+  return { colX:colX, rowY:rowY, cells:cells, maxC:maxC, maxR:maxR };
+}
+function colToNum(s){ var n=0; for(var i=0;i<s.length;i++) n=n*26+(s.charCodeAt(i)-64); return n; }
+
+// ── 図形(テキストボックス) ──
+function parseShapes(sheet, layout, theme){
+  if(!sheet.drawingXml) return [];
+  var P=new DOMParser(); var d=P.parseFromString(sheet.drawingXml,'application/xml');
+  var out=[];
+  var root=d.documentElement; // xdr:wsDr
+  for(var i=0;i<root.children.length;i++){
+    var anc=root.children[i]; var tag=anc.localName;
+    var fromR=null;
+    if(tag==='twoCellAnchor'||tag==='oneCellAnchor'){
+      var fr=anc.getElementsByTagName('xdr:from')[0]||anc.getElementsByTagName('from')[0];
+      if(fr){ fromR=anchorPx(fr, layout); }
+    }
+    // shape elements directly under anchor
+    for(var j=0;j<anc.children.length;j++){
+      var sh=anc.children[j]; var ln=sh.localName;
+      if(ln==='sp'||ln==='pic'||ln==='grpSp'||ln==='cxnSp') walkShape(sh, null, fromR, out, theme);
+    }
+  }
+  return out;
+}
+function anchorPx(fromEl, layout){
+  function val(t){ var e=fromEl.getElementsByTagName('xdr:'+t)[0]||fromEl.getElementsByTagName(t)[0]; return e?e.textContent:0; }
+  var c=+val('col'), co=emu(val('colOff')), r=+val('row'), ro=emu(val('rowOff'));
+  var x=(layout.colX[c]!=null?layout.colX[c]:0)+co; var y=(layout.rowY[r]!=null?layout.rowY[r]:0)+ro;
+  return { x:x, y:y };
+}
+function getXfrm(sh){ // returns {off:{x,y},ext:{cx,cy},chOff,chExt} in px (off/ext), or null
+  var spPr=sh.getElementsByTagName('xdr:spPr')[0]||sh.getElementsByTagName('xdr:grpSpPr')[0]||sh.getElementsByTagName('xdr:nvGrpSpPr')[0];
+  // find a:xfrm directly child of spPr/grpSpPr
+  var xf=null; var cand=sh.getElementsByTagName('a:xfrm'); if(cand.length) xf=cand[0];
+  if(!xf) return null;
+  function pt(tag){ var e=xf.getElementsByTagName('a:'+tag)[0]; return e?{x:emu(e.getAttribute('x')),y:emu(e.getAttribute('y')),cx:emu(e.getAttribute('cx')),cy:emu(e.getAttribute('cy'))}:null; }
+  var off=pt('off'), ext=pt('ext'), chOff=pt('chOff'), chExt=pt('chExt');
+  return { off:off, ext:ext, chOff:chOff, chExt:chExt };
+}
+function walkShape(sh, parentMap, fromR, out, theme){
+  var ln=sh.localName;
+  var xf=getXfrm(sh);
+  var rect=null;
+  if(xf&&xf.off&&xf.ext){
+    rect={ x:xf.off.x, y:xf.off.y, w:xf.ext.cx, h:xf.ext.cy };
+    if(parentMap){ rect={ x:parentMap.ax + (xf.off.x-parentMap.cox)*parentMap.sx, y:parentMap.ay + (xf.off.y-parentMap.coy)*parentMap.sy, w:xf.ext.cx*parentMap.sx, h:xf.ext.cy*parentMap.sy }; }
+  } else if(fromR){ rect={ x:fromR.x, y:fromR.y, w:200, h:40 }; }
+  if(ln==='grpSp'){
+    if(!xf||!xf.off||!xf.ext||!xf.chOff||!xf.chExt) return;
+    var gr=rect; var map={ ax:gr.x, ay:gr.y, cox:xf.chOff.x, coy:xf.chOff.y, sx:(xf.ext.cx/(xf.chExt.cx||1))*(parentMap?1:1), sy:(xf.ext.cy/(xf.chExt.cy||1)) };
+    if(parentMap){ map.sx=(gr.w/(xf.chExt.cx||1)); map.sy=(gr.h/(xf.chExt.cy||1)); } else { map.sx=(xf.ext.cx/(xf.chExt.cx||1)); map.sy=(xf.ext.cy/(xf.chExt.cy||1)); }
+    for(var i=0;i<sh.children.length;i++){ var ch=sh.children[i]; var cl=ch.localName; if(cl==='sp'||cl==='pic'||cl==='grpSp'||cl==='cxnSp') walkShape(ch, map, null, out, theme); }
+    return;
+  }
+  if(!rect) return;
+  // fill
+  var fill=null, line=null;
+  var spPr=sh.getElementsByTagName('xdr:spPr')[0];
+  if(spPr){
+    var sf=directChild(spPr,'a:solidFill'); if(sf) fill=colorOf(sf, theme);
+    var lnEl=directChild(spPr,'a:ln'); if(lnEl){ if(directChild(lnEl,'a:noFill')) line=null; else { var lf=directChild(lnEl,'a:solidFill'); line=lf?colorOf(lf,theme):'#888888'; } }
+  }
+  // text paragraphs
+  var paras=[]; var txBody=sh.getElementsByTagName('xdr:txBody')[0];
+  var anchorV='t';
+  if(txBody){ var bp=txBody.getElementsByTagName('a:bodyPr')[0]; if(bp&&bp.getAttribute('anchor')) anchorV=bp.getAttribute('anchor');
+    var ps=txBody.getElementsByTagName('a:p');
+    for(var i=0;i<ps.length;i++){ var pEl=ps[i]; var pPr=pEl.getElementsByTagName('a:pPr')[0]; var algn=(pPr&&pPr.getAttribute('algn'))||'l';
+      var runs=[]; var rs=pEl.getElementsByTagName('a:r');
+      for(var j=0;j<rs.length;j++){ var rEl=rs[j]; var tEl=rEl.getElementsByTagName('a:t')[0]; var tx=tEl?tEl.textContent:''; if(tx==='') continue; var rPr=rEl.getElementsByTagName('a:rPr')[0]; var sz=rPr&&rPr.getAttribute('sz')?(+rPr.getAttribute('sz')/100):11; var b=rPr&&rPr.getAttribute('b')==='1'; var col='#000000'; if(rPr){ var cf=directChild(rPr,'a:solidFill'); if(cf) col=colorOf(cf,theme)||'#000000'; } runs.push({ t:tx, sz:sz, b:b, col:col }); }
+      if(runs.length) paras.push({ algn:algn, runs:runs });
+    }
+  }
+  out.push({ x:rect.x, y:rect.y, w:rect.w, h:rect.h, fill:fill, line:line, paras:paras, anchorV:anchorV });
+}
+function directChild(parent, name){ for(var i=0;i<parent.children.length;i++){ if(parent.children[i].localName===name.split(':').pop()) return parent.children[i]; } return null; }
+function colorOf(fillEl, theme){
+  var s=directChild(fillEl,'a:srgbClr'); if(s) return applyLum('#'+s.getAttribute('val'), s);
+  var sc=directChild(fillEl,'a:schemeClr'); if(sc){ var nm=sc.getAttribute('val'); var map={'bg1':'lt1','tx1':'dk1','bg2':'lt2','tx2':'dk2','dk1':'dk1','lt1':'lt1','dk2':'dk2','lt2':'lt2'}; var key=map[nm]||nm; var base=theme[key]||'#000000'; return applyLum(base, sc); }
+  return null;
+}
+function applyLum(hex, node){
+  var lm=node.getElementsByTagName('a:lumMod')[0], lo=node.getElementsByTagName('a:lumOff')[0];
+  var tint=node.getElementsByTagName('a:tint')[0], shade=node.getElementsByTagName('a:shade')[0];
+  var c=hex2rgb(hex); var hsl=rgb2hsl(c[0],c[1],c[2]);
+  if(lm) hsl[2]*= (+lm.getAttribute('val')/100000);
+  if(lo) hsl[2]+= (+lo.getAttribute('val')/100000);
+  hsl[2]=Math.max(0,Math.min(1,hsl[2]));
+  if(tint){ var tv=+tint.getAttribute('val')/100000; hsl[2]=hsl[2]*tv+(1-tv); }
+  if(shade){ var sv=+shade.getAttribute('val')/100000; hsl[2]=hsl[2]*sv; }
+  var rgb=hsl2rgb(hsl[0],hsl[1],hsl[2]); return 'rgb('+rgb[0]+','+rgb[1]+','+rgb[2]+')';
+}
+function hex2rgb(h){ h=h.replace('#',''); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)]; }
+function rgb2hsl(r,g,b){ r/=255;g/=255;b/=255; var mx=Math.max(r,g,b),mn=Math.min(r,g,b),h,s,l=(mx+mn)/2; if(mx===mn){h=s=0;}else{var dd=mx-mn;s=l>0.5?dd/(2-mx-mn):dd/(mx+mn);switch(mx){case r:h=(g-b)/dd+(g<b?6:0);break;case g:h=(b-r)/dd+2;break;default:h=(r-g)/dd+4;}h/=6;} return [h,s,l]; }
+function hsl2rgb(h,s,l){ var r,g,b; if(s===0){r=g=b=l;}else{function hue(p,q,t){if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p;}var q=l<0.5?l*(1+s):l+s-l*s,p=2*l-q;r=hue(p,q,h+1/3);g=hue(p,q,h);b=hue(p,q,h-1/3);} return [Math.round(r*255),Math.round(g*255),Math.round(b*255)]; }
+
+// ── 描画 ──
+var CUR=null; // {canvas, scale}
+function renderNow(){
+  if(!DOC){ return; }
+  var si=+document.getElementById('sheetSel').value||0; var sheet=DOC.sheets[si];
+  var scale=+document.getElementById('dpiSel').value||2;
+  var withCells=document.getElementById('optCells').checked;
+  var withFill=document.getElementById('optFill').checked;
+  document.getElementById('status').textContent='⏳ 変換中…';
+  try{
+    var layout=parseSheet(sheet, DOC.shared);
+    var shapes=parseShapes(sheet, layout, DOC.theme);
+    // bounds
+    var maxX=10,maxY=10;
+    shapes.forEach(function(s){ maxX=Math.max(maxX,s.x+s.w); maxY=Math.max(maxY,s.y+s.h); });
+    if(withCells) layout.cells.forEach(function(c){ maxX=Math.max(maxX,c.x+c.w); maxY=Math.max(maxY,c.y+c.h); });
+    maxX+=12; maxY+=12;
+    var cv=document.getElementById('cv'); cv.width=Math.ceil(maxX*scale); cv.height=Math.ceil(maxY*scale);
+    var ctx=cv.getContext('2d'); ctx.setTransform(scale,0,0,scale,0,0); ctx.fillStyle='#fff'; ctx.fillRect(0,0,maxX,maxY);
+    // cells
+    if(withCells){ ctx.textBaseline='top'; layout.cells.forEach(function(c){ ctx.fillStyle='#000'; ctx.font='12px "Yu Gothic","Meiryo",sans-serif'; drawWrapped(ctx, c.text, c.x+2, c.y+2, c.w-3, 12, 'l', false); }); }
+    // shapes
+    shapes.forEach(function(s){
+      if(withFill){ if(s.fill){ ctx.fillStyle=s.fill; roundRect(ctx,s.x,s.y,s.w,s.h,4); ctx.fill(); } if(s.line){ ctx.strokeStyle=s.line; ctx.lineWidth=0.8; roundRect(ctx,s.x,s.y,s.w,s.h,4); ctx.stroke(); } }
+      // text
+      var pad=3; var lines=[];
+      s.paras.forEach(function(p){ var size=p.runs[0]?p.runs[0].sz:11; var text=p.runs.map(function(r){return r.t;}).join(''); var col=p.runs[0]?p.runs[0].col:'#000'; var b=p.runs[0]?p.runs[0].b:false; lines.push({text:text,size:size,col:col,b:b,algn:p.algn}); });
+      // measure total height
+      ctx.textBaseline='top';
+      var totalH=0; lines.forEach(function(L){ var lh=L.size*1.45*1.0; var n=wrapCount(ctx,L,s.w-pad*2); totalH+=lh*n; });
+      var startY=s.y+pad; if(s.anchorV==='ctr') startY=s.y+Math.max(pad,(s.h-totalH)/2); else if(s.anchorV==='b') startY=s.y+Math.max(pad,s.h-totalH-pad);
+      var yy=startY;
+      lines.forEach(function(L){ ctx.fillStyle=L.col||'#000'; ctx.font=(L.b?'bold ':'')+(L.size)+'px "UD デジタル教科書体 NK-R","Yu Gothic","Meiryo",sans-serif'; var lh=L.size*1.45; yy=drawWrapped(ctx, L.text, s.x+pad, yy, s.w-pad*2, lh, L.algn, true); });
+    });
+    cv.style.width=Math.ceil(maxX)+'px'; cv.style.height=Math.ceil(maxY)+'px';
+    document.getElementById('cv-wrap').style.display='block';
+    CUR={ canvas:cv, w:maxX, h:maxY };
+    document.getElementById('btnPdf').disabled=false;
+    document.getElementById('status').textContent='✅ 図形'+shapes.length+'件 / セル文字'+(withCells?layout.cells.length:0)+'件 を描画（プレビュー）';
+  }catch(e){ document.getElementById('status').textContent=''; toast('❌ 変換失敗: '+(e.message||e)); console.error(e); }
+}
+function wrapCount(ctx,L,maxw){ ctx.font=(L.b?'bold ':'')+(L.size)+'px sans-serif'; var t=L.text; if(!t) return 1; var n=0,line=''; for(var i=0;i<t.length;i++){ var ch=t[i]; if(ch==='\n'){n++;line='';continue;} if(ctx.measureText(line+ch).width>maxw && line){ n++; line=ch; } else line+=ch; } return n+ (line?1:0) || 1; }
+function drawWrapped(ctx, text, x, y, maxw, lh, algn, isShape){
+  var t=String(text==null?'':text); var line='', yy=y;
+  function flush(){ var w=ctx.measureText(line).width; var xx=x; if(algn==='ctr') xx=x+(maxw-w)/2; else if(algn==='r'||algn==='right') xx=x+(maxw-w); ctx.fillText(line, xx, yy); yy+=lh; line=''; }
+  for(var i=0;i<t.length;i++){ var ch=t[i]; if(ch==='\n'){ flush(); continue; } if(ctx.measureText(line+ch).width>maxw && line){ flush(); line=ch; } else line+=ch; }
+  if(line!=='') flush(); else if(t==='') yy+=lh;
+  return yy;
+}
+function roundRect(ctx,x,y,w,h,r){ r=Math.min(r,w/2,h/2); ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+async function downloadPdf(){
+  if(!CUR){ toast('先に変換してください'); return; }
+  document.getElementById('status').textContent='⏳ PDF作成中…';
+  try{
+    var cv=CUR.canvas; var P=PDFLib; var pdf=await P.PDFDocument.create();
+    // A4 portrait, fit width
+    var A4W=595.28, A4H=841.89, margin=18; var contentW=A4W-margin*2, contentH=A4H-margin*2;
+    var pxW=cv.width, pxH=cv.height; var scaleToPt=contentW/pxW; var pageHpx=Math.floor(contentH/scaleToPt);
+    var pages=Math.max(1,Math.ceil(pxH/pageHpx));
+    for(var pg=0; pg<pages; pg++){
+      var sy=pg*pageHpx; var sh=Math.min(pageHpx, pxH-sy);
+      var tmp=document.createElement('canvas'); tmp.width=pxW; tmp.height=sh; tmp.getContext('2d').drawImage(cv,0,sy,pxW,sh,0,0,pxW,sh);
+      var b64=tmp.toDataURL('image/jpeg',0.92).split(',')[1]; var bytes=Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0);});
+      var img=await pdf.embedJpg(bytes); var page=pdf.addPage([A4W,A4H]); var dh=sh*scaleToPt; page.drawImage(img,{x:margin,y:A4H-margin-dh,width:contentW,height:dh});
+    }
+    var out=await pdf.save(); var blob=new Blob([out],{type:'application/pdf'}); var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url; a.download='Excel_PDF変換.pdf'; a.click(); setTimeout(function(){URL.revokeObjectURL(url);},5000);
+    document.getElementById('status').textContent='✅ PDF出力（'+pages+'ページ）';
+  }catch(e){ document.getElementById('status').textContent=''; toast('❌ PDF失敗: '+(e.message||e)); console.error(e); }
+}
+window.__xltest={ parseWorkbook:parseWorkbook, parseSheet:parseSheet, parseShapes:parseShapes, get:function(){return DOC;}, cur:function(){return CUR;} };
+</script>
+</body>
+</html>
