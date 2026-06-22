@@ -110,9 +110,11 @@
     </div>
     <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
       <label class="chk"><input type="checkbox" id="o-dim" checked onchange="schedule()"> 寸法を表示（縦×横 mm）</label>
-      <label class="chk"><input type="checkbox" id="o-tonbo" checked onchange="schedule()"> トンボ（コーナー）</label>
+      <label class="chk"><input type="checkbox" id="o-tonbo" checked onchange="schedule()"> 日本式トンボ（二重＋センター）</label>
+      <label class="chk"><input type="checkbox" id="o-autobleed" onchange="schedule()"> 塗り足しを自動作成（端を3mm伸ばす）</label>
       <label class="chk"><input type="checkbox" id="o-caption" checked onchange="schedule()"> 上部キャプション</label>
     </div>
+    <div class="muted" style="margin-top:5px">※トンボは塗り足し3mmを自動表示（「塗り足し(bleed) mm」を入れた場合はその値）。データに塗り足しが無い時は「塗り足しを自動作成」で端を伸ばして埋めます（簡易・約1%拡大）。</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
       <button class="btn btn-c" id="btn-prev" onclick="genSize(false)" disabled>👁 プレビュー更新</button>
       <button class="btn btn-g" id="btn-dl" onclick="genSize(true)" disabled>⬇ 校正PDFを出力</button>
@@ -175,7 +177,7 @@ async function measureFile(buf){
 function sizeLabel(m){
   if(!m) return '';
   var parts=[];
-  if(m.pages>1) parts.push('全'+m.pages+'ページ');
+  parts.push((m.pages>1?'全':'')+m.pages+'ページ');
   if(m.hasTonbo){ parts.push('トンボまで '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm'); parts.push('データ '+mm(m.trimW)+'×'+mm(m.trimH)+'mm'); }
   else parts.push('データ '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm');
   return parts.join(' ／ ');
@@ -199,14 +201,14 @@ function render(){
   document.getElementById('flist').innerHTML=files.map(function(f,i){
     return '<div class="frow'+(i===0?' top':'')+'"><span>'+(i===0?'⭐':'📄')+'</span>'
       + '<span class="nm">'+(i+1)+'. '+esc(f.name)+'</span>'
-      + '<span class="muted" style="flex:1;text-align:right">'+(sizeLabel(f.m)||(f.pages+'p'))+' / '+kb(f.buf.byteLength)+'</span>'
+      + '<span class="muted" style="flex:1;text-align:right">'+(sizeLabel(f.m)||(f.pages+'ページ'))+' / '+kb(f.buf.byteLength)+'</span>'
       + '<span class="mv" onclick="mv('+i+',-1)" title="上へ">↑</span>'
       + '<span class="mv" onclick="mv('+i+',1)" title="下へ">↓</span>'
       + '<span class="mv" style="color:#b91c1c" onclick="removeAt('+i+')">✕</span></div>';
   }).join('');
   var tp=files.reduce(function(s,f){return s+(f.pages||0);},0);
   document.getElementById('merge-info').textContent=files.length?(files.length+'ファイル / 計'+tp+'ページ'):'';
-  document.getElementById('split-info').textContent=files.length?('対象: '+files[0].name+' ('+files[0].pages+'p)'):'';
+  document.getElementById('split-info').textContent=files.length?('対象: '+files[0].name+' ('+files[0].pages+'ページ)'):'';
   var has=files.length>0;
   document.getElementById('btn-prev').disabled=!has;
   document.getElementById('btn-dl').disabled=!has;
@@ -258,7 +260,8 @@ function readOpts(){
   return { bleed:Math.max(0,parseFloat(document.getElementById('o-bleed').value)||0), margin:Math.max(8,parseFloat(document.getElementById('o-margin').value)||25),
     finW:(w>0?w:null), finH:(h>0?h:null), color:document.getElementById('o-color').value.split(',').map(Number),
     lw:Math.max(0.2,parseFloat(document.getElementById('o-lw').value)||0.75), dash:document.getElementById('o-dash').value==='dash',
-    dim:document.getElementById('o-dim').checked, tonbo:document.getElementById('o-tonbo').checked, caption:document.getElementById('o-caption').checked };
+    dim:document.getElementById('o-dim').checked, tonbo:document.getElementById('o-tonbo').checked,
+    autoBleed:document.getElementById('o-autobleed').checked, caption:document.getElementById('o-caption').checked };
 }
 async function buildProofPdf(srcBytes, opts){
   var P=PDFLib;
@@ -275,24 +278,45 @@ async function buildProofPdf(srcBytes, opts){
     else { frW=srcW-2*bleedPt; frH=srcH-2*bleedPt; frX=marginPt+bleedPt; frY=marginPt+bleedPt; }
     var pageW=srcW+2*marginPt, pageH=srcH+2*marginPt;
     var page=out.addPage([pageW,pageH]);
-    var emb=await out.embedPage(sp); page.drawPage(emb,{x:marginPt,y:marginPt,width:srcW,height:srcH});
     var L=frX,R=frX+frW,B=frY,T=frY+frH;
+    var GRN=P.rgb(0.06,0.43,0.34), WHT=P.rgb(1,1,1);
+    var tb=(opts.bleed>0?bleedPt:3*MM);                       // 塗り足し(トンボ)オフセット 既定3mm
+    var mlen=Math.max(6, Math.min(9*MM, marginPt-tb-2));      // トンボの長さ
     function line(x1,y1,x2,y2,th,c,ds){ page.drawLine({start:{x:x1,y:y1},end:{x:x2,y:y2},thickness:th,color:(c||col),dashArray:ds}); }
+    // 元データ配置（塗り足し自動作成ONなら塗り足し枠まで引き伸ばし）
+    var emb=await out.embedPage(sp);
+    if(opts.autoBleed && !(opts.finW&&opts.finH) && opts.bleed<=0){
+      page.drawPage(emb,{ x:L-tb, y:B-tb, width:frW+2*tb, height:frH+2*tb });
+    } else {
+      page.drawPage(emb,{ x:marginPt, y:marginPt, width:srcW, height:srcH });
+    }
+    // 仕上り枠
     line(L,B,R,B,opts.lw,col,dash); line(L,T,R,T,opts.lw,col,dash); line(L,B,L,T,opts.lw,col,dash); line(R,B,R,T,opts.lw,col,dash);
-    if(opts.tonbo){ var g=3,ln=9,tw=opts.lw;
-      line(L-g-ln,B,L-g,B,tw); line(L,B-g-ln,L,B-g,tw); line(R+g,B,R+g+ln,B,tw); line(R,B-g-ln,R,B-g,tw);
-      line(L-g-ln,T,L-g,T,tw); line(L,T+g,L,T+g+ln,tw); line(R+g,T,R+g+ln,T,tw); line(R,T+g,R,T+g+ln,tw); }
-    if(opts.dim){ var fs=Math.max(7,Math.min(11,marginPt*0.30));
-      // 幅: 下の枠線の中に（線を白抜きして数値を埋め込む）
+    // 日本式トンボ（角＝二重トンボ／各辺中央＝センタートンボ）
+    if(opts.tonbo){ var tlw=0.4, cb=mlen*0.3;
+      function jpCorner(tx,ty,sx,sy){
+        var x0=tx+sx*tb, x1=tx+sx*(tb+mlen);
+        line(x0,ty,x1,ty,tlw); line(x0,ty+sy*tb,x1,ty+sy*tb,tlw);
+        var y0=ty+sy*tb, y1=ty+sy*(tb+mlen);
+        line(tx,y0,tx,y1,tlw); line(tx+sx*tb,y0,tx+sx*tb,y1,tlw);
+      }
+      jpCorner(L,B,-1,-1); jpCorner(R,B,1,-1); jpCorner(L,T,-1,1); jpCorner(R,T,1,1);
+      var mx=(L+R)/2, my=(B+T)/2;
+      line(mx,B-tb,mx,B-tb-mlen,tlw); line(mx-cb,B-tb-mlen/2,mx+cb,B-tb-mlen/2,tlw);
+      line(mx,T+tb,mx,T+tb+mlen,tlw); line(mx-cb,T+tb+mlen/2,mx+cb,T+tb+mlen/2,tlw);
+      line(L-tb,my,L-tb-mlen,my,tlw); line(L-tb-mlen/2,my-cb,L-tb-mlen/2,my+cb,tlw);
+      line(R+tb,my,R+tb+mlen,my,tlw); line(R+tb+mlen/2,my-cb,R+tb+mlen/2,my+cb,tlw);
+    }
+    // 寸法（枠線の中／緑の下地＋白文字・大きめ）
+    if(opts.dim){ var fs=Math.max(9,Math.min(16,marginPt*0.45)), pad=3;
       var wTxt=mm(frW)+' mm', ww=font.widthOfTextAtSize(wTxt,fs);
-      page.drawRectangle({x:(L+R)/2-ww/2-3,y:B-fs/2-1,width:ww+6,height:fs+2,color:P.rgb(1,1,1)});
-      page.drawText(wTxt,{x:(L+R)/2-ww/2,y:B-fs/2+1,size:fs,font:font,color:col});
-      // 高さ: 左の枠線の中に（回転）
+      page.drawRectangle({x:(L+R)/2-ww/2-pad,y:B-fs/2-pad,width:ww+pad*2,height:fs+pad*2,color:GRN});
+      page.drawText(wTxt,{x:(L+R)/2-ww/2,y:B-fs*0.34,size:fs,font:fontB,color:WHT});
       var hTxt=mm(frH)+' mm', hw=font.widthOfTextAtSize(hTxt,fs);
-      page.drawRectangle({x:L-fs/2-1,y:(B+T)/2-hw/2-3,width:fs+2,height:hw+6,color:P.rgb(1,1,1)});
-      page.drawText(hTxt,{x:L-fs/2+1,y:(B+T)/2-hw/2,size:fs,font:font,color:col,rotate:P.degrees(90)}); }
-    if(opts.caption){ var cs=Math.max(8,Math.min(12,marginPt*0.34));
-      var cap=mm(frW)+' x '+mm(frH)+' mm'+(idxs.length>1?('   (p'+(pi+1)+'/'+idxs.length+')'):'');
+      page.drawRectangle({x:L-fs/2-pad,y:(B+T)/2-hw/2-pad,width:fs+pad*2,height:hw+pad*2,color:GRN});
+      page.drawText(hTxt,{x:L+fs*0.34,y:(B+T)/2-hw/2,size:fs,font:fontB,color:WHT,rotate:P.degrees(90)}); }
+    if(opts.caption){ var cs=Math.max(9,Math.min(13,marginPt*0.36));
+      var cap=mm(frW)+' x '+mm(frH)+' mm'+(idxs.length>1?('   '+(pi+1)+'/'+idxs.length):'');
       var cw=fontB.widthOfTextAtSize(cap,cs), cy=T+(marginPt-cs)/2+1;
       if(cy+cs<pageH) page.drawText(cap,{x:pageW/2-cw/2,y:cy,size:cs,font:fontB,color:col}); }
   }
