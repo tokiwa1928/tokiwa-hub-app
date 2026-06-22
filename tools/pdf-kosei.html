@@ -119,10 +119,16 @@
     <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
       <label class="chk"><input type="checkbox" id="o-dim" checked onchange="schedule()"> 寸法を表示（縦×横 mm）</label>
       <label class="chk"><input type="checkbox" id="o-tonbo" checked onchange="schedule()"> 日本式トンボ（二重＋センター）</label>
-      <label class="chk"><input type="checkbox" id="o-autobleed" onchange="schedule()"> 塗り足しを自動作成（端を3mm伸ばす）</label>
+      <label class="chk"><input type="checkbox" id="o-autobleed" onchange="schedule()"> 塗り足しを自動作成</label>
+      <label style="font-size:11px;color:#888;font-weight:600;display:inline-flex;align-items:center;gap:4px">方式
+        <select id="o-bleedmethod" onchange="schedule()" style="font-size:12px;padding:3px 6px;border:1px solid #d0cec8;border-radius:6px">
+          <option value="mirror">複製（端を鏡像・画像化）</option>
+          <option value="stretch">のばす（拡大・ベクター維持）</option>
+        </select>
+      </label>
       <label class="chk"><input type="checkbox" id="o-caption" checked onchange="schedule()"> 上部キャプション</label>
     </div>
-    <div class="muted" style="margin-top:5px">※トンボは塗り足し3mmを自動表示（「塗り足し(bleed) mm」を入れた場合はその値）。データに塗り足しが無い時は「塗り足しを自動作成」で端を伸ばして埋めます（簡易・約1%拡大）。</div>
+    <div class="muted" style="margin-top:5px">※トンボは塗り足し3mmを自動表示（「塗り足し(bleed) mm」を入れた場合はその値）。データに塗り足しが無い時は「塗り足しを自動作成」で埋めます。複製＝端を鏡像でつくる（その面だけ画像化）／のばす＝端まで拡大（ベクターのまま）。</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
       <button class="btn btn-c" id="btn-prev" onclick="genSize(false)" disabled>👁 プレビュー更新</button>
       <button class="btn btn-g" id="btn-dl" onclick="genSize(true)" disabled>⬇ 校正PDFを出力（一番上）</button>
@@ -345,7 +351,7 @@ function readOpts(){
     finW:(w>0?w:null), finH:(h>0?h:null), color:document.getElementById('o-color').value.split(',').map(Number),
     lw:Math.max(0.2,parseFloat(document.getElementById('o-lw').value)||0.75), dash:document.getElementById('o-dash').value==='dash',
     dim:document.getElementById('o-dim').checked, tonbo:document.getElementById('o-tonbo').checked,
-    autoBleed:document.getElementById('o-autobleed').checked, caption:document.getElementById('o-caption').checked };
+    autoBleed:document.getElementById('o-autobleed').checked, bleedMethod:(document.getElementById('o-bleedmethod')||{}).value||'mirror', caption:document.getElementById('o-caption').checked };
 }
 async function buildProofPdf(srcBytes, opts){
   var P=PDFLib;
@@ -370,7 +376,18 @@ async function buildProofPdf(srcBytes, opts){
     // 元データ配置（塗り足し自動作成ONなら塗り足し枠まで引き伸ばし）
     var emb=await out.embedPage(sp);
     if(opts.autoBleed && !(opts.finW&&opts.finH) && opts.bleed<=0){
-      page.drawPage(emb,{ x:L-tb, y:B-tb, width:frW+2*tb, height:frH+2*tb });
+      var placed=false;
+      if(opts.bleedMethod==='mirror'){
+        try{
+          var pim=await renderPageImg(srcBytes, pi+1, 2);
+          var imgEl=await _loadImg(pim.url);
+          var mcv=_mirrorBleed(imgEl, tb/frW);
+          var emj=await out.embedJpg(_canvasJpgBytes(mcv));
+          page.drawImage(emj,{ x:L-tb, y:B-tb, width:frW+2*tb, height:frH+2*tb });
+          placed=true;
+        }catch(mbErr){ placed=false; }
+      }
+      if(!placed){ page.drawPage(emb,{ x:L-tb, y:B-tb, width:frW+2*tb, height:frH+2*tb }); } // フォールバック=のばす
     } else {
       page.drawPage(emb,{ x:marginPt, y:marginPt, width:srcW, height:srcH });
     }
@@ -518,6 +535,25 @@ async function meImposeRun(){
 // ── 📦 3Dプレビュー＋クイックチェック ──
 try{ if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){}
 function mmNum(pt){ return Math.round(pt/MM); }
+function _loadImg(url){ return new Promise(function(res,rej){ var im=new Image(); im.onload=function(){res(im);}; im.onerror=rej; im.src=url; }); }
+function _canvasJpgBytes(cv){ var b64=cv.toDataURL('image/jpeg',0.92).split(',')[1]; return Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0);}); }
+// 端を鏡像で複製して塗り足しを作る (ratio = 塗り足し幅 / 仕上り幅)
+function _mirrorBleed(img, ratio){
+  var w=img.width, h=img.height; var b=Math.max(1,Math.round(w*ratio));
+  var cv=document.createElement('canvas'); cv.width=w+2*b; cv.height=h+2*b; var x=cv.getContext('2d');
+  x.fillStyle='#fff'; x.fillRect(0,0,cv.width,cv.height);
+  x.drawImage(img,b,b,w,h);
+  function band(cx,cy,cw,ch,fx,fy,tx,ty){ x.save(); x.beginPath(); x.rect(cx,cy,cw,ch); x.clip(); x.translate(tx,ty); x.scale(fx,fy); x.drawImage(img,0,0,w,h); x.restore(); }
+  band(b,0,w,b, 1,-1, b,b);             // 上
+  band(b,b+h,w,b, 1,-1, b,b+2*h);       // 下
+  band(0,b,b,h, -1,1, b,b);             // 左
+  band(b+w,b,b,h, -1,1, b+2*w,b);       // 右
+  band(0,0,b,b, -1,-1, b,b);            // 左上
+  band(b+w,0,b,b, -1,-1, b+2*w,b);      // 右上
+  band(0,b+h,b,b, -1,-1, b,b+2*h);      // 左下
+  band(b+w,b+h,b,b, -1,-1, b+2*w,b+2*h);// 右下
+  return cv;
+}
 function _paperStd(wpt,hpt){
   var w=mmNum(wpt), h=mmNum(hpt); var L=[[210,297,'A4'],[297,420,'A3'],[148,210,'A5'],[105,148,'A6'],[182,257,'B5'],[257,364,'B4'],[128,182,'B6'],[91,55,'名刺'],[100,148,'ハガキ']];
   for(var i=0;i<L.length;i++){ var a=L[i]; function near(x,y){ return Math.abs(x-y)<=2; } if((near(w,a[0])&&near(h,a[1]))||(near(w,a[1])&&near(h,a[0]))) return a[2]; }
