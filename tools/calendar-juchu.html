@@ -104,8 +104,6 @@
 
   <div class="sec">
     <div class="toolbar">
-      <label style="font-size:11px;color:#888;margin:0">年度</label>
-      <select id="yearSel" onchange="render()"></select>
       <select id="fCat" onchange="render()"><option value="">全カテゴリ</option></select>
       <input type="text" id="q" placeholder="🔍 得意先・製品名・担当で検索…" oninput="render()" style="flex:1;min-width:180px">
       <select id="fStatus" onchange="render()" style="display:none">
@@ -122,6 +120,7 @@
         <option value="calledNotOrdered">電話済・未受注</option>
         <option value="orderedNotDelivered">受注済・未納品</option>
       </select>
+      <button class="btn" onclick="bulkCopyLastYear()" title="昨年の受注内容を今年へ一括コピー(製品・外注先を引継ぎ)" style="background:#e0f2fe;border-color:#7dd3fc">📋 昨年をコピー</button>
       <button class="btn" onclick="seedImport()" title="先ほどのExcel2つ(旧台帳＋受注用)をまとめて投入" style="background:#fef3c7;border-color:#fcd34d">📦 初期投入</button>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
@@ -302,7 +301,7 @@ function byManual(a,b){
 
 function loadAll(){ var db = hubLoad(); if(!db) return []; return Array.isArray(db[COLL]) ? db[COLL] : []; }
 var BASE_YEAR = 2026;   // 今年（入力対象の基準年）
-function curYear(){ return Number(document.getElementById('yearSel').value || BASE_YEAR); }
+function curYear(){ return BASE_YEAR; }   // 今年は固定(年度ドロップダウン廃止・表示年チェックで切替)
 function curCat(){ return document.getElementById('fCat').value || ''; }
 function num(v){ var n = parseFloat(v); return isNaN(n) ? '' : n; }
 function fmt(n){ return (n===''||n==null) ? '—' : Number(n).toLocaleString(); }
@@ -316,7 +315,8 @@ function buildYears(){
   var rows = loadAll(); var years = {}; rows.forEach(function(r){ years[r.year] = 1; });
   if(years[BASE_YEAR]===undefined) years[BASE_YEAR]=1;   // 今年(2026)は常に選べる
   var list = Object.keys(years).map(Number).sort(function(a,b){ return b-a; });
-  var sel = document.getElementById('yearSel'); var cur = sel.value;
+  var sel = document.getElementById('yearSel'); if(!sel) return;   // 年度ドロップダウンは廃止
+  var cur = sel.value;
   sel.innerHTML = list.map(function(y){ return '<option value="'+y+'">'+y+'年</option>'; }).join('');
   sel.value = cur && list.indexOf(Number(cur))>=0 ? cur : String(BASE_YEAR);
 }
@@ -541,7 +541,24 @@ function renderTrend(){
 }
 function prevRecOf(g, r){ var best=null, same=null; g.recs.forEach(function(x){ if(x.year<r.year && mPrice(x)!==''){ if(!best||x.year>best.year) best=x; if(x.product===r.product && (!same||x.year>same.year)) same=x; } }); return same||best; }
 function prevAnyRecOf(g, r){ var best=null; g.recs.forEach(function(x){ if(x.year<r.year){ if(!best||x.year>best.year) best=x; } }); return best; }
-function addProductRow(gi){ var g=_mGroups[gi]; if(!g) return; var rec=newRecord({ year:curYear(), category:g.category||'カレンダー', cust:g.cust||'', contact:g.contact||'', user:g.user||'', product:'' }); if(hubAppend(COLL, rec)){ hubToast('＋ '+curYear()+'年の商品を追加'); buildYears(); render(); } }
+function addProductRow(gi){ var g=_mGroups[gi]; if(!g) return; var cur=curYear(); var past=g.recs.filter(function(x){return x.year<cur;}).sort(function(a,b){return b.year-a.year;})[0]; var rec=newRecord({ year:cur, category:g.category||'カレンダー', cust:g.cust||'', contact:g.contact||'', user:g.user||'', product:past?past.product:'', vendor:past?(past.vendor||''):'' }); if(hubAppend(COLL, rec)){ hubToast('＋ '+cur+'年の商品を追加（昨年の製品・外注先を引継ぎ）'); render(); } }
+// ③ 昨年(cur-1)の受注内容を今年にまとめてコピー(得意先/担当/製品/外注先を引継ぎ・数量/価格/日付は空欄・重複スキップ)
+function bulkCopyLastYear(){
+  var cur=curYear(), src=cur-1;
+  if(!confirm(src+'年の受注内容を '+cur+'年へまとめてコピーします。\n・得意先/担当者/製品/外注先を引き継ぎ\n・数量/売価/仕入/日付は空欄（今年これから入力）\n・既にある'+cur+'年の同じ商品はスキップ\nよろしいですか？')) return;
+  var added=0;
+  var ok=hubSave(function(db){
+    var arr=db[COLL]||(db[COLL]=[]);
+    var exist={}; arr.forEach(function(x){ if(x.year===cur) exist[[x.category,x.cust,x.contact||'',x.product].join('|')]=true; });
+    arr.filter(function(x){ return x.year===src; }).forEach(function(s){
+      var k=[s.category,s.cust,s.contact||'',s.product].join('|');
+      if(exist[k]) return; exist[k]=true;
+      arr.push(newRecord({ year:cur, category:s.category, cust:s.cust, contact:s.contact||'', user:s.user||'', product:s.product, vendor:s.vendor||'' }));
+      added++;
+    });
+  });
+  if(ok){ hubToast('✅ '+src+'年→'+cur+'年 コピー: '+added+'件'); render(); }
+}
 function yearRow2(r, g){
   var cur=curYear(); var isCur=(r.year===cur);
   var pr=prevRecOf(g,r); var prevP=pr?mPrice(pr):'', prevC=pr?mCost(pr):'', pyl=pr?pr.year:null;
@@ -796,7 +813,6 @@ function seedImport(){
       try {
         var S = window.JUCHU_SEED, before = loadAll().length;
         var r1 = importWorkbook(XLSX.read(b64ToBytes(S.old), { type:'array', codepage:932 }), true) || {added:0,updated:0};
-        document.getElementById('yearSel').value = '2027';
         var r2 = importWorkbook(XLSX.read(b64ToBytes(S.juchu), { type:'array', codepage:932 }), true) || {added:0,updated:0};
         var total = loadAll().length, added=(r1.added||0)+(r2.added||0), updated=(r1.updated||0)+(r2.updated||0);
         hideBusy();
