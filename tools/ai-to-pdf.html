@@ -3,15 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>🅰 AI→PDF プレビュー・印刷 | Tokiwa Hub Tools</title>
+<title>🅰 AI/PSD→PDF プレビュー・印刷 | Tokiwa Hub Tools</title>
 <!--
-  Illustrator(.ai) を PDF として プレビュー / PDF保存 / 印刷 するツール。
-  - 最近の .ai は「PDF互換ファイルを作成」で保存されていれば中身が PDF。
+  Illustrator(.ai)・Photoshop(.psd)・PDF を PDF として プレビュー / PDF保存 / 印刷 するツール。
+  - .ai/.pdf: 最近の .ai は「PDF互換ファイルを作成」で保存されていれば中身が PDF。
     その PDF 部分をそのまま使う(最も忠実)。任意で pdf-lib 再保存による軽量化も可。
+  - .psd: ag-psd で合成画像を取り出し→解像度に合わせてPDF化(ラスタライズ)。
+  - サイズ表示: トンボ(裁ち落とし枠)があれば「トンボまで」と「データ(仕上り)」、無ければデータのみ。複数ページはページ数も。
   - PC内処理(どこにも送信しない)。
+  - InDesign(.indd)は独自形式でPDFを内包しないため非対応 → InDesignからPDF書き出しを。
 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/ag-psd@16.0.0/dist/bundle.js"></script>
 <style>
   :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
   *{ box-sizing:border-box; }
@@ -41,13 +45,13 @@
 <body>
 <header>
   <span class="logo">TOKIWA <b>HUB</b> 🅰</span>
-  <span class="tname">AI→PDF プレビュー・印刷</span>
+  <span class="tname">AI/PSD→PDF プレビュー・印刷</span>
   <span class="user">🔒 PC内処理・送信なし</span>
 </header>
 <main>
   <div class="sec">
-    <div id="drop" onclick="document.getElementById('fi').click()">📂 .ai（または .pdf）をドラッグ&ドロップ（複数OK）<div class="muted" style="margin-top:6px">※ Illustratorで「PDF互換ファイルを作成」にチェックして保存した .ai が対象です</div></div>
-    <input type="file" id="fi" accept=".ai,.pdf,application/pdf,application/postscript,application/illustrator" multiple style="display:none" onchange="addFiles(this.files)">
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 .ai / .psd / .pdf をドラッグ&ドロップ（複数OK）<div class="muted" style="margin-top:6px">※ .ai は「PDF互換ファイルを作成」で保存したもの／.psd は画像化してPDF化／InDesignはPDF書き出し後に</div></div>
+    <input type="file" id="fi" accept=".ai,.psd,.pdf,application/pdf,application/postscript,application/illustrator,image/vnd.adobe.photoshop" multiple style="display:none" onchange="addFiles(this.files)">
     <div id="flist"></div>
   </div>
 
@@ -74,12 +78,60 @@ var files=[];   // {name, buf, ok}
 var cur=-1;     // 現在プレビュー中のindex
 var _curUrl=null;
 
+var MM=72/25.4;
+function mm(pt){ var v=Math.round(pt/MM*10)/10; return (Math.abs(v-Math.round(v))<0.05?String(Math.round(v)):v.toFixed(1)); }
+function fkind(name){ return /\.psd$/i.test(name) ? 'psd' : 'pdf'; }
 // %PDF ヘッダを先頭付近から探す (PDF互換 .ai は %PDF- で始まる/含む)
 function isPdfCompatible(buf){
   try{
     var head=new TextDecoder('latin1').decode(new Uint8Array(buf.slice(0, 2048)));
     return head.indexOf('%PDF-')>=0;
   }catch(e){ return false; }
+}
+// ファイルの寸法情報を採寸: ページ数 / トンボまで(MediaBox) / データ(TrimBox) / トンボ有無
+async function measureFile(f){
+  try{
+    if(f.kind==='psd'){
+      var psd=agPsd.readPsd(f.buf,{ skipLayerImageData:true, skipThumbnail:true });
+      var dpi=(psd.imageResources&&psd.imageResources.resolutionInfo&&psd.imageResources.resolutionInfo.horizontalResolution)||72;
+      return { pages:1, dpi:dpi, mediaW:psd.width/dpi*72, mediaH:psd.height/dpi*72, trimW:psd.width/dpi*72, trimH:psd.height/dpi*72, hasTonbo:false, px:psd.width+'×'+psd.height+'px' };
+    }
+    var d=await PDFLib.PDFDocument.load(f.buf,{ ignoreEncryption:true });
+    var n=d.getPageCount(), p=d.getPage(0);
+    var mb=p.getMediaBox(), tb=p.getTrimBox();
+    var eps=2; // pt
+    var hasTonbo=(mb.width-tb.width>eps)||(mb.height-tb.height>eps);
+    return { pages:n, mediaW:mb.width, mediaH:mb.height, trimW:tb.width, trimH:tb.height, hasTonbo:hasTonbo };
+  }catch(e){ return null; }
+}
+// 採寸結果を日本語表示
+function sizeLabel(m){
+  if(!m) return '';
+  var parts=[];
+  if(m.pages>1) parts.push('全'+m.pages+'ページ');
+  if(m.hasTonbo){
+    parts.push('トンボまで '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm');
+    parts.push('データ '+mm(m.trimW)+'×'+mm(m.trimH)+'mm');
+  } else {
+    parts.push('データ '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm');
+  }
+  if(m.px) parts.push(m.px);
+  return parts.join(' ／ ');
+}
+// PSD → 画像 → PDF (解像度に合わせた実寸)
+async function psdToPdf(buf){
+  var psd=agPsd.readPsd(buf,{ skipLayerImageData:true, skipThumbnail:true });
+  var canvas=psd.canvas;
+  if(!canvas){ throw new Error('PSDの合成画像を取得できませんでした'); }
+  var dpi=(psd.imageResources&&psd.imageResources.resolutionInfo&&psd.imageResources.resolutionInfo.horizontalResolution)||72;
+  var b64=canvas.toDataURL('image/jpeg',0.92).split(',')[1];
+  var bytes=Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); });
+  var doc=await PDFLib.PDFDocument.create();
+  var img=await doc.embedJpg(bytes);
+  var wPt=psd.width/dpi*72, hPt=psd.height/dpi*72;
+  var pg=doc.addPage([wPt,hPt]);
+  pg.drawImage(img,{ x:0, y:0, width:wPt, height:hPt });
+  return await doc.save();
 }
 
 var drop=document.getElementById('drop');
@@ -88,21 +140,29 @@ var drop=document.getElementById('drop');
 drop.addEventListener('drop',function(e){ addFiles(e.dataTransfer.files); });
 
 function addFiles(fl){
-  var arr=[].slice.call(fl).filter(function(f){ return /\.(ai|pdf)$/i.test(f.name); });
-  if(!arr.length){ toast('.ai または .pdf を入れてください'); return; }
+  var arr=[].slice.call(fl).filter(function(f){ return /\.(ai|psd|pdf)$/i.test(f.name); });
+  if(!arr.length){ toast('.ai / .psd / .pdf を入れてください'); return; }
+  if([].slice.call(fl).some(function(f){ return /\.indd$/i.test(f.name); })) toast('InDesign(.indd)は非対応です。PDF書き出ししてください');
   var pending=arr.length;
   arr.forEach(function(f){
-    f.arrayBuffer().then(function(buf){
-      files.push({ name:f.name, buf:buf, ok:isPdfCompatible(buf) });
+    f.arrayBuffer().then(async function(buf){
+      var kind=fkind(f.name);
+      var ok=(kind==='psd') ? (typeof agPsd!=='undefined') : isPdfCompatible(buf);
+      var rec={ name:f.name, buf:buf, kind:kind, ok:ok, m:null };
+      files.push(rec);
+      if(ok){ try{ rec.m=await measureFile(rec); }catch(e){} }
       if(--pending===0){ render(); if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); } }
     }).catch(function(e){ pending--; toast('❌ '+f.name+': '+(e.message||e)); });
   });
 }
 function render(){
   document.getElementById('flist').innerHTML=files.map(function(f,i){
+    var ico=f.ok?(f.kind==='psd'?'🅿':'🅰'):'⚠';
+    var sz=f.ok ? (sizeLabel(f.m)||kb(f.buf.byteLength)) : (f.kind==='psd'?'読込失敗':'PDF互換なし');
     return '<div class="frow'+(i===cur?' cur':'')+'" onclick="select('+i+')">'
-      + '<span>'+(f.ok?'🅰':'⚠')+'</span><span class="nm">'+(i+1)+'. '+esc(f.name)+'</span>'
-      + '<span class="muted">'+(f.ok?kb(f.buf.byteLength):'PDF互換なし')+'</span>'
+      + '<span>'+ico+'</span>'
+      + '<span class="nm" style="flex:0 1 auto;max-width:46%">'+(i+1)+'. '+esc(f.name)+'</span>'
+      + '<span class="muted" style="flex:1;text-align:right">'+sz+'</span>'
       + '<span class="frow-x" style="color:#b91c1c;padding:2px 8px;border:1px solid #d0cec8;border-radius:5px" onclick="event.stopPropagation();removeAt('+i+')">✕</span></div>';
   }).join('');
   var anyOk=files.some(function(f){return f.ok;});
@@ -117,8 +177,9 @@ function removeAt(i){
   if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); }
 }
 
-// PDFバイト取得 (軽量化ONなら pdf-lib 再保存、OFFなら .ai 内のPDFをそのまま)
+// PDFバイト取得: psd は画像化、ai/pdf は中身PDF(忠実) / 軽量化ONなら pdf-lib再保存
 async function toPdfBytes(f){
+  if(f.kind==='psd'){ return await psdToPdf(f.buf); }
   if(document.getElementById('o-slim').checked){
     try{
       var d=await PDFLib.PDFDocument.load(f.buf,{ ignoreEncryption:true, updateMetadata:false });
@@ -130,7 +191,7 @@ async function toPdfBytes(f){
 
 async function select(i){
   var f=files[i]; if(!f) return;
-  if(!f.ok){ toast('この .ai はPDF互換で保存されていません'); return; }
+  if(!f.ok){ toast(f.kind==='psd'?'このPSDは読み込めませんでした':'この .ai はPDF互換で保存されていません'); return; }
   cur=i; render();
   await refreshPreview();
 }
@@ -147,10 +208,12 @@ async function refreshPreview(){
     var pv=document.getElementById('preview'); pv.src=_curUrl; pv.style.display='block';
     document.getElementById('btn-print').disabled=false;
     document.getElementById('btn-dl').disabled=false;
-    st.textContent='✅ '+esc(f.name)+' → PDF ('+kb(bytes.byteLength)+')'+(document.getElementById('o-slim').checked?' / 軽量化':' / 忠実');
+    var mode=(f.kind==='psd')?'画像化':(document.getElementById('o-slim').checked?'軽量化':'忠実');
+    var szl=sizeLabel(f.m);
+    st.textContent='✅ '+esc(f.name)+' → PDF ('+kb(bytes.byteLength)+' / '+mode+')'+(szl?('　'+szl):'');
   }catch(e){ st.textContent=''; toast('❌ 変換失敗: '+(e.message||e)); }
 }
-function pdfName(f){ return f.name.replace(/\.(ai|pdf)$/i,'')+'.pdf'; }
+function pdfName(f){ return f.name.replace(/\.(ai|psd|pdf)$/i,'')+'.pdf'; }
 
 function downloadCurrent(){
   if(cur<0 || !window._curBytes){ toast('プレビューがありません'); return; }
@@ -173,7 +236,7 @@ function printCurrent(){
 }
 async function downloadAllZip(){
   var oks=files.filter(function(f){return f.ok;});
-  if(oks.length<2){ toast('PDF互換の .ai が2件以上必要です'); return; }
+  if(oks.length<2){ toast('変換できるファイルが2件以上必要です'); return; }
   var st=document.getElementById('status'); st.textContent='⏳ まとめて変換中…';
   try{
     var zip=new JSZip();
@@ -189,8 +252,17 @@ async function downloadAllZip(){
 // 検証用フック
 window.__test = {
   isPdf: isPdfCompatible,
-  pushBuf:function(name,buf){ files.push({name:name,buf:buf,ok:isPdfCompatible(buf)}); render(); return files.length-1; },
+  mm: mm, sizeLabel: sizeLabel, measureFile: measureFile, psdToPdf: psdToPdf,
+  async pushBuf(name,buf){
+    var kind=fkind(name);
+    var ok=(kind==='psd')?(typeof agPsd!=='undefined'):isPdfCompatible(buf);
+    var rec={name:name,buf:buf,kind:kind,ok:ok,m:null};
+    files.push(rec);
+    if(ok){ try{ rec.m=await measureFile(rec); }catch(e){} }
+    render(); return files.length-1;
+  },
   toPdfBytes: toPdfBytes,
+  rec:function(i){ return files[i]; },
   state:function(){ return { count:files.length, cur:cur, oks:files.filter(function(f){return f.ok;}).length }; }
 };
 </script>
