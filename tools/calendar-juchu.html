@@ -143,9 +143,6 @@
       </select>
       <button class="btn" onclick="bulkCopyLastYear()" title="昨年の受注内容を今年へ一括コピー(製品・外注先を引継ぎ)" style="background:#e0f2fe;border-color:#7dd3fc">📋 昨年をコピー</button>
       <button class="btn" onclick="seedImport()" title="先ほどのExcel2つ(旧台帳＋受注用)をまとめて投入" style="background:#fef3c7;border-color:#fcd34d">📦 初期投入</button>
-      <button class="btn" onclick="import2024()" title="抜けていた2024年分(2024顧客リスト.xls)を取り込む" style="background:#fef3c7;border-color:#fcd34d">📥 2024年取込</button>
-      <button class="btn" onclick="genUnify()" title="得意先名をGENの正式名称に統一(確認あり・元に戻せます)" style="background:#dcfce7;border-color:#86efac">🔗 GENで名称統一</button>
-      <button class="btn" onclick="genUnifyUndo()" title="GEN統一を取り消して元の名前に戻す" style="font-size:11px;padding:6px 8px">↩ 統一を戻す</button>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
       <button class="btn" onclick="addRow()" title="得意先名を入力して今年の行を追加">＋ 追加</button>
@@ -1234,8 +1231,34 @@ function exportXlsx(){
   XLSX.utils.book_append_sheet(wb, ws, y+'年受注'); XLSX.writeFile(wb, y+'年受注台帳'+(curCat()?('_'+curCat()):'')+'.xlsx');
 }
 
+// ─ 自動移行: 開いた時に1回だけ 2024年取込＋得意先名GEN統一を適用（ボタン不要・冪等・マーカー管理）─
+function applyMig(need2024, needGen){
+  var msg=[], changed=false;
+  hubSave(function(db){
+    var arr=db[COLL]||(db[COLL]=[]);
+    var m=db._calMig||(db._calMig={});
+    if(need2024 && window.JUCHU_2024){
+      var keep=arr.filter(function(x){ return !(x.year===2024 && x._src==='旧台帳移行'); });
+      arr=db[COLL]=window.JUCHU_2024.map(function(r,i){ return newRecord(Object.assign({id:'cal2024_'+i}, r)); }).concat(keep);
+      m['CAL2024-1']=true; changed=true; msg.push('2024年'+window.JUCHU_2024.length+'件');
+    }
+    if(needGen && window.GEN_CUST_MAP){
+      var c=0; arr.forEach(function(r){ var cur=r.cust||''; var g=window.GEN_CUST_MAP[normCust(cur)]; if(g&&g!==cur){ r.cust=g; c++; } });
+      m['CALGEN-1']=true; changed=true; if(c) msg.push('得意先名統一'+c+'件');
+    }
+  });
+  if(changed){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildYears(); buildCats(); render(); if(msg.length) hubToast('✅ 自動更新: '+msg.join(' / ')); }); }
+}
+function autoMigrate(){
+  var db=hubLoad(); if(!db||!Array.isArray(db[COLL])||!db[COLL].length) return;   // データが無い時は何もしない
+  var marks=db._calMig||{};
+  var need2024=!marks['CAL2024-1'], needGen=!marks['CALGEN-1'];
+  if(!need2024 && !needGen) return;
+  var loaders=[]; if(need2024) loaders.push(load2024); if(needGen) loaders.push(loadGen);
+  var i=0;(function next(){ if(i>=loaders.length){ applyMig(need2024,needGen); return; } loaders[i++](next); })();
+}
 // 起動
-buildYears(); buildCats(); setView('matrix');
+buildYears(); buildCats(); setView('matrix'); autoMigrate();
 try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 </body>
