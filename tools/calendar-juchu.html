@@ -143,6 +143,8 @@
       </select>
       <button class="btn" onclick="bulkCopyLastYear()" title="昨年の受注内容を今年へ一括コピー(製品・外注先を引継ぎ)" style="background:#e0f2fe;border-color:#7dd3fc">📋 昨年をコピー</button>
       <button class="btn" onclick="seedImport()" title="先ほどのExcel2つ(旧台帳＋受注用)をまとめて投入" style="background:#fef3c7;border-color:#fcd34d">📦 初期投入</button>
+      <button class="btn" onclick="genUnify()" title="得意先名をGENの正式名称に統一(確認あり・元に戻せます)" style="background:#dcfce7;border-color:#86efac">🔗 GENで名称統一</button>
+      <button class="btn" onclick="genUnifyUndo()" title="GEN統一を取り消して元の名前に戻す" style="font-size:11px;padding:6px 8px">↩ 統一を戻す</button>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
       <button class="btn" onclick="addRow()" title="得意先名を入力して今年の行を追加">＋ 追加</button>
@@ -1000,6 +1002,50 @@ function loadSeed(cb){
   s.onload=function(){ cb(); };
   s.onerror=function(){ hubToast('❌ 初期データの読込に失敗（calendar-juchu-seed.js）'); };
   document.head.appendChild(s);
+}
+// ─ 🔗 得意先名をGENの正式名称に統一（旧台帳の不揃いな名前 → GEN取引先名）─
+function loadGen(cb){
+  if(window.GEN_CUST_MAP) return cb();
+  var s=document.createElement('script'); s.src='calendar-juchu-gen.js?v=1';
+  s.onload=function(){ cb(); };
+  s.onerror=function(){ hideBusy(); hubToast('❌ GENデータの読込に失敗（calendar-juchu-gen.js）'); };
+  document.head.appendChild(s);
+}
+function normCust(s){
+  s=String(s==null?'':s).normalize('NFKC');
+  s=s.replace(/株式会社|有限会社|合資会社|学校法人/g,'');
+  s=s.replace(/[(](株|有|資)[)]/g,'');
+  s=s.replace(/(様|さま|さん|御中|担当者?|営業所|営業部|本店|支店).*$/,'');
+  s=s.replace(/[\s　・.,，、]+/g,'');
+  return s.trim();
+}
+function genUnify(){
+  loadGen(function(){
+    var map=window.GEN_CUST_MAP||{}, arr=loadAll();
+    var changes=[], idx={};
+    arr.forEach(function(r){
+      var cur=r.cust||''; if(!cur) return;
+      var gen=map[normCust(cur)];
+      if(gen&&gen!==cur){ var k=cur+''+gen; if(idx[k]===undefined){ idx[k]=changes.length; changes.push({from:cur,to:gen,n:0}); } changes[idx[k]].n++; }
+    });
+    if(!changes.length){ hubToast('✅ 既にGEN名称に統一済み（変更なし）'); return; }
+    var recCount=changes.reduce(function(s,c){return s+c.n;},0);
+    var preview=changes.slice(0,25).map(function(c){return '・'+c.from+' → '+c.to+' ('+c.n+')';}).join('\n');
+    var more=changes.length>25?('\n…ほか '+(changes.length-25)+' 社'):'';
+    if(!confirm('得意先名をGENの正式名称に統一します。\n\n'+changes.length+'社 / '+recCount+'件を変更:\n'+preview+more+'\n\n※元の名前は保持。あとで「↩ GEN統一を戻す」で戻せます。実行しますか？')) return;
+    showBusy('🔗 得意先名をGENに統一中…');
+    hubSave(function(db){
+      (db[COLL]||[]).forEach(function(r){ var cur=r.cust||''; var gen=map[normCust(cur)]; if(gen&&gen!==cur){ if(r._origCust===undefined) r._origCust=cur; r.cust=gen; } });
+    });
+    if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
+    showBusy('☁ 全社保存中…');
+    hubCloudPush().then(function(saved){ hideBusy(); buildCats(); render(); hubToast(saved?('✅ GEN名称に統一: '+changes.length+'社 '+recCount+'件'):('✅ 統一'+recCount+'件（端末内）。⚠本体アプリでログイン後に同期')); });
+  });
+}
+function genUnifyUndo(){
+  if(!confirm('GEN統一を取り消し、元の得意先名に戻します。よろしいですか？')) return;
+  var n=0;
+  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(r._origCust!==undefined){ r.cust=r._origCust; delete r._origCust; n++; } }); })){ buildCats(); render(); hubToast('↩ 元の名前に戻しました（'+n+'件）'); }
 }
 function seedImport(){
   if(!confirm('先ほどのExcel2つをまとめて投入します。\n・旧台帳(2026_顧客リスト.xls) → 過去履歴(全カテゴリ)\n・受注用(2027年カレンダー受注用.xlsx) → 2027年分\n再投入しても二重化しません。よろしいですか？')) return;
