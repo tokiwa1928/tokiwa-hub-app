@@ -128,6 +128,12 @@
       </label>
       <label class="chk"><input type="checkbox" id="o-caption" checked onchange="schedule()"> 上部キャプション</label>
     </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:10px;background:#fdf2f8;border:1px solid #fbcfe8;border-radius:8px;padding:8px 10px">
+      <label class="chk"><input type="checkbox" id="o-guide" onchange="schedule()"> 🔢 ノンブル位置ガイド線</label>
+      <label style="font-size:11px;color:#888;font-weight:600">下から<input type="number" id="o-guideh" value="10" min="0" step="0.5" oninput="schedule()" style="width:64px;text-align:right;margin-left:4px"> mm（水平線）</label>
+      <label style="font-size:11px;color:#888;font-weight:600">端から<input type="number" id="o-guidev" value="0" min="0" step="0.5" oninput="schedule()" style="width:64px;text-align:right;margin-left:4px"> mm（垂直線・0=なし）</label>
+      <span class="muted">各ページ同位置に線を引き、ノンブルが線上に揃うか確認できます</span>
+    </div>
     <div class="muted" style="margin-top:5px">※トンボは塗り足し3mmを自動表示（「塗り足し(bleed) mm」を入れた場合はその値）。データに塗り足しが無い時は「塗り足しを自動作成」で埋めます。複製＝端を鏡像でつくる（その面だけ画像化）／のばす＝端まで拡大（ベクターのまま）。</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
       <button class="btn btn-c" id="btn-prev" onclick="genSize(false)" disabled>👁 プレビュー更新</button>
@@ -366,7 +372,8 @@ function readOpts(){
     finW:(w>0?w:null), finH:(h>0?h:null), color:document.getElementById('o-color').value.split(',').map(Number),
     lw:Math.max(0.2,parseFloat(document.getElementById('o-lw').value)||0.75), dash:document.getElementById('o-dash').value==='dash',
     dim:document.getElementById('o-dim').checked, tonbo:document.getElementById('o-tonbo').checked,
-    autoBleed:document.getElementById('o-autobleed').checked, bleedMethod:(document.getElementById('o-bleedmethod')||{}).value||'mirror', caption:document.getElementById('o-caption').checked };
+    autoBleed:document.getElementById('o-autobleed').checked, bleedMethod:(document.getElementById('o-bleedmethod')||{}).value||'mirror', caption:document.getElementById('o-caption').checked,
+    guide:document.getElementById('o-guide').checked, guideH:parseFloat(document.getElementById('o-guideh').value)||0, guideV:parseFloat(document.getElementById('o-guidev').value)||0 };
 }
 async function buildProofPdf(srcBytes, opts){
   var P=PDFLib;
@@ -438,6 +445,10 @@ async function buildProofPdf(srcBytes, opts){
       var cap=mm(frW)+' x '+mm(frH)+' mm'+(idxs.length>1?('   '+(pi+1)+'/'+idxs.length):'');
       var cw=fontB.widthOfTextAtSize(cap,cs), cy=T+(marginPt-cs)/2+1;
       if(cy+cs<pageH) page.drawText(cap,{x:pageW/2-cw/2,y:cy,size:cs,font:fontB,color:col}); }
+    // ノンブル位置ガイド線（各ページ同位置・マゼンタ破線）。ノンブルが線上に乗るかで縦横の揃いを確認
+    if(opts.guide){ var gcol=P.rgb(0.9,0,0.55), gdash=[3,2];
+      if(opts.guideH>0){ var gy=B+opts.guideH*MM; if(gy>B&&gy<T) line(L,gy,R,gy,0.5,gcol,gdash); }
+      if(opts.guideV>0){ var gxl=L+opts.guideV*MM, gxr=R-opts.guideV*MM; if(gxl>L&&gxl<R) line(gxl,B,gxl,T,0.5,gcol,gdash); if(gxr>L&&gxr<R&&Math.abs(gxr-gxl)>1) line(gxr,B,gxr,T,0.5,gcol,gdash); } }
   }
   return await out.save();
 }
@@ -603,6 +614,8 @@ async function quick3D(){
     ];
     document.getElementById('q3d-check').innerHTML='<div style="display:flex;flex-wrap:wrap;gap:6px">'+checks.map(function(c){ var ok=c[2]; return '<span style="font-size:11.5px;padding:3px 9px;border-radius:14px;border:1px solid '+(ok?'#86efac':'#fcd34d')+';background:'+(ok?'#f0fdf4':'#fffbeb')+';color:'+(ok?'#166534':'#92400e')+'">'+(ok?'✓ ':'⚠ ')+c[0]+'：'+c[1]+'</span>'; }).join('')+'</div>';
     window._q3dDoc={ bytes:f.buf, pages:m.pages, cur:1, blank:false, W:W, H:H };
+    _q3dAutoMatchFromName();
+    if(document.getElementById('q3d-seiban').value){ try{ _q3dMatchCase(); }catch(mc){} }
     try{
       await _q3dShowPage(1);
       st.textContent='✅ 生成（全'+m.pages+'ページ）'+(m.pages>1?'／◀▶でページ移動・🔄で裏（次ページ）':'');
@@ -635,6 +648,16 @@ function _q3dUpdateNav(){
 function _q3dHubDB(){ try{ return JSON.parse(localStorage.getItem('murayama_v15')||'{}'); }catch(e){ return {}; } }
 function _pagesFromSpec(spec){ var m=String(spec||'').replace(/[０-９]/g,function(d){return String.fromCharCode(d.charCodeAt(0)-0xFEE0);}).match(/(\d{1,4})\s*(ページ|頁|P|ｐ)/i); return m?+m[1]:null; }
 function _projParts(p){ if(p.parts!=null&&!isNaN(+p.parts)) return +p.parts; var keys=['paperRows','rows','paper','parts','items','partsList']; for(var i=0;i<keys.length;i++){ if(Array.isArray(p[keys[i]])) return p[keys[i]].length; } return null; }
+// ファイル名から案件(製番)を自動判定して製番欄に入れる
+function _q3dAutoMatchFromName(){
+  var sb=document.getElementById('q3d-seiban'); if(!sb||sb.value) return;
+  var f=files[0]; if(!f) return; var name=(f.name||'').replace(/\.pdf$/i,'');
+  var n=name.replace(/\s/g,'');
+  var ps=_q3dHubDB().projects||[];
+  var hit=ps.find(function(p){ return p.id && n.indexOf(String(p.id).replace(/\s/g,''))>=0; });
+  if(hit){ sb.value=hit.id; return; }
+  var m=name.match(/([A-Za-z]{1,4}[-_ ]?\d{3,7})/); if(m){ sb.value=m[1].replace(/[_ ]/g,'-'); }
+}
 function _q3dMatchCase(){
   var box=document.getElementById('q3d-match');
   if(!files.length||!files[0].m){ box.innerHTML='<span class="muted">先にPDFを入れて「印刷イメージ(3D)を生成」してください</span>'; return; }
