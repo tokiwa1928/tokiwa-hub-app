@@ -188,6 +188,15 @@
       <span class="muted" id="me-status"></span>
     </div>
   </div>
+  <div class="sec" id="sec-cover">
+    <div class="st">📕 冊子の表紙データを作成（表1=1P／表2=2P／表3=最後の前／表4=最後・一番上のファイルが対象）</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-g" onclick="bookletCover()">⬇ 表紙＋本文を分割して出力（ZIP）</button>
+      <label class="chk"><input type="checkbox" id="o-cover-spread"> 表紙を見開き面付（外=表4|表1／内=表2|表3）</label>
+      <span class="muted" id="cover-status"></span>
+    </div>
+    <div class="muted" style="margin-top:5px">表紙＝別データ（表1・表2・表3・表4）、本文＝中ページに分けて出力します。</div>
+  </div>
   <div class="sec" id="sec-3d">
     <div class="st">📦 3Dプレビュー・クイックチェック（一番上のファイル）</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
@@ -738,7 +747,33 @@ function _q3dRender(){
   stage.onwheel=function(e){ e.preventDefault(); s.sc*=(e.deltaY<0?1.08:0.93); s.sc=Math.max(0.4,Math.min(3,s.sc)); _q3dApply(); };
 }
 
-window.__test={ measureFile:measureFile, sizeLabel:sizeLabel, buildProofPdf:buildProofPdf, meImposeCore:meImposeCore, renderPageImg:renderPageImg, paperStd:_paperStd,
+// 📕 冊子: 表紙(表1=1P/表2=2P/表3=最後の前/表4=最後)を別データに、本文を分けて出力
+async function bookletCover(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  var f=files[0]; var st=document.getElementById('cover-status'); st.textContent='⏳ 作成中…';
+  try{
+    var P=PDFLib; var src=await P.PDFDocument.load(f.buf,{ignoreEncryption:true}); var N=src.getPageCount();
+    if(N<4){ st.textContent=''; toast('表紙を作るには4ページ以上必要です（現在'+N+'ページ）'); return; }
+    var base=f.name.replace(/\.pdf$/i,''); var spread=document.getElementById('o-cover-spread').checked;
+    var zip=new JSZip();
+    var cov=await P.PDFDocument.create();
+    if(spread){
+      var sz=src.getPage(0).getSize(); var W=sz.width, H=sz.height;
+      var e1=await cov.embedPage(src.getPage(0)), e2=await cov.embedPage(src.getPage(1)), e3=await cov.embedPage(src.getPage(N-2)), e4=await cov.embedPage(src.getPage(N-1));
+      var po=cov.addPage([W*2,H]); po.drawPage(e4,{x:0,y:0,width:W,height:H}); po.drawPage(e1,{x:W,y:0,width:W,height:H}); // 外面 表4|表1
+      var pin=cov.addPage([W*2,H]); pin.drawPage(e2,{x:0,y:0,width:W,height:H}); pin.drawPage(e3,{x:W,y:0,width:W,height:H}); // 内面 表2|表3
+      zip.file(base+'_表紙_見開き(外=表4表1_内=表2表3).pdf', await cov.save());
+    } else {
+      var cps=await cov.copyPages(src,[0,1,N-2,N-1]); cps.forEach(function(p){cov.addPage(p);});
+      zip.file(base+'_表紙(表1表2表3表4).pdf', await cov.save());
+    }
+    if(N>4){ var body=await P.PDFDocument.create(); var bidx=[]; for(var i=2;i<=N-3;i++) bidx.push(i); var bps=await body.copyPages(src,bidx); bps.forEach(function(p){body.addPage(p);}); zip.file(base+'_本文('+bidx.length+'ページ).pdf', await body.save()); }
+    var zb=await zip.generateAsync({type:'blob'}); var u=URL.createObjectURL(zb); var a=document.createElement('a'); a.href=u; a.download=base+'_表紙分割.zip'; a.click(); setTimeout(function(){URL.revokeObjectURL(u);},5000);
+    st.textContent='✅ 表紙'+(spread?'(見開き)':'(表1〜表4)')+'＋本文'+(N>4?'('+(N-4)+'ページ)':'なし')+' を出力';
+  }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); }
+}
+
+window.__test={ measureFile:measureFile, sizeLabel:sizeLabel, buildProofPdf:buildProofPdf, meImposeCore:meImposeCore, renderPageImg:renderPageImg, paperStd:_paperStd, bookletCover:bookletCover,
   pushBuf:async function(name,buf){ var rec={id:++_idseq,name:name,buf:buf,pages:0,m:null}; try{var d=await PDFLib.PDFDocument.load(buf,{ignoreEncryption:true}); rec.pages=d.getPageCount();}catch(e){} rec.m=await measureFile(buf); files.push(rec); render(); return files.length-1; },
   rec:function(i){return files[i];}, state:function(){return {count:files.length, lastName:_lastName};} };
 </script>
