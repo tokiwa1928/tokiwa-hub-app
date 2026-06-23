@@ -143,6 +143,7 @@
       </select>
       <button class="btn" onclick="bulkCopyLastYear()" title="昨年の受注内容を今年へ一括コピー(製品・外注先を引継ぎ)" style="background:#e0f2fe;border-color:#7dd3fc">📋 昨年をコピー</button>
       <button class="btn" onclick="seedImport()" title="先ほどのExcel2つ(旧台帳＋受注用)をまとめて投入" style="background:#fef3c7;border-color:#fcd34d">📦 初期投入</button>
+      <button class="btn" onclick="import2024()" title="抜けていた2024年分(2024顧客リスト.xls)を取り込む" style="background:#fef3c7;border-color:#fcd34d">📥 2024年取込</button>
       <button class="btn" onclick="genUnify()" title="得意先名をGENの正式名称に統一(確認あり・元に戻せます)" style="background:#dcfce7;border-color:#86efac">🔗 GENで名称統一</button>
       <button class="btn" onclick="genUnifyUndo()" title="GEN統一を取り消して元の名前に戻す" style="font-size:11px;padding:6px 8px">↩ 統一を戻す</button>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
@@ -1047,16 +1048,46 @@ function genUnifyUndo(){
   var n=0;
   if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(r._origCust!==undefined){ r.cust=r._origCust; delete r._origCust; n++; } }); })){ buildCats(); render(); hubToast('↩ 元の名前に戻しました（'+n+'件）'); }
 }
+// ─ 📥 2024年データ取込（抜けていた2024顧客リスト.xls → 2024履歴）─
+function load2024(cb){
+  if(window.JUCHU_2024) return cb();
+  var s=document.createElement('script'); s.src='calendar-juchu-2024.js?v=1';
+  s.onload=function(){ cb(); };
+  s.onerror=function(){ hideBusy(); hubToast('❌ 2024データの読込に失敗（calendar-juchu-2024.js）'); };
+  document.head.appendChild(s);
+}
+function applyJuchu2024(){   // 冪等: 2024履歴のみ入替（他年・受注用・手入力は不変）
+  var recs=window.JUCHU_2024||[]; var n=0;
+  hubSave(function(db){
+    var arr=db[COLL]||(db[COLL]=[]);
+    var keep=arr.filter(function(x){ return !(x.year===2024 && x._src==='旧台帳移行'); });
+    db[COLL]=recs.map(function(r){ return newRecord(r); }).concat(keep);
+    n=recs.length;
+  });
+  return n;
+}
+function import2024(){
+  showBusy('📥 2024年データを読込中…');
+  load2024(function(){
+    setTimeout(function(){
+      var n=applyJuchu2024();
+      if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
+      showBusy('☁ 全社保存中…');
+      hubCloudPush().then(function(saved){ hideBusy(); buildYears(); buildCats(); render(); hubToast(saved?('✅ 2024年分を取込: '+n+'件（カレンダー/業社/米屋/酒版/ミニ）'):('✅ 2024年 '+n+'件（端末内）。⚠本体アプリでログイン後に同期')); });
+    },30);
+  });
+}
 function seedImport(){
-  if(!confirm('先ほどのExcel2つをまとめて投入します。\n・旧台帳(2026_顧客リスト.xls) → 過去履歴(全カテゴリ)\n・受注用(2027年カレンダー受注用.xlsx) → 2027年分\n再投入しても二重化しません。よろしいですか？')) return;
+  if(!confirm('先ほどのExcel2つ＋2024年分をまとめて投入します。\n・旧台帳(2026_顧客リスト.xls) → 過去履歴(全カテゴリ)\n・2024年分(2024顧客リスト.xls) → 2024履歴\n・受注用(2027年カレンダー受注用.xlsx) → 2027年分\n再投入しても二重化しません。よろしいですか？')) return;
   showBusy('📦 初期データを投入中…');
-  loadSeed(function(){
+  loadSeed(function(){ load2024(function(){
     setTimeout(function(){   // オーバーレイを先に描画してから重い処理へ
       try {
         var S = window.JUCHU_SEED, before = loadAll().length;
         var r1 = importWorkbook(XLSX.read(b64ToBytes(S.old), { type:'array', codepage:932 }), true) || {added:0,updated:0};
         var r2 = importWorkbook(XLSX.read(b64ToBytes(S.juchu), { type:'array', codepage:932 }), true) || {added:0,updated:0};
-        var total = loadAll().length, added=(r1.added||0)+(r2.added||0), updated=(r1.updated||0)+(r2.updated||0);
+        var n2024 = applyJuchu2024();
+        var total = loadAll().length, added=(r1.added||0)+(r2.added||0)+n2024, updated=(r1.updated||0)+(r2.updated||0);
         if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
         showBusy('☁ 全社保存中…');
         hubCloudPush().then(function(saved){
@@ -1066,7 +1097,7 @@ function seedImport(){
         });
       } catch(e){ hideBusy(); console.error(e); hubToast('❌ 初期投入エラー: '+e.message); }
     }, 60);
-  });
+  }); });
 }
 function showBusy(m){ var b=document.getElementById('busy'); if(!b) return; document.getElementById('busy-msg').textContent=m||'処理中…'; b.style.display='flex'; }
 function hideBusy(){ var b=document.getElementById('busy'); if(b) b.style.display='none'; }
