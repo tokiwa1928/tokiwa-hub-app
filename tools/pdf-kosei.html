@@ -204,6 +204,11 @@
       </label>
       <span class="muted" id="q3d-status"></span>
     </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <label style="font-size:11px;color:#888;font-weight:600">製番 <input id="q3d-seiban" placeholder="例 TK-1042" style="font-size:13px;padding:4px 8px;border:1px solid #d0cec8;border-radius:6px;width:140px"></label>
+      <button class="btn" onclick="_q3dMatchCase()" style="font-size:12px;padding:5px 12px">🔍 案件管理と照合（サイズ・ページ・パーツ）</button>
+    </div>
+    <div id="q3d-match" style="margin-top:6px"></div>
     <div id="q3d-check" style="margin-top:8px"></div>
     <div id="q3d-stage" style="display:none;margin-top:10px;height:360px;border-radius:10px;background:linear-gradient(160deg,#eef2f7,#d7dee7);overflow:hidden;perspective:1500px;align-items:center;justify-content:center;cursor:grab;user-select:none"></div>
     <div class="muted" id="q3d-hint" style="margin-top:5px;display:none">🖱 ドラッグで回転／ホイールで拡大・縮小</div>
@@ -239,6 +244,7 @@ var CTX=(function(){
     if(h>0) document.getElementById('o-h').value=h;
     if(b>=0&&!isNaN(b)) document.getElementById('o-bleed').value=b;
     if(m>0) document.getElementById('o-margin').value=m;
+    if(c.seiban){ var sbel=document.getElementById('q3d-seiban'); if(sbel) sbel.value=c.seiban; }
     if(c.seiban||c.cust||c.prod||c.name){
       var bn=document.getElementById('ctx-banner'); bn.style.display='block';
       bn.innerHTML='📐 校正BOXから引き継ぎ：'
@@ -624,6 +630,32 @@ function _q3dPage(d){ var doc=window._q3dDoc; if(!doc||doc.blank) return; var st
 function _q3dUpdateNav(){
   var doc=window._q3dDoc; var nav=document.getElementById('q3d-nav');
   if(nav){ if(doc && doc.pages>1 && !doc.blank){ nav.style.display='inline-flex'; var lbl=document.getElementById('q3d-pagelbl'); if(lbl) lbl.textContent='ページ '+doc.cur+' / '+doc.pages; } else nav.style.display='none'; }
+}
+// ── 案件管理との照合（サイズ・ページ数・パーツ数）──
+function _q3dHubDB(){ try{ return JSON.parse(localStorage.getItem('murayama_v15')||'{}'); }catch(e){ return {}; } }
+function _pagesFromSpec(spec){ var m=String(spec||'').replace(/[０-９]/g,function(d){return String.fromCharCode(d.charCodeAt(0)-0xFEE0);}).match(/(\d{1,4})\s*(ページ|頁|P|ｐ)/i); return m?+m[1]:null; }
+function _projParts(p){ if(p.parts!=null&&!isNaN(+p.parts)) return +p.parts; var keys=['paperRows','rows','paper','parts','items','partsList']; for(var i=0;i<keys.length;i++){ if(Array.isArray(p[keys[i]])) return p[keys[i]].length; } return null; }
+function _q3dMatchCase(){
+  var box=document.getElementById('q3d-match');
+  if(!files.length||!files[0].m){ box.innerHTML='<span class="muted">先にPDFを入れて「印刷イメージ(3D)を生成」してください</span>'; return; }
+  var seiban=(document.getElementById('q3d-seiban').value||'').trim();
+  if(!seiban){ box.innerHTML='<span class="muted">製番を入力してください</span>'; return; }
+  var ps=(_q3dHubDB().projects||[]);
+  var pj=ps.find(function(p){return String(p.id||'')===seiban;})||ps.find(function(p){return String(p.id||'').replace(/\s/g,'').indexOf(seiban.replace(/\s/g,''))>=0;});
+  if(!pj){ box.innerHTML='<span style="color:#b45309;font-size:12px">⚠ 製番「'+esc(seiban)+'」の案件が見つかりません（このブラウザの本体データに無い可能性。本体にログイン済みか確認してください）</span>'; return; }
+  var m=files[0].m; var W=m.hasTonbo?m.trimW:m.mediaW, H=m.hasTonbo?m.trimH:m.mediaH;
+  var pdfStd=_paperStd(W,H); var pdfSize=(pdfStd?pdfStd+' ':'')+'('+mm(W)+'×'+mm(H)+'mm)';
+  var pjSize=pj.size||''; var pjPages=(pj.pages!=null&&pj.pages!=='')?pj.pages:_pagesFromSpec(pj.spec); var pjParts=_projParts(pj);
+  var sizeOk = pjSize ? ( (pdfStd && (pjSize.replace(/\s/g,'').toUpperCase()===pdfStd.toUpperCase()||pjSize.replace(/\s/g,'').toUpperCase().indexOf(pdfStd.toUpperCase())>=0)) ) : null;
+  var pagesOk = (pjPages!=null&&pjPages!=='') ? (Number(pjPages)===Number(m.pages)) : null;
+  function row(label,pdfV,pjV,ok){ var brd=ok===null?'#e2e8f0':(ok?'#86efac':'#fca5a5'); var bg=ok===null?'#f8fafc':(ok?'#f0fdf4':'#fef2f2'); var col=ok===null?'#94a3b8':(ok?'#166534':'#b91c1c'); var mark=ok===null?'－':(ok?'✓':'⚠');
+    return '<div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:4px 8px;border:1px solid '+brd+';background:'+bg+';border-radius:6px;margin-top:4px"><b style="color:'+col+';width:16px">'+mark+'</b><span style="width:64px;font-weight:700">'+label+'</span><span style="flex:1">PDF: '+pdfV+'</span><span style="flex:1">案件: '+pjV+'</span></div>'; }
+  var html='<div style="font-weight:700;font-size:12px;color:#334;margin-bottom:2px">📋 案件「'+esc(pj.item||pj.id)+'」（'+esc(pj.id)+'）と照合</div>';
+  html+=row('サイズ', pdfSize, pjSize||'(案件に未登録)', sizeOk);
+  html+=row('ページ数', m.pages+'ページ', (pjPages!=null&&pjPages!==''?pjPages+'ページ':'(案件に未登録)'), pagesOk);
+  html+=row('パーツ数', '（PDFからは測定不可）', (pjParts!=null?pjParts:'(案件に未登録)'), null);
+  html+='<div class="muted" style="margin-top:4px">※サイズ/ページ数は自動判定（✓一致／⚠不一致）。パーツ数はPDFから測れないため案件の値を参考表示します。</div>';
+  box.innerHTML=html;
 }
 var _q3dS=null;
 function _build3D(front, back, mode){
