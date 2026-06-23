@@ -193,6 +193,11 @@
           <option value="fold3">三つ折り（巻き）</option>
         </select>
       </label>
+      <span id="q3d-nav" style="display:none;align-items:center;gap:4px">
+        <button class="btn" onclick="_q3dPage(-1)" style="font-size:12px;padding:5px 10px">◀</button>
+        <span class="muted" id="q3d-pagelbl" style="min-width:90px;text-align:center">ページ 1 / 1</span>
+        <button class="btn" onclick="_q3dPage(1)" style="font-size:12px;padding:5px 10px">▶</button>
+      </span>
       <button class="btn" id="q3d-flip" onclick="_q3dFlip()" style="display:none;font-size:12px;padding:5px 12px">🔄 裏返す</button>
       <label id="q3d-foldwrap" style="display:none;align-items:center;gap:6px;font-size:11px;color:#888;font-weight:600">折り具合
         <input type="range" id="q3d-fold" min="0" max="100" value="70" oninput="_q3dFoldChange(this.value)" style="width:120px">
@@ -591,21 +596,34 @@ async function quick3D(){
       ['定形サイズ', std||'非定形（要確認）', !!std]
     ];
     document.getElementById('q3d-check').innerHTML='<div style="display:flex;flex-wrap:wrap;gap:6px">'+checks.map(function(c){ var ok=c[2]; return '<span style="font-size:11.5px;padding:3px 9px;border-radius:14px;border:1px solid '+(ok?'#86efac':'#fcd34d')+';background:'+(ok?'#f0fdf4':'#fffbeb')+';color:'+(ok?'#166534':'#92400e')+'">'+(ok?'✓ ':'⚠ ')+c[0]+'：'+c[1]+'</span>'; }).join('')+'</div>';
+    window._q3dDoc={ bytes:f.buf, pages:m.pages, cur:1, blank:false, W:W, H:H };
     try{
-      var front=await Promise.race([ renderPageImg(f.buf, 1, 1.6), new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('render-timeout')); }, 15000); }) ]);
-      var back=null; if(m.pages>=2){ try{ back=await renderPageImg(f.buf, 2, 1.6); }catch(be){} }
-      window._q3dLast={ front:front, back:back };
-      _build3D(front, back, document.getElementById('q3d-mode').value);
-      st.textContent='✅ 生成しました（表'+(back?'＋裏（2ページ目）':'のみ')+'／全'+m.pages+'ページ）';
+      await _q3dShowPage(1);
+      st.textContent='✅ 生成（全'+m.pages+'ページ）'+(m.pages>1?'／◀▶でページ移動・🔄で裏（次ページ）':'');
     }catch(reErr){
+      window._q3dDoc.blank=true;
       var aspect=(H>0?H/W:1.4); var bw=300, bh=Math.round(bw*aspect);
       var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+bw+'" height="'+bh+'"><rect width="100%" height="100%" fill="white" stroke="%23cbd5e1"/><text x="'+(bw/2)+'" y="'+(bh/2)+'" font-size="18" fill="%23334" text-anchor="middle">'+mm(W)+' x '+mm(H)+' mm</text></svg>';
       var blank={ url:'data:image/svg+xml,'+encodeURIComponent(svg), w:bw, h:bh, pages:m.pages };
       window._q3dLast={ front:blank, back:null };
-      _build3D(blank, null, document.getElementById('q3d-mode').value);
+      _build3D(blank, null, document.getElementById('q3d-mode').value); _q3dUpdateNav();
       st.textContent='✅ チェック完了（プレビュー画像はこの環境では生成できませんでした／本番ブラウザでは表示されます）';
     }
   }catch(e){ st.textContent=''; toast('❌ 失敗: '+(e.message||e)); console.error(e); }
+}
+async function _q3dShowPage(n){
+  var doc=window._q3dDoc; if(!doc) return;
+  doc.cur=Math.max(1,Math.min(doc.pages,n));
+  var front=await Promise.race([ renderPageImg(doc.bytes, doc.cur, 1.6), new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('render-timeout')); }, 15000); }) ]);
+  var back=null; if(doc.cur+1<=doc.pages){ try{ back=await renderPageImg(doc.bytes, doc.cur+1, 1.6); }catch(be){} }
+  window._q3dLast={ front:front, back:back };
+  _build3D(front, back, document.getElementById('q3d-mode').value);
+  _q3dUpdateNav();
+}
+function _q3dPage(d){ var doc=window._q3dDoc; if(!doc||doc.blank) return; var st=document.getElementById('q3d-status'); st.textContent='⏳ ページ生成中…'; _q3dShowPage(doc.cur+d).then(function(){ st.textContent='✅ ページ '+doc.cur+' / '+doc.pages; }).catch(function(e){ st.textContent='❌ '+(e&&e.message||e); }); }
+function _q3dUpdateNav(){
+  var doc=window._q3dDoc; var nav=document.getElementById('q3d-nav');
+  if(nav){ if(doc && doc.pages>1 && !doc.blank){ nav.style.display='inline-flex'; var lbl=document.getElementById('q3d-pagelbl'); if(lbl) lbl.textContent='ページ '+doc.cur+' / '+doc.pages; } else nav.style.display='none'; }
 }
 var _q3dS=null;
 function _build3D(front, back, mode){
