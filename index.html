@@ -20009,6 +20009,12 @@ function openMitsumori(id){
   ed.innerHTML = '<div class="sec" style="max-width:1080px">'
     + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap"><button class="btn" onclick="_formBackToList_()">← 一覧</button><strong style="font-size:16px">🧾 見積書'+(id?'（編集）':'（新規）')+'</strong>'
     +   '<span style="margin-left:auto;font-size:11px;color:#94a3b8">提出版PDFを出力（社内の原価対比は印刷されません）</span></div>'
+    + '<div style="background:linear-gradient(90deg,#eef2ff,#f5f3ff);border:1px solid #c7d2fe;border-radius:10px;padding:8px 10px;margin-bottom:10px">'
+    +   '<div style="font-size:12px;font-weight:700;color:#4338ca;margin-bottom:4px">🤖 AIで下書き（Gemini）— 依頼内容を書いて「AIで入力」</div>'
+    +   '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start">'
+    +     '<textarea id="mit-ai-input" rows="2" placeholder="例: 高部屋小学校の運動会チラシ、A4両面カラー1000部、本文4ページ。印刷と製本込みで。" style="flex:1;min-width:240px;font-size:12.5px;padding:6px 8px;border:1px solid #c7d2fe;border-radius:6px;box-sizing:border-box;resize:vertical"></textarea>'
+    +     '<button class="btn" style="background:#4f46e5;border-color:#4f46e5;color:#fff;font-size:12px;padding:6px 14px;white-space:nowrap" onclick="_mitAiFill_()">✨ AIで入力</button>'
+    +   '</div><div id="mit-ai-result" style="margin-top:5px;font-size:11.5px;color:#64748b"></div></div>'
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 14px">'
     +   fld('会社','<select id="mit-co" onchange="_mitFillCo_()" style="'+st+'"><option value="arteso"'+(co==='arteso'?' selected':'')+'>有限会社アート・エス</option><option value="nakao"'+(co==='nakao'?' selected':'')+'>中尾印刷</option></select>')
     +   fld('種別','<select id="mit-type" style="'+st+'"><option'+(v('type','御見積書')==='御見積書'?' selected':'')+'>御見積書</option><option'+(v('type')==='参考見積書'?' selected':'')+'>参考見積書</option></select>')
@@ -20051,6 +20057,28 @@ function openMitsumori(id){
   var tb=document.getElementById('mit-body'); tb.innerHTML=items.map(function(it){ return _mitRow_(it); }).join('');
   _mitFillCo_(true); _mitCalc_(); _mitBuildDatalists_(); _mitRecallPrev_();
   _mitLoadFolderCusts_(document.getElementById('mit-co').value); // Driveの得意先一覧を非同期取得
+}
+// 🤖 AIで下書き（Gemini）: 依頼文→見積項目を抽出してフォームに反映
+async function _mitAiFill_(){
+  var inp=document.getElementById('mit-ai-input'); var t=(inp&&inp.value||'').trim();
+  var rb=document.getElementById('mit-ai-result');
+  if(!t){ if(rb) rb.innerHTML='<span style="color:#b91c1c">依頼内容を入力してください</span>'; return; }
+  if(rb) rb.innerHTML='⏳ AI解析中…（Gemini）';
+  try{
+    var r=await callCloudAPI('geminiMitParse', {}, { text:t, co:_mitCurCo_() });
+    if(r && r.success && r.data){ _mitApplyParsed_(r.data); if(rb) rb.innerHTML='✅ 反映しました。内容を確認・修正してください（金額は必要に応じ入力）'; if(typeof _toastMsg==='function')_toastMsg('🤖 AIで下書きを反映しました'); }
+    else { if(rb) rb.innerHTML='<span style="color:#b91c1c">❌ '+((r&&r.error)||'解析失敗')+'</span>'; }
+  }catch(e){ if(rb) rb.innerHTML='<span style="color:#b91c1c">❌ 通信エラー: '+(e.message||e)+'</span>'; }
+}
+function _mitApplyParsed_(d){
+  function set(id,val){ var e=document.getElementById(id); if(e && val!=null && String(val)!=='') e.value=val; }
+  set('mit-to',d.to); set('mit-subject',d.subject); set('mit-prod',d.prod); set('mit-size',d.size); set('mit-color',d.color); set('mit-qty',d.qty); set('mit-pages',d.pages);
+  if(d.note){ var n=document.getElementById('mit-note'); if(n) n.value=(n.value?n.value+'\n':'')+d.note; }
+  if(Array.isArray(d.items) && d.items.length){
+    var items=d.items.map(function(it){ it=it||{}; var x={ kubun:it.kubun||'', naiyo:it.naiyo||'', tanka:(it.tanka==null?'':it.tanka), suryo:(it.suryo==null?'':it.suryo), tani:it.tani||'式', hacchu:it.hacchu||'', genka:(it.genka==null?'':it.genka) }; var g=parseFloat(x.genka)||0,tk=parseFloat(x.tanka)||0; if(g>0&&tk>0) x.genkaritsu=Math.round(g/tk*1000)/10; return x; });
+    var tb=document.getElementById('mit-body'); if(tb) tb.innerHTML=items.map(function(it){ return _mitRow_(it); }).join('');
+  }
+  _mitCalc_(); if(typeof _mitRecallPrev_==='function')_mitRecallPrev_(); if(typeof _mitBuildDatalists_==='function')_mitBuildDatalists_();
 }
 function _mitFillCo_(keep){
   var co=document.getElementById('mit-co').value; var p=MIT_CO[co]||MIT_CO.arteso;
