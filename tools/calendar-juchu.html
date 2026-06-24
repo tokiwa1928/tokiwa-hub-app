@@ -1235,9 +1235,19 @@ function applyMig(need2024, needGen){
       arr=db[COLL]=window.JUCHU_2024.map(function(r,i){ return newRecord(Object.assign({id:'cal2024_'+i}, r)); }).concat(keep);
       m['CAL2024-1']=true; changed=true; msg.push('2024年'+window.JUCHU_2024.length+'件');
     }
-    if(needGen && window.GEN_CUST_MAP){
-      var c=0; arr.forEach(function(r){ var cur=r.cust||''; var g=window.GEN_CUST_MAP[normCust(cur)]; if(g&&g!==cur){ r.cust=g; c++; } });
-      m['CALGEN-1']=true; changed=true; if(c) msg.push('得意先名統一'+c+'件');
+    if(needGen && (window.GEN_REF || window.GEN_CUST_MAP)){
+      var refMap=window.GEN_REF||{}, nameMap=window.GEN_CUST_MAP||{}, nd=0, nc=0;
+      arr.forEach(function(r){
+        var ref=(r.ref==null?'':String(r.ref)).trim();
+        if(ref && r.denpyoNo!==ref){ r.denpyoNo=ref; nd++; }          // 伝票番号＝受注番号
+        if(ref && refMap[ref]){                                        // GENに有り→得意先/ユーザーをGEN正に
+          if(refMap[ref][0] && r.cust!==refMap[ref][0]){ r.cust=refMap[ref][0]; nc++; }
+          if(refMap[ref][1] && !r.user){ r.user=refMap[ref][1]; }
+        } else {                                                       // refなし→名称統一で寄せる
+          var g=nameMap[normCust(r.cust||'')]; if(g && g!==r.cust){ r.cust=g; nc++; }
+        }
+      });
+      m['CALGEN-1']=true; m['CALGEN-2']=true; changed=true; if(nd) msg.push('伝票番号'+nd+'件'); if(nc) msg.push('得意先'+nc+'件');
     }
   });
   if(changed){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildYears(); buildCats(); render(); if(msg.length) hubToast('✅ 自動更新: '+msg.join(' / ')); }); }
@@ -1245,7 +1255,7 @@ function applyMig(need2024, needGen){
 function autoMigrate(){
   var db=hubLoad(); if(!db||!Array.isArray(db[COLL])||!db[COLL].length) return;   // データが無い時は何もしない
   var marks=db._calMig||{};
-  var need2024=!marks['CAL2024-1'], needGen=!marks['CALGEN-1'];
+  var need2024=!marks['CAL2024-1'], needGen=!marks['CALGEN-2'];   // CALGEN-2=受注番号でGEN突合(伝票番号+得意先)
   if(!need2024 && !needGen) return;
   var loaders=[]; if(need2024) loaders.push(load2024); if(needGen) loaders.push(loadGen);
   var i=0;(function next(){ if(i>=loaders.length){ applyMig(need2024,needGen); return; } loaders[i++](next); })();
