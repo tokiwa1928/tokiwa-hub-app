@@ -19862,6 +19862,11 @@ var MIT_CO = {
   arteso:{ name:'有限会社アート・エス', rep:'代表取締役 飯島大輔', zip:'〒259-1137', addr:'伊勢原市笠窪331-1', tel:'0463-96-6264', fax:'0463-96-6252' },
   nakao:{ name:'中尾印刷', rep:'本多 亮', zip:'〒442-0051', addr:'愛知県豊川市中央通３丁目２２', tel:'0533-86-2046', fax:'' }
 };
+// 会社別の既定LINE WORKSトークルーム（見積URL送信先）
+var MIT_LW_ROOMS = {
+  arteso:{ name:'アートエス', targetId:'9e4eafcd-22a5-c2bc-cf1d-22b75b38653d' }
+  // nakao:{ name:'中尾印刷', targetId:'...' }  // 中尾のルームIDが分かれば追記
+};
 function _formsList_(){ if(!window.DB) window.DB={}; if(!Array.isArray(DB.forms)) DB.forms=[]; return DB.forms; }
 function _formEsc_(s){ return (typeof _escDiff==='function')?_escDiff(s):String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function _formWho_(){ return (typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||''; }
@@ -20149,40 +20154,74 @@ async function saveMitsumoriDrive(){
     else { if(box) box.innerHTML='<span style="color:#b91c1c">❌ '+((r&&r.error)||'保存失敗（バックエンド未対応の可能性）')+'</span>'; }
   }catch(e){ if(box) box.innerHTML='<span style="color:#b91c1c">❌ 通信エラー: '+(e.message||e)+'</span>'; }
 }
-// LINE WORKS 送信UI（トークルームへPDFのURLを送る → タップでプレビュー→印刷）
-function _mitRenderLwSend_(){
-  var box=document.getElementById('mit-lw-box'); if(!box) return;
-  var rooms=[]; try{ rooms=(typeof _getContactTargets_==='function'?_getContactTargets_():[]).filter(function(t){ return t.type==='lw_channel'; }); }catch(e){}
-  var opts=rooms.map(function(t){ return '<option value="'+_formEsc_(t.targetId)+'">'+_formEsc_(t.name||t.targetId)+'</option>'; }).join('');
-  var html='<div style="background:#ecfeff;border:1px solid #a5f3fc;border-radius:8px;padding:8px 10px;font-size:12px">'
-    + '<b>📲 LINE WORKS のトークルームへ送信</b>（URLをタップ→プレビュー→印刷）<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
-  if(rooms.length){ html+='<select id="mit-lw-room" style="font-size:12px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;min-width:160px">'+opts+'</select>'; }
-  else { html+='<input id="mit-lw-newname" placeholder="ルーム名（例: 営業）" style="font-size:12px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;width:130px"><input id="mit-lw-newid" placeholder="トークルームID" style="font-size:12px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;width:200px">'; }
-  html+='<button class="btn" style="background:#06b6d4;border-color:#06b6d4;color:#fff;font-size:12px;padding:5px 12px" onclick="_mitSendLineworks_()">送信</button>'
-    + (rooms.length?'<span style="font-size:10.5px;color:#0e7490">※宛先は連絡宛先マスタで管理</span>':'<span style="font-size:10.5px;color:#0e7490">※初回はルーム名＋IDを入力（保存して次回から選択可）</span>')
-    + '</div><div id="mit-lw-result" style="margin-top:6px;font-size:11.5px"></div></div>';
-  box.innerHTML=html;
-}
-async function _mitSendLineworks_(){
-  var L=window._mitLastDrive_; if(!L){ return; }
-  var rb=document.getElementById('mit-lw-result');
-  var sel=document.getElementById('mit-lw-room');
-  var targetId='', roomName='';
-  if(sel){ targetId=sel.value; roomName=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].text:''; }
-  else {
-    var nm=document.getElementById('mit-lw-newname'), idv=document.getElementById('mit-lw-newid');
-    targetId=(idv&&idv.value||'').trim(); roomName=(nm&&nm.value||'').trim()||targetId;
-    if(!targetId){ if(rb) rb.innerHTML='<span style="color:#b91c1c">トークルームIDを入力してください</span>'; return; }
-    // 連絡宛先マスタへ登録して次回から選択可能に
-    try{ var arr=_getContactTargets_(); arr.push({ id:'ct_'+Date.now(), name:roomName, type:'lw_channel', targetId:targetId, group:'見積', createdAt:new Date().toISOString() }); if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){} }catch(e){}
-  }
+// 見積URLの送信UI（LINE WORKS トークルーム / メール → タップでプレビュー→印刷）
+function _mitSendMsg_(L){
   var co=(typeof MIT_CO!=='undefined'&&MIT_CO[L.co])?MIT_CO[L.co].name:'';
-  var msg='【'+(L.type||'御見積書')+'】'+(L.cust||'')+'\n'
+  return '【'+(L.type||'御見積書')+'】'+(L.cust||'')+'\n'
     + (L.subject?('件名: '+L.subject+'\n'):'')
     + (L.prod?('品名: '+L.prod+'\n'):'')
     + (co?(co+'\n'):'')
     + '\n▼PDF（タップでプレビュー→印刷）\n'+L.pdfUrl
     + '\n\n▼スプレッドシート\n'+L.sheetUrl;
+}
+function _mitRenderLwSend_(){
+  var box=document.getElementById('mit-lw-box'); if(!box) return;
+  var L=window._mitLastDrive_||{}; var co=L.co||'arteso';
+  // LINE WORKS トークルーム候補: 会社別既定 + 連絡宛先マスタ(lw_channel)
+  var rooms=[]; var seen={};
+  if(typeof MIT_LW_ROOMS!=='undefined' && MIT_LW_ROOMS[co]){ var d=MIT_LW_ROOMS[co]; rooms.push({name:d.name+'（既定）',targetId:d.targetId}); seen[d.targetId]=1; }
+  try{ (typeof _getContactTargets_==='function'?_getContactTargets_():[]).filter(function(t){return t.type==='lw_channel';}).forEach(function(t){ if(t.targetId&&!seen[t.targetId]){ rooms.push({name:t.name||t.targetId,targetId:t.targetId}); seen[t.targetId]=1; } }); }catch(e){}
+  var roomOpts=rooms.map(function(t){ return '<option value="'+_formEsc_(t.targetId)+'">'+_formEsc_(t.name)+'</option>'; }).join('');
+  var ist='font-size:12px;padding:5px 8px;border:1px solid #ccc;border-radius:6px';
+  var lwInner = rooms.length
+    ? '<select id="mit-lw-room" style="'+ist+';min-width:160px">'+roomOpts+'</select><span style="font-size:10.5px;color:#0e7490">※宛先は連絡宛先マスタで管理</span>'
+    : '<input id="mit-lw-newname" placeholder="ルーム名（例: 営業）" style="'+ist+';width:130px"><input id="mit-lw-newid" placeholder="トークルームID" style="'+ist+';width:200px"><span style="font-size:10.5px;color:#0e7490">※初回はルーム名＋IDを入力（保存され次回から選択可）</span>';
+  var html='<div style="background:#f6f4ee;border:1px solid #e2ded4;border-radius:8px;padding:8px 10px;font-size:12px">'
+    + '<b>📨 見積を送信</b>（URLをタップ→プレビュー→印刷）'
+    + '<div style="margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px">'
+    +   '<label style="cursor:pointer"><input type="radio" name="mit-send-ch" value="lw" checked onchange="_mitSendChToggle_()"> 📲 LINE WORKS</label>'
+    +   '<label style="cursor:pointer"><input type="radio" name="mit-send-ch" value="mail" onchange="_mitSendChToggle_()"> ✉️ メール</label>'
+    + '</div>'
+    + '<div id="mit-send-lw" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+lwInner+'</div>'
+    + '<div id="mit-send-mail" style="margin-top:6px;display:none;gap:6px;flex-wrap:wrap;align-items:center">'
+    +   '<input id="mit-mail-to" placeholder="送信先メールアドレス" style="'+ist+';width:230px"><span style="font-size:10.5px;color:#92400e">※トキワのGmailから送信されます</span>'
+    + '</div>'
+    + '<div style="margin-top:8px"><button class="btn" style="background:#06b6d4;border-color:#06b6d4;color:#fff;font-size:12px;padding:5px 14px" onclick="_mitSend_()">送信</button>'
+    +   '<span id="mit-send-result" style="margin-left:8px;font-size:11.5px"></span></div></div>';
+  box.innerHTML=html;
+}
+function _mitSendChToggle_(){
+  var ch=(document.querySelector('input[name="mit-send-ch"]:checked')||{}).value||'lw';
+  var lw=document.getElementById('mit-send-lw'), ml=document.getElementById('mit-send-mail');
+  if(lw) lw.style.display = ch==='lw' ? 'flex':'none';
+  if(ml) ml.style.display = ch==='mail' ? 'flex':'none';
+}
+async function _mitSend_(){
+  var L=window._mitLastDrive_; if(!L) return;
+  var rb=document.getElementById('mit-send-result');
+  var ch=(document.querySelector('input[name="mit-send-ch"]:checked')||{}).value||'lw';
+  var msg=_mitSendMsg_(L);
+  if(ch==='mail'){
+    var to=(document.getElementById('mit-mail-to')||{}).value||''; to=to.trim();
+    if(!to || to.indexOf('@')<0){ if(rb) rb.innerHTML='<span style="color:#b91c1c">送信先メールアドレスを入力してください</span>'; return; }
+    var subj=(L.type||'御見積書')+'：'+(L.cust||'')+(L.subject?(' '+L.subject):'');
+    if(rb) rb.innerHTML='⏳ 送信中…';
+    try{
+      var rm=await callCloudAPI('forwardInquiryToEmail', {}, { replyTo:to, subject:subj, body:msg, by:(currentAuth&&currentAuth.userName)||'' });
+      if(rm && rm.success){ if(rb) rb.innerHTML='✅ '+_formEsc_(to)+' へメール送信しました'; if(typeof _toastMsg==='function')_toastMsg('✉️ メール送信しました'); }
+      else { if(rb) rb.innerHTML='<span style="color:#b91c1c">❌ '+((rm&&rm.error)||'送信失敗')+'</span>'; }
+    }catch(e){ if(rb) rb.innerHTML='<span style="color:#b91c1c">❌ 通信エラー: '+(e.message||e)+'</span>'; }
+    return;
+  }
+  // LINE WORKS
+  var sel=document.getElementById('mit-lw-room'); var targetId='', roomName='';
+  if(sel){ targetId=sel.value; roomName=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].text:''; }
+  else {
+    var nm=document.getElementById('mit-lw-newname'), idv=document.getElementById('mit-lw-newid');
+    targetId=(idv&&idv.value||'').trim(); roomName=(nm&&nm.value||'').trim()||targetId;
+    if(!targetId){ if(rb) rb.innerHTML='<span style="color:#b91c1c">トークルームIDを入力してください</span>'; return; }
+    try{ var arr=_getContactTargets_(); arr.push({ id:'ct_'+Date.now(), name:roomName, type:'lw_channel', targetId:targetId, group:'見積', createdAt:new Date().toISOString() }); if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){} }catch(e){}
+  }
   if(rb) rb.innerHTML='⏳ 送信中…';
   try{
     var r=await callCloudAPI('forwardInquiryToLineworks', {}, { target:'channel', targetId:targetId, message:msg, by:(currentAuth&&currentAuth.userName)||'' });
