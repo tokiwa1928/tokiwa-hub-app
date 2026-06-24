@@ -20032,7 +20032,7 @@ function openMitsumori(id){
     +   fld('ユーザー（エンドユーザー・社内参照）','<input id="mit-user" list="dl-mit-cust" value="'+_formEsc_(v('user'))+'" placeholder="最終客先（任意）" style="'+st+'">')
     +   fld('元請（上流の受注会社・社内参照）','<input id="mit-motouke" list="dl-mit-cust" value="'+_formEsc_(v('motouke'))+'" placeholder="例 アート・エス（任意）" style="'+st+'">')
     + '</div>'
-    + '<div style="margin:6px 0;font-size:11px;color:#64748b;display:flex;align-items:center;gap:8px;flex-wrap:wrap">取引先マスタ <b id="mit-master-count">'+((typeof _mitCustMaster_==='function')?_mitCustMaster_().length:0)+'</b>件（全社共有）<button class="btn" style="font-size:10.5px;padding:2px 8px" onclick="_mitImportTaicho_()">📥 得意先台帳を取り込む（228社）</button><span id="mit-import-result" style="color:#0f6e56"></span></div>'
+    + '<div style="margin:6px 0;font-size:11px;color:#64748b;display:flex;align-items:center;gap:8px;flex-wrap:wrap">取引先マスタ <b id="mit-master-count">'+((typeof _mitCustMaster_==='function')?_mitCustMaster_().length:0)+'</b>件（全社共有）<button class="btn" style="font-size:10.5px;padding:2px 8px" onclick="_mitImportTaicho_()">📥 得意先台帳を取り込む（228社）</button><button class="btn" style="font-size:10.5px;padding:2px 8px" onclick="openMitMaster()">🗂 読みを確認・管理</button><span id="mit-import-result" style="color:#0f6e56"></span></div>'
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 14px;margin-top:8px">'
     +   fld('品名','<input id="mit-prod" value="'+_formEsc_(v('prod'))+'" style="'+st+'">')
     +   fld('サイズ','<input id="mit-size" value="'+_formEsc_(v('size'))+'" style="'+st+'">')
@@ -20194,13 +20194,68 @@ function _mitGroupCos_(){ try{ var l=(typeof DB!=='undefined'&&DB.companies&&DB.
 function _mitImportTaicho_(){
   var m=_mitCustMaster_(); var byName={}; m.forEach(function(r){ if(r&&r.name) byName[r.name]=r; });
   var added=0;
-  (typeof MIT_TAICHO_SEED!=='undefined'?MIT_TAICHO_SEED:[]).forEach(function(a){ var name=a[1]; if(name && !byName[name]){ var rec={no:a[0],name:name,yomi:a[2]||'',kind:'cust'}; m.push(rec); byName[name]=rec; added++; } });
-  _mitGroupCos_().forEach(function(nm){ if(nm && !byName[nm]){ var rec={no:'',name:nm,yomi:'',kind:'group'}; m.push(rec); byName[nm]=rec; added++; } });
+  (typeof MIT_TAICHO_SEED!=='undefined'?MIT_TAICHO_SEED:[]).forEach(function(a){ var name=a[1]; if(name && !byName[name]){ var rec={no:a[0],name:name,yomi:a[2]||'',kind:'cust',yomiOK:false}; m.push(rec); byName[name]=rec; added++; } });
+  _mitGroupCos_().forEach(function(nm){ if(nm && !byName[nm]){ var rec={no:'',name:nm,yomi:_mitAutoYomi_(nm),kind:'group',yomiOK:false}; m.push(rec); byName[nm]=rec; added++; } });
   if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){}
   if(typeof _mitBuildDatalists_==='function')_mitBuildDatalists_();
   var cnt=document.getElementById('mit-master-count'); if(cnt) cnt.textContent=m.length;
   var rb=document.getElementById('mit-import-result'); if(rb) rb.textContent='✅ '+added+'件追加（マスタ計'+m.length+'件）';
   if(typeof _toastMsg==='function')_toastMsg('📥 取引先マスタに'+added+'件取り込みました');
+}
+// 名前から読みを自動生成（かな/英数主体ならカタカナ化。漢字を含むなら空＝要手入力）
+function _mitAutoYomi_(name){
+  var n=String(name||''); if(!n) return '';
+  if(/[一-鿿々〇〻]/.test(n)) return ''; // 漢字あり→自動不可（要確認）
+  var k=n.replace(/[ぁ-ゖ]/g, function(c){ return String.fromCharCode(c.charCodeAt(0)+0x60); }); // ひらがな→カタカナ
+  try{ k=k.normalize('NFKC'); }catch(e){}
+  return k.replace(/[\s　]/g,'');
+}
+// 🗂 取引先マスタ管理（読みの確認・承認）
+function openMitMaster(){
+  var ed=document.getElementById('form-editor'); if(!ed) return; ed.style.display='block'; window._formEditId_=null;
+  var m=_mitCustMaster_();
+  if(!m.length){ ed.innerHTML='<div class="sec" style="max-width:900px"><button class="btn" onclick="renderFormsPage()">← 戻る</button><p style="margin-top:12px;color:#64748b">取引先マスタが空です。見積フォームの「📥 得意先台帳を取り込む」を先に押してください。</p></div>'; return; }
+  m.forEach(function(r){ if(!r.yomi){ var y=_mitAutoYomi_(r.name); if(y) r.yomi=y; } }); // 空の読みを自動補完
+  _mitMasterRender_(false);
+}
+function _mitMasterRender_(filterUnapproved){
+  var ed=document.getElementById('form-editor'); var all=_mitCustMaster_();
+  var m=all.map(function(r,i){ r._i=i; return r; }).slice();
+  m.sort(function(a,b){ return String(a.yomi||'ンンン').localeCompare(String(b.yomi||'ンンン'),'ja'); });
+  var unappr=all.filter(function(r){ return !r.yomiOK; }).length;
+  var rows=m.filter(function(r){ return !filterUnapproved || !r.yomiOK; });
+  var st='width:100%;padding:3px 6px;border:1px solid #d0cec8;border-radius:5px;font-size:12px;box-sizing:border-box';
+  var h='<div class="sec" style="max-width:920px">'
+   +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap"><button class="btn" onclick="renderFormsPage()">← 戻る</button><strong style="font-size:16px">🗂 取引先マスタ（読みの確認・承認）</strong>'
+   +'<span style="font-size:12px;color:#64748b">計'+all.length+'件 / 未承認 <b style="color:#b45309">'+unappr+'</b>件</span>'
+   +'<label style="font-size:12px;margin-left:auto;cursor:pointer"><input type="checkbox" id="mit-m-filter"'+(filterUnapproved?' checked':'')+' onchange="_mitMasterSyncInputs_();_mitMasterRender_(this.checked)"> 未承認のみ表示</label></div>'
+   +'<div style="font-size:11px;color:#64748b;margin-bottom:6px">読みが合っていれば「承認」にチェック。違えば読みを直してチェック。㈱/㈲を除いた読みで あいうえお順 に並びます（黄色＝未承認）。</div>'
+   +'<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap"><button class="btn btn-p" onclick="_mitMasterSave_()">💾 保存</button><button class="btn" onclick="_mitMasterApproveVisible_()">✓ 表示中をすべて承認</button></div>'
+   +'<div style="max-height:62vh;overflow:auto;border:1px solid #e2e8f0;border-radius:8px"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f1f5f9;position:sticky;top:0"><th style="padding:5px;width:48px">承認</th><th style="padding:5px;text-align:left">名前</th><th style="padding:5px;width:250px;text-align:left">読み（カナ）</th><th style="padding:5px;width:56px">番号</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    h+='<tr data-i="'+r._i+'"'+(!r.yomiOK?' style="background:#fffbeb"':'')+'>'
+     +'<td style="text-align:center;padding:3px"><input type="checkbox" class="mit-m-ok"'+(r.yomiOK?' checked':'')+'></td>'
+     +'<td style="padding:3px">'+_formEsc_(r.name)+(r.kind==='group'?' <span style="font-size:9px;color:#0891b2">[グループ]</span>':'')+'</td>'
+     +'<td style="padding:3px"><input class="mit-m-yomi" value="'+_formEsc_(r.yomi||'')+'" placeholder="カナで入力" style="'+st+'"></td>'
+     +'<td style="text-align:center;padding:3px;color:#94a3b8">'+_formEsc_(r.no||'')+'</td></tr>';
+  });
+  h+='</tbody></table></div><div style="margin-top:10px"><button class="btn btn-p" onclick="_mitMasterSave_()">💾 保存</button></div></div>';
+  ed.innerHTML=h;
+}
+function _mitMasterSyncInputs_(){
+  var m=_mitCustMaster_();
+  document.querySelectorAll('#form-editor tr[data-i]').forEach(function(tr){
+    var i=parseInt(tr.getAttribute('data-i'),10); if(isNaN(i)||!m[i]) return;
+    var y=tr.querySelector('.mit-m-yomi'), ok=tr.querySelector('.mit-m-ok');
+    if(y) m[i].yomi=y.value.trim(); if(ok) m[i].yomiOK=ok.checked;
+  });
+}
+function _mitMasterApproveVisible_(){ document.querySelectorAll('#form-editor .mit-m-ok').forEach(function(c){ c.checked=true; }); }
+function _mitMasterSave_(){
+  _mitMasterSyncInputs_();
+  if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){}
+  if(typeof _toastMsg==='function')_toastMsg('💾 取引先マスタを保存しました');
+  _mitMasterRender_(document.getElementById('mit-m-filter')&&document.getElementById('mit-m-filter').checked);
 }
 // Driveの見積フォルダから得意先一覧を取得してキャッシュ（入力候補に反映）
 var _mitFolderCustsCache_={};
