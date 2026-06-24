@@ -4286,6 +4286,7 @@ async function loadFromCloud() {
   if (result.data.toolStatusOverride) DB.toolStatusOverride = result.data.toolStatusOverride;
   if (result.data.toolDeleted) DB.toolDeleted = result.data.toolDeleted;
   if (Array.isArray(result.data.forms)) DB.forms = result.data.forms;
+  if (result.data.mitMaster) DB.mitMaster = result.data.mitMaster; // 見積: 会社別 得意先/発注先マスタ
   // 🔖 リンク集: 単純上書きだと自動同期が「追加直後のローカル分」を空配列で消してしまうため
   // id単位でマージ (クラウド優先で編集反映, ローカルだけにある未同期分は保持)
   if (Array.isArray(result.data.bookmarks)) {
@@ -4748,6 +4749,7 @@ async function saveToCloud() {
     toolStatusOverride: DB.toolStatusOverride || {},
     toolDeleted: DB.toolDeleted || {},
     forms: DB.forms || [],
+    mitMaster: DB.mitMaster || {},
     bookmarks: DB.bookmarks || [],
     bookmarkCategories: DB.bookmarkCategories || [],
     leadTimeMaster: DB.leadTimeMaster || {},
@@ -20045,6 +20047,7 @@ function _mitFillCo_(keep){
   var co=document.getElementById('mit-co').value; var p=MIT_CO[co]||MIT_CO.arteso;
   document.getElementById('mit-co-disp').textContent=p.name;
   document.getElementById('mit-co-info').textContent=p.rep+'／'+p.zip+' '+p.addr+'／TEL '+p.tel+(p.fax?('／FAX '+p.fax):'');
+  if(typeof _mitBuildDatalists_==='function') _mitBuildDatalists_(); // 会社切替で候補を絞り直す
 }
 function _mitRow_(it){ it=it||{}; var st='width:100%;padding:3px 5px;border:1px solid #d0cec8;border-radius:5px;font-size:12px;box-sizing:border-box';
   function inp(cls,val,num){ return '<input class="'+cls+'" value="'+_formEsc_(val==null?'':val)+'"'+(num?' type="number" oninput="_mitCalc_()"':'')+' style="'+st+(num?';text-align:right':'')+'">'; }
@@ -20084,28 +20087,38 @@ function _mitCollect_(){
   });
   return { co:g('mit-co'), type:g('mit-type'), date:g('mit-date'), no:g('mit-no'), to:g('mit-to'), subject:g('mit-subject'), cust:g('mit-cust'), prod:g('mit-prod'), size:g('mit-size'), color:g('mit-color'), qty:g('mit-qty'), pages:g('mit-pages'), tax:g('mit-tax'), items:items, note:g('mit-note') };
 }
-// 得意先・発注先のオートコンプリート候補
+// 得意先・発注先のオートコンプリート候補（会社別＝アート・エスはアート・エスのみ／中尾は中尾のみ）
 function _mitUniq_(arr){ var seen={},out=[]; arr.forEach(function(x){ x=(x==null?'':String(x)).trim(); if(x&&!seen[x]){ seen[x]=1; out.push(x); } }); return out.sort(function(a,b){ return a.localeCompare(b,'ja'); }); }
-function _mitForms_(){ try{ return (typeof _formsList_==='function'?_formsList_():[]).filter(function(r){ return r.type==='mitsumori'; }).map(function(r){ return r.data||{}; }); }catch(e){ return []; } }
-function _mitCustList_(){
-  var o=[]; var DBx=(typeof DB!=='undefined')?DB:{};
-  try{ (DBx.orgMaster||[]).forEach(function(r){ var f=r.codeFamily||((r.code||'')[0]); if(f==='C'||f==='E'){ o.push(r.org); (r.aliases||[]).forEach(function(a){o.push(a);}); } }); }catch(e){}
-  try{ (DBx.projects||[]).forEach(function(p){ o.push(p.cust); }); }catch(e){}
-  try{ (DBx.quotations||[]).forEach(function(q){ o.push(q.cust||q.customer||q.to); }); }catch(e){}
-  try{ (DBx.artesoCases||[]).forEach(function(c){ o.push(c.customer||c.cust||c['得意先']); }); }catch(e){}
-  try{ _mitForms_().forEach(function(d){ o.push(d.cust); o.push(d.to); }); }catch(e){}
+function _mitForms_(co){ try{ return (typeof _formsList_==='function'?_formsList_():[]).filter(function(r){ return r.type==='mitsumori' && (!co || (r.data&&r.data.co)===co); }).map(function(r){ return r.data||{}; }); }catch(e){ return []; } }
+// 会社別マスタ（蓄積先・cloud同期）: DB.mitMaster[co]={custs:[],vendors:[]}
+function _mitMaster_(co){ if(typeof DB==='undefined') return {custs:[],vendors:[]}; if(!DB.mitMaster) DB.mitMaster={}; if(!DB.mitMaster[co]) DB.mitMaster[co]={custs:[],vendors:[]}; var m=DB.mitMaster[co]; if(!Array.isArray(m.custs))m.custs=[]; if(!Array.isArray(m.vendors))m.vendors=[]; return m; }
+function _mitCurCo_(){ var e=document.getElementById('mit-co'); return (e&&e.value)||'arteso'; }
+function _mitCustList_(co){
+  co=co||_mitCurCo_(); var o=[]; var DBx=(typeof DB!=='undefined')?DB:{};
+  try{ _mitMaster_(co).custs.forEach(function(x){ o.push(x); }); }catch(e){}
+  try{ _mitForms_(co).forEach(function(d){ o.push(d.cust); o.push(d.to); }); }catch(e){}
+  // アート・エスは専用台帳(artesoCases)の得意先も候補に
+  if(co==='arteso'){ try{ (DBx.artesoCases||[]).forEach(function(c){ o.push(c.customer||c.cust||c['得意先']||c.client); }); }catch(e){} }
   return _mitUniq_(o);
 }
-function _mitVendorList_(){
-  var o=[]; var DBx=(typeof DB!=='undefined')?DB:{};
-  try{ (DBx.orgMaster||[]).forEach(function(r){ var f=r.codeFamily||((r.code||'')[0]); if(f==='S'||f==='O'){ o.push(r.org); (r.aliases||[]).forEach(function(a){o.push(a);}); } }); }catch(e){}
-  try{ var ov=(DBx.master&&DBx.master.outsourceVendors)||DBx.outsourceVendors||[]; ov.forEach(function(v){ o.push(typeof v==='string'?v:(v.nm||v.name||v.org)); }); }catch(e){}
-  try{ _mitForms_().forEach(function(d){ (d.items||[]).forEach(function(it){ o.push(it.hacchu); }); }); }catch(e){}
+function _mitVendorList_(co){
+  co=co||_mitCurCo_(); var o=[];
+  try{ _mitMaster_(co).vendors.forEach(function(x){ o.push(x); }); }catch(e){}
+  try{ _mitForms_(co).forEach(function(d){ (d.items||[]).forEach(function(it){ o.push(it.hacchu); }); }); }catch(e){}
   return _mitUniq_(o);
 }
 function _mitBuildDatalists_(){
-  var dc=document.getElementById('dl-mit-cust'); if(dc) dc.innerHTML=_mitCustList_().map(function(x){ return '<option value="'+_formEsc_(x)+'">'; }).join('');
-  var dv=document.getElementById('dl-mit-vendor'); if(dv) dv.innerHTML=_mitVendorList_().map(function(x){ return '<option value="'+_formEsc_(x)+'">'; }).join('');
+  var co=_mitCurCo_();
+  var dc=document.getElementById('dl-mit-cust'); if(dc) dc.innerHTML=_mitCustList_(co).map(function(x){ return '<option value="'+_formEsc_(x)+'">'; }).join('');
+  var dv=document.getElementById('dl-mit-vendor'); if(dv) dv.innerHTML=_mitVendorList_(co).map(function(x){ return '<option value="'+_formEsc_(x)+'">'; }).join('');
+}
+// 保存時に会社別マスタへ蓄積（得意先・発注先）
+function _mitAccumulateMaster_(data){
+  if(!data||!data.co) return; var m=_mitMaster_(data.co);
+  function add(list,val){ val=(val==null?'':String(val)).trim(); if(val && list.indexOf(val)<0) list.push(val); }
+  add(m.custs, data.cust); add(m.custs, data.to);
+  (data.items||[]).forEach(function(it){ add(m.vendors, it.hacchu); });
+  m.custs.sort(function(a,b){return a.localeCompare(b,'ja');}); m.vendors.sort(function(a,b){return a.localeCompare(b,'ja');});
 }
 function saveMitsumori(thenPrint){
   var data=_mitCollect_();
@@ -20115,6 +20128,7 @@ function saveMitsumori(thenPrint){
   var rec;
   if(id){ rec=L.find(function(x){return x.id===id;}); if(rec){ rec.data=data; rec.title=title; rec.updatedAt=now; } }
   if(!rec){ rec={ id:'frm_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), type:'mitsumori', title:title, data:data, createdAt:now, updatedAt:now, createdBy:_formWho_() }; L.push(rec); window._formEditId_=rec.id; }
+  _mitAccumulateMaster_(data);
   if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){}
   if(typeof _toastMsg==='function')_toastMsg('💾 保存しました');
   if(thenPrint) _printMitsumori_(rec); else renderFormsPage();
