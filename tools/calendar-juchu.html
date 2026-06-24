@@ -997,7 +997,7 @@ function loadSeed(cb){
 // ─ 🔗 得意先名をGENの正式名称に統一（旧台帳の不揃いな名前 → GEN取引先名）─
 function loadGen(cb){
   if(window.GEN_CUST_MAP) return cb();
-  var s=document.createElement('script'); s.src='calendar-juchu-gen.js?v=1';
+  var s=document.createElement('script'); s.src='calendar-juchu-gen.js?v=2';
   s.onload=function(){ cb(); };
   s.onerror=function(){ hideBusy(); hubToast('❌ GENデータの読込に失敗（calendar-juchu-gen.js）'); };
   document.head.appendChild(s);
@@ -1254,15 +1254,32 @@ function applyMig(need2024, needGen){
   });
   if(changed){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildYears(); buildCats(); render(); if(msg.length) hubToast('✅ 自動更新: '+msg.join(' / ')); }); }
 }
-function applyGenPass(){   // 伝票番号=受注番号、得意先/ユーザーをGEN正に（refなしは名称統一）
-  var refMap=window.GEN_REF||{}, nameMap=window.GEN_CUST_MAP||{};
+function applyGenPass(){   // GENを正に: 受注番号を実レコードへ・年をGEN受注日へ・得意先GEN化・重複整理
+  var refMap=window.GEN_REF||{}, nameMap=window.GEN_CUST_MAP||{}, matchMap=window.GEN_MATCH||{};
+  var rnd=function(v){ return (v===''||v==null||isNaN(Number(v)))?'':Math.round(Number(v)); };
   hubSave(function(db){
-    (db[COLL]||[]).forEach(function(r){
-      var ref=(r.ref==null?'':String(r.ref)).trim();
-      if(ref) r.denpyoNo=ref;
-      if(ref && refMap[ref]){ if(refMap[ref][0]) r.cust=refMap[ref][0]; if(refMap[ref][1] && !r.user) r.user=refMap[ref][1]; }
-      else { var g=nameMap[normCust(r.cust||'')]; if(g) r.cust=g; }
+    var arr=db[COLL]||(db[COLL]=[]);
+    // 1) 旧台帳レコードをGENと照合(年|得意先|数量|単価)し受注番号を付与
+    arr.forEach(function(r){
+      if(r._src!=='旧台帳移行') return;
+      var key=String(r.year)+'|'+normCust(r.cust||'')+'|'+rnd(r.orderQty)+'|'+rnd(r.orderPrice);
+      var no=matchMap[key];
+      if(no){ r.ref=no; r.denpyoNo=no; if(refMap[no]){ if(refMap[no][0]) r.cust=refMap[no][0]; if(refMap[no][1]&&!r.user) r.user=refMap[no][1]; } }
     });
+    // 2) 受注用(ref付き・_srcなし・2026固定)を整理: 旧台帳に同refが付いたら重複削除、無ければGEN受注年へ移動
+    var enriched={}; arr.forEach(function(r){ if(r._src==='旧台帳移行'&&r.ref) enriched[r.ref]=true; });
+    var keep=[];
+    arr.forEach(function(r){
+      var ref=(r.ref==null?'':String(r.ref)).trim();
+      var isJuchu=ref && r._src!=='旧台帳移行';
+      if(isJuchu && enriched[ref]) return;   // 旧台帳側に同refあり→重複なので削除
+      if(isJuchu){ var info=refMap[ref]; if(info){ if(info[2]) r.year=info[2]; if(info[0]) r.cust=info[0]; if(info[1]&&!r.user) r.user=info[1]; } r.denpyoNo=ref; }
+      else if(r._src!=='旧台帳移行'){ var g=nameMap[normCust(r.cust||'')]; if(g) r.cust=g; }   // 手入力等は名称統一
+      keep.push(r);
+    });
+    db[COLL]=keep;
+    // 3) 旧台帳でrefが付かなかったもの: 名称統一
+    keep.forEach(function(r){ if(r._src==='旧台帳移行' && !r.ref){ var g=nameMap[normCust(r.cust||'')]; if(g) r.cust=g; } });
   });
 }
 // 自己修復つき自動移行: 履歴(発注日付き)・2024・受注用 が揃うよう毎回チェック。
@@ -1273,7 +1290,7 @@ function autoMigrate(){
   var arr=db[COLL], marks=db._calMig||{};
   var has2024=arr.some(function(x){ return x.year===2024; });
   var hasHist=arr.some(function(x){ return x._src==='旧台帳移行'; });
-  if(marks['CAL-DATES-1'] && has2024 && hasHist) return;   // 正常完了 → 何もしない
+  if(marks['CAL-DATES-2'] && has2024 && hasHist) return;   // 正常完了 → 何もしない
   showBusy('🔄 データを準備中…');
   loadSeed(function(){ load2024(function(){ loadGen(function(){
     setTimeout(function(){
@@ -1286,7 +1303,7 @@ function autoMigrate(){
           importWorkbook(XLSX.read(b64ToBytes(S.juchu),{ type:'array', codepage:932 }), true);
         }
         applyGenPass();                                                                       // 伝票番号＋得意先GEN
-        hubSave(function(db2){ var m=db2._calMig||(db2._calMig={}); ['CAL-DATES-1','CAL2024-1','CALGEN-1','CALGEN-2'].forEach(function(k){ m[k]=true; }); });
+        hubSave(function(db2){ var m=db2._calMig||(db2._calMig={}); ['CAL-DATES-1','CAL-DATES-2','CAL2024-1','CALGEN-1','CALGEN-2'].forEach(function(k){ m[k]=true; }); });
         if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
         showBusy('☁ 全社保存中…');
         hubCloudPush().then(function(){ hideBusy(); buildYears(); buildCats(); render(); hubToast('✅ データを最新化しました（発注日・2024年など）'); });
