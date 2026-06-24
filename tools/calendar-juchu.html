@@ -1048,6 +1048,7 @@ function load2024(cb){
 }
 function applyJuchu2024(){   // 冪等: 2024履歴のみ入替（他年・受注用・手入力は不変）
   var recs=window.JUCHU_2024||[]; var n=0;
+  if(!recs.length) return 0;   // 未ロード時は既存2024を消さない（自己防衛）
   hubSave(function(db){
     var arr=db[COLL]||(db[COLL]=[]);
     var keep=arr.filter(function(x){ return !(x.year===2024 && x._src==='旧台帳移行'); });
@@ -1264,22 +1265,31 @@ function applyGenPass(){   // 伝票番号=受注番号、得意先/ユーザー
     });
   });
 }
+// 自己修復つき自動移行: 履歴(発注日付き)・2024・受注用 が揃うよう毎回チェック。
+// 揃って完了済みなら何もしない。欠けていれば種から補填（初期投入ボタン不要）。
 function autoMigrate(){
-  var db=hubLoad(); if(!db||!Array.isArray(db[COLL])||!db[COLL].length) return;   // データが無い時は何もしない
-  var marks=db._calMig||{};
-  if(marks['CAL-DATES-1']) return;   // 最新移行(発注日など＋GEN突合)が済んでいれば終了
-  showBusy('🔄 データ更新中（発注日・発注納期などを反映）…');
+  var db=hubLoad(); if(!db) return;   // 本体未ログイン等は何もしない
+  if(!Array.isArray(db[COLL])) db[COLL]=[];
+  var arr=db[COLL], marks=db._calMig||{};
+  var has2024=arr.some(function(x){ return x.year===2024; });
+  var hasHist=arr.some(function(x){ return x._src==='旧台帳移行'; });
+  if(marks['CAL-DATES-1'] && has2024 && hasHist) return;   // 正常完了 → 何もしない
+  showBusy('🔄 データを準備中…');
   loadSeed(function(){ load2024(function(){ loadGen(function(){
     setTimeout(function(){
       try{
         var S=window.JUCHU_SEED;
-        importWorkbook(XLSX.read(b64ToBytes(S.old),{ type:'array', codepage:932 }), true);   // 旧台帳を発注日付きで再取込(旧台帳移行を全置換)
-        applyJuchu2024();                                                                      // 2024(固定IDで入替)
-        applyGenPass();                                                                        // 伝票番号＋得意先GEN
+        if(!S || !window.JUCHU_2024 || !window.JUCHU_2024.length){ hideBusy(); return; }   // 種が未ロードなら中断（既存データは触らない）
+        importWorkbook(XLSX.read(b64ToBytes(S.old),{ type:'array', codepage:932 }), true);   // 履歴を発注日付きで取込(旧台帳移行を全置換)
+        applyJuchu2024();                                                                     // 2024(固定IDで入替)
+        if(!loadAll().some(function(x){ return x.ref; })){                                     // 受注用が無ければ種から補填
+          importWorkbook(XLSX.read(b64ToBytes(S.juchu),{ type:'array', codepage:932 }), true);
+        }
+        applyGenPass();                                                                       // 伝票番号＋得意先GEN
         hubSave(function(db2){ var m=db2._calMig||(db2._calMig={}); ['CAL-DATES-1','CAL2024-1','CALGEN-1','CALGEN-2'].forEach(function(k){ m[k]=true; }); });
         if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
         showBusy('☁ 全社保存中…');
-        hubCloudPush().then(function(){ hideBusy(); buildYears(); buildCats(); render(); hubToast('✅ 発注日・発注納期・製品納入などを反映しました'); });
+        hubCloudPush().then(function(){ hideBusy(); buildYears(); buildCats(); render(); hubToast('✅ データを最新化しました（発注日・2024年など）'); });
       }catch(e){ hideBusy(); console.error(e); hubToast('❌ 更新エラー: '+e.message); }
     }, 40);
   }); }); });
