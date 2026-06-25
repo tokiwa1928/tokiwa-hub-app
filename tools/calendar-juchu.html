@@ -1488,6 +1488,18 @@ function applyGenPass(){   // GENを正に: 受注番号を実レコードへ・
     });
   });
 }
+// 発注紐付けだけを既存行に追記する軽い処理（再投入なし・ref行だけ触る＝前年コピー等は不変）
+function applyHatchuLight(){
+  loadHatchu(function(){
+    if(!window.GEN_HATCHU) return;
+    var n=0;
+    var ok=hubSave(function(db){
+      (db[COLL]||[]).forEach(function(r){ var ref=(r.ref==null?'':String(r.ref)).trim(); if(ref && window.GEN_HATCHU[ref]){ var h=window.GEN_HATCHU[ref]; if(h[0]) r.vendor=h[0]; if(h[1]) r.cost=h[1]; r.purAmt=h[2]; n++; } });
+      (db._calMig||(db._calMig={}))['CAL-HATCHU-1']=true;
+    });
+    if(ok && n){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildCats(); render(); hubToast('✅ 外注先・仕入を反映しました（'+n+'件）'); }); }
+  });
+}
 // 自己修復つき自動移行: 履歴(発注日付き)・2024・受注用 が揃うよう毎回チェック。
 // 揃って完了済みなら何もしない。欠けていれば種から補填（初期投入ボタン不要）。
 function autoMigrate(){
@@ -1498,9 +1510,12 @@ function autoMigrate(){
   var hasHist=arr.some(function(x){ return x._src==='旧台帳移行'; });
   var hasJuchu=arr.some(function(x){ return x.ref; });
   var needsShift=arr.some(function(x){ return x.ref && !x._cshift && /^20\d\d年カレンダー/.test(String(x.product||'')); });
-  // データが揃って処理済み(履歴+2024+受注用、年シフト済)なら、マーカーに関係なく何もしない＝
-  // リロードのたびに種を再投入せず、前年コピー等のユーザー入力を巻き込まない
-  if(has2024 && hasHist && hasJuchu && !needsShift && marks['CAL-HATCHU-1']) return;
+  // データが揃って処理済みなら、重い再投入は絶対にしない＝前年コピー等を守る。
+  // 発注紐付け(外注先/仕入)だけ未適用なら、既存行に追記する軽い処理だけ行う(再投入なし)
+  if(has2024 && hasHist && hasJuchu && !needsShift){
+    if(!marks['CAL-HATCHU-1']) applyHatchuLight();
+    return;
+  }
   showBusy('🔄 データを準備中…');
   loadSeed(function(){ load2024(function(){ loadGen(function(){ loadHatchu(function(){
     setTimeout(function(){
