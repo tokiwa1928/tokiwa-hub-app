@@ -20162,12 +20162,15 @@ function openNittei(id){
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 14px;margin-top:8px">'
     +   fld('件名（案件名）','<input id="nt-subject" list="dl-mit-cust" value="'+_formEsc_(v('subject'))+'" placeholder="例 ○○会報 No.26" style="'+st+'">')
     +   fld('得意先','<input id="nt-cust" list="dl-mit-cust" value="'+_formEsc_(v('cust'))+'" style="'+st+'">')
-    +   fld('納品予定日','<input type="date" id="nt-due" value="'+_formEsc_(v('due'))+'" style="'+st+'">')
+    +   fld('納品予定日','<input type="date" id="nt-due" value="'+_formEsc_(v('due'))+'" oninput="if(typeof _ntCalGoto_===\'function\')_ntCalGoto_(this.value)" style="'+st+'">')
     + '</div>'
     + '<div style="margin-top:12px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:640px">'
     +   '<thead><tr style="background:#f1f5f9"><th style="padding:5px;text-align:left;width:170px">工程</th><th style="padding:5px;width:140px">予定日</th><th style="padding:5px;width:110px">担当</th><th style="padding:5px;text-align:left">備考</th><th style="width:48px"></th></tr></thead>'
     +   '<tbody id="nt-body"></tbody></table>'
     +   '<button class="btn" style="font-size:11px;padding:3px 10px;margin-top:5px" onclick="_ntAddRow_()">＋ 工程を追加</button></div>'
+    + '<div style="margin-top:12px;border:1.5px solid #94a3b8;border-radius:8px;padding:8px 10px;background:#fcfcfb">'
+    +   '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:12.5px">🗓 スケジュール（工程を見ながら設定）</b><span style="font-size:11px;color:#64748b">設定する工程→</span><select id="nt-cal-target" style="font-size:12px;padding:3px 6px;border:1px solid #94a3b8;border-radius:5px"></select></div>'
+    +   '<div id="nt-cal"></div></div>'
     + '<div style="margin-top:10px">'+fld('備考・連絡事項','<textarea id="nt-memo" rows="3" style="'+st+';resize:vertical">'+_formEsc_(v('memo'))+'</textarea>')+'</div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'
     +   '<button class="btn btn-p" onclick="saveNittei()">💾 保存</button>'
@@ -20176,17 +20179,63 @@ function openNittei(id){
     + '</div><datalist id="dl-nt-step">'+NT_STEP_PRESET.map(function(s){return '<option value="'+_formEsc_(s)+'">';}).join('')+'</datalist></div>';
   var tb=document.getElementById('nt-body'); tb.innerHTML=rows.map(function(it){ return _ntRow_(it); }).join('');
   if(typeof _mitBuildDatalists_==='function'){ try{ _mitBuildDatalists_(); }catch(e){} }
+  _ntCalInit_(); _ntRenderCal_();
 }
 function _ntRow_(it){ it=it||{}; var st='width:100%;padding:4px 6px;border:1px solid #d0cec8;border-radius:5px;font-size:13px;box-sizing:border-box'; var e=function(x){return _formEsc_(x==null?'':x);};
   return '<tr>'
-    + '<td style="padding:3px 5px"><input class="nt-step" list="dl-nt-step" value="'+e(it.step)+'" style="'+st+'"></td>'
-    + '<td style="padding:3px 5px"><input class="nt-sched" type="date" value="'+e(it.sched)+'" style="'+st+'"></td>'
+    + '<td style="padding:3px 5px"><input class="nt-step" list="dl-nt-step" value="'+e(it.step)+'" onchange="if(typeof _ntRenderCal_===\'function\')_ntRenderCal_()" style="'+st+'"></td>'
+    + '<td style="padding:3px 5px"><input class="nt-sched" type="date" value="'+e(it.sched)+'" oninput="if(typeof _ntCalGoto_===\'function\')_ntCalGoto_(this.value)" style="'+st+'"></td>'
     + '<td style="padding:3px 5px"><input class="nt-person" value="'+e(it.person)+'" style="'+st+'"></td>'
     + '<td style="padding:3px 5px"><input class="nt-note" value="'+e(it.note)+'" style="'+st+'"></td>'
     + '<td style="text-align:center;white-space:nowrap"><span style="cursor:pointer;color:#2563eb;margin-right:8px" title="この行を下にコピー" onclick="_ntCopyRow_(this)">📋</span><span style="cursor:pointer;color:#b91c1c" title="削除" onclick="this.closest(\'tr\').remove()">✕</span></td></tr>';
 }
-function _ntAddRow_(){ var tb=document.getElementById('nt-body'); if(tb) tb.insertAdjacentHTML('beforeend', _ntRow_({})); }
-function _ntCopyRow_(el){ var tr=el.closest('tr'); if(!tr) return; function gv(c){ var x=tr.querySelector('.'+c); return x?x.value:''; } tr.insertAdjacentHTML('afterend', _ntRow_({step:gv('nt-step'),sched:gv('nt-sched'),person:gv('nt-person'),note:gv('nt-note')})); }
+function _ntAddRow_(){ var tb=document.getElementById('nt-body'); if(tb) tb.insertAdjacentHTML('beforeend', _ntRow_({})); if(typeof _ntRenderCal_==='function')_ntRenderCal_(); }
+function _ntCopyRow_(el){ var tr=el.closest('tr'); if(!tr) return; function gv(c){ var x=tr.querySelector('.'+c); return x?x.value:''; } tr.insertAdjacentHTML('afterend', _ntRow_({step:gv('nt-step'),sched:gv('nt-sched'),person:gv('nt-person'),note:gv('nt-note')})); if(typeof _ntRenderCal_==='function')_ntRenderCal_(); }
+// 🗓 日程表のミニカレンダー（工程を見ながら設定／日付クリックで選択中工程に設定）
+window._ntCal_={y:null,m:null};
+function _ntCalInit_(){
+  var due=(document.getElementById('nt-due')||{}).value;
+  var firstSched=''; var s=document.querySelector('#nt-body .nt-sched'); if(s) firstSched=s.value;
+  var base=due||firstSched||(new Date()).toISOString().slice(0,10);
+  var p=String(base).split('-'); window._ntCal_={ y:+p[0]||(new Date()).getFullYear(), m:+p[1]||((new Date()).getMonth()+1) };
+}
+function _ntCalMove_(delta){ var c=window._ntCal_; var m=c.m+delta, y=c.y; if(m<1){m=12;y--;} if(m>12){m=1;y++;} window._ntCal_={y:y,m:m}; _ntRenderCal_(); }
+function _ntCalGoto_(ds){ if(ds){ var p=String(ds).split('-'); if(p[0]&&p[1]) window._ntCal_={y:+p[0],m:+p[1]}; } _ntRenderCal_(); }
+function _ntRenderCal_(){
+  var host=document.getElementById('nt-cal'); if(!host) return;
+  if(!window._ntCal_.y) _ntCalInit_();
+  var y=window._ntCal_.y, m=window._ntCal_.m;
+  var rows=[]; document.querySelectorAll('#nt-body tr').forEach(function(tr,i){ rows.push({i:i, step:tr.querySelector('.nt-step').value, sched:tr.querySelector('.nt-sched').value}); });
+  var sel=document.getElementById('nt-cal-target');
+  if(sel){ var cur=sel.value; sel.innerHTML=rows.map(function(r){ return '<option value="'+r.i+'">'+_formEsc_(r.step||('工程'+(r.i+1)))+'</option>'; }).join(''); if(cur!==''&&+cur<rows.length) sel.value=cur; }
+  var byDate={}; rows.forEach(function(r){ if(r.sched){ (byDate[r.sched]=byDate[r.sched]||[]).push(r.step||'工程'); } });
+  var due=(document.getElementById('nt-due')||{}).value;
+  var first=new Date(y,m-1,1); var startDow=first.getDay(); var dim=new Date(y,m,0).getDate();
+  var h='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><button type="button" class="btn" style="font-size:11px;padding:2px 9px" onclick="_ntCalMove_(-1)">◀</button><b style="font-size:13px">'+y+'年'+m+'月</b><button type="button" class="btn" style="font-size:11px;padding:2px 9px" onclick="_ntCalMove_(1)">▶</button><span style="font-size:10.5px;color:#64748b;margin-left:6px">日付クリックで「選択中の工程」に設定（赤=納品予定）</span></div>';
+  h+='<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px"><tr>'+['日','月','火','水','木','金','土'].map(function(w,i){return '<th style="border:1px solid #cbd5e1;padding:2px;background:#f1f5f9;color:'+(i===0?'#b91c1c':i===6?'#2563eb':'#334155')+'">'+w+'</th>';}).join('')+'</tr>';
+  var day=1;
+  for(var r=0;r<6 && day<=dim;r++){ h+='<tr>';
+    for(var c=0;c<7;c++){
+      if((r===0&&c<startDow)||day>dim){ h+='<td style="border:1px solid #e8edf2;height:50px;background:#fafafa"></td>'; continue; }
+      var ds=y+'-'+String(m).padStart(2,'0')+'-'+String(day).padStart(2,'0');
+      var marks=byDate[ds]||[]; var isDue=(ds===due);
+      var bg=isDue?'#fee2e2':(marks.length?'#ecfdf5':'#fff');
+      h+='<td onclick="_ntCalPick_(\''+ds+'\')" style="border:1px solid #cbd5e1;height:50px;vertical-align:top;cursor:pointer;background:'+bg+';padding:1px 2px"><div style="font-weight:700;font-size:11px;color:'+(c===0?'#b91c1c':c===6?'#2563eb':'#334155')+'">'+day+(isDue?'<span style="font-size:8px;color:#b91c1c">納品</span>':'')+'</div>'+marks.slice(0,2).map(function(s){return '<div style="font-size:8.5px;background:#0f6e56;color:#fff;border-radius:3px;padding:0 2px;margin-top:1px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+_formEsc_(s)+'</div>';}).join('')+(marks.length>2?'<div style="font-size:8px;color:#0f6e56">+'+(marks.length-2)+'</div>':'')+'</td>';
+      day++;
+    }
+    h+='</tr>';
+  }
+  h+='</table>'; host.innerHTML=h;
+}
+function _ntCalPick_(ds){
+  var sel=document.getElementById('nt-cal-target'); if(!sel||sel.value==='') return;
+  var tr=document.querySelectorAll('#nt-body tr')[+sel.value]; if(!tr) return;
+  var inp=tr.querySelector('.nt-sched'); if(inp) inp.value=ds;
+  // 次の工程へ自動で進める（連続入力しやすく）
+  var ni=+sel.value+1; if(ni<sel.options.length) sel.value=String(ni);
+  _ntRenderCal_();
+  if(typeof _toastMsg==='function')_toastMsg('📅 '+ds+' を設定');
+}
 function _ntCollect_(){
   function g(id){ var e=document.getElementById(id); return e?e.value:''; }
   var rows=[]; document.querySelectorAll('#nt-body tr').forEach(function(tr){ var o={step:tr.querySelector('.nt-step').value, sched:tr.querySelector('.nt-sched').value, person:tr.querySelector('.nt-person').value, note:tr.querySelector('.nt-note').value}; if(o.step||o.sched||o.note) rows.push(o); });
