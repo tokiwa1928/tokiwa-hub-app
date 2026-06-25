@@ -1195,6 +1195,13 @@ function loadHatchu(cb){
   s.onerror=function(){ cb(); };   // 無くても続行(外注先紐付けのみスキップ)
   document.head.appendChild(s);
 }
+function loadCust(cb){
+  if(window.CUST_DISPLAY) return cb();
+  var s=document.createElement('script'); s.src='calendar-juchu-cust.js?v=1';
+  s.onload=function(){ cb(); };
+  s.onerror=function(){ cb(); };
+  document.head.appendChild(s);
+}
 function normCust(s){
   s=String(s==null?'':s).normalize('NFKC');
   s=s.replace(/株式会社|有限会社|合資会社|学校法人/g,'');
@@ -1486,19 +1493,27 @@ function applyGenPass(){   // GENを正に: 受注番号を実レコードへ・
       var ref=(r.ref==null?'':String(r.ref)).trim();
       if(ref && hat[ref]){ var h=hat[ref]; if(h[0]) r.vendor=h[0]; if(h[1]) r.cost=h[1]; r.purAmt=h[2]; }
     });
+    // 6) 顧客名を顧客リスト表記(㈲アイ・プラン等)へ統一
+    var disp=window.CUST_DISPLAY||{};
+    keep.forEach(function(r){ var d=disp[normCust(r.cust||'')]; if(d) r.cust=d; });
   });
 }
-// 発注紐付けだけを既存行に追記する軽い処理（再投入なし・ref行だけ触る＝前年コピー等は不変）
-function applyHatchuLight(){
-  loadHatchu(function(){
-    if(!window.GEN_HATCHU) return;
-    var n=0;
+// 軽い追記処理（再投入なし）: 発注紐付け(外注先/仕入)＋顧客名を顧客リスト表記へ統一。
+// データの削除・再投入は一切しないので前年コピー等は消えない。
+function applyLightRefine(){
+  loadHatchu(function(){ loadCust(function(){
+    var hat=window.GEN_HATCHU||{}, disp=window.CUST_DISPLAY||{};
+    var changed=false;
     var ok=hubSave(function(db){
-      (db[COLL]||[]).forEach(function(r){ var ref=(r.ref==null?'':String(r.ref)).trim(); if(ref && window.GEN_HATCHU[ref]){ var h=window.GEN_HATCHU[ref]; if(h[0]) r.vendor=h[0]; if(h[1]) r.cost=h[1]; r.purAmt=h[2]; n++; } });
-      (db._calMig||(db._calMig={}))['CAL-HATCHU-1']=true;
+      (db[COLL]||[]).forEach(function(r){
+        var ref=(r.ref==null?'':String(r.ref)).trim();
+        if(ref && hat[ref]){ var h=hat[ref]; if(h[0]) r.vendor=h[0]; if(h[1]) r.cost=h[1]; r.purAmt=h[2]; changed=true; }
+        var d=disp[normCust(r.cust||'')]; if(d && d!==r.cust){ r.cust=d; changed=true; }   // 顧客リスト表記へ
+      });
+      var m=db._calMig||(db._calMig={}); m['CAL-HATCHU-1']=true; m['CAL-NAME-1']=true;
     });
-    if(ok && n){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildCats(); render(); hubToast('✅ 外注先・仕入を反映しました（'+n+'件）'); }); }
-  });
+    if(ok && changed){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildCats(); render(); hubToast('✅ 外注先・仕入・顧客名を反映しました'); }); }
+  }); });
 }
 // 自己修復つき自動移行: 履歴(発注日付き)・2024・受注用 が揃うよう毎回チェック。
 // 揃って完了済みなら何もしない。欠けていれば種から補填（初期投入ボタン不要）。
@@ -1513,11 +1528,11 @@ function autoMigrate(){
   // データが揃って処理済みなら、重い再投入は絶対にしない＝前年コピー等を守る。
   // 発注紐付け(外注先/仕入)だけ未適用なら、既存行に追記する軽い処理だけ行う(再投入なし)
   if(has2024 && hasHist && hasJuchu && !needsShift){
-    if(!marks['CAL-HATCHU-1']) applyHatchuLight();
+    if(!marks['CAL-NAME-1']) applyLightRefine();
     return;
   }
   showBusy('🔄 データを準備中…');
-  loadSeed(function(){ load2024(function(){ loadGen(function(){ loadHatchu(function(){
+  loadSeed(function(){ load2024(function(){ loadGen(function(){ loadHatchu(function(){ loadCust(function(){
     setTimeout(function(){
       try{
         var S=window.JUCHU_SEED;
@@ -1528,13 +1543,13 @@ function autoMigrate(){
           importWorkbook(XLSX.read(b64ToBytes(S.juchu),{ type:'array', codepage:932 }), true);
         }
         applyGenPass();                                                                       // 伝票番号＋得意先GEN＋発注紐付け(外注先/仕入)
-        hubSave(function(db2){ var m=db2._calMig||(db2._calMig={}); ['CAL-DATES-1','CAL-DATES-2','CAL-DATES-3','CAL2024-1','CALGEN-1','CALGEN-2','CAL-HATCHU-1'].forEach(function(k){ m[k]=true; }); });
+        hubSave(function(db2){ var m=db2._calMig||(db2._calMig={}); ['CAL-DATES-1','CAL-DATES-2','CAL-DATES-3','CAL2024-1','CALGEN-1','CALGEN-2','CAL-HATCHU-1','CAL-NAME-1'].forEach(function(k){ m[k]=true; }); });
         if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
         showBusy('☁ 全社保存中…');
         hubCloudPush().then(function(){ hideBusy(); buildYears(); buildCats(); render(); hubToast('✅ データを最新化しました（外注先・仕入・発注日など）'); });
       }catch(e){ hideBusy(); console.error(e); hubToast('❌ 更新エラー: '+e.message); }
     }, 40);
-  }); }); }); });
+  }); }); }); }); });
 }
 // 起動
 buildYears(); buildCats(); setView('matrix'); autoMigrate();
