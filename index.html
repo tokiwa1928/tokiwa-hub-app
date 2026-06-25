@@ -20450,7 +20450,7 @@ function openMitsumori(id){
     + '<div style="margin-top:8px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:920px">'
     +   '<thead><tr style="background:#f1f5f9"><th style="padding:5px;width:56px">区分</th><th style="padding:5px;width:130px;text-align:left">品名</th><th style="padding:5px;text-align:left">内訳</th>'
     +   '<th style="padding:5px;width:90px;background:#fef3c7">発注先</th><th style="padding:5px;width:74px;background:#fef3c7">仕入(原価)</th><th style="padding:5px;width:58px;background:#fef3c7">原価率%</th>'
-    +   '<th style="padding:5px;width:78px">売価単価</th><th style="padding:5px;width:58px">数量</th><th style="padding:5px;width:42px">単位</th><th style="padding:5px;width:88px">金額</th>'
+    +   '<th style="padding:5px;width:78px">売価単価</th><th style="padding:5px;width:58px">数量</th><th style="padding:5px;width:42px">単位</th><th style="padding:5px;width:60px">税</th><th style="padding:5px;width:88px">金額</th>'
     +   '<th style="padding:5px;width:82px;background:#ecfdf5">利益額</th><th style="width:48px"></th></tr></thead>'
     +   '<tbody id="mit-body"></tbody></table>'
     +   '<button class="btn" style="font-size:11px;padding:3px 10px;margin-top:5px" onclick="_mitAddRow_()">＋ 明細行を追加</button>'
@@ -20514,6 +20514,7 @@ function _mitRow_(it){ it=it||{}; var st='width:100%;padding:3px 5px;border:1px 
     + '<td style="padding:2px 3px"><input class="mit-tanka" type="number" step="0.01" value="'+e(it.tanka)+'" oninput="_mitRowCalc_(this,\'tanka\')" style="'+st+';text-align:right"></td>'
     + '<td style="padding:2px 3px"><input class="mit-suryo" type="number" value="'+e(it.suryo)+'" oninput="_mitCalc_()" style="'+st+';text-align:right"></td>'
     + '<td style="padding:2px 3px"><input class="mit-tani" value="'+e(it.tani)+'" style="'+st+'"></td>'
+    + '<td style="padding:2px 3px"><select class="mit-itax" onchange="_mitCalc_()" style="'+st+'"><option value="">既定</option><option value="zeibetsu"'+(it.itax==='zeibetsu'?' selected':'')+'>税抜</option><option value="zeikomi"'+(it.itax==='zeikomi'?' selected':'')+'>税込</option></select></td>'
     + '<td class="mit-kingaku" style="text-align:right;padding:2px 5px;font-weight:600">0</td>'
     + '<td class="mit-arari" style="text-align:right;padding:2px 5px;background:#ecfdf5;font-weight:600">0</td>'
     + '<td style="text-align:center;white-space:nowrap"><span style="cursor:pointer;color:#2563eb;margin-right:8px" title="この行を下にコピー" onclick="_mitCopyRow_(this)">📋</span><span style="cursor:pointer;color:#b91c1c" title="この行を削除" onclick="this.closest(\'tr\').remove();_mitCalc_()">✕</span></td></tr>';
@@ -20561,19 +20562,32 @@ function _mitAddRow_(){ var tb=document.getElementById('mit-body'); if(!tb) retu
 function _mitCopyFirstRow_(){
   var tb=document.getElementById('mit-body'); if(!tb) return; var tr=tb.querySelector('tr'); if(!tr) return;
   function gv(c){ var x=tr.querySelector('.'+c); return x?x.value:''; }
-  var it={ kubun:gv('mit-kubun'), hinmei:gv('mit-hinmei'), naiyo:gv('mit-naiyo'), hacchu:gv('mit-hacchu'), genka:gv('mit-genka'), genkaritsu:gv('mit-genkaritsu'), tanka:gv('mit-tanka'), suryo:gv('mit-suryo'), tani:gv('mit-tani') };
+  var it={ kubun:gv('mit-kubun'), hinmei:gv('mit-hinmei'), naiyo:gv('mit-naiyo'), hacchu:gv('mit-hacchu'), genka:gv('mit-genka'), genkaritsu:gv('mit-genkaritsu'), tanka:gv('mit-tanka'), suryo:gv('mit-suryo'), tani:gv('mit-tani'), itax:gv('mit-itax') };
   tb.insertAdjacentHTML('beforeend', _mitRow_(it)); _mitCalc_();
   if(typeof _toastMsg==='function')_toastMsg('📋 1行目をコピーしました');
 }
+// 行ごとの税区分(itax 未指定は既定defTax)を考慮した合計。net=税抜小計, tax=消費税, total=税込
+function _mitTotals_(items, defTax){
+  var net=0, tax=0;
+  (items||[]).forEach(function(it){
+    var kin=Math.round((parseFloat(it.tanka)||0)*(parseFloat(it.suryo)||0));
+    var eff=it.itax||defTax||'zeibetsu';
+    if(eff==='zeikomi'){ var n=Math.round(kin/1.1); net+=n; tax+=(kin-n); }
+    else { net+=kin; tax+=Math.round(kin*0.1); }
+  });
+  return { net:net, tax:tax, total:net+tax };
+}
 function _mitCalc_(){
-  var rows=document.querySelectorAll('#mit-body tr'); var sum=0, costsum=0;
+  var rows=document.querySelectorAll('#mit-body tr'); var costsum=0; var its=[];
+  var defTax=(document.getElementById('mit-tax')||{}).value||'zeibetsu';
   rows.forEach(function(tr){
     var tanka=parseFloat(tr.querySelector('.mit-tanka').value)||0, suryo=parseFloat(tr.querySelector('.mit-suryo').value)||0, genka=parseFloat(tr.querySelector('.mit-genka').value)||0;
     var kin=Math.round(tanka*suryo), gsum=Math.round(genka*suryo), arari=kin-gsum;
     tr.querySelector('.mit-kingaku').textContent=_mitYen(kin); var _gs=tr.querySelector('.mit-genkasum'); if(_gs)_gs.textContent=_mitYen(gsum); tr.querySelector('.mit-arari').textContent=_mitYen(arari);
-    sum+=kin; costsum+=gsum;
+    costsum+=gsum;
+    its.push({ tanka:tanka, suryo:suryo, itax:((tr.querySelector('.mit-itax')||{}).value||'') });
   });
-  var zei=Math.round(sum*0.1); var total=sum+zei;
+  var T=_mitTotals_(its, defTax); var sum=T.net, zei=T.tax, total=T.total;
   var qty=parseFloat((document.getElementById('mit-qty')||{}).value)||0; var unit=qty>0?_mitRoundUnit_(sum/qty):0;
   var setT=function(id,val){ var e=document.getElementById(id); if(e) e.textContent=val; };
   setT('mit-sum','¥'+_mitYen(sum)); setT('mit-zei','¥'+_mitYen(zei)); setT('mit-total','¥'+_mitYen(total)); setT('mit-unit','¥'+(unit.toLocaleString()));
@@ -20582,7 +20596,7 @@ function _mitCalc_(){
 function _mitCollect_(){
   function g(id){ var e=document.getElementById(id); return e?e.value:''; }
   var items=[]; document.querySelectorAll('#mit-body tr').forEach(function(tr){
-    var o={ kubun:tr.querySelector('.mit-kubun').value, hinmei:(tr.querySelector('.mit-hinmei')||{}).value||'', lsize:(tr.querySelector('.mit-lsize')||{}).value||'', naiyo:tr.querySelector('.mit-naiyo').value, tanka:tr.querySelector('.mit-tanka').value, suryo:tr.querySelector('.mit-suryo').value, tani:tr.querySelector('.mit-tani').value, hacchu:tr.querySelector('.mit-hacchu').value, genka:tr.querySelector('.mit-genka').value, genkaritsu:(tr.querySelector('.mit-genkaritsu')||{}).value||'' };
+    var o={ kubun:tr.querySelector('.mit-kubun').value, hinmei:(tr.querySelector('.mit-hinmei')||{}).value||'', lsize:(tr.querySelector('.mit-lsize')||{}).value||'', naiyo:tr.querySelector('.mit-naiyo').value, tanka:tr.querySelector('.mit-tanka').value, suryo:tr.querySelector('.mit-suryo').value, tani:tr.querySelector('.mit-tani').value, itax:(tr.querySelector('.mit-itax')||{}).value||'', hacchu:tr.querySelector('.mit-hacchu').value, genka:tr.querySelector('.mit-genka').value, genkaritsu:(tr.querySelector('.mit-genkaritsu')||{}).value||'' };
     if(o.naiyo||o.tanka||o.kubun||o.hinmei) items.push(o);
   });
   var dp2=!!(document.getElementById('mit-dp2')&&document.getElementById('mit-dp2').checked);
@@ -20863,12 +20877,13 @@ async function _mitSend_(){
 }
 function _printMitsumori_(r){
   var d=r.data||{}; var p=MIT_CO[d.co]||MIT_CO.arteso; var e=_formEsc_;
-  var sum=0; (d.items||[]).forEach(function(it){ sum+=Math.round((parseFloat(it.tanka)||0)*(parseFloat(it.suryo)||0)); });
-  var zei=Math.round(sum*0.1), total=sum+zei; var qty=parseFloat(d.qty)||0; var _df=Math.pow(10,d.dp2?2:1); var unit=qty>0?Math.round(sum/qty*_df)/_df:0;
+  var _T=(typeof _mitTotals_==='function')?_mitTotals_(d.items, d.tax||'zeibetsu'):{net:0,tax:0,total:0};
+  var sum=_T.net, zei=_T.tax, total=_T.total; var qty=parseFloat(d.qty)||0; var _df=Math.pow(10,d.dp2?2:1); var unit=qty>0?Math.round(sum/qty*_df)/_df:0;
   var its=(d.items||[]).filter(function(it){return it.naiyo||it.tanka||it.hinmei;});
   var n=its.length;
   var rows=its.map(function(it,i){ var kin=Math.round((parseFloat(it.tanka)||0)*(parseFloat(it.suryo)||0));
     var desc=[it.hinmei,it.lsize,it.naiyo].filter(function(x){return x&&String(x).trim();}).join('　'); if(!desc)desc=it.kubun||'';
+    if(it.itax==='zeikomi')desc+='（税込）'; else if(it.itax==='zeibetsu')desc+='（税抜）';
     var last=(i===n-1);
     return '<tr><td class="l">'+e(desc)+'</td><td class="r">'+(it.tanka!==''&&it.tanka!=null?Number(it.tanka).toLocaleString():'')+'</td><td class="r">'+e(it.suryo||'')+'</td><td class="c">'+e(it.tani||'')+'</td><td class="r">'+(kin?kin.toLocaleString():'')+'</td><td></td><td></td></tr>'; }).join('');
   for(var _i=n;_i<5;_i++){ rows+='<tr><td class="l">&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'; }
