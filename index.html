@@ -19878,7 +19878,8 @@ function _toolToggleTrash_(){ window._toolShowTrash_=!window._toolShowTrash_; re
 var FORMS_REGISTRY = [
   { key:'mitsumori', icon:'🧾', name:'見積書（アート・エス／中尾印刷）', desc:'会社プリセット＋御見積/参考見積を選び、品名・部数・内訳(自動合計)・原価対比(社内)を入力→提出版PDF。保存・一覧・再編集可。' },
   { key:'shucchou', icon:'🧳', name:'出張報告書', desc:'日付・行先・目的・同行者・費用明細(自動合計)・報告本文を入力→保存→PDF/印刷。' },
-  { key:'fax', icon:'📠', name:'FAX送付状', desc:'会社プリセット(4社)＋宛先・件名・送信枚数・通信欄を入力→保存→PDF/印刷。各社の差出人が自動で入ります。' }
+  { key:'fax', icon:'📠', name:'FAX送付状', desc:'会社プリセット(4社)＋宛先・件名・送信枚数・通信欄を入力→保存→PDF/印刷。各社の差出人が自動で入ります。' },
+  { key:'nittei', icon:'📅', name:'日程表（進行スケジュール）', desc:'件名・得意先・納品予定日＋工程ごとの予定日/担当/備考を入力→保存→PDF/印刷。将来は案件管理から半自動生成・見積同時提供へ。' }
 ];
 var MIT_CO = {
   arteso:{ name:'有限会社アート・エス', rep:'代表取締役 本多 亮', zip:'〒259-1137', addr:'伊勢原市笠窪331-1', tel:'0463-96-6264', fax:'0463-96-6252', email:'info@art-s1986.com' },
@@ -19978,7 +19979,7 @@ function renderFormsPage(){
   }).join('');
   fl.innerHTML = sections;
 }
-function openForm(type, id){ if(type==='shucchou') return openShucchou(id); if(type==='mitsumori') return openMitsumori(id); if(type==='fax') return openFax(id); }
+function openForm(type, id){ if(type==='shucchou') return openShucchou(id); if(type==='mitsumori') return openMitsumori(id); if(type==='fax') return openFax(id); if(type==='nittei') return openNittei(id); }
 function _formBackToList_(){ renderFormsPage(); }
 function deleteForm(id){ var L=_formsList_(); var r=L.find(function(x){return x.id===id;}); if(!r) return; if(!confirm('「'+(r.title||'この帳票')+'」を削除しますか？')) return; DB.forms=L.filter(function(x){return x.id!==id;}); if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){} renderFormsPage(); if(typeof _toastMsg==='function')_toastMsg('🗑 削除しました'); }
 
@@ -20052,6 +20053,7 @@ function printForm(id){
   var r=_formsList_().find(function(x){return x.id===id;}); if(!r){ if(typeof _toastMsg==='function')_toastMsg('保存後に印刷できます'); return; }
   if(r.type==='shucchou') return _printShucchou_(r);
   if(r.type==='fax') return _printFax_(r);
+  if(r.type==='nittei') return _printNittei_(r);
   if(r.type==='mitsumori') return _printMitsumori_(r);
 }
 function _shMonth_(r){ var d=(r&&r.data)||{}; return d.month || (d.from||d.date||'').slice(0,7); }
@@ -20137,6 +20139,91 @@ function _shMonthlyListHtml_(rows){
   return groups + '<div style="margin-top:10px"><button class="btn" style="font-size:12px;padding:6px 14px;background:#0f6e56;border-color:#0f6e56;color:#fff" onclick="_shBatchPrint_()">🖨 選択した月を一括申請PDF</button></div>';
 }
 
+// ── 📅 日程表（進行スケジュール・各社対応） ──
+var NT_STEP_PRESET=['入稿','データ作成','デザイン','初校','再校','校了','下版','印刷','製本・加工','断裁','検品','箱詰め','納品','発送'];
+function openNittei(id){
+  var L=_formsList_(); var rec=id?L.find(function(x){return x.id===id;}):null; var d=(rec&&rec.data)||{};
+  window._formEditId_=id||'';
+  var fl=document.getElementById('forms-list'); if(fl) fl.style.display='none';
+  var ed=document.getElementById('form-editor'); ed.style.display='block';
+  var today=new Date(); var t=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+  function v(k,def){ return d[k]!=null?d[k]:(def||''); }
+  var co=v('co','arteso');
+  var rows=(d.rows&&d.rows.length)?d.rows:[{step:'入稿'},{step:'データ作成'},{step:'初校'},{step:'校了'},{step:'印刷'},{step:'製本・加工'},{step:'納品'}];
+  var st='width:100%;padding:7px 9px;border:1px solid #d0cec8;border-radius:6px;font-size:14px;font-family:inherit;box-sizing:border-box';
+  function fld(label,inner){ return '<div><label style="font-size:11px;color:#888;font-weight:600;display:block;margin-bottom:2px">'+label+'</label>'+inner+'</div>'; }
+  ed.innerHTML = '<div class="sec mit-form" style="max-width:920px">'
+    + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><button class="btn" onclick="_formBackToList_()">← 一覧</button><strong style="font-size:16px">📅 日程表（進行スケジュール）'+(id?'（編集）':'（新規）')+'</strong></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 14px">'
+    +   fld('会社（自社）','<select id="nt-co" style="'+st+'">'+Object.keys(MIT_CO).map(function(k){ return '<option value="'+k+'"'+(co===k?' selected':'')+'>'+_formEsc_(MIT_CO[k].name)+'</option>'; }).join('')+'</select>')
+    +   fld('作成日','<input type="date" id="nt-date" value="'+_formEsc_(v('date',t))+'" style="'+st+'">')
+    +   fld('担当','<input id="nt-owner" value="'+_formEsc_(v('owner',_formWho_()))+'" style="'+st+'">')
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 14px;margin-top:8px">'
+    +   fld('件名（案件名）','<input id="nt-subject" list="dl-mit-cust" value="'+_formEsc_(v('subject'))+'" placeholder="例 ○○会報 No.26" style="'+st+'">')
+    +   fld('得意先','<input id="nt-cust" list="dl-mit-cust" value="'+_formEsc_(v('cust'))+'" style="'+st+'">')
+    +   fld('納品予定日','<input type="date" id="nt-due" value="'+_formEsc_(v('due'))+'" style="'+st+'">')
+    + '</div>'
+    + '<div style="margin-top:12px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:640px">'
+    +   '<thead><tr style="background:#f1f5f9"><th style="padding:5px;text-align:left;width:170px">工程</th><th style="padding:5px;width:140px">予定日</th><th style="padding:5px;width:110px">担当</th><th style="padding:5px;text-align:left">備考</th><th style="width:48px"></th></tr></thead>'
+    +   '<tbody id="nt-body"></tbody></table>'
+    +   '<button class="btn" style="font-size:11px;padding:3px 10px;margin-top:5px" onclick="_ntAddRow_()">＋ 工程を追加</button></div>'
+    + '<div style="margin-top:10px">'+fld('備考・連絡事項','<textarea id="nt-memo" rows="3" style="'+st+';resize:vertical">'+_formEsc_(v('memo'))+'</textarea>')+'</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'
+    +   '<button class="btn btn-p" onclick="saveNittei()">💾 保存</button>'
+    +   '<button class="btn" onclick="saveNittei(true)">💾 保存して印刷/PDF</button>'
+    +   (id?'<button class="btn" onclick="_formBackToList_()">キャンセル</button>':'')
+    + '</div><datalist id="dl-nt-step">'+NT_STEP_PRESET.map(function(s){return '<option value="'+_formEsc_(s)+'">';}).join('')+'</datalist></div>';
+  var tb=document.getElementById('nt-body'); tb.innerHTML=rows.map(function(it){ return _ntRow_(it); }).join('');
+  if(typeof _mitBuildDatalists_==='function'){ try{ _mitBuildDatalists_(); }catch(e){} }
+}
+function _ntRow_(it){ it=it||{}; var st='width:100%;padding:4px 6px;border:1px solid #d0cec8;border-radius:5px;font-size:13px;box-sizing:border-box'; var e=function(x){return _formEsc_(x==null?'':x);};
+  return '<tr>'
+    + '<td style="padding:3px 5px"><input class="nt-step" list="dl-nt-step" value="'+e(it.step)+'" style="'+st+'"></td>'
+    + '<td style="padding:3px 5px"><input class="nt-sched" type="date" value="'+e(it.sched)+'" style="'+st+'"></td>'
+    + '<td style="padding:3px 5px"><input class="nt-person" value="'+e(it.person)+'" style="'+st+'"></td>'
+    + '<td style="padding:3px 5px"><input class="nt-note" value="'+e(it.note)+'" style="'+st+'"></td>'
+    + '<td style="text-align:center;white-space:nowrap"><span style="cursor:pointer;color:#2563eb;margin-right:8px" title="この行を下にコピー" onclick="_ntCopyRow_(this)">📋</span><span style="cursor:pointer;color:#b91c1c" title="削除" onclick="this.closest(\'tr\').remove()">✕</span></td></tr>';
+}
+function _ntAddRow_(){ var tb=document.getElementById('nt-body'); if(tb) tb.insertAdjacentHTML('beforeend', _ntRow_({})); }
+function _ntCopyRow_(el){ var tr=el.closest('tr'); if(!tr) return; function gv(c){ var x=tr.querySelector('.'+c); return x?x.value:''; } tr.insertAdjacentHTML('afterend', _ntRow_({step:gv('nt-step'),sched:gv('nt-sched'),person:gv('nt-person'),note:gv('nt-note')})); }
+function _ntCollect_(){
+  function g(id){ var e=document.getElementById(id); return e?e.value:''; }
+  var rows=[]; document.querySelectorAll('#nt-body tr').forEach(function(tr){ var o={step:tr.querySelector('.nt-step').value, sched:tr.querySelector('.nt-sched').value, person:tr.querySelector('.nt-person').value, note:tr.querySelector('.nt-note').value}; if(o.step||o.sched||o.note) rows.push(o); });
+  return { co:g('nt-co'), date:g('nt-date'), owner:g('nt-owner'), subject:g('nt-subject'), cust:g('nt-cust'), due:g('nt-due'), rows:rows, memo:g('nt-memo') };
+}
+function saveNittei(thenPrint){
+  var data=_ntCollect_();
+  if(!data.subject&&!data.cust){ if(typeof _toastMsg==='function')_toastMsg('件名か得意先を入力してください'); return; }
+  var L=_formsList_(); var id=window._formEditId_; var now=new Date().toISOString();
+  var title=(data.cust?data.cust+' / ':'')+(data.subject||'日程表');
+  var rec;
+  if(id){ rec=L.find(function(x){return x.id===id;}); if(rec){ rec.data=data; rec.title=title; rec.updatedAt=now; } }
+  if(!rec){ rec={ id:'frm_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), type:'nittei', title:title, data:data, createdAt:now, updatedAt:now, createdBy:_formWho_() }; L.push(rec); window._formEditId_=rec.id; }
+  if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){}
+  if(typeof _toastMsg==='function')_toastMsg('💾 保存しました');
+  if(thenPrint) _printNittei_(rec); else renderFormsPage();
+}
+function _printNittei_(r){
+  var d=r.data||{}; var p=MIT_CO[d.co]||MIT_CO.arteso; var e=_formEsc_;
+  var rows=(d.rows||[]).filter(function(x){return x.step||x.sched||x.note;}).map(function(x){
+    return '<tr><td>'+e(x.step||'')+'</td><td class="c">'+e(x.sched||'')+'</td><td class="c">'+e(x.person||'')+'</td><td>'+e(x.note||'')+'</td></tr>'; }).join('');
+  var html='<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>進行スケジュール表</title>'
+    + '<style>@page{size:A4;margin:16mm}body{font-family:"Yu Gothic","Meiryo",sans-serif;color:#000;font-size:13px}'
+    + 'h1{font-size:24px;text-align:center;letter-spacing:.3em;margin:0 0 12px;font-weight:700}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #000;padding:7px 9px;font-size:13px;vertical-align:top}th{background:#f0f0f0;text-align:left;white-space:nowrap}'
+    + '.info th{width:110px}.sch th{text-align:center}.c{text-align:center}.due{font-size:15px;font-weight:700}@media print{button{display:none}}</style></head><body>'
+    + '<div style="text-align:right;margin-bottom:6px"><button onclick="window.print()" style="padding:8px 18px;font-size:13px;cursor:pointer">🖨 印刷 / PDF保存</button></div>'
+    + '<h1>進行スケジュール表</h1>'
+    + '<table class="info"><tr><th>件名</th><td>'+e(d.subject||'')+'</td><th>作成日</th><td>'+e(d.date||'')+'</td></tr>'
+    +   '<tr><th>得意先</th><td>'+e(d.cust||'')+(d.cust?' 御中':'')+'</td><th>納品予定日</th><td class="due">'+e(d.due||'')+'</td></tr>'
+    +   '<tr><th>担当</th><td>'+e(d.owner||'')+'</td><th>作成</th><td>'+e(p.name)+'</td></tr></table>'
+    + '<table class="sch"><thead><tr><th style="text-align:left">工程</th><th style="width:130px">予定日</th><th style="width:110px">担当</th><th style="text-align:left">備考</th></tr></thead><tbody>'+rows+'</tbody></table>'
+    + (d.memo?('<div style="font-size:12px;margin-top:6px;white-space:pre-wrap"><b>＜備考・連絡事項＞</b><br>'+e(d.memo)+'</div>'):'')
+    + '</body></html>';
+  var w=window.open('','_blank'); if(!w){ if(typeof _toastMsg==='function')_toastMsg('ポップアップを許可してください'); return; }
+  w.document.write(html); w.document.close();
+}
 // ── 📠 FAX送付状（各社対応） ──
 function openFax(id){
   var L=_formsList_(); var rec=id?L.find(function(x){return x.id===id;}):null; var d=(rec&&rec.data)||{};
