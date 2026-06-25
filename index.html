@@ -1884,6 +1884,7 @@ setTimeout(_removeBootLoader_, 5000);
     <!-- 検索窓 + カテゴリ選択ドロップダウン + 並べ替えモード -->
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
       <input id="bm-search" class="inp" placeholder="🔍 タイトル・URL・メモで検索" style="flex:1;min-width:180px;max-width:340px" oninput="renderBookmarksPage()">
+      <button class="btn btn-p" style="white-space:nowrap" onclick="openDriveSearch()" title="Google Drive内の書類をファイル名で検索して直接開く">📁 書類検索(Drive)</button>
       <select id="bm-cat-filter" class="inp" style="max-width:220px" onchange="renderBookmarksPage()"></select>
       <span style="font-size:11px;color:#0e7490;background:#ecfeff;border:1px solid #a5f3fc;border-radius:6px;padding:3px 8px;white-space:nowrap" title="カードの ⠿ をつかんで別カテゴリの枠へドラッグすると移動できます">⠿ ドラッグで移動できます</span>
       <label style="font-size:11.5px;color:#666;display:flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap" title="ONにするとチェックして複数まとめて削除できます">
@@ -19949,6 +19950,38 @@ function _scWriteUrlFile_(name,url){
   var blob=new Blob([content],{type:'application/octet-stream'});
   var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=_scSan_(name)+'.url'; document.body.appendChild(a); a.click();
   setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 900);
+}
+// 📁 Drive書類検索（ファイル名で探して直接開く。実ファイルは触らせず閲覧リンクのみ）
+function openDriveSearch(){
+  var prev=document.getElementById('ds-overlay'); if(prev) prev.remove();
+  var ov=document.createElement('div'); ov.id='ds-overlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px';
+  ov.innerHTML='<div style="background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:86vh;overflow:auto;padding:18px 20px;box-shadow:0 8px 30px rgba(0,0,0,.3)">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><strong style="font-size:17px">📁 書類検索（Google Drive）</strong><button onclick="document.getElementById(\'ds-overlay\').remove()" style="margin-left:auto;font-size:18px;background:none;border:none;cursor:pointer">✕</button></div>'
+    +'<div style="font-size:12px;color:#555;margin-bottom:10px">ファイル名で検索 → 見つかった書類を<b>直接開きます</b>（フォルダを移動してもリンクは切れません。フォルダ構造は触りません）。</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:10px"><input id="ds-q" placeholder="例: アイリス 見積 ／ 神特協 ／ 請求 ○○商店" style="flex:1;font-size:14px;padding:8px 10px;border:1.5px solid #64748b;border-radius:6px" onkeydown="if(event.key===\'Enter\')_dsRun_()"><button class="btn btn-p" style="font-size:14px;padding:8px 16px;white-space:nowrap" onclick="_dsRun_()">🔍 検索</button></div>'
+    +'<div id="ds-result" style="font-size:13px"></div></div>';
+  ov.addEventListener('click',function(ev){ if(ev.target===ov) ov.remove(); });
+  document.body.appendChild(ov);
+  setTimeout(function(){ var i=document.getElementById('ds-q'); if(i) i.focus(); }, 50);
+}
+function _dsIcon_(m){ m=m||''; if(m.indexOf('pdf')>=0)return '📄'; if(m.indexOf('sheet')>=0||m.indexOf('excel')>=0||m.indexOf('spreadsheet')>=0)return '📊'; if(m.indexOf('word')>=0||m.indexOf('document')>=0)return '📝'; if(m.indexOf('image')>=0)return '🖼'; if(m.indexOf('presentation')>=0||m.indexOf('powerpoint')>=0)return '📽'; return '📁'; }
+async function _dsRun_(){
+  var q=((document.getElementById('ds-q')||{}).value||'').trim();
+  var rb=document.getElementById('ds-result'); if(!rb) return;
+  if(!q){ rb.innerHTML='<span style="color:#b91c1c">検索語を入力してください</span>'; return; }
+  rb.innerHTML='⏳ 検索中…';
+  try{
+    var r=await callCloudAPI('searchDriveFiles', {}, { q:q, max:40 });
+    if(!r||!r.success){ rb.innerHTML='<span style="color:#b91c1c">❌ '+((r&&r.error)||'検索失敗')+'</span>'; return; }
+    if(!r.items||!r.items.length){ rb.innerHTML='<div style="color:#94a3b8;padding:10px">該当する書類がありませんでした</div>'; return; }
+    rb.innerHTML='<div style="font-size:11px;color:#64748b;margin-bottom:6px">'+r.count+'件</div>'+r.items.map(function(f){
+      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;margin-bottom:5px">'
+        +'<span style="font-size:18px">'+_dsIcon_(f.mime)+'</span>'
+        +'<span style="flex:1;min-width:0"><b style="font-size:13px;word-break:break-all">'+_formEsc_(f.title)+'</b><span style="font-size:11px;color:#94a3b8;margin-left:6px">'+_formEsc_(f.modified)+'</span></span>'
+        +'<a href="'+_formEsc_(f.url)+'" target="_blank" rel="noopener" class="btn btn-p" style="font-size:12px;padding:5px 12px;text-decoration:none;white-space:nowrap">開く ↗</a></div>';
+    }).join('');
+  }catch(e){ rb.innerHTML='<span style="color:#b91c1c">❌ 通信エラー: '+(e.message||e)+'</span>'; }
 }
 // 起動時にURLパラメータ ?page=◯◯ を読み、そのページを開く（ショートカット用ディープリンク）
 function _applyDeepLink_(){
