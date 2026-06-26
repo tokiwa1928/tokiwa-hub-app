@@ -23015,6 +23015,7 @@ function _renderEstModeCtrl_(tid){
       + '<button class="btn" style="' + SBTN + 'background:#fffbeb;border-color:#fbbf24;color:#92400e" onclick="saveAsTemplate(' + tid + ')">⭐ テンプレ保存</button>'
       + '<span class="est-view-badge" style="' + BADGE + 'background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.25)">🖊 作成中</span>'
       + '<button class="btn" style="' + SBTN + 'background:#ecfeff;border-color:#67e8f9;color:#0e7490" onclick="saveEstimateDraft(' + tid + ')" title="入力途中でも保存して後で再開できます（下書き・必須入力なし）">💾 一時保存</button>'
+      + (((typeof currentAuth!=='undefined'&&currentAuth&&['COMP005','COMP006'].indexOf(currentAuth.companyId)>=0))?'<button class="btn" style="' + SBTN + 'background:#1e293b;border-color:#1e293b;color:#fff" onclick="_estRequestToTokiwa_(' + tid + ')" title="この内容をコピーしてトキワ印刷へ見積依頼します">🏭 トキワ印刷へ見積依頼</button>':'')
       + (isOrderC
         ? '<button class="btn" style="' + BTN + 'background:#065f46;color:#fff;border-color:#065f46;box-shadow:0 2px 6px rgba(6,95,70,.4)" onclick="openOrderConfirmModal(' + tid + ')">🟢 受注案件として登録</button>'
         : '<button class="btn" style="' + BTN + 'background:#0891b2;color:#fff;border-color:#0891b2;box-shadow:0 2px 6px rgba(8,145,178,.4)" onclick="saveEstimateAsQuote(' + tid + ')">🔵 見積書として保存</button>');
@@ -34241,6 +34242,54 @@ async function saveEstimateDraft(tid){
   if(typeof renderProjStageTabs === 'function') try { renderProjStageTabs(); } catch(e){}
   if(typeof _toastMsg === 'function') _toastMsg('💾 一時保存しました（下書き）— 見積一覧やホームの「一時保存」から再開できます');
   else alert('💾 一時保存しました（下書き）');
+}
+// 🏭 関連会社(アート・エス/中尾)→トキワ印刷へ見積依頼（内容コピー＋会社マッピング）
+// トキワ側マッピング: 得意先=依頼元会社／エンドユーザー=依頼元の得意先／納品先・梱包指示先=依頼元会社
+async function _estRequestToTokiwa_(tid){
+  if(typeof currentAuth==='undefined'||!currentAuth) return;
+  var _rok=await _estReconcile_(tid); if(_rok===false) return;
+  var TOKIWA='COMP002';
+  var fromCo=currentAuth.companyId; var fromName=(typeof getCompanyName==='function'&&getCompanyName(fromCo))||'';
+  if(fromCo===TOKIWA){ alert('トキワ印刷自身からは依頼できません'); return; }
+  var g=function(p){ return (document.getElementById(p+'-'+tid)||{}).value||''; };
+  var s=ts(tid); var qty=(s.qtyPats&&s.qtyPats[0]&&s.qtyPats[0].v)||0;
+  var cust=g('cust'), enduser=g('enduser'), prod=g('prod'), unit=g('unit')||'枚', due=g('due'), spec=g('spec'), memo=g('memo');
+  if(!prod){ alert('品名が空です。先に内容を入力してください'); return; }
+  if(!confirm('この内容をコピーして「トキワ印刷」へ見積依頼します。よろしいですか？')) return;
+  // マッピング（トキワ側）
+  var mapEndUser=cust;        // 依頼元の得意先 → トキワのエンドユーザー
+  var mapDeliv=fromName;      // 納品先 = 依頼元会社
+  var nowISO=new Date().toISOString();
+  var mapNote='【トキワ印刷側 取込み用】\n得意先（トキワ）：'+fromName+'\nエンドユーザー：'+(mapEndUser||'')+(enduser?'（最終客: '+enduser+'）':'')+'\n納品先：'+mapDeliv+'\n梱包・納品指示先：'+mapDeliv+(memo?('\n\n備考:\n'+memo):'');
+  var req={
+    id:(typeof generateRequestId==='function')?generateRequestId():('ICR-'+Date.now()),
+    fromCompanyId:fromCo, toCompanyId:TOKIWA,
+    item:prod, qty:(parseFloat(qty)||0), unit:unit, dueDate:due, budget:null,
+    spec:spec, note:mapNote, status:'sent', createdAt:nowISO, sentAt:nowISO,
+    replyPrice:null, replyNote:null, repliedAt:null,
+    // 取込みマッピング（将来「この依頼で見積作成」用）
+    map:{ cust:fromName, endUser:mapEndUser, endUserFinal:enduser, srcCust:cust, delivTarget:mapDeliv, packTarget:mapDeliv }
+  };
+  DB.intercoRequests=DB.intercoRequests||[]; DB.intercoRequests.push(req);
+  if(typeof saveDB==='function')saveDB();
+  // 問い合わせ管理（トキワ側の受信）にも追加
+  try{
+    var newInq={ id:'IC-'+req.id, source_type:'interco', source_id:req.id,
+      channel_company:fromName, from_name:(currentAuth.userName||''), from_company:fromName, from_email:'',
+      subject:'【社間見積依頼】'+req.item+' ('+req.qty+req.unit+')',
+      body:'依頼先: トキワ印刷\n品名: '+req.item+'\n数量: '+req.qty+req.unit+(req.dueDate?'\n納期: '+req.dueDate:'')+(req.spec?'\n\n仕様:\n'+req.spec:'')+'\n\n'+mapNote,
+      kind:'quote_req', priority:'normal', status:'progress', summary:'', received_at:nowISO, createdAt:nowISO,
+      timeline:[{type:'note',date:nowISO,text:'関連会社からの見積依頼（内容コピー）',by:(currentAuth.userName||'')}],
+      tags:['グループ会社依頼','送信'], _interco_meta:{ fromCompanyId:fromCo, toCompanyId:TOKIWA, requestId:req.id } };
+    DB.inquiries=DB.inquiries||[]; DB.inquiries.unshift(newInq);
+    if(typeof saveDB==='function')saveDB();
+    if(typeof callCloudAPI==='function'){ try{ callCloudAPI('addCommunication',{},newInq); }catch(e){} }
+  }catch(e){ console.warn('interco inquiry sync failed',e); }
+  if(typeof saveToCloud==='function')try{ saveToCloud(); }catch(e){}
+  if(typeof _addAuditLog_==='function')try{ _addAuditLog_('create','intercoRequest:'+req.id,'トキワ印刷へ見積依頼: '+prod); }catch(e){}
+  if(typeof renderIntercoSent==='function')try{ renderIntercoSent(); }catch(e){}
+  if(typeof renderInquiryList==='function')try{ renderInquiryList(); }catch(e){}
+  alert('🏭 トキワ印刷へ見積依頼を送信しました。\n（トキワ側：得意先=「'+fromName+'」／エンドユーザー=「'+(mapEndUser||'')+'」／納品先・梱包=「'+mapDeliv+'」）');
 }
 
 function openOrderConfirmModal(tabId){
