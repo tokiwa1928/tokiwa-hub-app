@@ -21237,9 +21237,62 @@ function _mitAccumulateMaster_(data){
   (data.items||[]).forEach(function(it){ add(m.vendors, it.hacchu); });
   m.custs.sort(function(a,b){return a.localeCompare(b,'ja');}); m.vendors.sort(function(a,b){return a.localeCompare(b,'ja');});
 }
-function saveMitsumori(thenPrint){
+// ===== マスタ名寄せ（照合）共通部品 =====
+// 表記ゆれ正規化：株式会社/有限会社・（株）等・スペース・記号・全半角を無視
+function _normName_(s){ s=String(s==null?'':s).trim(); if(!s) return ''; try{ s=s.normalize('NFKC'); }catch(e){} s=s.replace(/(株式会社|有限会社|合同会社|合資会社|合名会社|（株）|\(株\)|（有）|\(有\)|㈱|㈲)/g,''); s=s.replace(/[\s　・･,，、。.．\-ー―–—_／/]/g,''); return s.toLowerCase(); }
+function _masterArr_(kind){ return kind==='vendor'? _mitVendorMaster_() : _mitCustMaster_(); }
+function _masterFindExact_(kind,value){ var n=_normName_(value); if(!n) return null; var arr=_masterArr_(kind); for(var i=0;i<arr.length;i++){ if(arr[i]&&_normName_(arr[i].name)===n) return arr[i]; } return null; }
+function _masterFindSimilar_(kind,value){ var n=_normName_(value); var arr=_masterArr_(kind); var out=[]; if(!n) return arr.slice(0,30); arr.forEach(function(r){ if(!r||!r.name) return; var rn=_normName_(r.name); if(!rn) return; if(rn===n||rn.indexOf(n)>=0||n.indexOf(rn)>=0) out.push(r); }); return out.slice(0,40); }
+function _masterAdd_(kind,name){ name=String(name||'').trim(); if(!name||_masterFindExact_(kind,name)) return; if(kind==='vendor'){ _mitVendorMaster_().push({code:'',name:name,zip:'',addr:'',tel:'',fax:''}); } else { _mitCustMaster_().push({no:'',name:name,yomi:(typeof _mitAutoYomi_==='function'?_mitAutoYomi_(name):''),kind:'cust',yomiOK:false}); } try{ if(typeof saveDB==='function')saveDB(); }catch(e){} }
+// 未登録なら照合モーダルを出し、確定した正式名称を返す（キャンセル=null）
+function _masterReconcile_(kind, value){
+  return new Promise(function(resolve){
+    value=String(value||'').trim();
+    if(!value){ resolve(value); return; }
+    var exact=_masterFindExact_(kind,value);
+    if(exact){ resolve(exact.name); return; }
+    var kindLabel=kind==='vendor'?'外注先（仕入先）':'得意先';
+    var ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px';
+    document.body.appendChild(ov);
+    function done(val){ try{document.body.removeChild(ov);}catch(e){} resolve(val); }
+    ov.innerHTML='<div style="background:#fff;border-radius:12px;max-width:520px;width:100%;max-height:86vh;overflow:auto;padding:18px 20px;box-shadow:0 16px 48px rgba(0,0,0,.3);font-family:inherit">'
+      + '<div style="font-size:15px;font-weight:800;margin-bottom:4px">🗂 '+kindLabel+'マスタに未登録</div>'
+      + '<div style="font-size:12px;color:#475569;margin-bottom:12px;line-height:1.6">「<b>'+_formEsc_(value)+'</b>」はマスタにありません。<br>類似があれば<b>統一</b>、無ければ<b>新規登録</b>してください（表記ゆれ防止）。</div>'
+      + '<label style="font-size:11px;color:#475569;font-weight:700">登録／使用する正式名称</label>'
+      + '<input id="mr-name" value="'+_formEsc_(value)+'" style="width:100%;padding:7px 9px;border:2px solid #6b7280;border-radius:6px;font-size:14px;box-sizing:border-box;margin:3px 0 12px">'
+      + '<label style="font-size:11px;color:#475569;font-weight:700">マスタ内を検索（類似候補）</label>'
+      + '<input id="mr-search" value="'+_formEsc_(value)+'" placeholder="社名の一部で検索" style="width:100%;padding:6px 9px;border:1px solid #cfd4da;border-radius:6px;font-size:13px;box-sizing:border-box;margin:3px 0 6px">'
+      + '<div id="mr-sims" style="max-height:34vh;overflow:auto"></div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'
+      +   '<button id="mr-reg" style="font-size:12.5px;padding:7px 14px;border-radius:7px;border:1px solid #16a34a;background:#16a34a;color:#fff;cursor:pointer;font-family:inherit">✅ この名称で登録して使用</button>'
+      +   '<button id="mr-use" style="font-size:12px;padding:7px 12px;border-radius:7px;border:1px solid #cfd4da;background:#fff;cursor:pointer;font-family:inherit">登録せず使用</button>'
+      +   '<button id="mr-cancel" style="font-size:12px;padding:7px 12px;border-radius:7px;border:1px solid #fca5a5;background:#fff;color:#b91c1c;cursor:pointer;font-family:inherit">キャンセル</button>'
+      + '</div></div>';
+    var nameEl=ov.querySelector('#mr-name'), searchEl=ov.querySelector('#mr-search'), simsEl=ov.querySelector('#mr-sims');
+    function renderSims(){
+      var sims=_masterFindSimilar_(kind, searchEl.value);
+      simsEl.innerHTML = sims.length? sims.map(function(r){ return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:7px;margin-top:5px"><span style="flex:1;font-size:13px">'+_formEsc_(r.name)+'</span><button data-pick="'+_formEsc_(r.name).replace(/"/g,'&quot;')+'" style="font-size:11px;padding:3px 10px;border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:5px;cursor:pointer;font-family:inherit">これに統一</button></div>'; }).join('') : '<div style="color:#94a3b8;font-size:12px;padding:8px 2px">類似はありません。「この名称で登録して使用」で新規登録できます。</div>';
+      simsEl.querySelectorAll('button[data-pick]').forEach(function(b){ b.onclick=function(){ nameEl.value=this.getAttribute('data-pick'); }; });
+    }
+    renderSims(); searchEl.oninput=renderSims;
+    ov.querySelector('#mr-reg').onclick=function(){ var nm=nameEl.value.trim(); if(!nm){ nameEl.focus(); return; } var ex=_masterFindExact_(kind,nm); if(ex){ done(ex.name); } else { _masterAdd_(kind,nm); try{ if(typeof saveToCloud==='function')saveToCloud(); }catch(e){} done(nm); } };
+    ov.querySelector('#mr-use').onclick=function(){ done(nameEl.value.trim()||value); };
+    ov.querySelector('#mr-cancel').onclick=function(){ done(null); };
+  });
+}
+// 見積データの得意先・外注先を保存前に名寄せ（戻り値 false=キャンセル）
+async function _mitReconcileData_(data){
+  var cust=(data.cust||'').trim();
+  if(cust){ var c=await _masterReconcile_('cust',cust); if(c===null) return false; if(c){ if((data.to||'').trim()===cust) data.to=c; data.cust=c; var ce=document.getElementById('mit-cust'); if(ce) ce.value=c; } }
+  var seen={}; var items=data.items||[];
+  for(var i=0;i<items.length;i++){ var v=(items[i].hacchu||'').trim(); if(!v) continue; if(seen[v]!==undefined){ items[i].hacchu=seen[v]; continue; } var rv=await _masterReconcile_('vendor',v); if(rv===null) return false; seen[v]=rv; items[i].hacchu=rv; }
+  return true;
+}
+async function saveMitsumori(thenPrint){
   var data=_mitCollect_();
   if(!data.to&&!data.prod){ if(typeof _toastMsg==='function')_toastMsg('宛先か品名を入力してください'); return; }
+  var _ok=await _mitReconcileData_(data); if(!_ok) return false;
   var L=_formsList_(); var id=window._formEditId_; var now=new Date().toISOString();
   var title=(data.to||'')+(data.prod?(' / '+data.prod):'');
   var rec;
@@ -21249,11 +21302,14 @@ function saveMitsumori(thenPrint){
   if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){}
   if(typeof _toastMsg==='function')_toastMsg('💾 保存しました');
   if(thenPrint) _printMitsumori_(rec); else renderFormsPage();
+  return true;
 }
 async function saveMitsumoriDrive(){
-  var data=_mitCollect_();
-  if(!data.cust && !data.to){ if(typeof _toastMsg==='function')_toastMsg('得意先（保存フォルダ名）を入力してください'); return; }
-  saveMitsumori();
+  var data0=_mitCollect_();
+  if(!data0.cust && !data0.to){ if(typeof _toastMsg==='function')_toastMsg('得意先（保存フォルダ名）を入力してください'); return; }
+  var _saved=await saveMitsumori();           // 名寄せ＋ローカル保存
+  if(_saved===false){ var b=document.getElementById('mit-drive-result'); if(b) b.innerHTML=''; return; } // 照合キャンセル
+  var data=_mitCollect_();          // 名寄せ後の正式名称で再取得
   var box=document.getElementById('mit-drive-result'); if(box) box.innerHTML='⏳ Driveへ保存中…';
   try{
     var r=await callCloudAPI('saveMitsumoriToDrive', {}, { co:data.co, customer:(data.cust||data.to||'').trim(), data:data });
