@@ -16458,10 +16458,11 @@ function showProofCompareModal(proofing, eligibleVersions){
           <select id="cmp-left" style="font-size:11px;padding:4px 8px" onchange="updateProofCompareIframes()">${optsHtml}</select>
           <span style="font-size:11px;color:#888">↔</span>
           <select id="cmp-right" style="font-size:11px;padding:4px 8px" onchange="updateProofCompareIframes()">${optsHtml}</select>
+          <button class="btn" style="font-size:11px;padding:4px 10px;background:#1e293b;color:#fff;border-color:#1e293b" onclick="runProofPixelDiff()">🔬 画像差分</button>
         </div>
-        <button onclick="this.closest('.proof-modal').remove();window._proofCompareData=null" style="font-size:24px;border:none;background:none;cursor:pointer;line-height:1">×</button>
+        <button onclick="this.closest('.proof-modal').remove();window._proofCompareData=null;window._kpState_=null" style="font-size:24px;border:none;background:none;cursor:pointer;line-height:1">×</button>
       </div>
-      <div style="flex:1;display:flex;background:#f9fafb;min-height:0">
+      <div id="cmp-iframe-row" style="flex:1;display:flex;background:#f9fafb;min-height:0">
         <div style="flex:1;border-right:2px solid #e0ddd6;display:flex;flex-direction:column">
           <div style="padding:4px 10px;background:#fef3c7;font-size:11px;color:#78350f">左: <span id="cmp-left-label"></span></div>
           <iframe id="cmp-iframe-left" src="" style="border:0;width:100%;flex:1" allow="autoplay"></iframe>
@@ -16471,9 +16472,22 @@ function showProofCompareModal(proofing, eligibleVersions){
           <iframe id="cmp-iframe-right" src="" style="border:0;width:100%;flex:1" allow="autoplay"></iframe>
         </div>
       </div>
+      <div id="cmp-pixel" style="display:none;flex:1;min-height:0;overflow:auto;background:#525659;text-align:center;padding:10px">
+        <canvas id="cmp-pix-cv" style="background:#fff;max-width:100%;box-shadow:0 2px 12px rgba(0,0,0,.4)"></canvas>
+      </div>
       <div style="padding:8px 16px;border-top:1px solid #e0ddd6;font-size:11px;color:#666;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-        <span>💡 各ペインは独立してスクロール・ズーム可能。ページ送りで両側を同期させながら目視確認してください。</span>
-        <span>※ 自動差分検出は次フェーズで追加予定</span>
+        <span id="cmp-pix-ctrl" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="_kpSetMode_('diff')">差分(赤)</button>
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="_kpSetMode_('onion')">重ね</button>
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="_kpSetMode_('old')">左(旧)</button>
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="_kpSetMode_('new')">右(新)</button>
+          <input id="cmp-pix-slider" type="range" min="0" max="100" value="50" step="1" oninput="_kpPaint_()" style="display:none;width:120px;vertical-align:middle">
+          <span style="width:1px;height:16px;background:#cbd5e1;display:inline-block"></span>
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="_kpPage_(-1)">◀ 前頁</button>
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="_kpPage_(1)">次頁 ▶</button>
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="_kpShowIframes_()">↔ 並列に戻る</button>
+        </span>
+        <span id="cmp-pix-status" style="margin-left:auto">💡 「🔬 画像差分」で旧版/新版を重ねて変化箇所を赤く検出します。</span>
       </div>
     </div>
   `;
@@ -16509,6 +16523,50 @@ function updateProofCompareIframes(){
   }
 }
 
+// ── 🔬 画像差分検版 (pdf.js + ピクセル比較) ────────────────────────────
+function _kpLoadPdfjs_(){ return new Promise(function(res,rej){ if(window.pdfjsLib){res(window.pdfjsLib);return;} var s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'; s.onload=function(){ try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){} res(window.pdfjsLib); }; s.onerror=function(){ rej(new Error('pdf.js の読込に失敗（CDN不可の可能性）')); }; document.head.appendChild(s); }); }
+function _b64ToU8_(b64){ var bin=atob(b64); var u=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }
+async function _kpFetchDoc_(fileId){ window._kpDocCache_=window._kpDocCache_||{}; if(window._kpDocCache_[fileId]) return window._kpDocCache_[fileId]; var r=await callCloudAPI('getDriveFileBase64',{},{fileId:fileId}); if(!r||!r.success) throw new Error((r&&r.error)||'Drive取得失敗'); if((r.mime||'').indexOf('pdf')<0 && !/\.pdf$/i.test(r.name||'')) throw new Error('PDF以外は未対応です（'+(r.mime||'')+'）'); var doc=await pdfjsLib.getDocument({data:_b64ToU8_(r.base64)}).promise; window._kpDocCache_[fileId]={doc:doc,name:r.name}; return window._kpDocCache_[fileId]; }
+async function _kpRenderPage_(doc,pageNum,targetW){ var page=await doc.getPage(pageNum); var v1=page.getViewport({scale:1}); var vp=page.getViewport({scale:targetW/v1.width}); var c=document.createElement('canvas'); c.width=Math.round(vp.width); c.height=Math.round(vp.height); await page.render({canvasContext:c.getContext('2d'),viewport:vp}).promise; return c; }
+async function runProofPixelDiff(){
+  var data=window._proofCompareData; if(!data) return;
+  var L=data.versions.find(function(v){return v.id===document.getElementById('cmp-left').value;});
+  var R=data.versions.find(function(v){return v.id===document.getElementById('cmp-right').value;});
+  if(!L||!R||!L.driveFileId||!R.driveFileId){ alert('Drive連携済みのPDFを左右に選んでください'); return; }
+  if(L.id===R.id){ alert('左右に別のバージョンを選んでください'); return; }
+  var st=document.getElementById('cmp-pix-status');
+  document.getElementById('cmp-iframe-row').style.display='none';
+  document.getElementById('cmp-pixel').style.display='block';
+  document.getElementById('cmp-pix-ctrl').style.display='flex';
+  st.textContent='⏳ pdf.js 読込中…';
+  try{
+    await _kpLoadPdfjs_(); st.textContent='⏳ PDF取得中…';
+    var lp=await _kpFetchDoc_(L.driveFileId), rp=await _kpFetchDoc_(R.driveFileId);
+    window._kpState_={ lp:lp, rp:rp, page:1, maxPage:Math.max(lp.doc.numPages,rp.doc.numPages), mode:'diff' };
+    await _kpRenderCurrent_();
+  }catch(e){ st.textContent='❌ '+(e.message||e); }
+}
+async function _kpRenderCurrent_(){
+  var s=window._kpState_; if(!s) return; var st=document.getElementById('cmp-pix-status'); st.textContent='⏳ 描画中…';
+  var box=document.getElementById('cmp-pixel'); var targetW=Math.max(360,Math.min(1100,(box.clientWidth||900)-24));
+  var lc = s.page<=s.lp.doc.numPages ? await _kpRenderPage_(s.lp.doc,s.page,targetW) : null;
+  var rc = s.page<=s.rp.doc.numPages ? await _kpRenderPage_(s.rp.doc,s.page,targetW) : null;
+  var W=Math.max(lc?lc.width:0, rc?rc.width:0)||targetW, Hh=Math.max(lc?lc.height:0, rc?rc.height:0)||10;
+  function norm(c){ var n=document.createElement('canvas'); n.width=W;n.height=Hh; var x=n.getContext('2d'); x.fillStyle='#fff';x.fillRect(0,0,W,Hh); if(c)x.drawImage(c,0,0); return n; }
+  s.normL=norm(lc); s.normR=norm(rc);
+  var dl=s.normL.getContext('2d').getImageData(0,0,W,Hh), dr=s.normR.getContext('2d').getImageData(0,0,W,Hh);
+  var diffC=document.createElement('canvas'); diffC.width=W;diffC.height=Hh; var dx=diffC.getContext('2d'); dx.drawImage(s.normR,0,0); var di=dx.getImageData(0,0,W,Hh); var dd=di.data; var changed=0;
+  for(var i=0;i<dl.data.length;i+=4){ var a=Math.abs(dl.data[i]-dr.data[i])+Math.abs(dl.data[i+1]-dr.data[i+1])+Math.abs(dl.data[i+2]-dr.data[i+2]); if(a>60){ changed++; dd[i]=255;dd[i+1]=40;dd[i+2]=40;dd[i+3]=215; } }
+  dx.putImageData(di,0,0); s.diffC=diffC; s.changedPct=Math.round(changed/(W*Hh)*1000)/10;
+  _kpPaint_(); st.textContent='ページ '+s.page+' / '+s.maxPage+'　｜　差分 '+s.changedPct+'%'+((s.page>s.lp.doc.numPages||s.page>s.rp.doc.numPages)?'（片側にこのページなし＝全面差分）':'');
+}
+function _kpPaint_(){ var s=window._kpState_; if(!s||!s.normR) return; var cv=document.getElementById('cmp-pix-cv'); var W=s.normR.width,Hh=s.normR.height; cv.width=W;cv.height=Hh; var ctx=cv.getContext('2d'); ctx.clearRect(0,0,W,Hh); ctx.fillStyle='#fff';ctx.fillRect(0,0,W,Hh);
+  if(s.mode==='old')ctx.drawImage(s.normL,0,0); else if(s.mode==='new')ctx.drawImage(s.normR,0,0); else if(s.mode==='diff')ctx.drawImage(s.diffC,0,0); else { var a=(parseFloat(document.getElementById('cmp-pix-slider').value)||50)/100; ctx.drawImage(s.normL,0,0); ctx.globalAlpha=a; ctx.drawImage(s.normR,0,0); ctx.globalAlpha=1; }
+  document.getElementById('cmp-pix-slider').style.display=(s.mode==='onion')?'inline-block':'none';
+}
+function _kpSetMode_(m){ var s=window._kpState_; if(!s)return; s.mode=m; _kpPaint_(); }
+function _kpPage_(d){ var s=window._kpState_; if(!s)return; var np=s.page+d; if(np<1||np>s.maxPage)return; s.page=np; _kpRenderCurrent_(); }
+function _kpShowIframes_(){ document.getElementById('cmp-pixel').style.display='none'; document.getElementById('cmp-pix-ctrl').style.display='none'; document.getElementById('cmp-iframe-row').style.display='flex'; document.getElementById('cmp-pix-status').textContent='💡 「🔬 画像差分」で旧版/新版を重ねて変化箇所を赤く検出します。'; }
 // ── テキスト差分モード (jsdiff) ────────────────────────────
 
 function startTextDiff(proofingId){
