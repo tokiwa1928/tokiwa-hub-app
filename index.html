@@ -17918,6 +17918,8 @@ async function createEstimateFromInquiry(inqId){
   if(!inq){ alert('問い合わせが見つかりません'); return; }
   var ex = inq.extracted_data || {};
   var pf = _parseInquiryFields_(inq); // ローカル解析（AI抽出が無い/欠けている項目を補完）
+  // クロス会社（グループ会社見積依頼）の取込みマッピング：得意先=依頼元会社／エンドユーザー=依頼元の得意先／納品先・梱包=依頼元会社
+  var _icMap=null,_icReq=null; try{ if(inq._interco_meta&&inq._interco_meta.requestId){ _icReq=(DB.intercoRequests||[]).find(function(x){return x.id===inq._interco_meta.requestId;})||null; if(_icReq&&_icReq.map) _icMap=_icReq.map; } }catch(e){}
 
   if(!DB.estimates) DB.estimates = [];
   var existing = DB.estimates.find(function(e){ return e.fromInquiryId === inq.id; });
@@ -17992,13 +17994,16 @@ async function createEstimateFromInquiry(inqId){
     setTimeout(function(){
       if(typeof applyIngestToEstimate === 'function'){
         applyIngestToEstimate({
-          cust: ex.cust || inq.from_company || inq.custName || '',
-          item: ex.item || pf.item || '',
-          spec: ex.spec || [pf.size, pf.pages?(pf.pages+'ページ'):''].filter(Boolean).join(' ') || '',
-          qty: parseInt(ex.qty) || pf.qty || 0,
-          unit: ex.unit || pf.unit || '部',
+          cust: (_icMap&&_icMap.cust) || ex.cust || inq.from_company || inq.custName || '',
+          item: (_icReq&&_icReq.item) || ex.item || pf.item || '',
+          spec: (_icReq&&_icReq.spec) || ex.spec || [pf.size, pf.pages?(pf.pages+'ページ'):''].filter(Boolean).join(' ') || '',
+          qty: (_icReq&&_icReq.qty) || parseInt(ex.qty) || pf.qty || 0,
+          unit: (_icReq&&_icReq.unit) || ex.unit || pf.unit || '部',
           dueDate: ex.dueDate || '',
-          memo: detailMemo
+          memo: detailMemo,
+          endUser: _icMap?_icMap.endUser:'',
+          delivOther: _icMap?_icMap.delivTarget:'',
+          delivNote: _icMap?('梱包・納品指示先：'+(_icMap.packTarget||'')) : ''
         });
       }
       // タブ状態に紐付け情報を保存 (戻り値の tabId を使用)
@@ -30341,6 +30346,11 @@ function applyIngestToEstimate(extracted){
     set(`spec-${activeTabId}`, extracted.spec);
     set(`memo-${activeTabId}`, extracted.memo);
     set(`unit-${activeTabId}`, extracted.unit);
+    // クロス会社（見積依頼）取込み用：エンドユーザー・関連会社・納品先・梱包
+    set(`enduser-${activeTabId}`, extracted.endUser);
+    set(`relay-${activeTabId}`, extracted.relay);
+    set(`deliv-other-${activeTabId}`, extracted.delivOther);
+    set(`delivery-note-${activeTabId}`, extracted.delivNote);
     // 数量
     const qtyEl = document.getElementById(`qty-${activeTabId}`);
     if(qtyEl && extracted.qty){ qtyEl.value = extracted.qty; }
