@@ -21244,7 +21244,13 @@ function _mitAccumulateMaster_(data){
 // ===== マスタ名寄せ（照合）共通部品 =====
 // 表記ゆれ正規化：株式会社/有限会社・（株）等・スペース・記号・全半角を無視
 function _normName_(s){ s=String(s==null?'':s).trim(); if(!s) return ''; try{ s=s.normalize('NFKC'); }catch(e){} s=s.replace(/(株式会社|有限会社|合同会社|合資会社|合名会社|（株）|\(株\)|（有）|\(有\)|㈱|㈲)/g,''); s=s.replace(/[\s　・･,，、。.．\-ー―–—_／/]/g,''); return s.toLowerCase(); }
-function _masterArr_(kind){ return kind==='vendor'? _mitVendorMaster_() : _mitCustMaster_(); }
+// 得意先系の既知名称を統合（共通台帳＋est用マスタDB.master.cust＋グループ会社名）。重複は正規化で排除
+function _custMasterAll_(){ var seen={},out=[]; function add(nm){ nm=String(nm||'').trim(); if(!nm)return; var k=_normName_(nm); if(k&&!seen[k]){seen[k]=1;out.push({name:nm});} }
+  try{ _mitCustMaster_().forEach(function(r){ if(r&&r.name)add(r.name); }); }catch(e){}
+  try{ (window.DB&&DB.master&&DB.master.cust||[]).forEach(function(c){ add(c.org); add(c.user); }); }catch(e){}
+  try{ (window.DB&&DB.companies||[]).forEach(function(c){ add(c.name); }); }catch(e){}
+  return out; }
+function _masterArr_(kind){ return kind==='vendor'? _mitVendorMaster_() : _custMasterAll_(); }
 function _masterFindExact_(kind,value){ var n=_normName_(value); if(!n) return null; var arr=_masterArr_(kind); for(var i=0;i<arr.length;i++){ if(arr[i]&&_normName_(arr[i].name)===n) return arr[i]; } return null; }
 function _masterFindSimilar_(kind,value){ var n=_normName_(value); var arr=_masterArr_(kind); var out=[]; if(!n) return arr.slice(0,30); arr.forEach(function(r){ if(!r||!r.name) return; var rn=_normName_(r.name); if(!rn) return; if(rn===n||rn.indexOf(n)>=0||n.indexOf(rn)>=0) out.push(r); }); return out.slice(0,40); }
 function _masterAdd_(kind,name){ name=String(name||'').trim(); if(!name||_masterFindExact_(kind,name)) return; if(kind==='vendor'){ _mitVendorMaster_().push({code:'',name:name,zip:'',addr:'',tel:'',fax:''}); } else { _mitCustMaster_().push({no:'',name:name,yomi:(typeof _mitAutoYomi_==='function'?_mitAutoYomi_(name):''),kind:'cust',yomiOK:false}); } try{ if(typeof saveDB==='function')saveDB(); }catch(e){} }
@@ -34171,7 +34177,20 @@ function saveEstimateAsQuote(tabId){
 }
 
 // DRAFT-1: 一時保存（下書き）— 必須入力なしで現在の見積タブを status:'draft' でDBに保存（リロードしても残る）
-function saveEstimateDraft(tid){
+// 見積登録：得意先・関連会社・エンドユーザーを保存前に名寄せ（未登録なら照合モーダル）。false=キャンセル
+async function _estReconcile_(tid){
+  if(typeof _masterReconcile_!=='function') return true;
+  var fields=[['cust','得意先'],['relay','関連会社'],['enduser','エンドユーザー']];
+  for(var i=0;i<fields.length;i++){
+    var el=document.getElementById(fields[i][0]+'-'+tid); if(!el) continue;
+    var v=(el.value||'').trim(); if(!v) continue;
+    var r=await _masterReconcile_('cust', v); if(r===null) return false;
+    if(r && r!==v){ el.value=r; if(fields[i][0]==='cust' && typeof onCustChange==='function'){ try{ onCustChange(tid); }catch(e){} } }
+  }
+  return true;
+}
+async function saveEstimateDraft(tid){
+  var _rok=await _estReconcile_(tid); if(_rok===false) return;
   var s = ts(tid);
   var cust = document.getElementById('cust-' + tid)?.value || '';
   var item = document.getElementById('prod-' + tid)?.value || '';
