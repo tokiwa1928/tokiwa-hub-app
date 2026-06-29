@@ -2075,6 +2075,29 @@ setTimeout(_removeBootLoader_, 5000);
 
 <!-- スケジュール管理ページ -->
 <div class="page" id="page-schedule">
+  <!-- 🗂 案件別 工程進捗ボード (受注→版下→校了→(ミシン出し/色合わせ)→印刷→加工→納品) -->
+  <div class="sec" style="margin-bottom:1rem;border:1px solid #cbd5e1">
+    <div class="st" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span>🗂 案件別 工程進捗</span>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="pb-q" placeholder="案件番号・得意先・品名で検索…" style="width:200px;font-size:12px;padding:4px 8px" oninput="renderProcessBoard()">
+        <select id="pb-filter" style="font-size:12px;padding:4px 8px" onchange="renderProcessBoard()">
+          <option value="active">進行中のみ</option>
+          <option value="delayed">⚠ 納期遅れ</option>
+          <option value="soon">⏳ 納期7日以内</option>
+          <option value="today">本日納期</option>
+          <option value="all">すべて</option>
+        </select>
+        <select id="pb-sort" style="font-size:12px;padding:4px 8px" onchange="renderProcessBoard()">
+          <option value="due">納期が近い順</option>
+          <option value="order">受注が新しい順</option>
+          <option value="stalled">滞留が長い順</option>
+        </select>
+      </div>
+    </div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:.5rem">各工程をクリックで <b>未着手→進行中→完了</b> に切替（完了日を自動記録）。🪡ミシン出し・🎨色合わせはトキワ印刷の製造ルールで自動表示されます。</div>
+    <div id="process-board"></div>
+  </div>
   <!-- 🏭 社内ジョブ ボード (自社対応の工程を見える化) -->
   <div class="sec" style="margin-bottom:1rem;border:1px solid #93c5fd;background:#f0f9ff">
     <div class="st" style="color:#1e3a8a;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
@@ -13347,10 +13370,83 @@ function printReceipt(){
 
 // スケジュールページ初期化
 function initSchedulePage(){
+  if(typeof renderProcessBoard === 'function') renderProcessBoard();
   renderScheduleTemplates();
   renderScheduleList();
   refreshReminders();
   if(typeof renderInhouseJobs === 'function') renderInhouseJobs();
+}
+
+// PROCBOARD-1: 案件別 工程進捗ボード（統合工程リスト _projStageList_ をカード表示。クリックで進行・完了日自動記録）
+function renderProcessBoard(){
+  var box=document.getElementById('process-board'); if(!box) return;
+  var q=(document.getElementById('pb-q')?.value||'').trim().toLowerCase();
+  var filter=document.getElementById('pb-filter')?.value||'active';
+  var sort=document.getElementById('pb-sort')?.value||'due';
+  var today=new Date().toISOString().slice(0,10);
+  var todayT=new Date(today).getTime();
+  function isDoneProj(r){ return r.status==='納品済'||r.status==='完了'||r.status==='キャンセル'||(r.steps&&r.steps['納品']==='納品済'); }
+  var list=(DB.projects||[]).filter(function(r){
+    // 会社スコープ（他社は自社案件のみ・トキワは全件）
+    if(typeof _itemVisibleByCompany_==='function' && !_itemVisibleByCompany_(r)) return false;
+    // 見積中など受注前は対象外（工程管理は受注後の製造進捗）
+    if(typeof _projStageOf_==='function' && _projStageOf_(r.status)==='quote') return false;
+    if(q){ var hay=((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    var done=isDoneProj(r);
+    if(filter==='active'){ if(done) return false; }
+    else if(filter==='delayed'){ if(done||!r.dueDate||r.dueDate>=today) return false; }
+    else if(filter==='soon'){ if(done||!r.dueDate) return false; var dd=new Date(r.dueDate).getTime(); if(dd<todayT||dd>todayT+7*86400000) return false; }
+    else if(filter==='today'){ if(r.dueDate!==today) return false; }
+    return true;
+  });
+  // 並び替え
+  list.sort(function(a,b){
+    if(sort==='due'){ var da=a.dueDate||'9999-12-31', db=b.dueDate||'9999-12-31'; return da<db?-1:da>db?1:0; }
+    if(sort==='order'){ var oa=a.orderDate||a.createdAt||'', ob=b.orderDate||b.createdAt||''; return oa<ob?1:oa>ob?-1:0; }
+    if(sort==='stalled'){ var sa=(_projStatusMeta_(a).days||0), sb=(_projStatusMeta_(b).days||0); return sb-sa; }
+    return 0;
+  });
+  if(!list.length){ box.innerHTML='<div style="text-align:center;color:#94a3b8;padding:2rem;font-size:13px">該当する案件がありません</div>'; return; }
+  var LIMIT=60;
+  var shown=list.slice(0,LIMIT);
+  box.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px">'+shown.map(function(r){
+    var oi=(DB.projects||[]).lastIndexOf(r);
+    var grp=(typeof _detectGroupCompany_==='function')?_detectGroupCompany_(r):null;
+    var groupTag=grp?'<span style="display:inline-block;background:'+grp.border+';color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;margin-right:4px;font-weight:700">'+grp.label+'</span>':'';
+    // 納期
+    var due=r.dueDate||'';
+    var overdue=due&&due<today&&!isDoneProj(r);
+    var dueSoon=due&&!overdue&&!isDoneProj(r)&&(new Date(due).getTime()-todayT)<=7*86400000;
+    var dueCol=overdue?'#b91c1c':dueSoon?'#b45309':'#334155';
+    var dueLbl=due?('納期 '+due.slice(5).replace('-','/')+(overdue?' ⚠遅れ':dueSoon?' ⏳間近':'')):'納期 未定';
+    // ステータス + 経過
+    var meta=_projStatusMeta_(r);
+    var sc=(typeof STATUS_COLORS!=='undefined'&&STATUS_COLORS[r.status])||'#64748b';
+    var stalled=meta.days!=null&&meta.days>=14&&!isDoneProj(r);
+    var statusBadge='<span style="display:inline-block;background:'+sc+';color:#fff;font-size:10px;padding:1px 7px;border-radius:9px;font-weight:700">'+(r.status||'—')+'</span>';
+    var elapsed=meta.start?('<span style="font-size:10px;color:'+(stalled?'#b91c1c':'#64748b')+';margin-left:6px">'+meta.start.slice(5).replace('-','/')+'〜<b>'+meta.days+'日</b>'+(stalled?' 滞留':'')+'</span>'):'';
+    var assignee=r.assignee?('<span style="font-size:10px;color:#475569;margin-left:6px">👤'+_pdmEsc_(r.assignee)+'</span>'):'';
+    var post=(typeof _projProcessSummaryMini_==='function')?_projProcessSummaryMini_(r):'';
+    return '<div style="background:#fff;border:1px solid '+(overdue?'#fca5a5':'#d6d3ca')+';border-radius:8px;padding:10px;'+(overdue?'box-shadow:0 0 0 1px #fca5a5 inset;':'')+'">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;cursor:pointer" onclick="_openProjFromBoard_('+oi+')" title="クリックで案件を開く">'
+        +'<div style="min-width:0">'
+          +'<div style="font-size:13px;font-weight:700;line-height:1.3">'+groupTag+_pdmEsc_(r.cust||'（得意先未設定）')+'</div>'
+          +'<div style="font-size:11px;color:#475569;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_pdmEsc_(r.item||'')+'</div>'
+          +'<div style="font-size:10px;font-family:monospace;color:#94a3b8;margin-top:1px">'+(r.id||'')+'</div>'
+        +'</div>'
+        +'<div style="text-align:right;white-space:nowrap;font-size:11px;font-weight:700;color:'+dueCol+'">'+dueLbl+'</div>'
+      +'</div>'
+      +'<div style="margin:6px 0;padding:4px 0;border-top:1px solid #f1f0ec;border-bottom:1px solid #f1f0ec;display:flex;align-items:center;flex-wrap:wrap">'+statusBadge+elapsed+assignee+'</div>'
+      +_projStageList_(r,oi)
+      +(post?('<div style="margin-top:4px">'+post+'</div>'):'')
+      +'</div>';
+  }).join('')+'</div>'
+  +(list.length>LIMIT?('<div style="text-align:center;color:#94a3b8;font-size:11px;margin-top:8px">他 '+(list.length-LIMIT)+' 件（検索・絞り込みで表示）</div>'):'');
+}
+// 工程ボードのカードから案件を開く（見積フォーム編集画面）
+function _openProjFromBoard_(oi){
+  if(typeof _openProjInEstForm_==='function'){ try{ _openProjInEstForm_(oi); return; }catch(e){} }
+  if(typeof editProjDetail==='function') editProjDetail(oi);
 }
 
 // ROUTING-1: 社内ジョブ ボード（自社対応の工程を見える化）
@@ -36476,6 +36572,8 @@ function editProjStep(oi, step){
   });
   if(r.steps['納品']==='納品済') r.status='納品済';
   saveDB();renderProjects();
+  if(typeof renderProcessBoard==='function' && document.getElementById('process-board')) try{ renderProcessBoard(); }catch(e){}
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
 }
 
 // 案件詳細モーダル
