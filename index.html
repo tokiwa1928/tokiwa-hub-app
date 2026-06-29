@@ -2095,7 +2095,7 @@ setTimeout(_removeBootLoader_, 5000);
         </select>
       </div>
     </div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:.5rem">各工程をクリックで <b>未着手→進行中→完了</b> に切替（完了日を自動記録、自社で対応する工程は内製ジョブの状態も連動）。セル内の <b>👤担当</b>・<b>📅予定</b> をクリックで設定できます。🪡ミシン出し・🎨色合わせはトキワ印刷の製造ルールで自動表示されます。</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:.5rem">各工程をクリックで <b>未着手→進行中→完了</b> に切替（完了日を自動記録、自社で対応する工程は内製ジョブの状態も連動）。セル内の <b>👤担当</b>・<b>📅予定</b>（カレンダー）をクリックで設定。案件名の横の <b>📅自動</b> で納期から各工程の予定日を一括計算。🪡ミシン出し・🎨色合わせはトキワ印刷の製造ルールで自動表示されます。</div>
     <div id="process-board"></div>
   </div>
   <div style="display:flex;gap:1rem;flex-wrap:wrap">
@@ -13428,7 +13428,9 @@ function renderProcessBoard(){
     (DB.inhouseJobs||[]).forEach(function(j){ if(!j||j.projectId!==r.id) return; var st=PB_JOB2STEP[j.process]; if(st){ (jobsByStep[st]=jobsByStep[st]||[]).push(j); } });
     var td='<td style="border:'+BD+';background:#fff;padding:4px 6px;font-size:11px;min-width:170px;position:sticky;left:0;cursor:pointer" onclick="_openProjFromBoard_('+oi+')" title="クリックで案件を開く">'
       +'<div style="font-weight:700;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px">'+groupTag+_pdmEsc_(r.cust||'（得意先未設定）')+'</div>'
-      +'<div style="color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px">'+_pdmEsc_(r.item||'')+(r.assignee?(' ・👤'+_pdmEsc_(r.assignee)):'')+'</div></td>'
+      +'<div style="color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px">'+_pdmEsc_(r.item||'')+(r.assignee?(' ・👤'+_pdmEsc_(r.assignee)):'')
+        +' <span onclick="event.stopPropagation();_pbAutoPlan_('+oi+')" title="納期から各工程の予定日を自動計算" style="cursor:pointer;color:#1e40af;font-size:9px;white-space:nowrap">📅自動</span>'
+      +'</div></td>'
       +'<td style="border:'+BD+';text-align:center;font-size:11px;font-weight:700;white-space:nowrap;color:'+dueCol+';background:'+(overdue?'#fef2f2':'#fff')+'">'+dueTxt+'</td>'
       +'<td style="border:'+BD+';text-align:center;background:#fff">'+statusCell+'</td>';
     COLS.forEach(function(c){
@@ -13457,7 +13459,7 @@ function renderProcessBoard(){
       if(!planned && jbs.length){ var pl=jbs.map(function(x){return x.plannedDate;}).filter(Boolean).sort(); planned=pl[0]||''; }
       var planLate=planned&&!done&&planned<today;
       var pTxt=planned?('📅'+md(planned)):'📅予定';
-      var metaLines='<span onclick="event.stopPropagation();_pbSetStepPlanned_('+oi+',\''+c.k+'\')" title="クリックで予定日を設定" style="cursor:pointer;color:'+(planLate?'#b91c1c':(planned?'#475569':'#b9b5aa'))+';font-size:9px">'+pTxt+(planLate?' ⚠':'')+'</span>';
+      var metaLines='<span onclick="event.stopPropagation();_pbSetStepPlanned_('+oi+',\''+c.k+'\',event)" title="クリックで予定日を設定（カレンダー）" style="cursor:pointer;color:'+(planLate?'#b91c1c':(planned?'#475569':'#b9b5aa'))+';font-size:9px">'+pTxt+(planLate?' ⚠':'')+'</span>';
       if(jrep){
         var workers=Array.from(new Set(jbs.map(function(x){return x.worker;}).filter(Boolean)));
         var wTxt=workers.length?('👤'+_pdmEsc_(workers.join('・'))):'👤担当';
@@ -13500,16 +13502,31 @@ function _pbSetJobWorker_(jobId){
   if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   if(typeof renderProcessBoard==='function') renderProcessBoard();
 }
-// セルの📅予定をクリック → 工程の予定日を設定（全工程が保持。内製ジョブがあれば連動）
-function _pbSetStepPlanned_(oi, step){
+// セルの📅予定をクリック → カレンダー(日付ピッカー)で工程の予定日を設定
+function _pbSetStepPlanned_(oi, step, ev){
   var r=DB.projects[oi]; if(!r) return;
   r.stepPlanned=r.stepPlanned||{};
-  var v=prompt(step+' の予定日  例: 2026-07-10  ※空欄で解除', r.stepPlanned[step]||'');
-  if(v===null) return;
-  v=v.trim();
-  if(v && !/^\d{4}-\d{2}-\d{2}$/.test(v)){ alert('日付は YYYY-MM-DD 形式で入力してください'); return; }
+  var inp=document.createElement('input'); inp.type='date'; inp.value=r.stepPlanned[step]||'';
+  inp.style.cssText='position:fixed;z-index:100001;font-size:13px;padding:2px';
+  var x=(ev&&ev.clientX)||120, y=(ev&&ev.clientY)||120;
+  inp.style.left=Math.max(4,Math.min(x, (window.innerWidth||400)-170))+'px';
+  inp.style.top=Math.min(y, (window.innerHeight||400)-44)+'px';
+  document.body.appendChild(inp);
+  var done=false;
+  function commit(){ if(done) return; done=true; var v=inp.value; try{inp.remove();}catch(e){} _pbApplyStepPlanned_(oi, step, v); }
+  inp.addEventListener('change', commit);
+  inp.addEventListener('keydown', function(e){ if(e.key==='Escape'){ done=true; try{inp.remove();}catch(_){} } });
+  inp.addEventListener('blur', function(){ setTimeout(commit, 150); });
+  inp.focus();
+  try{ if(inp.showPicker) inp.showPicker(); }catch(e){}
+}
+// 予定日を実際に保存（内製ジョブがあれば連動）
+function _pbApplyStepPlanned_(oi, step, v){
+  var r=DB.projects[oi]; if(!r) return;
+  r.stepPlanned=r.stepPlanned||{};
+  v=(v||'').trim();
+  if(v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return;
   if(v) r.stepPlanned[step]=v; else delete r.stepPlanned[step];
-  // 内製ジョブがある工程は予定日も連動
   if(typeof PB_STEP2JOBPROCS!=='undefined' && PB_STEP2JOBPROCS[step] && Array.isArray(DB.inhouseJobs)){
     var procs=PB_STEP2JOBPROCS[step];
     DB.inhouseJobs.forEach(function(j){ if(j&&j.projectId===r.id&&procs.indexOf(j.process)>=0){ j.plannedDate=v; } });
@@ -13517,6 +13534,34 @@ function _pbSetStepPlanned_(oi, step){
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   if(typeof renderProcessBoard==='function') renderProcessBoard();
+}
+// 納期から逆算して各工程の予定日を自動計算（品目別リードタイム目安を使用）
+function _pbAutoPlan_(oi){
+  var r=DB.projects[oi]; if(!r) return;
+  if(!r.dueDate){ alert('納期が未設定です。先に納期を入れてください'); return; }
+  var arr=(typeof _procStepsFor_==='function')?_procStepsFor_(r):['版下','校了','印刷','加工','納品'];
+  var lt=(typeof _leadTimeFor_==='function')?_leadTimeFor_(r):{proofRounds:1,makeDays:3,proofCycle:3};
+  var design=2, proofSpan=(lt.proofRounds||0)*(lt.proofCycle||3), makeDays=Math.max(1,lt.makeDays||3);
+  var total=design+proofSpan+makeDays;
+  if(!confirm('納期 '+r.dueDate+' から各工程の予定日を自動計算して上書きします。\n（品目目安: '+(lt.category||'その他')+' / 標準 約'+total+'営業日）\nよろしいですか？')) return;
+  var due=new Date(r.dueDate);
+  function plannedAt(off){ var d=(typeof _addBizDays_==='function')?_addBizDays_(due,off):new Date(due.getTime()+off*864e5); return d.toISOString().slice(0,10); }
+  var offsets={'版下':-total,'校了':-makeDays,'納品':0};
+  // 校了→納品 の間の工程(色合わせ/ミシン出し/印刷/加工)は納品側から1営業日ずつ手前へ配置（重複回避）
+  var mids=arr.filter(function(s){ return ['色合わせ','ミシン出し','印刷','加工'].indexOf(s)>=0; });
+  mids.slice().reverse().forEach(function(s,i){ offsets[s]=-(i+1); });
+  // 校了が直近の工程と重なる場合は校了を1日手前へ
+  var minMid=mids.length?-(mids.length):0;
+  if(offsets['校了']>=minMid) offsets['校了']=minMid-1;
+  r.stepPlanned=r.stepPlanned||{};
+  arr.forEach(function(s){ if(offsets[s]!=null) r.stepPlanned[s]=plannedAt(offsets[s]); });
+  if(Array.isArray(DB.inhouseJobs)){
+    DB.inhouseJobs.forEach(function(j){ if(!j||j.projectId!==r.id) return; var st=PB_JOB2STEP[j.process]; if(st && r.stepPlanned[st]) j.plannedDate=r.stepPlanned[st]; });
+  }
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
+  if(typeof renderProcessBoard==='function') renderProcessBoard();
+  if(typeof _toastMsg==='function') _toastMsg('📅 予定日を自動作成しました（標準 約'+total+'営業日）');
 }
 
 // ROUTING-1: 社内ジョブ ボード（自社対応の工程を見える化）
