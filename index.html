@@ -13428,6 +13428,9 @@ function renderProcessBoard(){
     // 内製ジョブ（自社で対応する工程）を工程列にひも付け
     var jobsByStep={};
     (DB.inhouseJobs||[]).forEach(function(j){ if(!j||j.projectId!==r.id) return; var st=PB_JOB2STEP[j.process]; if(st){ (jobsByStep[st]=jobsByStep[st]||[]).push(j); } });
+    // 外注発注（受注時に外製と確定した工程）を工程列にひも付け
+    var outByStep={};
+    (DB.outsourceOrders||[]).concat(DB.intercoOrders||[]).forEach(function(o){ if(!o||o.projectId!==r.id) return; var hay=(o.item||'')+' '+(o.note||'')+' '+(o.process||''); Object.keys(PB_OUT_PROC_MAP).forEach(function(col){ if(applic.indexOf(col)<0) return; if(PB_OUT_PROC_MAP[col].some(function(k){return hay.indexOf(k)>=0;})){ (outByStep[col]=outByStep[col]||[]).push(o); } }); });
     var quoteId=r.quotationId||r.estimateId||r.fromQuoteId||'';
     var chain=(typeof _renderHandoffChain_==='function')?_renderHandoffChain_(r,{size:'small'}):'';
     var specChips=r.spec?((typeof _specChipsHtml_==='function')?_specChipsHtml_(r.spec):_pdmEsc_(r.spec)):'';
@@ -13458,24 +13461,37 @@ function renderProcessBoard(){
       var done=v==='完了'||v==='OK'||v==='納品済'||v==='発送済';
       var active=v&&v!=='─'&&v!=='未着手'&&!done;
       var dt=r.stepDates[c.k]||((c.k==='納品'&&r.deliveredAt)?String(r.deliveredAt).slice(0,10):'');
-      var bg=done?'#f0fdf4':active?'#fffbeb':'#fff';
       var col=done?'#15803d':active?'#b45309':'#cbd5e1';
       var txt=done?(dt?md(dt):'完了'):active?(/^(完了|OK|─|未着手)$/.test(v)?'進行中':v):'—';
-      // 予定日（全工程が保持）＋ 内製ジョブの担当（自社で対応する工程のみ）
+      // 内製/外注（受注時に確定した stepMaker・外注発注で判定）
       var jbs=jobsByStep[c.k]||[];
       var jrep=jbs[0]||null;
+      var outs=outByStep[c.k]||[];
+      var isExt=(r.stepMaker&&r.stepMaker[c.k]==='外製')||outs.length>0;
+      // 予定日（全工程が保持。無ければ内製ジョブ/外注の納期で補完）
       var planned=r.stepPlanned[c.k]||'';
       if(!planned && jbs.length){ var pl=jbs.map(function(x){return x.plannedDate;}).filter(Boolean).sort(); planned=pl[0]||''; }
+      if(!planned && outs.length){ var pl2=outs.map(function(x){return x.dueDate;}).filter(Boolean).sort(); planned=pl2[0]||''; }
       var planLate=planned&&!done&&planned<today;
       var pTxt=planned?('📅'+md(planned)):'📅予定';
-      var metaLines='<span onclick="event.stopPropagation();_pbSetStepPlanned_('+oi+',\''+c.k+'\',event)" title="クリックで予定日を設定（カレンダー）" style="cursor:pointer;color:'+(planLate?'#b91c1c':(planned?'#475569':'#b9b5aa'))+';font-size:9px">'+pTxt+(planLate?' ⚠':'')+'</span>';
-      if(jrep){
+      var planSpan='<span onclick="event.stopPropagation();_pbSetStepPlanned_('+oi+',\''+c.k+'\',event)" title="クリックで予定日を設定（カレンダー）" style="cursor:pointer;color:'+(planLate?'#b91c1c':(planned?'#475569':'#b9b5aa'))+';font-size:9px">'+pTxt+(planLate?' ⚠':'')+'</span>';
+      var cellBg=done?'#f0fdf4':active?(isExt?'#fff7ed':'#fffbeb'):(isExt?'#fff7ed':'#fff');
+      var makerLine;
+      if(isExt){
+        var vendors=Array.from(new Set(outs.map(function(x){return x.vendor||x.toCompanyName||x.vendorName;}).filter(Boolean)));
+        var vTxt=vendors.length?('🤝'+_pdmEsc_(vendors.join('・'))):'🤝外注先';
+        var oStat = outs.length ? _normStatus_(outs[0].status,OUT_CYCLE,{planned:'未発注',ordered:'発注済',delivered:'納品済'}) : '未発注';
+        makerLine='<span onclick="event.stopPropagation();_navAdmin_(\'outsource\')" title="外注発注を開く（外注先・状態の管理）" style="cursor:pointer;color:#9a3412;font-size:9px;font-weight:700">'+vTxt+'</span>'
+          +' <span style="color:#9a3412;font-size:8.5px">['+oStat+']</span>';
+      } else if(jrep){
         var workers=Array.from(new Set(jbs.map(function(x){return x.worker;}).filter(Boolean)));
         var wTxt=workers.length?('👤'+_pdmEsc_(workers.join('・'))):'👤担当';
-        metaLines='<span onclick="event.stopPropagation();_pbSetJobWorker_(\''+jrep.id+'\')" title="クリックで担当者を設定" style="cursor:pointer;color:'+(workers.length?'#475569':'#b9b5aa')+';font-size:9px">'+wTxt+'</span><br>'+metaLines;
+        makerLine='<span onclick="event.stopPropagation();_pbSetJobWorker_(\''+jrep.id+'\')" title="クリックで担当者を設定" style="cursor:pointer;color:'+(workers.length?'#1d4ed8':'#9bb0d9')+';font-size:9px">'+wTxt+'</span>';
+      } else {
+        makerLine='<span style="color:#9bb0d9;font-size:9px">🏭内製</span>';
       }
-      var jMeta='<div style="margin-top:2px;line-height:1.3">'+metaLines+'</div>';
-      td+='<td onclick="event.stopPropagation();editProjStep('+oi+',\''+c.k+'\')" title="'+c.k+'：'+v+'（クリックで次の状態へ）" style="border:'+BD+';text-align:center;font-size:11px;font-weight:'+(done||active?'700':'400')+';background:'+bg+';color:'+col+';white-space:nowrap;cursor:pointer"><div>'+txt+'</div>'+jMeta+'</td>';
+      var jMeta='<div style="margin-top:2px;line-height:1.35">'+makerLine+'<br>'+planSpan+'</div>';
+      td+='<td onclick="event.stopPropagation();editProjStep('+oi+',\''+c.k+'\')" title="'+c.k+'：'+v+(isExt?'（外注）':'（内製）')+' / クリックで状態を進める" style="border:'+BD+';text-align:center;font-size:11px;font-weight:'+(done||active?'700':'400')+';background:'+cellBg+';color:'+col+';white-space:nowrap;cursor:pointer"><div>'+txt+'</div>'+jMeta+'</td>';
     });
     return '<tr>'+td+'</tr>';
   }).join('');
@@ -13486,8 +13502,9 @@ function renderProcessBoard(){
       +'<span><b style="color:#15803d">日付</b>＝完了日</span>'
       +'<span><b style="color:#b45309">橙字</b>＝進行中</span>'
       +'<span style="color:#94a3b8">—＝未着手</span>'
+      +'<span><span style="display:inline-block;width:10px;height:10px;background:#fffbeb;border:1px solid #d6d3ca;vertical-align:-1px"></span> 🏭内製（👤担当）</span>'
+      +'<span><span style="display:inline-block;width:10px;height:10px;background:#fff7ed;border:1px solid #f0997b;vertical-align:-1px"></span> 🤝外注（外注先・状態）</span>'
       +'<span>📅＝予定日（クリックで設定）</span>'
-      +'<span>👤＝担当（内製工程）</span>'
       +'<span style="color:#cfccc3">·＝対象外の工程</span>'
       +'<span>状態セルのクリックで進行</span>'
     +'</div>'
@@ -13538,13 +13555,17 @@ function _pbSummaryBar_(list){
   list=list||[];
   var today=new Date().toISOString().slice(0,10), todayT=new Date(today).getTime();
   function isDoneP(r){ return r.status==='納品済'||r.status==='完了'||r.status==='キャンセル'||(r.steps&&r.steps['納品']==='納品済'); }
-  var n=list.length, overdue=0, soon=0;
+  var n=list.length, overdue=0, soon=0, extN=0;
   list.forEach(function(r){
     var done=isDoneP(r);
     if(r.dueDate && !done){
       if(r.dueDate<today) overdue++;
       else { var dd=new Date(r.dueDate).getTime(); if(dd<=todayT+7*86400000) soon++; }
     }
+    var hasExt=(r.stepMaker&&Object.keys(r.stepMaker).some(function(k){return r.stepMaker[k]==='外製';}))
+      || (DB.outsourceOrders||[]).some(function(o){return o&&o.projectId===r.id;})
+      || (DB.intercoOrders||[]).some(function(o){return o&&o.projectId===r.id;});
+    if(hasExt) extN++;
   });
   var rem=_pbReminderMap_(); var remTot=0; Object.keys(rem).forEach(function(k){ remTot+=rem[k]; });
   function card(jp,val,bg){ return '<div style="background:'+bg+';border-radius:7px;padding:8px 14px;min-width:96px">'
@@ -13553,6 +13574,7 @@ function _pbSummaryBar_(list){
   bar.innerHTML=card('対象案件', n.toLocaleString(), '#211f1c')
     +card('納期遅れ', overdue.toLocaleString(), overdue>0?'#7f1d1d':'#211f1c')
     +card('納期間近 7日', soon.toLocaleString(), soon>0?'#854d0e':'#211f1c')
+    +card('外注あり', extN.toLocaleString(), extN>0?'#9a3412':'#211f1c')
     +card('確認連絡', remTot.toLocaleString(), remTot>0?'#0f6e56':'#211f1c');
 }
 // 送信待ち確認連絡の projectId→件数 マップ（行内バッジ用。旧 projectSchedules 由来）
@@ -13572,6 +13594,8 @@ function _pbReminderMap_(){
 // 内製ジョブの工程名 → マトリクス表の工程列 への対応
 var PB_JOB2STEP={ 'データ作成':'版下','製版':'版下','印刷':'印刷','製本':'加工','加工':'加工','抜き':'加工','発送':'納品' };
 var PB_STEP2JOBPROCS={ '版下':['データ作成','製版'],'印刷':['印刷'],'加工':['製本','加工','抜き'],'納品':['発送'] };
+// 外注発注（品名・備考の工程ワード）→ 工程列 への対応（受注時に外製と確定した工程を表に出す）
+var PB_OUT_PROC_MAP={ '版下':['版下','データ作成','製版','データ'],'校了':['校了'],'色合わせ':['色合わせ'],'ミシン出し':['ミシン'],'印刷':['印刷'],'加工':['加工','製本','抜き','折','穴','断裁','ラミ','箔','型抜'],'納品':['発送','配送','納品'] };
 // セルの👤担当をクリック → 担当者を設定
 function _pbSetJobWorker_(jobId){
   var j=(DB.inhouseJobs||[]).find(function(x){return x.id===jobId;}); if(!j) return;
