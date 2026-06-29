@@ -2093,47 +2093,29 @@ setTimeout(_removeBootLoader_, 5000);
           <option value="order">受注が新しい順</option>
           <option value="stalled">滞留が長い順</option>
         </select>
+        <button class="btn" id="pb-rem-btn" style="font-size:12px;padding:4px 10px" onclick="openReminderModal()" title="得意先への確認連絡（送信待ち）">⏰ 確認連絡 <span id="pb-rem-count" style="background:#f59e0b;color:#fff;font-size:10px;padding:0 6px;border-radius:9px;margin-left:2px">0</span></button>
       </div>
     </div>
     <div style="font-size:11px;color:#64748b;margin-bottom:.5rem">各工程をクリックで <b>未着手→進行中→完了</b> に切替（完了日を自動記録、自社で対応する工程は内製ジョブの状態も連動）。セル内の <b>👤担当</b>・<b>📅予定</b>（カレンダー）をクリックで設定。案件名の横の <b>📅自動</b> で納期から各工程の予定日を一括計算。🪡ミシン出し・🎨色合わせはトキワ印刷の製造ルールで自動表示されます。</div>
     <div id="process-board"></div>
   </div>
-  <div style="display:flex;gap:1rem;flex-wrap:wrap">
-    <!-- リマインダー待機リスト -->
-    <div class="sec" style="flex:1;min-width:350px;background:#fef3c7;border:1px solid #fcd34d">
-      <div class="st" style="color:#92400e;display:flex;align-items:center;justify-content:space-between">
-        <span>⏰ 送信待ちリマインダー</span>
-        <span id="reminder-count" style="background:#f59e0b;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px">0件</span>
+  <!-- ⏰ 確認連絡（旧・送信待ちリマインダー）はモーダルへ集約 -->
+  <div id="reminder-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto">
+    <div style="background:#fff;border-radius:10px;max-width:560px;width:100%;max-height:86vh;display:flex;flex-direction:column">
+      <div style="padding:12px 16px;background:#92400e;color:#fff;display:flex;justify-content:space-between;align-items:center">
+        <b style="font-size:14px">⏰ 得意先への確認連絡（送信待ち <span id="reminder-count">0件</span>）</b>
+        <button onclick="document.getElementById('reminder-modal').style.display='none'" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button>
       </div>
-      <div style="font-size:11px;color:#854d0e;margin-bottom:.5rem">
-        確認して送信ボタンを押してください（前倒し完了分は自動スキップ）
-      </div>
-      <div id="reminder-pending-list" style="max-height:400px;overflow-y:auto"></div>
-      <div style="margin-top:.75rem;display:flex;gap:8px">
+      <div style="font-size:11px;color:#854d0e;padding:8px 16px 0">確認して送信ボタンを押してください（前倒し完了分は自動スキップ）</div>
+      <div id="reminder-pending-list" style="padding:8px 16px;overflow-y:auto;flex:1"></div>
+      <div style="padding:10px 16px;border-top:1px solid #eee;display:flex;gap:8px">
         <button class="btn btn-p" onclick="sendAllReminders()">一括送信</button>
         <button class="btn" onclick="refreshReminders()">更新</button>
       </div>
     </div>
-    
-    <!-- 案件スケジュール一覧 (メイン) -->
-    <div class="sec" style="flex:2;min-width:500px">
-      <div class="st" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-        <span>📋 案件スケジュール</span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input id="schedule-q" placeholder="案件・得意先で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderScheduleList()">
-          <select id="schedule-filter" style="font-size:12px;padding:4px 8px" onchange="renderScheduleList()">
-            <option value="">すべて</option>
-            <option value="active">進行中</option>
-            <option value="today">本日作業</option>
-            <option value="delayed">遅延あり</option>
-          </select>
-          <button class="btn" style="font-size:11px;padding:4px 10px" onclick="showScheduleTemplateModal()" title="工程日数のテンプレートを管理">⚙ テンプレート</button>
-        </div>
-      </div>
-      <div id="schedule-list" style="max-height:600px;overflow-y:auto;margin-top:.5rem"></div>
-    </div>
   </div>
-  <!-- スケジュールテンプレートはモーダルへ移動 (showScheduleTemplateModal) -->
+  <!-- 旧・案件スケジュール/テンプレートは工程進捗表に統合（非表示で互換維持） -->
+  <div id="schedule-list" style="display:none"></div>
   <div id="schedule-templates" style="display:none"></div>
 </div>
 
@@ -13390,6 +13372,7 @@ function renderProcessBoard(){
   if(!list.length){ box.innerHTML='<div style="text-align:center;color:#94a3b8;padding:2rem;font-size:13px">該当する案件がありません</div>'; return; }
   var LIMIT=200;
   var shown=list.slice(0,LIMIT);
+  var remMap=_pbReminderMap_();
   // 工程列（受注＋版下→校了→色合わせ→ミシン出し→印刷→加工→納品）。各セルに日程が入る
   var COLS=[{k:'受注',ic:'📝'},{k:'版下',ic:'📐'},{k:'校了',ic:'🆗'},{k:'色合わせ',ic:'🎨'},{k:'ミシン出し',ic:'🪡'},{k:'印刷',ic:'🖨'},{k:'加工',ic:'✂'},{k:'納品',ic:'🚚'}];
   function md(d){ d=String(d||''); return d.length>=10? d.slice(5).replace('-','/') : d; }
@@ -13397,9 +13380,13 @@ function renderProcessBoard(){
   // ヘッダー
   var thBase='border:'+BD+';background:#efede6;color:#33302b;font-size:11px;font-weight:700;padding:5px 6px;white-space:nowrap;position:sticky;top:0;z-index:1';
   var head='<tr>'
-    +'<th style="'+thBase+';text-align:left;min-width:170px;left:0;z-index:2">案件（得意先 / 品名）</th>'
-    +'<th style="'+thBase+'">納期</th>'
-    +'<th style="'+thBase+'">状況</th>'
+    +'<th style="'+thBase+';text-align:left;min-width:118px;left:0;z-index:2">案件番号</th>'
+    +'<th style="'+thBase+';min-width:96px">納期</th>'
+    +'<th style="'+thBase+'">受注日</th>'
+    +'<th style="'+thBase+';text-align:left;min-width:140px">得意先</th>'
+    +'<th style="'+thBase+';text-align:left;min-width:150px">品名</th>'
+    +'<th style="'+thBase+'">担当</th>'
+    +'<th style="'+thBase+';min-width:86px">状況</th>'
     +COLS.map(function(c){ return '<th style="'+thBase+';min-width:62px">'+c.ic+'<br>'+c.k+'</th>'; }).join('')
     +'</tr>';
   // 本体
@@ -13426,13 +13413,20 @@ function renderProcessBoard(){
     // 内製ジョブ（自社で対応する工程）を工程列にひも付け
     var jobsByStep={};
     (DB.inhouseJobs||[]).forEach(function(j){ if(!j||j.projectId!==r.id) return; var st=PB_JOB2STEP[j.process]; if(st){ (jobsByStep[st]=jobsByStep[st]||[]).push(j); } });
-    var td='<td style="border:'+BD+';background:#fff;padding:4px 6px;font-size:11px;min-width:170px;position:sticky;left:0;cursor:pointer" onclick="_openProjFromBoard_('+oi+')" title="クリックで案件を開く">'
-      +'<div style="font-weight:700;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px">'+groupTag+_pdmEsc_(r.cust||'（得意先未設定）')+'</div>'
-      +'<div style="color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px">'+_pdmEsc_(r.item||'')+(r.assignee?(' ・👤'+_pdmEsc_(r.assignee)):'')
-        +' <span onclick="event.stopPropagation();_pbAutoPlan_('+oi+')" title="納期から各工程の予定日を自動計算" style="cursor:pointer;color:#1e40af;font-size:9px;white-space:nowrap">📅自動</span>'
-      +'</div></td>'
-      +'<td style="border:'+BD+';text-align:center;font-size:11px;font-weight:700;white-space:nowrap;color:'+dueCol+';background:'+(overdue?'#fef2f2':'#fff')+'">'+dueTxt+'</td>'
-      +'<td style="border:'+BD+';text-align:center;background:#fff">'+statusCell+'</td>';
+    var quoteId=r.quotationId||r.estimateId||r.fromQuoteId||'';
+    var chain=(typeof _renderHandoffChain_==='function')?_renderHandoffChain_(r,{size:'small'}):'';
+    var specChips=r.spec?((typeof _specChipsHtml_==='function')?_specChipsHtml_(r.spec):_pdmEsc_(r.spec)):'';
+    var dueHtml=(typeof _projDueCellHtml_==='function')?_projDueCellHtml_(r):(r.dueDate?md(r.dueDate):'-');
+    var remN=remMap[r.id]||0;
+    var remBadge=remN>0?'<div style="margin-top:3px"><span onclick="event.stopPropagation();openReminderModal()" title="得意先への確認連絡が'+remN+'件あります" style="cursor:pointer;background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px">🔔要連絡'+remN+'</span></div>':'';
+    var td='<td style="border:'+BD+';background:#fff;padding:4px 6px;font-size:10.5px;font-family:monospace;white-space:nowrap;position:sticky;left:0;cursor:pointer" onclick="_openProjFromBoard_('+oi+')" title="クリックで案件を開く">'+(r.id||'')
+        +(quoteId?'<div style="color:#1e40af;font-size:9px">'+_pdmEsc_(quoteId)+'</div>':'')+'</td>'
+      +'<td style="border:'+BD+';text-align:left;font-size:10.5px;white-space:nowrap;background:'+(overdue?'#fef2f2':'#fff')+'">'+dueHtml+'</td>'
+      +'<td style="border:'+BD+';text-align:center;font-size:10.5px;white-space:nowrap;color:#64748b">'+(r.orderDate?md(r.orderDate):'—')+'</td>'
+      +'<td style="border:'+BD+';text-align:left;font-size:11px;padding:4px 6px">'+groupTag+'<span style="font-weight:700">'+_pdmEsc_(r.cust||'（得意先未設定）')+'</span>'+(chain?('<div style="margin-top:2px">'+chain+'</div>'):'')+'</td>'
+      +'<td style="border:'+BD+';text-align:left;font-size:11px;padding:4px 6px"><div style="font-weight:600">'+_pdmEsc_(r.item||'')+'</div>'+(specChips?('<div style="margin-top:2px;line-height:1.6">'+specChips+'</div>'):'')+'<div style="margin-top:3px"><span onclick="event.stopPropagation();_pbAutoPlan_('+oi+')" title="納期から各工程の予定日を自動計算" style="cursor:pointer;color:#1e40af;font-size:9px;white-space:nowrap">📅 予定日を自動</span></div></td>'
+      +'<td style="border:'+BD+';text-align:center;font-size:10.5px;white-space:nowrap">'+(r.assignee?_pdmEsc_(r.assignee):'<span style="color:#cbd5e1">—</span>')+'</td>'
+      +'<td style="border:'+BD+';text-align:center;background:#fff">'+statusCell+remBadge+'</td>';
     COLS.forEach(function(c){
       // 受注列
       if(c.k==='受注'){
@@ -13471,7 +13465,7 @@ function renderProcessBoard(){
     return '<tr>'+td+'</tr>';
   }).join('');
   box.innerHTML='<div style="overflow-x:auto;border:'+BD+';border-radius:6px">'
-    +'<table style="border-collapse:collapse;width:100%;min-width:760px">'
+    +'<table style="border-collapse:collapse;width:100%;min-width:1120px">'
     +'<thead>'+head+'</thead><tbody>'+rowsHtml+'</tbody></table></div>'
     +'<div style="font-size:10.5px;color:#64748b;margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
       +'<span><b style="color:#15803d">日付</b>＝完了日</span>'
@@ -13483,11 +13477,34 @@ function renderProcessBoard(){
       +'<span>状態セルのクリックで進行</span>'
     +'</div>'
     +(list.length>LIMIT?('<div style="text-align:center;color:#94a3b8;font-size:11px;margin-top:6px">他 '+(list.length-LIMIT)+' 件（検索・絞り込みで表示）</div>'):'');
+  // 確認連絡バッジの件数
+  var remEl=document.getElementById('pb-rem-count');
+  if(remEl){ var remTot=0; Object.keys(remMap).forEach(function(k){ remTot+=remMap[k]; }); remEl.textContent=remTot; remEl.style.background=remTot>0?'#f59e0b':'#cbd5e1'; }
 }
 // 工程ボードのカードから案件を開く（見積フォーム編集画面）
 function _openProjFromBoard_(oi){
   if(typeof _openProjInEstForm_==='function'){ try{ _openProjInEstForm_(oi); return; }catch(e){} }
   if(typeof editProjDetail==='function') editProjDetail(oi);
+}
+// 確認連絡（送信待ちリマインダー）モーダルを開く
+function openReminderModal(){
+  var m=document.getElementById('reminder-modal'); if(!m) return;
+  m.style.display='flex';
+  if(typeof refreshReminders==='function') try{ refreshReminders(); }catch(e){}
+}
+// 送信待ち確認連絡の projectId→件数 マップ（行内バッジ用。旧 projectSchedules 由来）
+function _pbReminderMap_(){
+  var map={}; var today=new Date().toISOString().slice(0,10);
+  (DB.projectSchedules||[]).forEach(function(sch){
+    if(!sch||!Array.isArray(sch.steps)) return;
+    sch.steps.forEach(function(step){
+      if(!step.customerRelated||step.status!=='pending'||step.reminderSent) return;
+      var sd=new Date(step.plannedDate); if(isNaN(sd)) return;
+      var rd=new Date(sd); rd.setDate(rd.getDate()-(step.reminderDays||0));
+      if(rd.toISOString().slice(0,10)<=today){ map[sch.projectId]=(map[sch.projectId]||0)+1; }
+    });
+  });
+  return map;
 }
 // 内製ジョブの工程名 → マトリクス表の工程列 への対応
 var PB_JOB2STEP={ 'データ作成':'版下','製版':'版下','印刷':'印刷','製本':'加工','加工':'加工','抜き':'加工','発送':'納品' };
