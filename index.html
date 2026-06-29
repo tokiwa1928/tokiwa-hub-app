@@ -2618,6 +2618,7 @@ setTimeout(_removeBootLoader_, 5000);
     <div class="f"><label>仕様</label><textarea id="pdm-spec" rows="2"></textarea></div>
     <div style="background:#f9f9f7;border-radius:7px;padding:.75rem">
       <div style="font-size:10px;font-weight:700;color:#aaa;letter-spacing:.1em;margin-bottom:.6rem">工程進捗（内製/外製・開始/完了日時）</div>
+      <div id="pdm-steps-toggles" style="margin-bottom:.5rem"></div>
       <div id="pdm-steps-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:8px"></div>
     </div>
     <!-- PPPPPP-9: 案件スケジュール (校正・打合せ等の予定 → ホームのカレンダーに表示) -->
@@ -13610,11 +13611,11 @@ function _renderProjMilestonesMini_(p){
 // 工程＋マイルストーンを1本化した縦リスト（左=工程/節目・右=日付。工程はクリックで進行）
 function _projStageList_(r, oi){
   r.steps=r.steps||{}; r.stepDates=r.stepDates||{};
-  var ICON={'版下':'📐','校了':'🆗','印刷':'🖨','加工':'✂','納品':'🚚'};
+  var ICON={'版下':'📐','校了':'🆗','ミシン出し':'🪡','色合わせ':'🎨','印刷':'🖨','加工':'✂','納品':'🚚'};
   var rows=[];
   var od=(r.orderDate||(r.createdAt?String(r.createdAt).slice(0,10):''))||'';
   rows.push({mark:'✓',icon:'📝',name:'受注',right:od||'—',state:od?'done':'todo'});
-  ['版下','校了','印刷','加工','納品'].forEach(function(step){
+  (typeof _procStepsFor_==='function'?_procStepsFor_(r):['版下','校了','印刷','加工','納品']).forEach(function(step){
     var v=r.steps[step]||'─';
     var done=v==='完了'||v==='OK'||v==='納品済'||v==='発送済';
     var active=v&&v!=='─'&&v!=='未着手'&&!done;
@@ -33273,15 +33274,38 @@ function _cancelDeleteProj_(oi){
 var STEP_OPTS = {
   '版下':['─','未着手','進行中','完了'],
   '校了':['─','未送付','送付済','OK','再校'],
+  'ミシン出し':['─','未着手','出し済','完了'],
+  '色合わせ':['─','未着手','合わせ中','完了'],
   '印刷':['─','未着手','印刷中','完了'],
   '加工':['─','未着手','進行中','完了','なし'],
   '納品':['─','未着手','手配中','発送済','納品済']
 };
+// トキワ印刷(COMP002)製造ルール: ミシンあり→印刷前に「ミシン出し」、色合わせは任意(p.needColorMatch)
+function _hasMishin_(p){ if(!p) return false; var hay=((p.spec||'')+' '+(p.item||'')+' '+((p.steps&&Object.keys(p.steps).join(' '))||'')); try{ if(p.items)hay+=' '+JSON.stringify(p.items); }catch(e){} return /ミシン/.test(hay); }
+// 案件の工程ステップ（ミシン出し・色合わせを条件付きで印刷前に挿入）
+function _procStepsFor_(p){
+  var steps=(typeof PROC_STEPS!=='undefined'?PROC_STEPS:['版下','校了','印刷','加工','納品']).slice();
+  if(!p) return steps;
+  function insBeforePrint(name){ if(steps.indexOf(name)>=0) return; var i=steps.indexOf('印刷'); if(i<0)i=steps.length; steps.splice(i,0,name); }
+  // 色合わせ（任意・必要時のみ。リピートは不要が基本）
+  if(p.needColorMatch && !(p.repeatFrom||p.isRepeat)) insBeforePrint('色合わせ');
+  // ミシン出し（ミシン×トキワ内製で自動。p.skipMishin で除外可）
+  if(_hasMishin_(p) && p.companyId==='COMP002' && !p.skipMishin) insBeforePrint('ミシン出し');
+  return steps;
+}
 // #7: 案件詳細の工程進捗を動的描画 (状態 + 内製/外製 + 開始/完了日時)
 function _pdmRenderSteps_(r){
   var grid=document.getElementById('pdm-steps-grid'); if(!grid) return;
   r.steps=r.steps||{}; r.stepMaker=r.stepMaker||{}; r.stepStart=r.stepStart||{}; r.stepEnd=r.stepEnd||{}; r.stepDates=r.stepDates||{};
-  grid.innerHTML = PROC_STEPS.map(function(step){
+  // トキワ印刷ルールのトグル（ミシン出し／色合わせ）
+  var tog=document.getElementById('pdm-steps-toggles');
+  if(tog){
+    var canMishin=_hasMishin_(r) && r.companyId==='COMP002';
+    tog.innerHTML = (canMishin?'<label style="font-size:11px;margin-right:14px;cursor:pointer"><input type="checkbox" '+(!r.skipMishin?'checked':'')+' onchange="_pdmSetStepFlag_(\'skipMishin\',!this.checked)"> 🪡 ミシン出しを工程に入れる</label>':'')
+      + '<label style="font-size:11px;cursor:pointer"><input type="checkbox" '+(r.needColorMatch?'checked':'')+' onchange="_pdmSetStepFlag_(\'needColorMatch\',this.checked)"> 🎨 色合わせあり（印刷前）</label>'
+      + (canMishin?'':'<span style="font-size:10px;color:#94a3b8;margin-left:8px">※ミシン出しはミシン加工×トキワ印刷内製のとき自動表示</span>');
+  }
+  grid.innerHTML = _procStepsFor_(r).map(function(step){
     var opts=(STEP_OPTS[step]||['─','未着手','進行中','完了']);
     var cur=r.steps[step]||'─';
     var maker=r.stepMaker[step]||'内製';
@@ -33301,6 +33325,8 @@ function _pdmRenderSteps_(r){
     '</div>';
   }).join('');
 }
+// 工程パネルのトグル（ミシン出し除外/色合わせ）→ フラグを更新して工程を再描画
+function _pdmSetStepFlag_(field,val){ var m=document.getElementById('proj-detail-modal'); if(!m)return; var r=DB.projects[parseInt(m.dataset.oi)]; if(!r)return; r[field]=val; _pdmRenderSteps_(r); }
 // 工程進捗からステータスを自動算出 (完了した工程に応じて) — #7の工程更新時に利用
 function _statusFromSteps_(p){
   if(!p || !p.steps) return p && p.status;
@@ -36635,8 +36661,9 @@ function saveProjDetail(){
   if(!r.stepMaker)r.stepMaker={};
   if(!r.stepStart)r.stepStart={};
   if(!r.stepEnd)r.stepEnd={};
-  PROC_STEPS.forEach(step=>{
-    r.steps[step]=document.getElementById(`pdm-step-${step}`)?.value||'─';
+  (typeof _procStepsFor_==='function'?_procStepsFor_(r):PROC_STEPS).forEach(step=>{
+    var el=document.getElementById(`pdm-step-${step}`); if(!el) return;
+    r.steps[step]=el.value||'─';
     r.stepMaker[step]=document.getElementById(`pdm-stepmaker-${step}`)?.value||'内製';
     r.stepStart[step]=document.getElementById(`pdm-stepstart-${step}`)?.value||'';
     r.stepEnd[step]=document.getElementById(`pdm-stepend-${step}`)?.value||'';
