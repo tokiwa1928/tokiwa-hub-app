@@ -2082,17 +2082,13 @@ setTimeout(_removeBootLoader_, 5000);
       <span>🗂 工程管理（案件別 工程進捗）</span>
       <button class="btn" id="pb-rem-btn" style="font-size:12px;padding:4px 10px" onclick="openReminderModal()" title="得意先への確認連絡（送信待ち）">⏰ 確認連絡 <span id="pb-rem-count" style="background:#f59e0b;color:#fff;font-size:10px;padding:0 6px;border-radius:9px;margin-left:2px">0</span></button>
     </div>
+    <!-- ステータス別タブ（案件管理と同じ） -->
+    <div id="pb-tabs" style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px"></div>
     <!-- 表示条件パネル（案件管理と同じ見た目） -->
     <div id="pb-filter-panel" style="background:#fff;border:1px solid #d6d3ca;border-radius:10px;padding:8px 12px;box-shadow:0 1px 3px rgba(40,36,28,.06);margin:0 0 10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
       <span style="font-size:11px;font-weight:700;color:#8d897f;letter-spacing:.06em">🔎 表示条件</span>
       <input id="pb-q" placeholder="得意先・品名・案件番号で検索…" style="font-size:12px;padding:5px 8px;min-width:200px" oninput="renderProcessBoard()">
-      <select id="pb-filter" style="font-size:12px;padding:5px 8px" onchange="renderProcessBoard()">
-        <option value="active">進行中のみ</option>
-        <option value="delayed">⚠ 納期遅れ</option>
-        <option value="soon">⏳ 納期7日以内</option>
-        <option value="today">本日納期</option>
-        <option value="all">すべて</option>
-      </select>
+      <span id="pb-period-wrapper"></span>
       <select id="pb-sort" style="font-size:12px;padding:5px 8px" onchange="renderProcessBoard()">
         <option value="due">納期が近い順</option>
         <option value="order">受注が新しい順</option>
@@ -13348,24 +13344,34 @@ function initSchedulePage(){
 function renderProcessBoard(){
   var box=document.getElementById('process-board'); if(!box) return;
   var q=(document.getElementById('pb-q')?.value||'').trim().toLowerCase();
-  var filter=document.getElementById('pb-filter')?.value||'active';
+  var filter=window._pbTab_||'active';
   var sort=document.getElementById('pb-sort')?.value||'due';
   var today=new Date().toISOString().slice(0,10);
   var todayT=new Date(today).getTime();
   function isDoneProj(r){ return r.status==='納品済'||r.status==='完了'||r.status==='キャンセル'||(r.steps&&r.steps['納品']==='納品済'); }
-  var list=(DB.projects||[]).filter(function(r){
-    // 会社スコープ（他社は自社案件のみ・トキワは全件）
+  // スコープ（会社別・受注後・検索）
+  var scoped=(DB.projects||[]).filter(function(r){
     if(typeof _itemVisibleByCompany_==='function' && !_itemVisibleByCompany_(r)) return false;
-    // 見積中など受注前は対象外（工程管理は受注後の製造進捗）
     if(typeof _projStageOf_==='function' && _projStageOf_(r.status)==='quote') return false;
     if(q){ var hay=((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
-    var done=isDoneProj(r);
-    if(filter==='active'){ if(done) return false; }
-    else if(filter==='delayed'){ if(done||!r.dueDate||r.dueDate>=today) return false; }
-    else if(filter==='soon'){ if(done||!r.dueDate) return false; var dd=new Date(r.dueDate).getTime(); if(dd<todayT||dd>todayT+7*86400000) return false; }
-    else if(filter==='today'){ if(r.dueDate!==today) return false; }
     return true;
   });
+  // 期間フィルタ（直近◯ヶ月）
+  var periodList=(typeof _filterByPeriod_==='function')?_filterByPeriod_(scoped,'sched-body',['orderDate','createdAt']):scoped;
+  // タブ判定
+  function matchTab(r,tab){
+    var done=isDoneProj(r);
+    if(tab==='all') return true;
+    if(tab==='active') return !done;
+    if(tab==='done') return done;
+    if(tab==='delayed') return !done&&!!r.dueDate&&r.dueDate<today;
+    if(tab==='soon'){ if(done||!r.dueDate) return false; var dd=new Date(r.dueDate).getTime(); return dd>=todayT&&dd<=todayT+7*86400000; }
+    if(tab==='today') return r.dueDate===today;
+    return true;
+  }
+  // タブ別件数
+  var counts={}; ['active','delayed','soon','today','done','all'].forEach(function(t){ counts[t]=periodList.filter(function(r){return matchTab(r,t);}).length; });
+  var list=periodList.filter(function(r){ return matchTab(r,filter); });
   // 並び替え
   list.sort(function(a,b){
     if(sort==='due'){ var da=a.dueDate||'9999-12-31', db=b.dueDate||'9999-12-31'; return da<db?-1:da>db?1:0; }
@@ -13373,6 +13379,10 @@ function renderProcessBoard(){
     if(sort==='stalled'){ var sa=(_projStatusMeta_(a).days||0), sb=(_projStatusMeta_(b).days||0); return sb-sa; }
     return 0;
   });
+  // タブ・期間セレクタ・KPIカードを描画
+  if(typeof _pbRenderTabs_==='function') _pbRenderTabs_(counts, filter);
+  var pw=document.getElementById('pb-period-wrapper');
+  if(pw && typeof _renderPeriodFilter_==='function') pw.innerHTML=_renderPeriodFilter_('sched-body','renderProcessBoard', scoped.length);
   if(typeof _pbSummaryBar_==='function') _pbSummaryBar_(list);
   if(!list.length){ box.innerHTML='<div style="text-align:center;color:#94a3b8;padding:2rem;font-size:13px">該当する案件がありません</div>'; return; }
   var LIMIT=200;
@@ -13500,9 +13510,27 @@ function openReminderModal(){
 // 表示条件をクリア（案件管理の「クリア」と同様）
 function _pbClearFilters_(){
   var q=document.getElementById('pb-q'); if(q) q.value='';
-  var f=document.getElementById('pb-filter'); if(f) f.value='active';
+  window._pbTab_='active';
   var s=document.getElementById('pb-sort'); if(s) s.value='due';
+  if(typeof _setPeriodFilter_==='function'){ try{ _setPeriodFilter_('sched-body','6m','renderProcessBoard'); return; }catch(e){} }
   if(typeof renderProcessBoard==='function') renderProcessBoard();
+}
+// ステータス別タブ（案件管理と同じチップ式）
+var PB_TABS=[{k:'active',label:'進行中'},{k:'delayed',label:'⚠ 納期遅れ'},{k:'soon',label:'⏳ 納期間近'},{k:'today',label:'本日納期'},{k:'done',label:'完了'},{k:'all',label:'すべて'}];
+function _pbSetTab_(k){ window._pbTab_=k; if(typeof renderProcessBoard==='function') renderProcessBoard(); }
+function _pbRenderTabs_(counts, active){
+  var el=document.getElementById('pb-tabs'); if(!el) return;
+  counts=counts||{};
+  el.innerHTML=PB_TABS.map(function(t){
+    var on=(active===t.k);
+    var n=counts[t.k]||0;
+    var danger=(t.k==='delayed'&&n>0);
+    var bg=on?(danger?'#b91c1c':'#211f1c'):'#fff';
+    var col=on?'#fff':(danger?'#b91c1c':'#44413c');
+    var bd=on?bg:(danger?'#fca5a5':'#d6d3ca');
+    return '<button onclick="_pbSetTab_(\''+t.k+'\')" style="cursor:pointer;font-size:12px;font-weight:'+(on?'700':'500')+';padding:5px 12px;border-radius:16px;border:1px solid '+bd+';background:'+bg+';color:'+col+'">'+t.label
+      +' <span style="font-size:10px;opacity:.85;'+(on?'':'color:#94a3b8')+'">'+n+'</span></button>';
+  }).join('');
 }
 // KPIメトリクスカード（案件管理と同じ黒/緑カード）
 function _pbSummaryBar_(list){
