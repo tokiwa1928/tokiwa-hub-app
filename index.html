@@ -13405,7 +13405,7 @@ function renderProcessBoard(){
   // 本体
   var rowsHtml=shown.map(function(r){
     var oi=(DB.projects||[]).lastIndexOf(r);
-    r.steps=r.steps||{}; r.stepDates=r.stepDates||{};
+    r.steps=r.steps||{}; r.stepDates=r.stepDates||{}; r.stepPlanned=r.stepPlanned||{};
     var grp=(typeof _detectGroupCompany_==='function')?_detectGroupCompany_(r):null;
     var groupTag=grp?'<span style="display:inline-block;background:'+grp.border+';color:#fff;font-size:9px;padding:0 4px;border-radius:3px;margin-right:3px;font-weight:700">'+grp.label+'</span>':'';
     var done0=isDoneProj(r);
@@ -13450,22 +13450,20 @@ function renderProcessBoard(){
       var bg=done?'#f0fdf4':active?'#fffbeb':'#fff';
       var col=done?'#15803d':active?'#b45309':'#cbd5e1';
       var txt=done?(dt?md(dt):'完了'):active?(/^(完了|OK|─|未着手)$/.test(v)?'進行中':v):'—';
-      // 内製ジョブの担当・予定日（自社で対応する工程）
+      // 予定日（全工程が保持）＋ 内製ジョブの担当（自社で対応する工程のみ）
       var jbs=jobsByStep[c.k]||[];
-      var jMeta='';
-      if(jbs.length){
-        var jrep=jbs[0];
+      var jrep=jbs[0]||null;
+      var planned=r.stepPlanned[c.k]||'';
+      if(!planned && jbs.length){ var pl=jbs.map(function(x){return x.plannedDate;}).filter(Boolean).sort(); planned=pl[0]||''; }
+      var planLate=planned&&!done&&planned<today;
+      var pTxt=planned?('📅'+md(planned)):'📅予定';
+      var metaLines='<span onclick="event.stopPropagation();_pbSetStepPlanned_('+oi+',\''+c.k+'\')" title="クリックで予定日を設定" style="cursor:pointer;color:'+(planLate?'#b91c1c':(planned?'#475569':'#b9b5aa'))+';font-size:9px">'+pTxt+(planLate?' ⚠':'')+'</span>';
+      if(jrep){
         var workers=Array.from(new Set(jbs.map(function(x){return x.worker;}).filter(Boolean)));
-        var plans=jbs.map(function(x){return x.plannedDate;}).filter(Boolean).sort();
-        var earliest=plans[0]||'';
-        var planLate=earliest&&!done&&earliest<today;
         var wTxt=workers.length?('👤'+_pdmEsc_(workers.join('・'))):'👤担当';
-        var pTxt=earliest?('📅'+md(earliest)):'📅予定';
-        jMeta='<div style="margin-top:2px;line-height:1.3">'
-          +'<span onclick="event.stopPropagation();_pbSetJobWorker_(\''+jrep.id+'\')" title="クリックで担当者を設定" style="cursor:pointer;color:'+(workers.length?'#475569':'#b9b5aa')+';font-size:9px">'+wTxt+'</span>'
-          +'<br><span onclick="event.stopPropagation();_pbSetJobDate_(\''+jrep.id+'\')" title="クリックで予定日を設定" style="cursor:pointer;color:'+(planLate?'#b91c1c':(earliest?'#475569':'#b9b5aa'))+';font-size:9px">'+pTxt+(planLate?' ⚠':'')+'</span>'
-          +'</div>';
+        metaLines='<span onclick="event.stopPropagation();_pbSetJobWorker_(\''+jrep.id+'\')" title="クリックで担当者を設定" style="cursor:pointer;color:'+(workers.length?'#475569':'#b9b5aa')+';font-size:9px">'+wTxt+'</span><br>'+metaLines;
       }
+      var jMeta='<div style="margin-top:2px;line-height:1.3">'+metaLines+'</div>';
       td+='<td onclick="event.stopPropagation();editProjStep('+oi+',\''+c.k+'\')" title="'+c.k+'：'+v+'（クリックで次の状態へ）" style="border:'+BD+';text-align:center;font-size:11px;font-weight:'+(done||active?'700':'400')+';background:'+bg+';color:'+col+';white-space:nowrap;cursor:pointer"><div>'+txt+'</div>'+jMeta+'</td>';
     });
     return '<tr>'+td+'</tr>';
@@ -13477,8 +13475,10 @@ function renderProcessBoard(){
       +'<span><b style="color:#15803d">日付</b>＝完了日</span>'
       +'<span><b style="color:#b45309">橙字</b>＝進行中</span>'
       +'<span style="color:#94a3b8">—＝未着手</span>'
+      +'<span>📅＝予定日（クリックで設定）</span>'
+      +'<span>👤＝担当（内製工程）</span>'
       +'<span style="color:#cfccc3">·＝対象外の工程</span>'
-      +'<span>セルをクリックで状態を進められます</span>'
+      +'<span>状態セルのクリックで進行</span>'
     +'</div>'
     +(list.length>LIMIT?('<div style="text-align:center;color:#94a3b8;font-size:11px;margin-top:6px">他 '+(list.length-LIMIT)+' 件（検索・絞り込みで表示）</div>'):'');
 }
@@ -13500,14 +13500,20 @@ function _pbSetJobWorker_(jobId){
   if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   if(typeof renderProcessBoard==='function') renderProcessBoard();
 }
-// セルの📅予定をクリック → 予定日を設定
-function _pbSetJobDate_(jobId){
-  var j=(DB.inhouseJobs||[]).find(function(x){return x.id===jobId;}); if(!j) return;
-  var v=prompt('予定日（'+(j.process||'')+'）  例: 2026-07-10  ※空欄で解除', j.plannedDate||'');
+// セルの📅予定をクリック → 工程の予定日を設定（全工程が保持。内製ジョブがあれば連動）
+function _pbSetStepPlanned_(oi, step){
+  var r=DB.projects[oi]; if(!r) return;
+  r.stepPlanned=r.stepPlanned||{};
+  var v=prompt(step+' の予定日  例: 2026-07-10  ※空欄で解除', r.stepPlanned[step]||'');
   if(v===null) return;
   v=v.trim();
   if(v && !/^\d{4}-\d{2}-\d{2}$/.test(v)){ alert('日付は YYYY-MM-DD 形式で入力してください'); return; }
-  j.plannedDate=v;
+  if(v) r.stepPlanned[step]=v; else delete r.stepPlanned[step];
+  // 内製ジョブがある工程は予定日も連動
+  if(typeof PB_STEP2JOBPROCS!=='undefined' && PB_STEP2JOBPROCS[step] && Array.isArray(DB.inhouseJobs)){
+    var procs=PB_STEP2JOBPROCS[step];
+    DB.inhouseJobs.forEach(function(j){ if(j&&j.projectId===r.id&&procs.indexOf(j.process)>=0){ j.plannedDate=v; } });
+  }
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try{saveToCloud();}catch(e){}
   if(typeof renderProcessBoard==='function') renderProcessBoard();
