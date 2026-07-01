@@ -135,6 +135,10 @@
     <input type="text" id="search" size="28" placeholder="全項目を検索（客先/品名/伝票No/担当/日付…）">
     <div class="results" id="results"></div>
   </div>
+  <div class="grp" style="position:relative;">
+    <button id="salesbtn" type="button">💰 売上: 総合計 ▾</button>
+    <div id="salespanel" style="display:none;position:absolute;top:100%;left:0;z-index:60;background:#fff;color:#111;border:1px solid #ccc;border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.25);max-height:340px;overflow:auto;min-width:190px"></div>
+  </div>
   <span class="spacer"></span>
   <div class="grp">
     <button id="listbtn">一覧</button>
@@ -399,6 +403,44 @@ function _num(v){ var s=String(v==null?'':v).replace(/[,\s¥]/g,''); return /^-?
 function _yen(n){ return '¥'+Math.round(n).toLocaleString('ja-JP'); }
 function _ym(r){ var d=String(get(r,'日付')||''); var m=d.match(/(\d{4})\.(\d{1,2})/); return m?(m[1]+'-'+('0'+m[2]).slice(-2)):'（日付なし）'; }
 function _match(r,q){ for(const k in r){ if(k==='_id') continue; if(String(r[k]).includes(q)) return true; } return false; }
+// 売上に含める項目（複数選択可）。総合計=全売上、他は工程別。
+const SALES_FIELDS=[
+  {k:'total', label:'総合計（全売上）', fields:['総合計']},
+  {k:'print', label:'印刷', fields:['印刷掛売上','印刷現売上']},
+  {k:'design', label:'デザイン', fields:['デザイン掛売上']},
+  {k:'shashoku', label:'写植', fields:['写植掛売上']},
+  {k:'output', label:'出力', fields:['出力掛売上','出力現売上']},
+  {k:'hanshita', label:'版下', fields:['版下掛売上']},
+  {k:'satsuei', label:'撮影', fields:['撮影掛売上']},
+  {k:'photo', label:'写真', fields:['写真掛け売上']},
+  {k:'seihan', label:'製版', fields:['製版掛売上']},
+  {k:'kakou', label:'加工', fields:['加工掛売上','加工現売上']},
+  {k:'zairyo', label:'材料', fields:['材料掛売上']},
+  {k:'toritsuke', label:'取付', fields:['取付掛売上']},
+  {k:'soryo', label:'送料', fields:['送料掛売上']},
+  {k:'orikomi', label:'折込', fields:['折込掛売上']},
+  {k:'other', label:'その他(1〜8)', fields:['その他1掛売上','その他2掛売上','その他3掛売上','その他4掛売上','その他5掛売上','その他6掛売上','その他7掛売上','その他8掛売上','その他4現売上']},
+  {k:'gen', label:'現売上合計（現金）', fields:['現売上合計']},
+];
+let selSales=new Set(['total']);
+function _sales(r){ let s=0; for(const f of SALES_FIELDS){ if(selSales.has(f.k)) for(const k of f.fields) s+=_num(get(r,k)); } return s; }
+function _salesLabel(){ if(selSales.size===1 && selSales.has('total')) return '総合計'; const ls=SALES_FIELDS.filter(f=>selSales.has(f.k)).map(f=>f.label); return ls.length?ls.join('＋'):'（未選択）'; }
+function buildSalesPanel(){
+  const p=$('#salespanel'); if(!p) return; p.innerHTML='';
+  SALES_FIELDS.forEach(f=>{
+    const lab=document.createElement('label');
+    lab.style.cssText='display:block;font-size:12px;padding:3px 6px;cursor:pointer;white-space:nowrap';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=selSales.has(f.k);
+    cb.addEventListener('change',function(){ if(this.checked) selSales.add(f.k); else selSales.delete(f.k); afterSalesChange(); });
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(' '+f.label));
+    p.appendChild(lab);
+  });
+}
+function afterSalesChange(){
+  const btn=$('#salesbtn'); if(btn) btn.textContent='💰 売上: '+_salesLabel()+' ▾';
+  if($('#monthview').style.display==='block') renderMonth($('#search').value);
+  else if($('#listview').style.display==='block') renderList($('#search').value);
+}
 function _rowHtml(r){
   return `<td>${get(r,'伝票No')}</td><td>${fmtDate(get(r,'日付'))}</td><td>${get(r,'本社・分室分類')}</td>`+
     `<td>${escapeHtml(get(r,'クライアント'))}</td><td>${escapeHtml(get(r,'品名'))}</td>`+
@@ -411,14 +453,14 @@ function renderList(q){
   for(let i=0;i<RECORDS.length;i++){
     const r=RECORDS[i];
     if(q && !_match(r,q)) continue;
-    n++; sum+=_num(get(r,'総合計'));
+    n++; sum+=_sales(r);
     const tr=document.createElement('tr');
     tr.innerHTML=_rowHtml(r);
     (function(idx){ tr.onclick=()=>{ go(idx); $('#listview').style.display='none'; $('#sheet').style.display=''; $('#listbtn').textContent='一覧'; }; })(i);
     frag.appendChild(tr);
   }
   b.appendChild(frag);
-  const c=$('#listcount'); if(c) c.textContent = (q?`検索：「${q}」 `:`全 `)+`${n}件　売上合計 ${_yen(sum)}`;
+  const c=$('#listcount'); if(c) c.textContent = (q?`検索：「${q}」 `:`全 `)+`${n}件　売上[${_salesLabel()}] ${_yen(sum)}`;
   $('#monthview').style.display='none';
   $('#listview').style.display='block'; $('#sheet').style.display='none'; $('#listbtn').textContent='伝票へ戻る';
 }
@@ -428,7 +470,7 @@ function renderMonth(q){
   for(let i=0;i<RECORDS.length;i++){
     const r=RECORDS[i]; if(q && !_match(r,q)) continue;
     const ym=_ym(r); if(!map[ym]){ map[ym]={n:0,s:0,o:0}; order.push(ym); }
-    const s=_num(get(r,'総合計')), o=_num(get(r,'外注費合計'));
+    const s=_sales(r), o=_num(get(r,'外注費合計'));
     map[ym].n++; map[ym].s+=s; map[ym].o+=o; tN++; tS+=s; tO+=o;
   }
   order.sort();
@@ -440,13 +482,19 @@ function renderMonth(q){
   const trt=document.createElement('tr'); trt.style.fontWeight='700'; trt.style.background='#eaf3de';
   trt.innerHTML=`<td>合計</td><td class="amt">${tN}</td><td class="amt">${_yen(tS)}</td><td class="amt">${_yen(tO)}</td><td class="amt">${_yen(tS-tO)}</td>`;
   b.appendChild(trt);
-  const c=$('#monthcount'); if(c) c.textContent=(q?`検索：「${q}」の月次　`:`月次集計　`)+`${order.length}ヶ月 / ${tN}件 / 売上 ${_yen(tS)} / 粗利 ${_yen(tS-tO)}`;
+  const c=$('#monthcount'); if(c) c.textContent=(q?`検索：「${q}」の月次　`:`月次集計　`)+`売上[${_salesLabel()}]　${order.length}ヶ月 / ${tN}件 / 売上 ${_yen(tS)} / 粗利 ${_yen(tS-tO)}`;
   $('#listview').style.display='none'; $('#sheet').style.display='none';
   $('#monthview').style.display='block'; $('#monthbtn').textContent='伝票へ戻る';
 }
 // 入力するたびに、表示中のビュー（一覧 or 月次）を絞り込み再集計（全項目・部分一致）
 $('#search').addEventListener('input',function(){ if($('#monthview').style.display==='block') renderMonth(this.value); else renderList(this.value); });
 $('#search').addEventListener('keydown',function(e){ if(e.key==='Escape'){ this.value=''; if($('#monthview').style.display==='block') renderMonth(''); else renderList(''); } });
+// 売上項目セレクタ（複数選択）
+$('#salesbtn').addEventListener('click',function(e){ e.stopPropagation(); const p=$('#salespanel'); p.style.display=(p.style.display==='block')?'none':'block'; });
+$('#salespanel').addEventListener('click',function(e){ e.stopPropagation(); });
+document.addEventListener('click',function(){ const p=$('#salespanel'); if(p) p.style.display='none'; });
+buildSalesPanel();
+$('#salesbtn').textContent='💰 売上: '+_salesLabel()+' ▾';
 
 // ---- 編集トグル ----
 $('#editbtn').onclick=function(){ editMode=!editMode; this.textContent='編集: '+(editMode?'ON':'OFF'); applyEditable(); };
