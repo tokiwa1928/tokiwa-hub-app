@@ -132,7 +132,7 @@
     <button id="jumpbtn">表示</button>
   </div>
   <div class="grp" style="position:relative;">
-    <input type="text" id="search" size="18" placeholder="客先・品名で検索">
+    <input type="text" id="search" size="28" placeholder="全項目を検索（客先/品名/伝票No/担当/日付…）">
     <div class="results" id="results"></div>
   </div>
   <span class="spacer"></span>
@@ -233,6 +233,7 @@
 
 <!-- 一覧ビュー -->
 <div class="listview" id="listview">
+  <div id="listcount" style="padding:6px 10px;font-weight:700;color:#334155">全 0件</div>
   <table>
     <thead><tr><th>伝票No</th><th>日付</th><th>分類</th><th>クライアント</th><th>品名</th><th>担当</th><th class="amt">総合計</th><th>納品</th></tr></thead>
     <tbody id="listBody"></tbody>
@@ -383,52 +384,45 @@ $('#jumpbtn').onclick=()=>{
 };
 $('#jump').addEventListener('keydown',e=>{if(e.key==='Enter')$('#jumpbtn').click();});
 
-// ---- 検索 ----
-const results=$('#results');
-$('#search').addEventListener('input',function(){
-  const q=this.value.trim(); results.innerHTML='';
-  if(!q){results.style.display='none';return;}
-  const hits=[];
+// ---- 検索（全項目）→ 結果を一覧表示 ----
+function _rowHtml(r){
+  return `<td>${get(r,'伝票No')}</td><td>${fmtDate(get(r,'日付'))}</td><td>${get(r,'本社・分室分類')}</td>`+
+    `<td>${escapeHtml(get(r,'クライアント'))}</td><td>${escapeHtml(get(r,'品名'))}</td>`+
+    `<td>${escapeHtml(get(r,'担当'))}</td><td class="amt">${fmtNum(get(r,'総合計'))}</td><td>${get(r,'納品')}</td>`;
+}
+function renderList(q){
+  q=(q||'').trim();
+  const b=$('#listBody'); b.innerHTML='';
+  const frag=document.createDocumentFragment(); let n=0;
   for(let i=0;i<RECORDS.length;i++){
     const r=RECORDS[i];
-    if(String(get(r,'クライアント')).includes(q)||String(get(r,'品名')).includes(q)){
-      hits.push(i); if(hits.length>=50) break;
+    if(q){
+      let hit=false;
+      for(const k in r){ if(k==='_id') continue; if(String(r[k]).includes(q)){ hit=true; break; } }
+      if(!hit) continue;
     }
+    n++;
+    const tr=document.createElement('tr');
+    tr.innerHTML=_rowHtml(r);
+    tr.onclick=()=>{ go(i); $('#listview').style.display='none'; $('#sheet').style.display=''; $('#listbtn').textContent='一覧'; };
+    frag.appendChild(tr);
   }
-  if(!hits.length){results.style.display='none';return;}
-  hits.forEach(i=>{
-    const r=RECORDS[i];
-    const d=document.createElement('div');
-    d.textContent=`No.${get(r,'伝票No')} ${fmtDate(get(r,'日付'))}　${get(r,'クライアント')}／${get(r,'品名')}`;
-    d.onclick=()=>{go(i);results.style.display='none';$('#search').value='';};
-    results.appendChild(d);
-  });
-  results.style.display='block';
-});
-document.addEventListener('click',e=>{ if(!e.target.closest('.grp')) results.style.display='none'; });
+  b.appendChild(frag);
+  const c=$('#listcount'); if(c) c.textContent = q ? `検索：「${q}」 ${n}件` : `全 ${n}件`;
+  $('#listview').style.display='block'; $('#sheet').style.display='none'; $('#listbtn').textContent='伝票へ戻る';
+}
+// 入力するたびに一覧を絞り込み表示（全項目・部分一致）
+$('#search').addEventListener('input',function(){ renderList(this.value); });
+$('#search').addEventListener('keydown',function(e){ if(e.key==='Escape'){ this.value=''; renderList(''); } });
 
 // ---- 編集トグル ----
 $('#editbtn').onclick=function(){ editMode=!editMode; this.textContent='編集: '+(editMode?'ON':'OFF'); applyEditable(); };
 
-// ---- 一覧 ----
-let listBuilt=false;
+// ---- 一覧ボタン（トグル：検索条件があれば絞り込み、無ければ全件）----
 $('#listbtn').onclick=function(){
-  const lv=$('#listview'), sh=$('#sheet');
-  const showing = lv.style.display==='block';
-  if(showing){ lv.style.display='none'; sh.style.display=''; this.textContent='一覧'; return; }
-  if(!listBuilt){
-    const b=$('#listBody');
-    RECORDS.forEach((r,i)=>{
-      const tr=document.createElement('tr');
-      tr.innerHTML=`<td>${get(r,'伝票No')}</td><td>${fmtDate(get(r,'日付'))}</td><td>${get(r,'本社・分室分類')}</td>`+
-        `<td>${escapeHtml(get(r,'クライアント'))}</td><td>${escapeHtml(get(r,'品名'))}</td>`+
-        `<td>${escapeHtml(get(r,'担当'))}</td><td class="amt">${fmtNum(get(r,'総合計'))}</td><td>${get(r,'納品')}</td>`;
-      tr.onclick=()=>{go(i);lv.style.display='none';sh.style.display='';$('#listbtn').textContent='一覧';};
-      b.appendChild(tr);
-    });
-    listBuilt=true;
-  }
-  lv.style.display='block'; sh.style.display='none'; this.textContent='伝票へ戻る';
+  const showing = $('#listview').style.display==='block';
+  if(showing){ $('#listview').style.display='none'; $('#sheet').style.display=''; this.textContent='一覧'; }
+  else { renderList($('#search').value); }
 };
 
 // ---- CSV書き出し（全件・編集反映） ----
