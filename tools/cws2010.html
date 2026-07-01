@@ -135,6 +135,11 @@
     <input type="text" id="search" size="28" placeholder="全項目を検索（客先/品名/伝票No/担当/日付…）">
     <div class="results" id="results"></div>
   </div>
+  <div class="grp">
+    <select id="fYear" title="年で絞り込み"><option value="">全年</option></select>
+    <select id="fMonFrom" title="開始月"></select>〜<select id="fMonTo" title="終了月"></select>
+    <button id="fClear" type="button" title="日付の絞り込みを解除">✕日付</button>
+  </div>
   <div class="grp" style="position:relative;">
     <button id="salesbtn" type="button">💰 売上: 総合計 ▾</button>
     <div id="salespanel" style="display:none;position:absolute;top:100%;left:0;z-index:60;background:#fff;color:#111;border:1px solid #ccc;border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.25);max-height:340px;overflow:auto;min-width:190px"></div>
@@ -403,6 +408,32 @@ function _num(v){ var s=String(v==null?'':v).replace(/[,\s¥]/g,''); return /^-?
 function _yen(n){ return '¥'+Math.round(n).toLocaleString('ja-JP'); }
 function _ym(r){ var d=String(get(r,'日付')||''); var m=d.match(/(\d{4})\.(\d{1,2})/); return m?(m[1]+'-'+('0'+m[2]).slice(-2)):'（日付なし）'; }
 function _match(r,q){ for(const k in r){ if(k==='_id') continue; if(String(r[k]).includes(q)) return true; } return false; }
+// 日付フィルタ（年＋月範囲）。日付は「2010.1.13」形式。
+function buildDateFilter(){
+  const ys=new Set();
+  for(const r of RECORDS){ const m=_ym(r).match(/^(\d{4})-/); if(m) ys.add(m[1]); }
+  const years=[...ys].sort();
+  const fy=document.getElementById('fYear'); if(fy){ const cur=fy.value; fy.innerHTML='<option value="">全年</option>'+years.map(y=>`<option value="${y}">${y}年</option>`).join(''); if(cur) fy.value=cur; }
+  const mopts=(sel)=>Array.from({length:12},(_,i)=>`<option value="${i+1}"${sel===i+1?' selected':''}>${i+1}月</option>`).join('');
+  const mf=document.getElementById('fMonFrom'), mt=document.getElementById('fMonTo');
+  if(mf && !mf.options.length) mf.innerHTML=mopts(1);
+  if(mt && !mt.options.length) mt.innerHTML=mopts(12);
+}
+function _dateOk(r){
+  const fy=document.getElementById('fYear'); const y=fy?fy.value:''; if(!y) return true;
+  const m=_ym(r).match(/^(\d{4})-(\d{2})$/); if(!m || m[1]!==y) return false;
+  const mo=parseInt(m[2],10);
+  const from=parseInt((document.getElementById('fMonFrom')||{}).value||'1',10);
+  const to=parseInt((document.getElementById('fMonTo')||{}).value||'12',10);
+  return mo>=Math.min(from,to) && mo<=Math.max(from,to);
+}
+function _dateLabel(){
+  const fy=document.getElementById('fYear'); const y=fy?fy.value:''; if(!y) return '';
+  const f=(document.getElementById('fMonFrom')||{}).value||'1', t=(document.getElementById('fMonTo')||{}).value||'12';
+  if(f==='1'&&t==='12') return `${y}年`;
+  if(f===t) return `${y}年${f}月`;
+  return `${y}年${f}〜${t}月`;
+}
 // 売上に含める項目（複数選択可）。総合計=全売上、他は工程別。
 const SALES_FIELDS=[
   {k:'total', label:'総合計（全売上）', fields:['総合計']},
@@ -452,6 +483,7 @@ function renderList(q){
   const frag=document.createDocumentFragment(); let n=0, sum=0;
   for(let i=0;i<RECORDS.length;i++){
     const r=RECORDS[i];
+    if(!_dateOk(r)) continue;
     if(q && !_match(r,q)) continue;
     n++; sum+=_sales(r);
     const tr=document.createElement('tr');
@@ -460,7 +492,8 @@ function renderList(q){
     frag.appendChild(tr);
   }
   b.appendChild(frag);
-  const c=$('#listcount'); if(c) c.textContent = (q?`検索：「${q}」 `:`全 `)+`${n}件　売上[${_salesLabel()}] ${_yen(sum)}`;
+  const dl=_dateLabel();
+  const c=$('#listcount'); if(c) c.textContent = (dl?`[${dl}] `:``)+(q?`検索：「${q}」 `:`全 `)+`${n}件　売上[${_salesLabel()}] ${_yen(sum)}`;
   $('#monthview').style.display='none';
   $('#listview').style.display='block'; $('#sheet').style.display='none'; $('#listbtn').textContent='伝票へ戻る';
 }
@@ -468,7 +501,7 @@ function renderMonth(q){
   q=(q||'').trim();
   const map={}, order=[]; let tN=0,tS=0,tO=0;
   for(let i=0;i<RECORDS.length;i++){
-    const r=RECORDS[i]; if(q && !_match(r,q)) continue;
+    const r=RECORDS[i]; if(!_dateOk(r)) continue; if(q && !_match(r,q)) continue;
     const ym=_ym(r); if(!map[ym]){ map[ym]={n:0,s:0,o:0}; order.push(ym); }
     const s=_sales(r), o=_num(get(r,'外注費合計'));
     map[ym].n++; map[ym].s+=s; map[ym].o+=o; tN++; tS+=s; tO+=o;
@@ -482,13 +515,18 @@ function renderMonth(q){
   const trt=document.createElement('tr'); trt.style.fontWeight='700'; trt.style.background='#eaf3de';
   trt.innerHTML=`<td>合計</td><td class="amt">${tN}</td><td class="amt">${_yen(tS)}</td><td class="amt">${_yen(tO)}</td><td class="amt">${_yen(tS-tO)}</td>`;
   b.appendChild(trt);
-  const c=$('#monthcount'); if(c) c.textContent=(q?`検索：「${q}」の月次　`:`月次集計　`)+`売上[${_salesLabel()}]　${order.length}ヶ月 / ${tN}件 / 売上 ${_yen(tS)} / 粗利 ${_yen(tS-tO)}`;
+  const dl=_dateLabel();
+  const c=$('#monthcount'); if(c) c.textContent=(dl?`[${dl}] `:``)+(q?`検索：「${q}」の月次　`:`月次集計　`)+`売上[${_salesLabel()}]　${order.length}ヶ月 / ${tN}件 / 売上 ${_yen(tS)} / 粗利 ${_yen(tS-tO)}`;
   $('#listview').style.display='none'; $('#sheet').style.display='none';
   $('#monthview').style.display='block'; $('#monthbtn').textContent='伝票へ戻る';
 }
 // 入力するたびに、表示中のビュー（一覧 or 月次）を絞り込み再集計（全項目・部分一致）
 $('#search').addEventListener('input',function(){ if($('#monthview').style.display==='block') renderMonth(this.value); else renderList(this.value); });
 $('#search').addEventListener('keydown',function(e){ if(e.key==='Escape'){ this.value=''; if($('#monthview').style.display==='block') renderMonth(''); else renderList(''); } });
+// 日付フィルタ（年・月範囲）の配線
+function _reRenderActive(){ if($('#monthview').style.display==='block') renderMonth($('#search').value); else renderList($('#search').value); }
+['fYear','fMonFrom','fMonTo'].forEach(function(id){ var el=document.getElementById(id); if(el) el.addEventListener('change', _reRenderActive); });
+var _fc=document.getElementById('fClear'); if(_fc) _fc.addEventListener('click',function(){ var fy=document.getElementById('fYear'); if(fy) fy.value=''; var mf=document.getElementById('fMonFrom'); if(mf) mf.value='1'; var mt=document.getElementById('fMonTo'); if(mt) mt.value='12'; _reRenderActive(); });
 // 売上項目セレクタ（複数選択）
 $('#salesbtn').addEventListener('click',function(e){ e.stopPropagation(); const p=$('#salespanel'); p.style.display=(p.style.display==='block')?'none':'block'; });
 $('#salespanel').addEventListener('click',function(e){ e.stopPropagation(); });
@@ -543,6 +581,7 @@ $('#csvbtn').onclick=()=>{
     try{
       RECORDS = await cwsUnlock(pw.value||'');
       ov.remove();
+      if(typeof buildDateFilter==='function') buildDateFilter();
       render();
     }catch(e){
       btn.disabled=false; btn.textContent='開く';
