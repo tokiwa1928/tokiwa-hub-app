@@ -1563,6 +1563,7 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-prod" onclick="swMaster('prod',this)">製品名</button>
     <button class="pill" id="mc-intercoRates" onclick="swMaster('intercoRates',this)">会社間掛け率</button>
     <button class="pill" id="mc-outsourceVendors" onclick="swMaster('outsourceVendors',this)">外注先</button>
+    <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
   </div>
   <div id="master-panels"></div>
 </div>
@@ -4034,7 +4035,7 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   if(!d.inquirySettings) d.inquirySettings={autoReply:true,autoReplyMessage:'',categories:['見積依頼','納品について','データ入稿','校正確認','クレーム','その他'],assignees:[]};
   if(!d.wikiArticles) d.wikiArticles=[];
   if(!d.templates) d.templates=[];
-  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],calendarOrders:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
+  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],calendarOrders:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
   // AAAA-1: マスター番号 backfill (起動時に既存データに割り当て)
   if(typeof _backfillMasterNos_ === 'function') _backfillMasterNos_();
   // 移行による変更を永続化（しないと次回リロードで元に戻り、フラグだけ立って再実行もされない）
@@ -10670,6 +10671,91 @@ function kiloBulkApply(){
   renderMaster('paper');
   alert('⚡ ' + n + ' 件の用紙単価を 連量×キロ単価 から再計算して反映しました。');
 }
+// ══ 品目マスタ (GEN 由来・品目コード付き) ══
+//   請求・発注・GEN連携の受け皿。見積のキロ単価マスタとは別管理（用紙種類で橋渡し）。
+//   DB.itemMaster = [{code,group,name,kd(用紙種類),info(紙情報),sz,wt,p}]
+function _hmToHalf_(s){ return String(s).replace(/[０-９．]/g,function(d){return String.fromCharCode(d.charCodeAt(0)-0xFEE0);}); }
+function _hmNum_(s){ var v=_hmToHalf_(String(s)).replace(/[,¥￥\s]/g,''); var n=v?parseFloat(v):0; return isNaN(n)?0:n; }
+// 📥 GEN「品目マスタ」Excel を取込 → DB.itemMaster にマージ（品目コードで更新/追加）
+function hinmokuImport(inp){
+  var file=inp&&inp.files&&inp.files[0]; if(!file){ return; }
+  if(typeof XLSX==='undefined'){ alert('Excel読取ライブラリが未ロードです。ページを再読込してください'); inp.value=''; return; }
+  var reader=new FileReader();
+  reader.onload=function(){
+    try{
+      var wb=XLSX.read(new Uint8Array(reader.result),{type:'array'});
+      var ws=wb.Sheets[wb.SheetNames[0]];
+      var rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+      var hi=-1;
+      for(var i=0;i<Math.min(rows.length,12);i++){ if(rows[i].some(function(c){return String(c).indexOf('品目コード')>=0;})){ hi=i; break; } }
+      if(hi<0){ alert('「品目コード」列が見つかりません。GENの品目マスタ(Excel)を選んでください'); inp.value=''; return; }
+      var H=rows[hi].map(function(c){return String(c).trim();});
+      function col(name){ for(var j=0;j<H.length;j++){ if(H[j].indexOf(name)>=0) return j; } return -1; }
+      var cGrp=col('品目グループ'),cCode=col('品目コード'),cName=col('品目名'),cKd=col('用紙種類'),cInfo=col('紙情報'),cSz=col('用紙サイズ'),cWt=col('用紙厚さ'),cP=col('用紙単価');
+      function g(r,ci){ return (ci>=0&&ci<r.length)?String(r[ci]).trim():''; }
+      DB.itemMaster=DB.itemMaster||[];
+      var idx={}; DB.itemMaster.forEach(function(r){ if(r.code) idx[r.code]=r; });
+      var added=0,updated=0;
+      for(var k=hi+1;k<rows.length;k++){
+        var r=rows[k]; if(!r||!r.length) continue;
+        var code=g(r,cCode); if(!code||code==='品目コード') continue;
+        var rec={code:code,group:g(r,cGrp),name:g(r,cName),kd:g(r,cKd),info:g(r,cInfo),sz:g(r,cSz),wt:g(r,cWt),p:_hmNum_(g(r,cP))};
+        if(idx[code]){ Object.assign(idx[code],rec); updated++; }
+        else { DB.itemMaster.push(rec); idx[code]=rec; added++; }
+      }
+      if(typeof saveDB==='function') saveDB();
+      renderMaster('hinmoku');
+      alert('📥 品目マスタ 取込完了\n\n新規追加: '+added+' 件\n更新: '+updated+' 件\n合計: '+DB.itemMaster.length+' 件\n\n※見積のキロ単価マスタとは別管理です（請求・発注・GEN連携用）。用紙種類でひも付きます。');
+    }catch(err){ alert('取込エラー: '+(err&&err.message||err)); }
+    finally{ inp.value=''; }
+  };
+  reader.onerror=function(){ alert('ファイル読込に失敗しました'); inp.value=''; };
+  reader.readAsArrayBuffer(file);
+}
+function hinmokuClear(){
+  var n=(DB.itemMaster||[]).length;
+  if(!n){ alert('品目マスタは空です'); return; }
+  if(!confirm('品目マスタ '+n+' 件をすべて削除します。よろしいですか？')) return;
+  DB.itemMaster=[];
+  if(typeof saveDB==='function') saveDB();
+  renderMaster('hinmoku');
+  alert('🗑 品目マスタ '+n+' 件を削除しました');
+}
+// 品目マスタ描画（検索テーブル）
+function renderHinmokuMaster(mp){
+  DB.itemMaster=DB.itemMaster||[];
+  var q=(document.getElementById('m-q-hinmoku')?.value||'').toLowerCase();
+  var all=DB.itemMaster;
+  var data=q?all.filter(function(r){return JSON.stringify(r).toLowerCase().indexOf(q)>=0;}):all;
+  var byGrp={}; all.forEach(function(r){ var k=r.group||'(未分類)'; byGrp[k]=(byGrp[k]||0)+1; });
+  var grpBadges=Object.keys(byGrp).sort().map(function(k){return '<span style="font-size:10.5px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:1px 8px;margin-right:4px">'+k+' '+byGrp[k]+'</span>';}).join('');
+  var rowsHtml=data.slice(0,600).map(function(r){
+    return '<tr>'
+      +'<td style="font-family:monospace;color:#0f766e;font-weight:700;white-space:nowrap">'+(r.code||'')+'</td>'
+      +'<td style="white-space:nowrap;font-size:11px;color:#64748b">'+(r.group||'')+'</td>'
+      +'<td>'+(r.name||'')+'</td>'
+      +'<td style="white-space:nowrap">'+(r.kd||'')+'</td>'
+      +'<td>'+(r.info||'')+'</td>'
+      +'<td style="white-space:nowrap">'+(r.sz||'')+'</td>'
+      +'<td style="white-space:nowrap;text-align:right">'+(r.wt||'')+'</td>'
+      +'<td style="text-align:right">'+(r.p?('¥'+r.p.toLocaleString()):'')+'</td>'
+      +'</tr>';
+  }).join('');
+  mp.innerHTML='<div class="sec">'
+    +'<div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">品目マスタ（GEN由来・品目コード付き）'
+      +'<input id="m-q-hinmoku" placeholder="コード/品目名/種類で検索…" value="'+q.replace(/"/g,'&quot;')+'" style="width:220px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="renderMaster(\'hinmoku\')">'
+      +'<button class="btn" style="font-size:11px;background:#0f766e;color:#fff;border-color:#0f766e;font-weight:700" onclick="document.getElementById(\'hinmoku-import-file\').click()" title="GENの品目マスタ(Excel)を取込。品目コードで更新/追加">📥 GEN品目マスタ取込 (Excel)</button>'
+      +'<input type="file" id="hinmoku-import-file" accept=".xlsx,.xls" style="display:none" onchange="hinmokuImport(this)">'
+      +'<button class="btn" style="font-size:11px;background:#fff;border-color:#b91c1c;color:#b91c1c" onclick="hinmokuClear()">🗑 全削除</button>'
+    +'</div>'
+    +'<div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:8px 12px;margin:.4rem 0;font-size:11.5px;color:#0f766e;line-height:1.7">💡 これは<b>請求・発注・GEN連携用</b>の品目カタログです（用語の正＝GEN）。見積のコスト計算は「用紙」タブの<b>キロ単価マスタ</b>を使い、両者は<b>用紙種類</b>でひも付きます。</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:.4rem">'+data.length+' 件'+(data.length>600?'（先頭600件表示）':'')+' / 全'+all.length+' 件　'+grpBadges+'</div>'
+    +(all.length?('<div style="overflow:auto;max-height:60vh"><table class="tbl" style="font-size:12px;width:100%"><thead><tr>'
+        +'<th>品目コード</th><th>グループ</th><th>品目名</th><th>用紙種類</th><th>紙情報</th><th>サイズ</th><th>厚さ</th><th>単価</th></tr></thead><tbody>'
+        +rowsHtml+'</tbody></table></div>')
+      :'<div style="padding:30px;text-align:center;color:#888"><div style="font-size:32px;margin-bottom:8px">📦</div>品目マスタが空です<br><span style="font-size:11px">「📥 GEN品目マスタ取込」からGENのExcel（品目マスタ）を読み込んでください</span></div>')
+    +'</div>';
+}
 // 🤖 キロ単価表のスキャン(画像)をAIで読み取り → マスターに反映
 function kiloScanImport(){
   var inp = document.createElement('input');
@@ -10786,7 +10872,11 @@ function renderMaster(id){
     renderOutsourceVendors(mp);
     return;
   }
-  
+  if(id==='hinmoku'){
+    renderHinmokuMaster(mp);
+    return;
+  }
+
   let html=`<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${labels[id]||id} <button class="add-btn" onclick="addMR('${id}')">＋ 追加</button>
     <input id="m-q-${id}" placeholder="検索…" style="width:160px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="renderMaster('${id}')">
     ${(id==='bind'||id==='print')?`<button class="btn" style="font-size:11px;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="openTierAnalysis('${id}')" title="過去実績(村山印刷の蓄積データ)から数量別の段階売価を分析して生成します">📈 実績から段階売価を生成</button>`:''}
