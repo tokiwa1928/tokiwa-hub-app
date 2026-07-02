@@ -22599,7 +22599,9 @@ function renderReceipts(){
       '<td style="padding:8px 10px;font-size:12px">' + (r.issuedAt ? new Date(r.issuedAt).toLocaleDateString('ja-JP') : '-') + '</td>' +
       '<td style="padding:8px 10px;font-weight:600">' + _escDiff(r.cust||'') + '</td>' +
       '<td style="padding:8px 10px;text-align:right;font-family:monospace;font-weight:700">¥' + (r.total||0).toLocaleString() + '</td>' +
-      '<td style="padding:8px 10px;text-align:center"><button class="btn" style="padding:4px 8px;font-size:11px;background:#fee;color:#dc2626" onclick="deleteReceipt(\'' + r.id + '\')">🗑</button></td>' +
+      '<td style="padding:8px 10px;text-align:center;white-space:nowrap">' +
+        '<button class="btn" style="padding:4px 8px;font-size:11px" onclick="printReceiptRow(\'' + r.id + '\')">🖨 印刷</button> ' +
+        '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fee;color:#dc2626" onclick="deleteReceipt(\'' + r.id + '\')">🗑</button></td>' +
       '</tr>';
   });
   html += '</tbody></table>';
@@ -22635,6 +22637,20 @@ function showCreateReceiptModal(){
   alert('✅ 領収書 ' + rcpt.id + ' を発行しました');
 }
 
+// 領収書一覧から GEN様式(3面)で印刷。税込合計を正確に表示（内訳は税込から逆算）
+function printReceiptRow(id){
+  var r=(DB.receipts||[]).find(function(x){ return x.id===id; });
+  if(!r){ alert('領収書が見つかりません'); return; }
+  var total=parseInt(r.total)||0;
+  var tax=Math.round(total*10/110), subtotal=total-tax;
+  var item=r.item||'';
+  if(!item && r.projectId){
+    var p=(DB.projects||[]).find(function(x){ return x.id===r.projectId; }) || (DB.invoices||[]).find(function(v){ return v.id===r.projectId; });
+    if(p) item=(p.items&&p.items[0]&&p.items[0].item) || p.item || '';
+  }
+  var entries=[{ delivery:{}, project:{ item:item, exTax:subtotal } }];
+  _printDocument_('領収書', r.cust, (r.issuedAt||'').slice(0,10), entries, { docNo:r.id, amounts:{subtotal:subtotal, tax:tax, total:total} });
+}
 function deleteReceipt(rcptId){
   if(!confirm('領収書を削除しますか?')) return;
   DB.receipts = (DB.receipts || []).filter(function(r){ return r.id !== rcptId; });
@@ -23232,6 +23248,8 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
   var subtotal = entries.reduce(function(s, e){ return s + (e.project?.exTax || 0); }, 0);
   var tax = Math.round(subtotal * 0.1);
   var total = subtotal + tax;
+  // 金額を明示指定（領収書の税込合計を正確に出す等）
+  if(meta.amounts){ subtotal=meta.amounts.subtotal||0; tax=meta.amounts.tax||0; total=(meta.amounts.total!=null)?meta.amounts.total:(subtotal+tax); }
   var docNo = meta.docNo || (docType.charAt(0) + '-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.floor(Math.random()*1000));
   var today = new Date().toLocaleDateString('ja-JP');
   var esc = (typeof _escDiff==='function') ? _escDiff : function(s){ return String(s==null?'':s); };
