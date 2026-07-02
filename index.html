@@ -2657,7 +2657,7 @@ const AUTH_KEY='murayama_auth';
 // cap = 製造能力: 'mfg'=DTP・製造あり / 'dtp'=DTPのみ(製造は外注) / 'none'=全外製
 const COMPANY_INIT=[
   {id:'COMP001',code:'MU',name:'村山印刷有限会社',rep:'代表取締役 本多 亮',zip:'208-0011',addr:'東京都武蔵村山市残堀2-1-1',tel:'TEL(042)560-2431',fax:'FAX(042)560-3697',email:'',cap:'none',projectPrefix:'MU',invoicePrefix:'IV',password:''},
-  {id:'COMP002',code:'TK',name:'トキワ印刷株式会社',rep:'代表取締役 白尾 浩志',zip:'',addr:'静岡県浜松市中央区法枝町115',tel:'TEL(053)441-2784',fax:'',email:'',cap:'mfg',projectPrefix:'TK',invoicePrefix:'IV',password:''},
+  {id:'COMP002',code:'TK',name:'トキワ印刷株式会社',rep:'代表取締役 白尾 浩志',zip:'432-8053',addr:'静岡県浜松市中央区法枝町115',tel:'TEL(053)441-2784',fax:'FAX(053)442-1265',email:'',cap:'mfg',projectPrefix:'TK',invoicePrefix:'IV',password:'',regNo:'T2080401003559',branch:'静岡営業所　静岡県葵区鷹匠2丁目8-10',banks:['浜松磐田信用金庫 本店営業部　当座 No.０００１７９６','静岡銀行 浜松営業部　当座 No.０００６２１３','静岡焼津信用金庫 本店営業部　普通 No.１０９４２４１']},
   {id:'COMP003',code:'TS',name:'株式会社津島プリント社',rep:'代表取締役 本多 亮',zip:'496-0036',addr:'愛知県津島市愛宕町8-13-3',tel:'TEL(0567)26-0087',fax:'',email:'',cap:'none',projectPrefix:'TS',invoicePrefix:'IV',password:''},
   {id:'COMP004',code:'KT',name:'有限会社北上プリント',rep:'代表取締役 本多 亮',zip:'024-0091',addr:'岩手県北上市大曲町2-13',tel:'TEL(0197)64-7082',fax:'',email:'',cap:'mfg',projectPrefix:'KT',invoicePrefix:'IV',password:''},
   {id:'COMP005',code:'AS',name:'有限会社アート・エス',rep:'代表取締役 本多 亮',zip:'',addr:'',tel:'',fax:'',email:'',cap:'dtp',projectPrefix:'AS',invoicePrefix:'IV',password:''},
@@ -23095,6 +23095,16 @@ function issueReceiptForGroup(cust, targetDate){
 }
 
 // 帳票印刷用の HTML を生成して新規ウィンドウで開く (A4 最適化版)
+// 会社プロファイル合成: COMPANY_INIT(帳票の確定既定=住所/TEL/登録番号/銀行) を土台に、
+//   クラウドの会社レコード(id/code/name 等) と 編集オーバーライド(DB.conf.companyProfiles) を上書き。
+//   ※クラウド同期は会社を id/code/name に間引くため、帳票用の項目はここで確定値を保つ。
+function _companyProfile_(id){
+  if(!id) return {};
+  var base = (typeof COMPANY_INIT!=='undefined') ? COMPANY_INIT.find(function(c){ return c.id===id; }) : null;
+  var live = ((typeof DB!=='undefined'&&DB.companies)||[]).find(function(c){ return c.id===id; });
+  var over = (typeof DB!=='undefined' && DB.conf && DB.conf.companyProfiles && DB.conf.companyProfiles[id]) || null;
+  return Object.assign({}, base||{}, live||{}, over||{});
+}
 function _printDocument_(docType, cust, dateStr, entries, meta){
   meta = meta || {};
   var subtotal = entries.reduce(function(s, e){ return s + (e.project?.exTax || 0); }, 0);
@@ -23104,12 +23114,16 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
   var today = new Date().toLocaleDateString('ja-JP');
   var esc = (typeof _escDiff==='function') ? _escDiff : function(s){ return String(s==null?'':s); };
   var yen = function(n){ return '¥' + (n||0).toLocaleString(); };
-  // ── 確定会社情報（GEN帳票準拠 / tokiwa-company-official-info）──
+  // ── 自社情報＝発行会社（ログイン会社）のプロファイルから（会社ごとに帳票が変わる）──
+  var _issuer = _companyProfile_(meta.issuerId || (currentAuth&&currentAuth.companyId)) || {};
+  var _clean = function(t){ return String(t||'').replace(/^\s*(TEL|FAX)\s*[:：]?/i,'').trim(); };
   var TK = {
-    name:'トキワ印刷株式会社', zip:'〒432-8053', addr:'静岡県浜松市中央区法枝町115',
-    shizuoka:'静岡営業所　静岡県葵区鷹匠2丁目8-10',
-    tel:'053-441-2784', fax:'053-442-1265', reg:'T2080401003559',
-    banks:['浜松磐田信用金庫 本店営業部　当座 No.０００１７９６','静岡銀行 浜松営業部　当座 No.０００６２１３','静岡焼津信用金庫 本店営業部　普通 No.１０９４２４１']
+    name: _issuer.name || 'トキワ印刷株式会社',
+    zip: _issuer.zip ? ('〒' + String(_issuer.zip).replace(/^〒/,'')) : '',
+    addr: _issuer.addr || '',
+    shizuoka: _issuer.branch || '',
+    tel: _clean(_issuer.tel), fax: _clean(_issuer.fax), reg: _issuer.regNo || '',
+    banks: Array.isArray(_issuer.banks) ? _issuer.banks : (_issuer.banks ? String(_issuer.banks).split(/\n/).filter(Boolean) : [])
   };
   // 得意先照合（住所・コード・締日）
   var custRec=null;
@@ -23158,11 +23172,11 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
 
   var senderHtml =
     '<div class="tk-sender">' +
-      '<div class="tk-name">' + TK.name + '</div>' +
-      '<div>' + TK.zip + '　' + TK.addr + '</div>' +
-      '<div>' + TK.shizuoka + '</div>' +
-      '<div>TEL：' + TK.tel + '　FAX：' + TK.fax + '</div>' +
-      '<div>登録番号：' + TK.reg + '</div>' +
+      '<div class="tk-name">' + esc(TK.name) + '</div>' +
+      ((TK.zip||TK.addr) ? '<div>' + esc((TK.zip?TK.zip+'　':'') + TK.addr) + '</div>' : '') +
+      (TK.shizuoka ? '<div>' + esc(TK.shizuoka) + '</div>' : '') +
+      ((TK.tel||TK.fax) ? '<div>' + (TK.tel?'TEL：'+esc(TK.tel):'') + (TK.fax?'　FAX：'+esc(TK.fax):'') + '</div>' : '') +
+      (TK.reg ? '<div>登録番号：' + esc(TK.reg) + '</div>' : '') +
     '</div>';
   var toHtml =
     '<div class="tk-to">' +
@@ -23232,7 +23246,7 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
     });
     for(var fi=entries.length; fi<8; fi++){ html += '<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>'; }
     html += '</tbody></table>' +
-      '<div class="tk-bank"><strong>取引銀行</strong><br>' + TK.banks.map(esc).join('<br>') + '</div>';
+      ((TK.banks && TK.banks.length) ? '<div class="tk-bank"><strong>取引銀行</strong><br>' + TK.banks.map(esc).join('<br>') + '</div>' : '');
   } else if(docType === '領収書'){
     html += '<div class="doc-title">領　収　書</div>' +
       '<div class="top">' + toHtml +
