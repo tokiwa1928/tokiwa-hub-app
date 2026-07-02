@@ -11469,6 +11469,8 @@ function renderOutsourceVendors(mp){
     <div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       外注先マスター
       <button class="add-btn" onclick="addOutsourceVendor()">＋ 追加</button>
+      <button class="btn" style="font-size:11px;background:#0f766e;color:#fff;border-color:#0f766e;font-weight:700" onclick="document.getElementById('outvendor-import-file').click()" title="仕入先/外注先のExcel・CSVを取込（外注先名・TEL・FAX・メールを自動マッピング）">📥 Excel/CSV取込</button>
+      <input type="file" id="outvendor-import-file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="importOutsourceVendorsFile(this)">
     </div>
     <div style="font-size:11px;color:#666;margin:.5rem 0;padding:8px;background:#f9f9f9;border-radius:6px">
       💡 タイプ: 見積・発注（相見積可）/ 発注のみ（料金固定）/ 請求のみ（請求書で処理）<br>
@@ -11556,6 +11558,70 @@ function addOutsourceVendor(){
     active: true
   });
   renderOutsourceVendors(document.getElementById('master-panels'));
+}
+
+// 📥 仕入先/外注先 Excel・CSV 取込（外注先マスター DB.outsourceVendors へ追加）
+function importOutsourceVendorsFile(input){
+  var f=input.files&&input.files[0]; if(!f) return;
+  var isCsv=/\.(csv|txt)$/i.test(f.name);
+  var fr=new FileReader();
+  fr.onload=function(){
+    try{
+      var rows=[];
+      if(isCsv){
+        var text;
+        try{ text=new TextDecoder('utf-8',{fatal:true}).decode(fr.result); }
+        catch(e){ text=new TextDecoder('shift_jis').decode(fr.result); }
+        rows=text.replace(/\r/g,'').split('\n').filter(function(l){return l.trim();}).map(function(l){return l.split(',').map(function(s){return s.replace(/^"|"$/g,'');});});
+      } else {
+        if(typeof XLSX==='undefined'){ alert('Excel読込ライブラリ(XLSX)が見つかりません。CSVで取込んでください。'); input.value=''; return; }
+        var wb=XLSX.read(fr.result,{type:'array'});
+        rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});
+      }
+      if(rows.length<2){ alert('データ行がありません'); input.value=''; return; }
+      var hi=-1;
+      for(var i=0;i<Math.min(rows.length,15);i++){ if(/外注先名|仕入先名|取引先名|会社名|業者名/.test((rows[i]||[]).map(function(x){return String(x||'');}).join('|'))){ hi=i; break; } }
+      if(hi<0) hi=0;
+      var hdr=rows[hi].map(function(h){return String(h||'').trim();});
+      var find=function(keys,excl){ for(var i=0;i<hdr.length;i++){ var h=hdr[i]; if(!h) continue; if(excl&&excl.some(function(x){return h.indexOf(x)>=0;})) continue; if(keys.some(function(k){return h.indexOf(k)>=0;})) return i; } return -1; };
+      var iName=find(['外注先名','仕入先名','取引先名','会社名','業者名','名称'],['カナ','ｶﾅ','ﾌﾘｶﾞﾅ','No','ＮＯ','ID','担当']);
+      var iFax=find(['FAX','ＦＡＸ']);
+      var iTel=find(['TEL','ＴＥＬ','電話'],['FAX']);
+      var iMail=find(['ﾒｰﾙ','メール','mail','Mail','Email']);
+      var iAddr=find(['住所']);
+      var iState=find(['状態','取引終了','取引区分']);
+      if(iName<0){ alert('「外注先名/仕入先名」列が見つかりませんでした。'); input.value=''; return; }
+      var dataRows=rows.slice(hi+1);
+      if(!confirm('外注先(仕入先)を取込みます。\n対象: '+dataRows.length+'行\n外注先名列: '+hdr[iName]+'\n\n※既存と同名はスキップします。よろしいですか？')){ input.value=''; return; }
+      DB.outsourceVendors=DB.outsourceVendors||[];
+      var existing={}; DB.outsourceVendors.forEach(function(v){ if(v&&v.name) existing[v.name]=1; });
+      var added=0,dup=0,skip=0;
+      dataRows.forEach(function(row){
+        if(!row) return;
+        var name=String(row[iName]||'').trim(); if(!name){ skip++; return; }
+        if(existing[name]){ dup++; return; } existing[name]=1;
+        var st=iState>=0?String(row[iState]||'').trim():'';
+        var inactive=/終了|停止|解約|false|✅?$/i.test(st) && /終了|停止|解約/.test(st);
+        DB.outsourceVendors.push({
+          id:'VND'+String(DB.outsourceVendors.length+1).padStart(3,'0'),
+          name:name, vendorType:'order', specialty:'',
+          contactMethod:(iFax>=0&&row[iFax])?'fax':'tel',
+          fax:iFax>=0?String(row[iFax]||'').trim():'',
+          tel:iTel>=0?String(row[iTel]||'').trim():'',
+          email:iMail>=0?String(row[iMail]||'').trim():'',
+          address:iAddr>=0?String(row[iAddr]||'').trim():'',
+          active: inactive?false:true
+        });
+        added++;
+      });
+      if(typeof saveDB==='function') saveDB();
+      if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+      renderMaster('outsourceVendors');
+      alert('📥 外注先 取込完了\n追加: '+added+' 件\n重複スキップ: '+dup+' 件\n空行: '+skip+' 件');
+    }catch(err){ alert('取込エラー: '+(err&&err.message||err)); }
+    finally{ input.value=''; }
+  };
+  fr.readAsArrayBuffer(f);
 }
 
 // 会社間掛け率を取得
