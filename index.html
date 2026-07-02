@@ -22698,7 +22698,7 @@ function renderPurchases(){
 function showAddPurchaseModal(){
   _showSimpleAddModal_('仕入発注', '#1e40af', [
     { key:'vendor', label:'仕入先 *', type:'text' },
-    { key:'item', label:'品名 *', type:'text' },
+    { key:'item', label:'品名 *', type:'itempick' },
     { key:'qty', label:'数量', type:'number' },
     { key:'unit', label:'単位', type:'text', default:'式' },
     { key:'amount', label:'金額', type:'number' },
@@ -22762,7 +22762,7 @@ function renderOutsource(){
 function showAddOutsourceModal(){
   _showSimpleAddModal_('外注発注', '#7c3aed', [
     { key:'vendor', label:'外注先 *', type:'text' },
-    { key:'item', label:'内容 *', type:'text' },
+    { key:'item', label:'内容 *', type:'itempick' },
     { key:'amount', label:'金額', type:'number' },
     { key:'dueDate', label:'納期', type:'date' },
     { key:'memo', label:'備考', type:'textarea' }
@@ -22875,9 +22875,15 @@ function _showSimpleAddModal_(title, color, fields, onSubmit, opts){
     var input;
     if(f.type === 'textarea') input = '<textarea id="_sm_f_' + i + '" rows="2" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:inherit"></textarea>';
     else if(f.type === 'select') input = '<select id="_sm_f_' + i + '" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px">' + f.options.map(function(o){ return '<option>'+o+'</option>'; }).join('') + '</select>';
+    else if(f.type === 'itempick') input = '<input id="_sm_f_' + i + '" list="_sm_itemdl" autocomplete="off" placeholder="品名を入力/選択（品目マスタ）" oninput="_smItemPick_(this)" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px">';
     else input = '<input id="_sm_f_' + i + '" type="' + (f.type||'text') + '" value="' + (f.default || '') + '" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px">';
     return '<label style="font-weight:700;align-self:center">' + f.label + '</label>' + input;
   }).join('');
+  // 品目ピッカー用 datalist (品目マスタ DB.itemMaster)
+  var _needItemDL = fields.some(function(f){ return f.type === 'itempick'; });
+  var itemDL = _needItemDL ? ('<datalist id="_sm_itemdl">' + (DB.itemMaster||[]).slice(0,3000).map(function(r){
+      return '<option value="' + String(r.name||'').replace(/"/g,'&quot;') + '">' + [r.code, r.kd].filter(Boolean).join(' · ') + '</option>';
+    }).join('') + '</datalist>') : '';
   // 案件紐付け欄 (opts.allowProject の場合のみ)
   var projHtml = '';
   if(opts.allowProject){
@@ -22893,7 +22899,7 @@ function _showSimpleAddModal_(title, color, fields, onSubmit, opts){
       '<div style="padding:14px 20px;background:' + color + ';color:#fff;display:flex;justify-content:space-between;flex-shrink:0"><strong>＋ ' + title + '</strong>' +
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
       '<div style="padding:18px 20px;overflow-y:auto;flex:1">' + projHtml +
-        '<div style="display:grid;grid-template-columns:120px 1fr;gap:10px 12px;font-size:13px">' + fieldsHtml + '</div>' +
+        '<div style="display:grid;grid-template-columns:120px 1fr;gap:10px 12px;font-size:13px">' + fieldsHtml + '</div>' + itemDL +
         '<div style="margin-top:18px;display:flex;justify-content:flex-end;gap:8px">' +
           '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
           '<button class="btn btn-p" id="_sm_submit_btn" style="background:' + color + ';border-color:' + color + '">登録</button>' +
@@ -22911,6 +22917,7 @@ function _showSimpleAddModal_(title, color, fields, onSubmit, opts){
       var v = document.getElementById('_sm_f_' + i)?.value?.trim() || '';
       if(f.label.indexOf('*') >= 0 && !v){ hasRequired = false; }
       data[f.key] = v;
+      if(f.type === 'itempick'){ data.itemCode = document.getElementById('_sm_f_' + i)?.dataset.code || ''; }
     });
     if(opts.allowProject){
       data.projectId = document.getElementById('_sm_projectId')?.value?.trim() || '';
@@ -22921,6 +22928,24 @@ function _showSimpleAddModal_(title, color, fields, onSubmit, opts){
   };
 }
 
+// 品目ピッカー: 入力/選択された品名を品目マスタと照合 → 品目コードを保持し、単価があれば金額欄を補完
+function _smItemPick_(inp){
+  if(!inp) return;
+  var name = (inp.value||'').trim();
+  inp.dataset.code = '';
+  if(!name) return;
+  var row = (DB.itemMaster||[]).find(function(r){ return (r.name||'') === name; });
+  if(!row) return;
+  inp.dataset.code = row.code || '';
+  // 金額欄(amount/unitp)が空で、品目に単価があれば補完
+  var fields = window._smFields_ || [];
+  var ai = -1;
+  fields.forEach(function(f, i){ if(f.key === 'amount' || f.key === 'unitp') ai = i; });
+  if(ai >= 0 && row.p > 0){
+    var ael = document.getElementById('_sm_f_' + ai);
+    if(ael && !ael.value){ ael.value = row.p; }
+  }
+}
 // 案件選択時に SimpleAddModal のフィールドを補完
 function _fillSimpleAddFromProject_(p){
   if(!p) return;
