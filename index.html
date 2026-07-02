@@ -23345,6 +23345,14 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
     '<div class="page-doc">';
 
   var taxBadge = '<span style="font-size:8.5pt;color:#666">税区分：' + (incl?'税込':'税抜') + '</span>';
+  // 複数面(控/受領書/入金伝票)用のコンパクト自社表示
+  var senderMini = '<div style="font-size:7.5pt;line-height:1.35;text-align:right">' +
+    '<b style="font-size:9pt">' + esc(TK.name) + '</b>' +
+    ((TK.zip||TK.addr)?('<br>' + esc((TK.zip?TK.zip+' ':'') + TK.addr)):'') +
+    (TK.shizuoka?('<br>' + esc(TK.shizuoka)):'') +
+    ((TK.tel||TK.fax)?('<br>' + (TK.tel?'TEL '+esc(TK.tel):'') + (TK.fax?'　FAX '+esc(TK.fax):'')):'') +
+    (TK.reg?('<br>登録番号 ' + esc(TK.reg)):'') +
+    '</div>';
   if(docType === '請求書'){
     html += '<div class="doc-title">御　請　求　書</div>' +
       '<div class="top">' + toHtml +
@@ -23370,38 +23378,52 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
     html += '</tbody></table>' +
       ((TK.banks && TK.banks.length) ? '<div class="tk-bank"><strong>取引銀行</strong><br>' + TK.banks.map(esc).join('<br>') + '</div>' : '');
   } else if(docType === '領収書'){
-    html += '<div class="doc-title">領　収　書</div>' +
-      '<div class="top">' + toHtml +
-        '<div class="tk-meta">No. ' + esc(docNo) + '<br>' + today + '<br>' + taxBadge + '</div>' +
-      '</div>' +
-      '<div class="amount-box">' + yen(total) + '　<span style="font-size:12pt">（税込）</span></div>' +
-      '<div style="margin:5mm 0 3mm;font-size:11pt"><strong style="margin-right:4mm">但し</strong>' + esc(entries.map(function(e){ return e.project?.item || ''; }).filter(Boolean).join('、')) + ' 代として</div>' +
-      '<div style="font-size:11pt;text-align:center;margin:4mm 0;letter-spacing:.1em">上記の通り領収いたしました</div>' +
-      sumTable('合計') +
-      '<div class="top" style="margin-top:8mm;align-items:flex-end">' +
-        '<div class="inshi">収入<br>印紙</div>' + senderHtml +
+    // GEN準拠 3面: 領収書（控）＋入金伝票＋領収書（収入印紙）
+    var butText = esc(entries.map(function(e){ return e.project?.item || ''; }).filter(Boolean).join('、'));
+    var rPanel = function(label, withInshi){
+      return '<div style="page-break-inside:avoid;border-bottom:1.5pt dashed #999;padding-bottom:4mm;margin-bottom:4mm">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+          '<div style="font-size:14pt;font-weight:700;letter-spacing:.3em;border:1pt solid #1a1a1a;padding:0 10px">' + esc(label) + '</div>' +
+          '<div style="font-size:8pt;text-align:right;line-height:1.5">No. ' + esc(docNo) + '<br>' + today + '</div>' +
+        '</div>' +
+        '<div style="font-size:10pt;margin:2mm 0">' + esc(cust) + '　御中' + (cCode?('　<span style="font-size:8pt;color:#555">(' + esc(cCode) + ')</span>'):'') + '</div>' +
+        '<div style="text-align:center;font-size:15pt;font-weight:700;border:1.2pt solid #1a1a1a;padding:2mm;margin:2mm auto;width:82mm">' + yen(total) + '　<span style="font-size:9pt">（税込）</span></div>' +
+        '<div style="font-size:9pt;margin:1.5mm 0"><b>但し</b>　' + butText + ' 代として</div>' +
+        '<div style="text-align:center;font-size:9pt;margin:1mm 0;letter-spacing:.1em">上記の通り領収いたしました</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:1.5mm">' +
+          '<table class="tk-sum" style="width:52mm;font-size:8pt;margin:0"><tr><td>税抜金額</td><td class="r">' + yen(subtotal) + '</td></tr><tr><td>消費税(10%)</td><td class="r">' + yen(tax) + '</td></tr></table>' +
+          (withInshi?'<div class="inshi" style="width:16mm;height:16mm;padding-top:2mm">収入<br>印紙</div>':'<div></div>') +
+          senderMini +
+        '</div>' +
       '</div>';
+    };
+    html += rPanel('領収書（控）', false) + rPanel('入金伝票', false) + rPanel('領収書', true);
   } else {
-    // 納品書 / 受領書（および その他の帳票）
-    var isJuryo = (docType.indexOf('受領')>=0);
-    html += '<div class="doc-title">' + esc(docType) + '</div>' +
-      '<div class="top">' + toHtml +
-        '<div><div class="tk-meta">伝票No. ' + esc(docNo) + '<br>' + esc(isJuryo?'受領日':'納品日') + '　' + esc(dateStr||today) + '<br>出力日　' + today + '<br>' + taxBadge + '</div><div style="margin-top:3mm">' + senderHtml + '</div></div>' +
-      '</div>' +
-      '<div class="lead">' + (isJuryo?'下記の通り受領いたしました。':'下記の通り納品いたします。') + '</div>' +
-      '<table><thead><tr>' +
-        '<th style="width:38%">品名</th><th class="r" style="width:8%">数量</th><th class="c" style="width:7%">単位</th><th class="r" style="width:13%">単価</th><th class="r" style="width:14%">金額' + (incl?'(税込)':'(税抜)') + '</th><th style="width:10%">注文No.</th>' + (isJuryo?'<th style="width:10%">受領印</th>':'<th style="width:10%">備考</th>') +
-      '</tr></thead><tbody>';
-    entries.forEach(function(e){
-      var p=e.project||{}, d=e.delivery||{};
-      var pid=p.id||p.projectId||e.projectId||'';
-      var nm=[pid, (p.item||d.taskType||'')].filter(Boolean).join('　');
-      var qty=p.qty||0, unit=p.unit||'';
-      var la=lineAmts(p.exTax||0, qty);
-      html += '<tr><td>' + esc(nm) + '</td><td class="r">' + (qty?qty.toLocaleString():'') + '</td><td class="c">' + esc(unit) + '</td><td class="r">' + (qty?la.up:'') + '</td><td class="r">' + la.amt + '</td><td class="c">' + esc(p.custOrderNo||p.orderNo||'') + '</td><td></td></tr>';
-    });
-    for(var fj=entries.length; fj<6; fj++){ html += '<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'; }
-    html += '</tbody></table>' + sumTable('合計金額');
+    // GEN準拠 3面: 納品書（控）＋納品書＋受領書（受領印欄）
+    var nPanel = function(label, showJuryoin){
+      var rowsH = '';
+      entries.forEach(function(e){
+        var p=e.project||{}, d=e.delivery||{};
+        var pid=p.id||p.projectId||e.projectId||'';
+        var nm=[pid, (p.item||d.taskType||'')].filter(Boolean).join('　');
+        var qty=p.qty||0, unit=p.unit||''; var la=lineAmts(p.exTax||0, qty);
+        rowsH += '<tr><td>' + esc(nm) + '</td><td class="r">' + (qty?qty.toLocaleString():'') + '</td><td class="c">' + esc(unit) + '</td><td class="r">' + (qty?la.up:'') + '</td><td class="r">' + la.amt + '</td><td class="c">' + esc(p.custOrderNo||p.orderNo||'') + '</td>' + (showJuryoin?'<td></td>':'') + '</tr>';
+      });
+      for(var i=entries.length; i<3; i++){ rowsH += '<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td>' + (showJuryoin?'<td></td>':'') + '</tr>'; }
+      return '<div style="page-break-inside:avoid;border-bottom:1.5pt dashed #999;padding-bottom:3.5mm;margin-bottom:3.5mm">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+          '<div style="font-size:13pt;font-weight:700;letter-spacing:.25em;border:1pt solid #1a1a1a;padding:0 8px">' + esc(label) + '</div>' +
+          '<div style="font-size:8pt;text-align:right;line-height:1.4">伝票No. ' + esc(docNo) + '<br>納品日 ' + esc(dateStr||today) + '　出力日 ' + today + '</div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;font-size:8.5pt;margin:1.5mm 0">' +
+          '<div>' + esc(cust) + '　御中' + (cCode?('　(' + esc(cCode) + ')'):'') + (closingLabel?('　／締切 ' + closingLabel):'') + '</div>' +
+          senderMini +
+        '</div>' +
+        '<table style="font-size:8.5pt;margin:1mm 0"><thead><tr><th style="width:38%">品名</th><th class="r">数量</th><th class="c">単位</th><th class="r">単価</th><th class="r">金額' + (incl?'(税込)':'(税抜)') + '</th><th>注文No.</th>' + (showJuryoin?'<th>受領印</th>':'') + '</tr></thead><tbody>' + rowsH + '</tbody></table>' +
+        '<table class="tk-sum" style="width:64mm;font-size:8.5pt;margin:0 0 0 auto"><tr><td>税抜金額</td><td class="r">' + yen(subtotal) + '</td></tr><tr><td>消費税(10%)</td><td class="r">' + yen(tax) + '</td></tr><tr class="grand"><td>合計金額</td><td class="r">' + yen(total) + '</td></tr></table>' +
+      '</div>';
+    };
+    html += nPanel('納品書（控）', false) + nPanel('納品書', false) + nPanel('受領書', true);
   }
 
   html += '</div></body></html>';
