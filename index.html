@@ -23119,7 +23119,39 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
   var cAddr2=(custRec&&custRec.addr2)||'';
   var cCode=(custRec&&(custRec.code||custRec.custCode||custRec.orgCode))||'';
   var closing=(meta.closingDay!=null)?meta.closingDay:(custRec&&custRec.closingDay);
-  var closingLabel=(closing==null||closing==='')?'':((closing==='end'||closing==='末')?'末日':(closing+'日'));
+  // 取引先マスタ(コード)から解決 → コード・締日・税区分を補完（別名対応）
+  var orgRec = (typeof _resolveOrgRecord_==='function') ? _resolveOrgRecord_(cust) : null;
+  if(orgRec){
+    if(!cCode) cCode = orgRec.code || '';
+    if(closing==null || closing==='') closing = orgRec.closingDay;
+  }
+  var closingLabel=(closing==null||closing==='')?'':((closing===31||closing==='end'||closing==='末')?'末日':(closing+'日'));
+  // 税区分（税抜=exclusive / 税込=inclusive）: 明示 meta > 取引先レコード > 得意先マスタ > 既定=税抜
+  var taxMode = meta.taxMode || (orgRec&&orgRec.taxMode) || (custRec&&custRec.taxMode) || 'exclusive';
+  var incl = (taxMode==='inclusive');
+  var adjust = meta.adjust || 0;
+  var yen2 = function(n){ return '¥' + (Math.round((n||0)*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); };
+  // 税区分に応じた 単価/金額 (raw=金額)
+  function lineAmts(exTax, qty){
+    var amtEx = exTax||0, amtIn = Math.round(amtEx*1.1), q = qty||0;
+    if(incl){ var up=q>0?Math.round(amtIn/q):amtIn; return { up:yen(up), amt:yen(amtIn), raw:amtIn }; }
+    var upe=q>0?(amtEx/q):amtEx; return { up:(q>0?yen2(upe):''), amt:yen(amtEx), raw:amtEx };
+  }
+  // 合計内訳（税込客/税抜客で切替）
+  function sumTable(grandLabel){
+    if(incl){
+      return '<table class="tk-sum">' +
+        '<tr><td>税込金額</td><td class="r">' + yen(total) + '</td></tr>' +
+        '<tr><td>（内 消費税10%）</td><td class="r">' + yen(tax) + '</td></tr>' +
+        '<tr><td>税抜金額</td><td class="r">' + yen(subtotal) + '</td></tr>' +
+        '<tr class="grand"><td>' + (grandLabel||'御請求金額') + '</td><td class="r">' + yen(total) + '</td></tr></table>';
+    }
+    return '<table class="tk-sum">' +
+      '<tr><td>税抜金額</td><td class="r">' + yen(subtotal) + '</td></tr>' +
+      '<tr><td>消費税額（10%）</td><td class="r">' + yen(tax) + '</td></tr>' +
+      (adjust ? ('<tr><td>調整金額</td><td class="r">' + yen(adjust) + '</td></tr>') : '') +
+      '<tr class="grand"><td>' + (grandLabel||'合計金額') + '</td><td class="r">' + yen(total+adjust) + '</td></tr></table>';
+  }
 
   var w = window.open('', '_blank', 'width=900,height=1100');
   if(!w){ alert('ポップアップがブロックされました。許可してから再試行してください。'); return; }
@@ -23176,30 +23208,27 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
     '<div class="print-btn-wrapper"><button onclick="window.print()" style="padding:10px 24px;font-size:14px;background:#1a1a1a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700">🖨 印刷 / PDF保存</button></div>' +
     '<div class="page-doc">';
 
+  var taxBadge = '<span style="font-size:8.5pt;color:#666">税区分：' + (incl?'税込':'税抜') + '</span>';
   if(docType === '請求書'){
     html += '<div class="doc-title">御　請　求　書</div>' +
       '<div class="top">' + toHtml +
         '<div>' +
-          '<div class="tk-meta">請求書番号　' + esc(docNo) + '<br>発行日　' + today + (closingLabel?('<br>締日　' + closingLabel + '締切分'):'') + '</div>' +
+          '<div class="tk-meta">請求書番号　' + esc(docNo) + '<br>発行日　' + today + (closingLabel?('<br>締日　' + closingLabel + '締切分'):'') + '<br>' + taxBadge + '</div>' +
           '<div style="margin-top:3mm">' + senderHtml + '</div>' +
         '</div>' +
       '</div>' +
       '<div class="lead">いつもご愛顧いただきありがとうございます。<br>下記のとおりご請求申し上げます。<br><span style="font-size:8.5pt;color:#666">万一行違いの節は何卒ご容赦下さい。</span></div>' +
-      '<table class="tk-sum">' +
-        '<tr><td>10%対象/税抜金額</td><td class="r">' + yen(subtotal) + '</td></tr>' +
-        '<tr><td>消費税額(10%)</td><td class="r">' + yen(tax) + '</td></tr>' +
-        '<tr class="grand"><td>御請求金額</td><td class="r">' + yen(total) + '</td></tr>' +
-      '</table>' +
+      sumTable('御請求金額') +
       '<table><thead><tr>' +
-        '<th style="width:12%">納品日</th><th style="width:14%">納品書番号</th><th style="width:38%">品目名</th><th class="r" style="width:10%">数量</th><th class="r" style="width:12%">単価</th><th class="r" style="width:14%">金額</th>' +
+        '<th style="width:12%">納品日</th><th style="width:14%">納品書番号</th><th style="width:36%">品目名</th><th class="r" style="width:9%">数量</th><th class="r" style="width:13%">単価</th><th class="r" style="width:16%">金額' + (incl?'(税込)':'(税抜)') + '</th>' +
       '</tr></thead><tbody>';
     entries.forEach(function(e){
       var p=e.project||{}, d=e.delivery||{};
       var pid=p.id||p.projectId||e.projectId||'';
       var nm=[pid, (p.item||d.taskType||'')].filter(Boolean).join('　');
-      var qty=p.qty||0, unit=p.unit||'', amt=p.exTax||0;
-      var unitp=qty>0?Math.round(amt/qty):amt;
-      html += '<tr><td class="c">' + esc(d.date||'') + '</td><td class="c">' + esc(d.no||'') + '</td><td>' + esc(nm) + '</td><td class="r">' + (qty?qty.toLocaleString()+unit:'') + '</td><td class="r">' + (qty?yen(unitp):'') + '</td><td class="r">' + yen(amt) + '</td></tr>';
+      var qty=p.qty||0, unit=p.unit||'';
+      var la=lineAmts(p.exTax||0, qty);
+      html += '<tr><td class="c">' + esc(d.date||'') + '</td><td class="c">' + esc(d.no||'') + '</td><td>' + esc(nm) + '</td><td class="r">' + (qty?qty.toLocaleString()+unit:'') + '</td><td class="r">' + (qty?la.up:'') + '</td><td class="r">' + la.amt + '</td></tr>';
     });
     for(var fi=entries.length; fi<8; fi++){ html += '<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>'; }
     html += '</tbody></table>' +
@@ -23207,44 +23236,36 @@ function _printDocument_(docType, cust, dateStr, entries, meta){
   } else if(docType === '領収書'){
     html += '<div class="doc-title">領　収　書</div>' +
       '<div class="top">' + toHtml +
-        '<div class="tk-meta">No. ' + esc(docNo) + '<br>' + today + '</div>' +
+        '<div class="tk-meta">No. ' + esc(docNo) + '<br>' + today + '<br>' + taxBadge + '</div>' +
       '</div>' +
       '<div class="amount-box">' + yen(total) + '　<span style="font-size:12pt">（税込）</span></div>' +
       '<div style="margin:5mm 0 3mm;font-size:11pt"><strong style="margin-right:4mm">但し</strong>' + esc(entries.map(function(e){ return e.project?.item || ''; }).filter(Boolean).join('、')) + ' 代として</div>' +
       '<div style="font-size:11pt;text-align:center;margin:4mm 0;letter-spacing:.1em">上記の通り領収いたしました</div>' +
-      '<table class="tk-sum">' +
-        '<tr><td>税抜金額</td><td class="r">' + yen(subtotal) + '</td></tr>' +
-        '<tr><td>消費税(10%)</td><td class="r">' + yen(tax) + '</td></tr>' +
-        '<tr class="grand"><td>合計</td><td class="r">' + yen(total) + '</td></tr>' +
-      '</table>' +
+      sumTable('合計') +
       '<div class="top" style="margin-top:8mm;align-items:flex-end">' +
         '<div class="inshi">収入<br>印紙</div>' + senderHtml +
       '</div>';
   } else {
-    // 納品書（および その他の帳票）
+    // 納品書 / 受領書（および その他の帳票）
+    var isJuryo = (docType.indexOf('受領')>=0);
     html += '<div class="doc-title">' + esc(docType) + '</div>' +
       '<div class="top">' + toHtml +
-        '<div><div class="tk-meta">No. ' + esc(docNo) + '<br>納品日　' + esc(dateStr||today) + '</div><div style="margin-top:3mm">' + senderHtml + '</div></div>' +
+        '<div><div class="tk-meta">伝票No. ' + esc(docNo) + '<br>' + esc(isJuryo?'受領日':'納品日') + '　' + esc(dateStr||today) + '<br>出力日　' + today + '<br>' + taxBadge + '</div><div style="margin-top:3mm">' + senderHtml + '</div></div>' +
       '</div>' +
-      '<div class="lead">下記の通り納品いたします。</div>' +
+      '<div class="lead">' + (isJuryo?'下記の通り受領いたしました。':'下記の通り納品いたします。') + '</div>' +
       '<table><thead><tr>' +
-        '<th style="width:44%">品名</th><th class="r" style="width:10%">数量</th><th class="c" style="width:8%">単位</th><th class="r" style="width:13%">単価</th><th class="r" style="width:13%">金額</th><th style="width:12%">注文No.</th>' +
+        '<th style="width:38%">品名</th><th class="r" style="width:8%">数量</th><th class="c" style="width:7%">単位</th><th class="r" style="width:13%">単価</th><th class="r" style="width:14%">金額' + (incl?'(税込)':'(税抜)') + '</th><th style="width:10%">注文No.</th>' + (isJuryo?'<th style="width:10%">受領印</th>':'<th style="width:10%">備考</th>') +
       '</tr></thead><tbody>';
     entries.forEach(function(e){
       var p=e.project||{}, d=e.delivery||{};
       var pid=p.id||p.projectId||e.projectId||'';
       var nm=[pid, (p.item||d.taskType||'')].filter(Boolean).join('　');
-      var qty=p.qty||0, unit=p.unit||'', amt=p.exTax||0;
-      var unitp=qty>0?Math.round(amt/qty):amt;
-      html += '<tr><td>' + esc(nm) + '</td><td class="r">' + (qty?qty.toLocaleString():'') + '</td><td class="c">' + esc(unit) + '</td><td class="r">' + (qty?yen(unitp):'') + '</td><td class="r">' + yen(amt) + '</td><td class="c">' + esc(p.custOrderNo||p.orderNo||'') + '</td></tr>';
+      var qty=p.qty||0, unit=p.unit||'';
+      var la=lineAmts(p.exTax||0, qty);
+      html += '<tr><td>' + esc(nm) + '</td><td class="r">' + (qty?qty.toLocaleString():'') + '</td><td class="c">' + esc(unit) + '</td><td class="r">' + (qty?la.up:'') + '</td><td class="r">' + la.amt + '</td><td class="c">' + esc(p.custOrderNo||p.orderNo||'') + '</td><td></td></tr>';
     });
-    for(var fj=entries.length; fj<6; fj++){ html += '<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>'; }
-    html += '</tbody></table>' +
-      '<table class="tk-sum">' +
-        '<tr><td>税抜金額</td><td class="r">' + yen(subtotal) + '</td></tr>' +
-        '<tr><td>消費税(10%)</td><td class="r">' + yen(tax) + '</td></tr>' +
-        '<tr class="grand"><td>合計</td><td class="r">' + yen(total) + '</td></tr>' +
-      '</table>';
+    for(var fj=entries.length; fj<6; fj++){ html += '<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'; }
+    html += '</tbody></table>' + sumTable('合計金額');
   }
 
   html += '</div></body></html>';
@@ -25682,6 +25703,7 @@ function registerOrg(opts){
     billingType: opts.billingType || 'spot',     // 'shime' | 'spot' | 'mixed'
     closingDay: opts.closingDay || 31,           // 5/10/15/20/25/31
     paymentTerm: opts.paymentTerm == null ? 30 : opts.paymentTerm,  // 0/30/60/90 days
+    taxMode: opts.taxMode || 'exclusive',        // 'exclusive'(税抜客) | 'inclusive'(税込客) → 帳票様式を自動切替
     note: opts.note || '',
     createdAt: new Date().toISOString(),
     createdBy: (currentAuth && currentAuth.email) || '',
@@ -26026,6 +26048,7 @@ function showOrgRegisterModal(parentCode){
             '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">請求形式</div><select id="org-reg-billing-type" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + billingOpts + '</select></label>' +
             '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">締め日 (締請求のみ)</div><select id="org-reg-closing-day" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + closingOpts + '</select></label>' +
             '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">支払サイト</div><select id="org-reg-payment-term" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + paymentOpts + '</select></label>' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">税区分（帳票様式を自動切替）</div><select id="org-reg-tax-mode" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"><option value="exclusive" selected>税抜（単価・金額は税抜、下部で消費税加算）</option><option value="inclusive">税込（税込金額で表示・内消費税を明記）</option></select></label>' +
           '</div>' +
         '</div>' +
         '<label style="display:flex;align-items:center;gap:8px;font-size:12px;background:#fef3c7;padding:8px 12px;border-radius:6px"><input type="checkbox" id="org-reg-hasdepts"> 部署 (子コード) を持つ法人 (例: 市役所、大学、大病院)</label>' +
@@ -26052,6 +26075,7 @@ function submitOrgRegister(parentCode){
   var billingType = document.getElementById('org-reg-billing-type')?.value || 'spot';
   var closingDay = parseInt(document.getElementById('org-reg-closing-day')?.value || '31', 10);
   var paymentTerm = parseInt(document.getElementById('org-reg-payment-term')?.value || '30', 10);
+  var taxMode = document.getElementById('org-reg-tax-mode')?.value || 'exclusive';
   var rec = registerOrg({
     family: family,
     parentCode: parentCode || '',
@@ -26062,7 +26086,8 @@ function submitOrgRegister(parentCode){
     hasDepartments: hasDepartments,
     billingType: billingType,
     closingDay: closingDay,
-    paymentTerm: paymentTerm
+    paymentTerm: paymentTerm,
+    taxMode: taxMode
   });
   if(rec){
     document.querySelector('.proof-modal')?.remove();
@@ -26089,6 +26114,8 @@ function showOrgEditModal(code){
   var paymentOptsE = PAYMENT_TERMS.map(function(p){
     return '<option value="' + p.value + '"' + ((rec.paymentTerm||30) === p.value ? ' selected' : '') + '>' + p.label + '</option>';
   }).join('');
+  var taxModeE = (rec.taxMode || 'exclusive');
+  var taxOptsE = '<option value="exclusive"' + (taxModeE==='exclusive'?' selected':'') + '>税抜（単価・金額は税抜、下部で消費税加算）</option><option value="inclusive"' + (taxModeE==='inclusive'?' selected':'') + '>税込（税込金額で表示・内消費税を明記）</option>';
   modal.innerHTML =
     '<div style="background:#fff;width:100%;max-width:640px;max-height:92vh;border-radius:10px;overflow-y:auto">' +
       '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
@@ -26106,6 +26133,7 @@ function showOrgEditModal(code){
             '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">請求形式</div><select id="org-edit-billing-type" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + billingOptsE + '</select></label>' +
             '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">締め日 (締請求のみ)</div><select id="org-edit-closing-day" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + closingOptsE + '</select></label>' +
             '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">支払サイト</div><select id="org-edit-payment-term" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + paymentOptsE + '</select></label>' +
+            '<label style="font-size:12px"><div style="margin-bottom:3px;color:#78350f;font-weight:600">税区分（帳票様式を自動切替）</div><select id="org-edit-tax-mode" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + taxOptsE + '</select></label>' +
           '</div>' +
         '</div>' +
         '<label style="font-size:12px"><div style="margin-bottom:3px;color:#555;font-weight:600">Drive フォルダ ID</div><input id="org-edit-drive" value="' + (rec.driveFolderId||'') + '" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>' +
@@ -26139,9 +26167,10 @@ function submitOrgEdit(code){
   var billingType = document.getElementById('org-edit-billing-type')?.value || 'spot';
   var closingDay = parseInt(document.getElementById('org-edit-closing-day')?.value || '31', 10);
   var paymentTerm = parseInt(document.getElementById('org-edit-payment-term')?.value || '30', 10);
+  var taxMode = document.getElementById('org-edit-tax-mode')?.value || 'exclusive';
   if(updateOrgRecord(code, {
     driveFolderId: driveFolderId, note: note,
-    billingType: billingType, closingDay: closingDay, paymentTerm: paymentTerm
+    billingType: billingType, closingDay: closingDay, paymentTerm: paymentTerm, taxMode: taxMode
   })){
     document.querySelector('.proof-modal')?.remove();
     alert('✅ 保存しました');
