@@ -1522,6 +1522,7 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-intercoRates" onclick="swMaster('intercoRates',this)">会社間掛け率</button>
     <button class="pill" id="mc-outsourceVendors" onclick="swMaster('outsourceVendors',this)">外注先</button>
     <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
+    <button class="pill" id="mc-costref" onclick="swMaster('costref',this)" title="参考原価マスタ（作業別の最低料金・単価・原価率%。見積の指針用・別管理）">参考原価</button>
   </div>
   <div id="master-panels"></div>
 </div>
@@ -4271,6 +4272,7 @@ async function loadFromCloud() {
   if (Array.isArray(result.data.vendorMaster)) DB.vendorMaster = result.data.vendorMaster; // 見積依頼: 外注先(発注先)マスタ
   if (Array.isArray(result.data.itemMaster)) DB.itemMaster = result.data.itemMaster; // 品目マスタ(GEN由来・品目コード付き)
   if (Array.isArray(result.data.outsourceVendors)) DB.outsourceVendors = result.data.outsourceVendors; // 外注先マスタ
+  if (Array.isArray(result.data.costRefMaster)) DB.costRefMaster = result.data.costRefMaster; // 参考原価マスタ(見積指針・別管理)
   // 🔖 リンク集: 単純上書きだと自動同期が「追加直後のローカル分」を空配列で消してしまうため
   // id単位でマージ (クラウド優先で編集反映, ローカルだけにある未同期分は保持)
   if (Array.isArray(result.data.bookmarks)) {
@@ -4738,6 +4740,7 @@ async function saveToCloud() {
     vendorMaster: DB.vendorMaster || [],
     itemMaster: DB.itemMaster || [],
     outsourceVendors: DB.outsourceVendors || [],
+    costRefMaster: DB.costRefMaster || [],
     bookmarks: DB.bookmarks || [],
     bookmarkCategories: DB.bookmarkCategories || [],
     leadTimeMaster: DB.leadTimeMaster || {},
@@ -10739,6 +10742,110 @@ function hinmokuClear(){
   renderMaster('hinmoku');
   alert('🗑 品目マスタ '+n+' 件を削除しました');
 }
+// ══ 参考原価マスタ（別管理・見積の指針） ══
+//   DB.costRefMaster = [{id,cat(大分類),sub(品目/区分),work(作業),minFee(最低料金),unit(単価),crossQty(境目数量),ratio(原価率%),n,src,note}]
+//   大分類: データ作成・製版 / 用紙・封筒 / 印刷 / 加工・製本 / 発送・梱包 / その他 / 全体指針
+var COSTREF_CATS=['全体指針','データ作成・製版','用紙・封筒','印刷','加工・製本','発送・梱包','その他'];
+function costRefImport(inp){
+  var f=inp&&inp.files&&inp.files[0]; if(!f) return;
+  var fr=new FileReader();
+  fr.onload=function(){
+    try{
+      var arr=JSON.parse(fr.result);
+      if(!Array.isArray(arr)){ alert('形式が不正です（配列JSON）'); inp.value=''; return; }
+      DB.costRefMaster=DB.costRefMaster||[];
+      var idx={}; DB.costRefMaster.forEach(function(r){ if(r&&r.id) idx[r.id]=r; });
+      var added=0,updated=0;
+      arr.forEach(function(s){
+        if(!s||!s.id) return;
+        if(idx[s.id]){ Object.assign(idx[s.id],s); updated++; }
+        else { DB.costRefMaster.push(s); idx[s.id]=s; added++; }
+      });
+      if(typeof saveDB==='function') saveDB();
+      if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+      renderMaster('costref');
+      alert('📥 参考原価 取込完了\n新規: '+added+' 件 / 更新: '+updated+' 件 / 合計: '+DB.costRefMaster.length+' 件');
+    }catch(err){ alert('取込エラー: '+(err&&err.message||err)); }
+    finally{ inp.value=''; }
+  };
+  fr.readAsText(f);
+}
+function costRefClear(){
+  var n=(DB.costRefMaster||[]).length;
+  if(!n){ alert('参考原価マスタは空です'); return; }
+  if(!confirm('参考原価マスタ '+n+' 件をすべて削除します。よろしいですか？')) return;
+  DB.costRefMaster=[];
+  if(typeof saveDB==='function') saveDB();
+  renderMaster('costref');
+}
+function costRefAdd(){
+  DB.costRefMaster=DB.costRefMaster||[];
+  DB.costRefMaster.push({id:'CRU'+Date.now(),cat:'印刷',sub:'',work:'',minFee:null,unit:null,crossQty:null,ratio:null,n:null,src:'手入力',note:''});
+  if(typeof saveDB==='function') saveDB();
+  renderMaster('costref');
+}
+function costRefEdit(id,field,val){
+  var r=(DB.costRefMaster||[]).find(function(x){return x.id===id;}); if(!r) return;
+  if(['minFee','unit','crossQty','ratio','n'].indexOf(field)>=0){ var v=parseFloat(val); r[field]=isNaN(v)?null:v; }
+  else r[field]=val;
+  if(typeof saveDB==='function') saveDB();
+}
+function costRefDel(id){
+  if(!confirm('この行を削除しますか?')) return;
+  DB.costRefMaster=(DB.costRefMaster||[]).filter(function(x){return x.id!==id;});
+  if(typeof saveDB==='function') saveDB();
+  renderMaster('costref');
+}
+function renderCostRefMaster(mp){
+  DB.costRefMaster=DB.costRefMaster||[];
+  var esc=(typeof _escDiff==='function')?_escDiff:function(s){return String(s==null?'':s);};
+  var q=(document.getElementById('m-q-costref')?.value||'').toLowerCase();
+  var fcat=window._crCatF_||'';
+  var all=DB.costRefMaster;
+  var data=all.filter(function(r){
+    if(fcat && r.cat!==fcat) return false;
+    if(q && JSON.stringify(r).toLowerCase().indexOf(q)<0) return false;
+    return true;
+  });
+  var catBtns=[''].concat(COSTREF_CATS).map(function(c){
+    var cnt=c?all.filter(function(r){return r.cat===c;}).length:all.length;
+    var on=(fcat===c);
+    return '<button onclick="window._crCatF_=\''+c+'\';renderMaster(\'costref\')" style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;border:1px solid '+(on?'#16a34a':'#d8d4c8')+';background:'+(on?'#16a34a':'#fff')+';color:'+(on?'#fff':'#6b6a63')+';cursor:pointer">'+(c||'すべて')+' '+cnt+'</button>';
+  }).join(' ');
+  var catOpts=function(sel){ return COSTREF_CATS.map(function(c){return '<option'+(c===sel?' selected':'')+'>'+c+'</option>';}).join(''); };
+  var rowsHtml=data.slice(0,400).map(function(r){
+    return '<tr>'
+      +'<td><select style="font-size:11px" onchange="costRefEdit(\''+r.id+'\',\'cat\',this.value)">'+catOpts(r.cat)+'</select></td>'
+      +'<td><input value="'+esc(r.sub||'').replace(/"/g,'&quot;')+'" style="width:110px;font-size:11px" onchange="costRefEdit(\''+r.id+'\',\'sub\',this.value)"></td>'
+      +'<td><input value="'+esc(r.work||'').replace(/"/g,'&quot;')+'" style="width:70px;font-size:11px" onchange="costRefEdit(\''+r.id+'\',\'work\',this.value)"></td>'
+      +'<td><input type="number" value="'+(r.minFee!=null?r.minFee:'')+'" style="width:70px;font-size:11px;text-align:right" onchange="costRefEdit(\''+r.id+'\',\'minFee\',this.value)"></td>'
+      +'<td><input type="number" step="0.01" value="'+(r.unit!=null?r.unit:'')+'" style="width:64px;font-size:11px;text-align:right" onchange="costRefEdit(\''+r.id+'\',\'unit\',this.value)"></td>'
+      +'<td style="text-align:right;font-size:11px;color:#888">'+(r.crossQty!=null?r.crossQty:'')+'</td>'
+      +'<td><input type="number" step="0.1" value="'+(r.ratio!=null?r.ratio:'')+'" style="width:56px;font-size:11px;text-align:right" onchange="costRefEdit(\''+r.id+'\',\'ratio\',this.value)"></td>'
+      +'<td style="text-align:right;font-size:10.5px;color:#888">'+(r.n!=null?r.n:'')+'</td>'
+      +'<td style="font-size:10.5px;color:#0f766e">'+esc(r.src||'')+'</td>'
+      +'<td style="font-size:10.5px;color:#888">'+esc(r.note||'')+'</td>'
+      +'<td><button class="del-btn" onclick="costRefDel(\''+r.id+'\')">×</button></td>'
+      +'</tr>';
+  }).join('');
+  mp.innerHTML='<div class="sec">'
+    +'<div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">参考原価マスタ（見積の指針・別管理）'
+      +'<button class="add-btn" onclick="costRefAdd()">＋ 追加</button>'
+      +'<input id="m-q-costref" placeholder="品目/作業で検索…" value="'+q.replace(/"/g,'&quot;')+'" style="width:180px;font-size:12px;padding:3px 6px" oninput="renderMaster(\'costref\')">'
+      +'<button class="btn" style="font-size:11px;background:#0f766e;color:#fff;border-color:#0f766e;font-weight:700" onclick="document.getElementById(\'costref-import-file\').click()">📥 分析シード取込 (JSON)</button>'
+      +'<input type="file" id="costref-import-file" accept=".json" style="display:none" onchange="costRefImport(this)">'
+      +'<button class="btn" style="font-size:11px;background:#fff;border-color:#b91c1c;color:#b91c1c" onclick="costRefClear()">🗑 全削除</button>'
+      +'<button class="btn" style="font-size:11px" onclick="saveDB();if(typeof saveToCloud===\'function\')try{saveToCloud()}catch(e){};alert(\'保存しました\')">💾 保存</button>'
+    +'</div>'
+    +'<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;margin:.4rem 0;font-size:11.5px;color:#78350f;line-height:1.7">💡 <b>金額 = max(最低料金, 単価×数量)</b> が適用式。<b>原価率%</b>は売価に対する指針（例: 原価÷0.757=推奨売価）。出典=村山計算書549枚・アート実績6.5万行。数値は自由に上書きOK（手入力が正）。</div>'
+    +'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:.4rem">'+catBtns+'</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:.3rem">'+data.length+' 件'+(data.length>400?'（先頭400表示）':'')+' / 全'+all.length+' 件</div>'
+    +(all.length?('<div style="overflow:auto;max-height:62vh"><table class="tbl" style="font-size:11.5px;width:100%"><thead><tr>'
+        +'<th>大分類</th><th>品目/区分</th><th>作業</th><th>最低料金</th><th>単価(円/枚)</th><th>境目数量</th><th>原価率%</th><th>n</th><th>出典</th><th>備考</th><th></th></tr></thead><tbody>'
+        +rowsHtml+'</tbody></table></div>')
+      :'<div style="padding:30px;text-align:center;color:#888"><div style="font-size:32px;margin-bottom:8px">📐</div>参考原価マスタが空です<br><span style="font-size:11px">「📥 分析シード取込」で 参考原価マスタ_取込用.json を読み込んでください</span></div>')
+    +'</div>';
+}
 // 品目マスタ描画（検索テーブル）
 function renderHinmokuMaster(mp){
   DB.itemMaster=DB.itemMaster||[];
@@ -10892,6 +10999,10 @@ function renderMaster(id){
   }
   if(id==='hinmoku'){
     renderHinmokuMaster(mp);
+    return;
+  }
+  if(id==='costref'){
+    renderCostRefMaster(mp);
     return;
   }
 
