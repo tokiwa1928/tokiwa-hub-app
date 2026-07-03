@@ -22651,6 +22651,13 @@ function _renderLedger_(cfg){
     +'<table style="width:100%;border-collapse:collapse">'
     +'<thead>'+head+'</thead><tbody>'+body+'</tbody></table></div>';
 }
+// 案件メタ(製品名/数量/納期)を案件番号から取得（全リスト標準4項目: 製造番号・製品名・数量・納期）
+function _ledgerProjMeta_(pid){
+  if(!pid) return null;
+  var p=((typeof DB!=='undefined'&&DB.projects)||[]).find(function(x){return x.id===pid;});
+  if(!p) return null;
+  return { item:p.item||'', qty:p.qty||0, unit:p.unit||'', due:p.dueDate||'' };
+}
 // 案件番号を「案件詳細（工程明細付き）」へ飛ぶリンクに
 function _ledgerProjLink_(pid){
   if(!pid) return '';
@@ -22746,11 +22753,13 @@ function renderInvoices(){
       {k:'unpaid',label:'未入金',match:function(v){return v.status!=='paid';}},
       {k:'paid',label:'入金済',match:function(v){return v.status==='paid';}} ],
     columns:[
-      {h:'請求番号',cell:function(v){return '<span style="font-family:monospace;font-size:11px;color:#555">'+esc(v.id||'')+'</span>';}},
+      {h:'請求番号',cell:function(v){return '<span style="font-family:monospace;font-size:11px;color:#555">'+esc(v.id||'')+'</span><div>'+(v.type==='shime'?'<span style="background:#fef3c7;color:#92400e;font-size:9.5px;padding:1px 5px;border-radius:4px">📅締め</span>':'<span style="background:#dbeafe;color:#1e40af;font-size:9.5px;padding:1px 5px;border-radius:4px">⚡都度</span>')+'</div>';}},
       {h:'発行日',cell:function(v){return v.issuedAt?new Date(v.issuedAt).toLocaleDateString('ja-JP'):'-';}},
       {h:'得意先',cell:function(v){return '<b>'+esc(v.cust||'')+'</b>';}},
-      {h:'種別',cell:function(v){return v.type==='shime'?'<span style="background:#fef3c7;color:#92400e;font-size:10px;padding:2px 6px;border-radius:4px">📅締め</span>':'<span style="background:#dbeafe;color:#1e40af;font-size:10px;padding:2px 6px;border-radius:4px">⚡都度</span>';}},
-      {h:'税抜',align:'right',cell:function(v){return '<span style="font-family:monospace">¥'+((v.subtotal||0)).toLocaleString()+'</span>';}},
+      {h:'製造番号',cell:function(v){var it=(v.items||[]); var pid=v.projectId||(it[0]&&(it[0].projectId||it[0].master_no))||''; var n=it.filter(function(x){return x.projectId;}).length; return (pid?_ledgerProjLink_(pid):'<span style="color:#cbd5e1">—</span>')+(n>1?(' <span style="font-size:10px;color:#8d897f">+'+(n-1)+'</span>'):'');}},
+      {h:'製品名',cell:function(v){var it=(v.items||[]); var nm=it[0]&&it[0].item||''; return esc(nm)+(it.length>1?(' <span style="font-size:10px;color:#8d897f">他'+(it.length-1)+'</span>'):'');}},
+      {h:'数量',align:'right',cell:function(v){var it=(v.items||[])[0]||{}; return it.qty?((it.qty).toLocaleString()+esc(it.unit||'')):'-';}},
+      {h:'納期',cell:function(v){var it=(v.items||[]); var pid=v.projectId||(it[0]&&it[0].projectId)||''; var m=_ledgerProjMeta_(pid); return (m&&m.due)?m.due:'-';}},
       {h:'税込',align:'right',cell:function(v){return '<b style="font-family:monospace">¥'+((v.total||0)).toLocaleString()+'</b>';}},
       {h:'支払期限',cell:function(v){return v.dueDate||'-';}},
       {h:'状況',cell:function(v){var m={draft:'下書き',sent:'送付済',paid:'入金済',overdue:'期限超過'};var c=v.status==='paid'?'#16a34a':v.status==='overdue'?'#dc2626':'#6b7280';return '<span style="color:'+c+';font-weight:700">'+(m[v.status]||v.status||'')+'</span>';}}
@@ -22960,6 +22969,10 @@ function renderReceipts(){
       {h:'領収書番号',cell:function(r){return '<span style="font-family:monospace;font-size:11px;color:#555">'+esc(r.id||'')+'</span>';}},
       {h:'発行日',cell:function(r){return r.issuedAt?new Date(r.issuedAt).toLocaleDateString('ja-JP'):'-';}},
       {h:'得意先',cell:function(r){return '<b>'+esc(r.cust||'')+'</b>';}},
+      {h:'製造番号',cell:function(r){return r.projectId?_ledgerProjLink_(r.projectId):'<span style="color:#cbd5e1">—</span>';}},
+      {h:'製品名',cell:function(r){var m=_ledgerProjMeta_(r.projectId); return esc(r.item||(m&&m.item)||'');}},
+      {h:'数量',align:'right',cell:function(r){var m=_ledgerProjMeta_(r.projectId); return (m&&m.qty)?((m.qty).toLocaleString()+esc(m.unit||'')):'-';}},
+      {h:'納期',cell:function(r){var m=_ledgerProjMeta_(r.projectId); return (m&&m.due)?m.due:'-';}},
       {h:'金額(税込)',align:'right',cell:function(r){return '<b style="font-family:monospace">¥'+((r.total||0)).toLocaleString()+'</b>';}}
     ],
     actions:function(r){ return '<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();printReceiptRow(\''+r.id+'\')">🖨</button> <button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deleteReceipt(\''+r.id+'\')">🗑</button>'; },
@@ -23043,6 +23056,10 @@ function renderPayments(){
     columns:[
       {h:'入金日',cell:function(p){return p.receivedAt?new Date(p.receivedAt).toLocaleDateString('ja-JP'):'-';}},
       {h:'得意先',cell:function(p){return '<b>'+esc(p.cust||'')+'</b>';}},
+      {h:'製造番号',cell:function(p){return p.projectId?_ledgerProjLink_(p.projectId):'<span style="color:#cbd5e1">—</span>';}},
+      {h:'製品名',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return esc((m&&m.item)||'');}},
+      {h:'数量',align:'right',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return (m&&m.qty)?((m.qty).toLocaleString()+esc(m.unit||'')):'-';}},
+      {h:'納期',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return (m&&m.due)?m.due:'-';}},
       {h:'金額',align:'right',cell:function(p){return '<b style="font-family:monospace">¥'+((p.amount||0)).toLocaleString()+'</b>';}},
       {h:'支払方法',cell:function(p){return p.method||'-';}},
       {h:'消込',cell:function(p){return p.matchedInvoiceId?('<span style="color:#16a34a;font-weight:700">✅ 消込済</span>'):'<span style="color:#d97706;font-weight:700">未消込</span>';}}
@@ -23178,10 +23195,11 @@ function renderPurchases(){
       {k:'received',label:'入荷済',match:function(o){return o.status==='received';}} ],
     columns:[
       {h:'仕入先',cell:function(o){return '<b>'+esc(o.vendor||'')+'</b>';}},
-      {h:'品名',cell:function(o){return esc(o.item||'')+(o.itemCode?(' <span style="font-family:monospace;font-size:10px;color:#0f766e">'+esc(o.itemCode)+'</span>'):'');}},
-      {h:'数量',align:'right',cell:function(o){return (o.qty?((o.qty).toLocaleString()+(o.unit||'')):'');}},
-      {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||0)).toLocaleString()+'</b>';}},
+      {h:'製造番号',cell:function(o){return o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>';}},
+      {h:'製品名',cell:function(o){return esc(o.item||'')+(o.itemCode?(' <span style="font-family:monospace;font-size:10px;color:#0f766e">'+esc(o.itemCode)+'</span>'):'');}},
+      {h:'数量',align:'right',cell:function(o){return (o.qty?((o.qty).toLocaleString()+(o.unit||'')):'-');}},
       {h:'納期',cell:function(o){return o.dueDate||'-';}},
+      {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||0)).toLocaleString()+'</b>';}},
       {h:'状況',cell:function(o){var c=o.status==='received'?'#16a34a':'#1e40af';return '<span style="color:'+c+';font-weight:700">'+(stL[o.status]||o.status||'-')+'</span>';}}
     ],
     actions:function(o){ return '<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deletePurchase(\''+o.id+'\')">🗑</button>'; },
@@ -23242,9 +23260,11 @@ function renderOutsource(){
       {k:'completed',label:'完了',match:function(o){return o.status==='completed';}} ],
     columns:[
       {h:'外注先',cell:function(o){return '<b>'+esc(o.vendor||o.vendorName||'')+'</b>';}},
-      {h:'内容',cell:function(o){return esc(o.item||o.workName||'')+(o.itemCode?(' <span style="font-family:monospace;font-size:10px;color:#0f766e">'+esc(o.itemCode)+'</span>'):'');}},
-      {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||o.totalCost||0)).toLocaleString()+'</b>';}},
+      {h:'製造番号',cell:function(o){return o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>';}},
+      {h:'製品名',cell:function(o){var m=_ledgerProjMeta_(o.projectId); var nm=o.item||o.workName||''; return esc(nm)+((m&&m.item&&m.item!==nm)?(' <span style="font-size:10px;color:#8d897f">'+esc(m.item)+'</span>'):'')+(o.itemCode?(' <span style="font-family:monospace;font-size:10px;color:#0f766e">'+esc(o.itemCode)+'</span>'):'');}},
+      {h:'数量',align:'right',cell:function(o){if(o.qty)return (o.qty).toLocaleString()+(o.unit||''); var m=_ledgerProjMeta_(o.projectId); return (m&&m.qty)?((m.qty).toLocaleString()+esc(m.unit||'')):'-';}},
       {h:'納期',cell:function(o){return o.dueDate||o.deliveryDate||'-';}},
+      {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||o.totalCost||0)).toLocaleString()+'</b>';}},
       {h:'状況',cell:function(o){var c=o.status==='completed'?'#16a34a':'#7c3aed';return '<span style="color:'+c+';font-weight:700">'+(stL[o.status]||o.status||'-')+'</span>';}}
     ],
     actions:function(o){ return '<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deleteOutsource(\''+o.id+'\')">🗑</button>'; },
@@ -23303,9 +23323,12 @@ function renderPayouts(){
       {k:'overdue',label:'期限超過',match:function(p){return p.status==='overdue';}} ],
     columns:[
       {h:'支払先',cell:function(p){return '<b>'+esc(p.vendor||'')+'</b>';}},
+      {h:'製造番号',cell:function(p){return p.projectId?_ledgerProjLink_(p.projectId):'<span style="color:#cbd5e1">—</span>';}},
+      {h:'製品名',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return esc((m&&m.item)||'');}},
+      {h:'数量',align:'right',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return (m&&m.qty)?((m.qty).toLocaleString()+esc(m.unit||'')):'-';}},
+      {h:'納期',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return (m&&m.due)?m.due:'-';}},
       {h:'金額',align:'right',cell:function(p){return '<b style="font-family:monospace">¥'+((p.amount||0)).toLocaleString()+'</b>';}},
       {h:'支払予定日',cell:function(p){return p.dueDate||'-';}},
-      {h:'支払方法',cell:function(p){return p.method||'-';}},
       {h:'状況',cell:function(p){var c=p.status==='paid'?'#16a34a':p.status==='overdue'?'#dc2626':'#d97706';return '<span style="color:'+c+';font-weight:700">'+(stLbl[p.status]||p.status||'支払予定')+'</span>';}}
     ],
     actions:function(p){ return (p.status!=='paid'?'<button class="btn" style="padding:3px 7px;font-size:11px;background:#16a34a;color:#fff" onclick="event.stopPropagation();markPayoutPaid(\''+p.id+'\')">✅</button> ':'')+'<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deletePayout(\''+p.id+'\')">🗑</button>'; },
