@@ -10796,6 +10796,66 @@ function costRefDel(id){
   if(typeof saveDB==='function') saveDB();
   renderMaster('costref');
 }
+// 🧮 単価決定シミュレータ: 仕様+前回数量+前回単価 → 推定原価・原価率・利益率、今回数量→推奨単価
+window._crs_=window._crs_||{cat:'すべて',spec:'',q0:'',p0:'',cost:'',costManual:false,q1:'',p1:''};
+function _crsSet_(k,v){ window._crs_[k]=v; if(k==='cost') window._crs_.costManual=true; if(k==='q0'||k==='cat') window._crs_.costManual=false; _crSim_(); }
+function _crsEstCost_(q){
+  var tot=0, parts=[];
+  ((typeof DB!=='undefined'&&DB.costRefMaster)||[]).forEach(function(r){
+    if(r.src!=='村山計算書'||!r.sub||String(r.sub).indexOf('(全般)')<0||r.unit==null) return;
+    var s=String(r.sub), m=s.match(/(\d+)-(\d+)\s*$/), m2=s.match(/(\d+)\+\s*$/), lo,hi;
+    if(m){lo=+m[1];hi=+m[2];} else if(m2){lo=+m2[1];hi=1e12;} else return;
+    if(q<lo||q>hi) return;
+    var v=r.unit*q; tot+=v; parts.push((r.work||'')+' ¥'+Math.round(v).toLocaleString());
+  });
+  return {tot:Math.round(tot), parts:parts};
+}
+function _crsGuideRatio_(cat){
+  var M=(typeof DB!=='undefined'&&DB.costRefMaster)||[];
+  var row=M.find(function(r){return r.cat==='全体指針'&&r.sub===cat&&r.ratio;});
+  if(!row) row=M.find(function(r){return r.cat==='全体指針'&&r.sub==='すべて'&&r.ratio;});
+  return row?row.ratio:null;
+}
+function _crSim_(){
+  var S=window._crs_, out=document.getElementById('crs-out'); if(!out) return;
+  var yen=function(n){return '¥'+Math.round(n||0).toLocaleString();};
+  var q0=parseFloat(S.q0), p0=parseFloat(S.p0);
+  if(!q0||!p0){ out.innerHTML='<span style="color:#8d897f">前回数量と前回単価を入れると 原価・原価率・利益率 を計算します</span>'; return; }
+  var sell0=q0*p0;
+  var est=_crsEstCost_(q0);
+  var gr=_crsGuideRatio_(S.cat);
+  // 原価: 手入力が正。未入力なら品目指針原価率ベース(売価×指針%)を自動セット（積算合算は全工程を含み過大になりやすいので参考表示のみ）
+  if(!S.costManual){ S.cost=(gr&&sell0)?Math.round(sell0*gr/100):(est.tot||''); var ci=document.getElementById('crs-cost'); if(ci) ci.value=S.cost; }
+  var cost=parseFloat(S.cost)||0;
+  var ratio=sell0>0?cost/sell0:0, profit=sell0-cost;
+  var h='<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">'
+    +'<span>前回売価 <b>'+yen(sell0)+'</b></span>'
+    +'<span>原価 <b>'+yen(cost)+'</b></span>'
+    +'<span>原価率 <b style="color:'+(ratio>0.85?'#dc2626':ratio>0.75?'#d97706':'#166534')+'">'+(ratio*100).toFixed(1)+'%</b></span>'
+    +'<span>利益率 <b>'+((1-ratio)*100).toFixed(1)+'%</b></span>'
+    +'<span>粗利 <b>'+yen(profit)+'</b></span>'
+    +'</div>'
+    +'<div style="font-size:10.5px;color:#8d897f;margin-top:3px">推定原価の内訳(村山計算書 全般): '+(est.parts.join(' + ')||'該当帯なし')
+    +(gr?('　／　品目指針原価率 '+gr+'% なら原価 '+yen(sell0*gr/100)):'')+'</div>';
+  // 今回
+  var q1=parseFloat(S.q1), p1=parseFloat(S.p1);
+  if(q1){
+    // 今回原価 = 数量カーブ(村山積算)の形を前回原価で補正: cost1 = est(q1) × (前回原価/est(q0))。積算が無い帯は線形スケール
+    var est1=_crsEstCost_(q1);
+    var kcal=(est.tot>0&&cost>0)?cost/est.tot:null;
+    var cost1=(kcal&&est1.tot>0)?Math.round(est1.tot*kcal):Math.round(cost*(q1/(q0||1)));
+    h+='<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #d8d4c8;display:flex;gap:16px;flex-wrap:wrap;align-items:center">'
+      +'<span style="font-weight:700;color:#1e40af">今回('+q1.toLocaleString()+')</span>'
+      +'<span>推定原価 <b>'+yen(cost1)+'</b></span>'
+      +'<span>同じ原価率なら単価 <b>¥'+(ratio>0?(cost1/ratio/q1).toFixed(2):'-')+'</b></span>';
+    if(p1){
+      var sell1=q1*p1, r1=sell1>0?cost1/sell1:0;
+      h+='<span>検討単価¥'+p1+' → 売価 '+yen(sell1)+' / 原価率 <b style="color:'+(r1>0.85?'#dc2626':r1>0.75?'#d97706':'#166534')+'">'+(r1*100).toFixed(1)+'%</b> / 利益率 <b>'+((1-r1)*100).toFixed(1)+'%</b> / 粗利 <b>'+yen(sell1-cost1)+'</b></span>';
+    }
+    h+='</div>';
+  }
+  out.innerHTML=h;
+}
 function renderCostRefMaster(mp){
   DB.costRefMaster=DB.costRefMaster||[];
   var esc=(typeof _escDiff==='function')?_escDiff:function(s){return String(s==null?'':s);};
@@ -10838,6 +10898,26 @@ function renderCostRefMaster(mp){
       +'<button class="btn" style="font-size:11px" onclick="saveDB();if(typeof saveToCloud===\'function\')try{saveToCloud()}catch(e){};alert(\'保存しました\')">💾 保存</button>'
     +'</div>'
     +'<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;margin:.4rem 0;font-size:11.5px;color:#78350f;line-height:1.7">💡 <b>金額 = max(最低料金, 単価×数量)</b> が適用式。<b>原価率%</b>は売価に対する指針（例: 原価÷0.757=推奨売価）。出典=村山計算書549枚・アート実績6.5万行。数値は自由に上書きOK（手入力が正）。</div>'
+    +(function(){
+      var S=window._crs_;
+      var esc2=function(s){return String(s==null?'':s).replace(/"/g,'&quot;');};
+      var cats=['すべて'].concat(Array.from(new Set((all||[]).filter(function(r){return r.cat==='全体指針'&&r.sub&&r.sub!=='すべて';}).map(function(r){return r.sub;}))));
+      var opts=cats.map(function(c){return '<option'+(c===S.cat?' selected':'')+'>'+c+'</option>';}).join('');
+      return '<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:8px 12px;margin:.4rem 0">'
+        +'<div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:5px">🧮 単価決定シミュレータ（前回数量・前回単価 → 原価・原価率・利益率）</div>'
+        +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11.5px">'
+        +'品目<select style="font-size:11.5px" onchange="_crsSet_(\'cat\',this.value)">'+opts+'</select>'
+        +'仕様<input value="'+esc2(S.spec)+'" placeholder="例: A4 両面4色" style="width:150px;font-size:11.5px" oninput="_crsSet_(\'spec\',this.value)">'
+        +'前回数量<input id="crs-q0" type="number" value="'+esc2(S.q0)+'" style="width:80px;font-size:11.5px;text-align:right" oninput="_crsSet_(\'q0\',this.value)">'
+        +'前回単価<input id="crs-p0" type="number" step="0.01" value="'+esc2(S.p0)+'" style="width:80px;font-size:11.5px;text-align:right" oninput="_crsSet_(\'p0\',this.value)">'
+        +'原価(上書き可)<input id="crs-cost" type="number" value="'+esc2(S.cost)+'" style="width:90px;font-size:11.5px;text-align:right;background:#fefce8" oninput="_crsSet_(\'cost\',this.value)">'
+        +'<span style="color:#94a3b8">|</span>'
+        +'今回数量<input id="crs-q1" type="number" value="'+esc2(S.q1)+'" style="width:80px;font-size:11.5px;text-align:right" oninput="_crsSet_(\'q1\',this.value)">'
+        +'検討単価<input id="crs-p1" type="number" step="0.01" value="'+esc2(S.p1)+'" style="width:80px;font-size:11.5px;text-align:right" oninput="_crsSet_(\'p1\',this.value)">'
+        +'</div>'
+        +'<div id="crs-out" style="margin-top:6px;font-size:12px"></div>'
+        +'</div>';
+    })()
     +'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:.4rem">'+catBtns+'</div>'
     +'<div style="font-size:11px;color:#888;margin-bottom:.3rem">'+data.length+' 件'+(data.length>400?'（先頭400表示）':'')+' / 全'+all.length+' 件</div>'
     +(all.length?('<div style="overflow:auto;max-height:62vh"><table class="tbl" style="font-size:11.5px;width:100%"><thead><tr>'
