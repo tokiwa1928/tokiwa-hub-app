@@ -1523,6 +1523,7 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-outsourceVendors" onclick="swMaster('outsourceVendors',this)">外注先</button>
     <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
     <button class="pill" id="mc-costref" onclick="swMaster('costref',this)" title="参考原価マスタ（作業別の最低料金・単価・原価率%。見積の指針用・別管理）">参考原価</button>
+    <button class="pill" id="mc-stock" onclick="swMaster('stock',this)" title="リピート品（在庫品候補）— FM2020-26で繰り返し・仕様変更なしの受注。閑散期に見込み生産する候補">🔁 リピート品</button>
   </div>
   <div id="master-panels"></div>
 </div>
@@ -4281,6 +4282,7 @@ async function loadFromCloud() {
   if (Array.isArray(result.data.itemMaster)) DB.itemMaster = result.data.itemMaster; // 品目マスタ(GEN由来・品目コード付き)
   if (Array.isArray(result.data.outsourceVendors)) DB.outsourceVendors = result.data.outsourceVendors; // 外注先マスタ
   if (Array.isArray(result.data.costRefMaster)) DB.costRefMaster = result.data.costRefMaster; // 参考原価マスタ(見積指針・別管理)
+  if (Array.isArray(result.data.stockCandidates)) DB.stockCandidates = result.data.stockCandidates; // リピート品(在庫品候補)
   // 経理系(2026-07-04 クラウド同期に追加: 端末間共有＋消失ガード対象)
   if (Array.isArray(result.data.invoices)) DB.invoices = result.data.invoices;
   if (Array.isArray(result.data.receipts)) DB.receipts = result.data.receipts;
@@ -4760,6 +4762,7 @@ async function saveToCloud() {
     itemMaster: DB.itemMaster || [],
     outsourceVendors: DB.outsourceVendors || [],
     costRefMaster: DB.costRefMaster || [],
+    stockCandidates: DB.stockCandidates || [],
     invoices: DB.invoices || [],
     receipts: DB.receipts || [],
     payments: DB.payments || [],
@@ -10916,6 +10919,103 @@ function _crSim_(){
   }
   out.innerHTML=h;
 }
+// ── リピート品（在庫品候補）: FM2020-26で繰り返し・仕様変更なしの受注を抽出 ──
+function renderStockCandidates(mp){
+  DB.stockCandidates=DB.stockCandidates||[];
+  var esc=(typeof _escDiff==='function')?_escDiff:function(s){return String(s==null?'':s);};
+  var yen=function(n){return '¥'+Math.round(n||0).toLocaleString();};
+  var MN=['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  var q=(document.getElementById('m-q-stock')?.value||'').toLowerCase();
+  var sort=window._stkSort_||'orders';
+  var all=DB.stockCandidates.slice();
+  var data=all.filter(function(r){ return !q || ((r.cust||'')+(r.item||'')+(r.paper||'')).toLowerCase().indexOf(q)>=0; });
+  data.sort(function(a,b){
+    if(sort==='orders') return (b.orders||0)-(a.orders||0);
+    if(sort==='amt') return (b.sumAmt||0)-(a.sumAmt||0);
+    if(sort==='qty') return (b.stockQty||0)-(a.stockQty||0);
+    if(sort==='recent') return String(b.lastDate||'').localeCompare(String(a.lastDate||''));
+    return 0;
+  });
+  // KPI
+  var totOrders=all.reduce(function(s,r){return s+(r.orders||0);},0);
+  var totAmt=all.reduce(function(s,r){return s+(r.sumAmt||0);},0);
+  // 全候補の閑散期分布(作り置きに向く月)
+  var slowCnt={}; for(var m=1;m<=12;m++) slowCnt[m]=0;
+  all.forEach(function(r){ (r.slowMonths||[]).forEach(function(m){ slowCnt[m]=(slowCnt[m]||0)+1; }); });
+  var slowRank=Object.keys(slowCnt).map(function(m){return [+m,slowCnt[m]];}).sort(function(a,b){return b[1]-a[1];}).slice(0,3).map(function(x){return MN[x[0]];}).join('・');
+  var sortBtn=function(k,lb){ var on=(sort===k); return '<button onclick="window._stkSort_=\''+k+'\';renderMaster(\'stock\')" style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;border:1px solid '+(on?'#b3361f':'#d8d4c8')+';background:'+(on?'#b3361f':'#fff')+';color:'+(on?'#fff':'#6b6a63')+';cursor:pointer">'+lb+'</button>'; };
+
+  var rowsHtml=data.slice(0,400).map(function(r){
+    var slow=(r.slowMonths||[]).map(function(m){return MN[m];}).join('・');
+    // 月ヒートバー(12ヶ月の受注回数)
+    var mx=Math.max.apply(null,(r.months||[0]).concat([1]));
+    var heat=(r.months||[]).map(function(v,i){
+      var h=Math.round((v/mx)*16)+2, isSlow=(r.slowMonths||[]).indexOf(i+1)>=0;
+      return '<span title="'+MN[i+1]+': '+v+'回" style="display:inline-block;width:7px;height:'+h+'px;background:'+(isSlow?'#e8b4a8':'var(--hub-a,#1f6f9d)')+';margin-right:1px;vertical-align:bottom;border-radius:1px"></span>';
+    }).join('');
+    return '<tr>'
+      +'<td style="font-weight:600">'+esc(r.cust||'')+'</td>'
+      +'<td>'+esc(r.item||'')+(r.paper?'<div style="font-size:10px;color:#a39f97">'+esc(r.paper)+'</div>':'')+'</td>'
+      +'<td style="text-align:right;font-variant-numeric:tabular-nums"><b>'+(r.orders||0)+'</b><div style="font-size:10px;color:#a39f97">年'+(r.perYear||0)+'・'+(r.years||0)+'年</div></td>'
+      +'<td style="text-align:right;font-variant-numeric:tabular-nums">'+(r.lastQty!=null?Math.round(r.lastQty).toLocaleString():'-')+(r.unit?('<span style="font-size:10px;color:#a39f97">'+esc(r.unit)+'</span>'):'')+'<div style="font-size:10px;color:#a39f97">@'+(r.lastUp!=null?r.lastUp:'-')+'</div></td>'
+      +'<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:#b3361f">'+(r.stockQty!=null?r.stockQty.toLocaleString():'-')+'</td>'
+      +'<td style="white-space:nowrap"><span style="font-size:11px;font-weight:700;color:#a8641f">'+esc(slow)+'</span><div style="margin-top:2px">'+heat+'</div></td>'
+      +'<td style="text-align:right;font-variant-numeric:tabular-nums;font-size:11px">'+yen(r.sumAmt)+'</td>'
+      +'<td style="text-align:right;font-size:11px;color:#a39f97">'+(r.lastDate||'')+'</td>'
+      +'</tr>';
+  }).join('');
+
+  mp.innerHTML=
+    '<div class="sec">'
+    +'<div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">🔁 リピート品（在庫品候補）'
+      +'<span style="font-size:11px;font-weight:500;color:#8d897f">FM2020-26で「リピート・仕様変更なし・版下変更なし」を3年以上繰り返した品目</span>'
+      +'<span style="flex:1"></span>'
+      +'<input id="m-q-stock" placeholder="得意先・品名で検索…" value="'+esc(q).replace(/"/g,'&quot;')+'" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderMaster(\'stock\')">'
+      +'<button class="btn" onclick="document.getElementById(\'stock-imp-file\').click()">📥 取込</button>'
+      +'<input type="file" id="stock-imp-file" accept="application/json" style="display:none" onchange="stockImport(this)">'
+      +'<button class="btn" onclick="stockExportCsv()">⬇ CSV</button>'
+    +'</div>'
+    // KPI帯
+    +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:10px 0">'
+      +'<div style="background:#211f1c;color:#fff;border-radius:10px;padding:10px 12px"><div style="font-size:10px;opacity:.7">候補品目</div><div style="font-size:20px;font-weight:900">'+all.length+'</div></div>'
+      +'<div style="background:#211f1c;color:#fff;border-radius:10px;padding:10px 12px"><div style="font-size:10px;opacity:.7">7年 総受注回数</div><div style="font-size:20px;font-weight:900">'+totOrders.toLocaleString()+'</div></div>'
+      +'<div style="background:#211f1c;color:#fff;border-radius:10px;padding:10px 12px"><div style="font-size:10px;opacity:.7">7年 売上計</div><div style="font-size:20px;font-weight:900">'+yen(totAmt)+'</div></div>'
+      +'<div style="background:#a8641f;color:#fff;border-radius:10px;padding:10px 12px"><div style="font-size:10px;opacity:.85">見込み生産に向く月（閑散期）</div><div style="font-size:16px;font-weight:900;margin-top:3px">'+(slowRank||'-')+'</div></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><span style="font-size:11px;color:#8d897f">並べ替え:</span>'
+      +sortBtn('orders','受注回数')+sortBtn('amt','売上')+sortBtn('qty','作り置き数')+sortBtn('recent','直近受注')
+      +'<span style="flex:1"></span><span style="font-size:11px;color:#a39f97">'+data.length+'件表示'+(data.length>400?'（上位400）':'')+'</span></div>'
+    +(all.length? (
+      '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
+      +['得意先','品名','受注回数','直近数量','推奨作り置き','見込み生産月／受注の波','7年売上','直近'].map(function(h){return '<th style="text-align:'+(['受注回数','直近数量','推奨作り置き','7年売上'].indexOf(h)>=0?'right':'left')+';padding:6px 8px;white-space:nowrap">'+h+'</th>';}).join('')
+      +'</tr></thead><tbody>'+rowsHtml+'</tbody></table></div>'
+      +'<div style="font-size:11px;color:#8d897f;margin-top:8px;line-height:1.6">💡 <b>推奨作り置き</b>=過去受注数量の中央値。<b>見込み生産月</b>=その品の受注が少ない月（閑散期）で、ここに製造して在庫化すると繁忙期の負荷を平準化できます。バーは各月の受注回数、<span style="color:#a8641f">橙</span>が閑散期。</div>'
+    ) : '<div style="text-align:center;padding:40px;color:#a39f97">候補データがありません。<button class="btn" onclick="document.getElementById(\'stock-imp-file\').click()" style="margin-left:8px">📥 取込</button></div>');
+}
+function stockImport(inp){
+  var f=inp.files&&inp.files[0]; if(!f) return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    try{
+      var arr=JSON.parse(rd.result); if(!Array.isArray(arr)) throw 0;
+      DB.stockCandidates=arr; saveDB();
+      if(typeof saveToCloud==='function') saveToCloud();
+      renderMaster('stock');
+      alert('リピート品候補 '+arr.length+'件を取り込みました');
+    }catch(e){ alert('取込失敗: JSON形式を確認してください'); }
+    inp.value='';
+  };
+  rd.readAsText(f);
+}
+function stockExportCsv(){
+  var rows=DB.stockCandidates||[]; if(!rows.length){ alert('データがありません'); return; }
+  var MN=['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  var head=['得意先','品名','用紙','出現年数','受注回数','年平均','変更なし率%','直近受注日','直近数量','単位','直近単価','推奨作り置き数','見込み生産月(閑散期)','7年売上'];
+  var esc=function(s){ s=String(s==null?'':s); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  var body=rows.map(function(r){ return [r.cust,r.item,r.paper,r.years,r.orders,r.perYear,r.cleanPct,r.lastDate,r.lastQty,r.unit,r.lastUp,r.stockQty,(r.slowMonths||[]).map(function(m){return MN[m];}).join('・'),r.sumAmt].map(esc).join(','); });
+  var csv='﻿'+head.join(',')+'\n'+body.join('\n');
+  var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='リピート品候補.csv'; a.click();
+}
 function renderCostRefMaster(mp){
   DB.costRefMaster=DB.costRefMaster||[];
   var esc=(typeof _escDiff==='function')?_escDiff:function(s){return String(s==null?'':s);};
@@ -11143,6 +11243,10 @@ function renderMaster(id){
   }
   if(id==='costref'){
     renderCostRefMaster(mp);
+    return;
+  }
+  if(id==='stock'){
+    renderStockCandidates(mp);
     return;
   }
 
