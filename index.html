@@ -10919,6 +10919,63 @@ function _crSim_(){
   }
   out.innerHTML=h;
 }
+// ── 繁忙期予測 & 見込み生産（リピート品）の共通ロジック ──
+// トキワの月次負荷指数(FM2020-26 31,640件の受注月分布より・平均=1.0)
+var TK_LOAD_INDEX=[0.97,0.90,1.24,1.12,0.92,1.15,1.01,0.88,0.86,0.84,1.03,1.07];
+function _stkCoName_(id){
+  var c=(DB.companies||[]).find(function(x){return x&&(x.id===id||x.companyId===id);});
+  if(c) return c.name||c.shortName||id;
+  var mp={COMP001:'トキワ物流',COMP002:'トキワ印刷',COMP003:'トキワ',COMP004:'北上製本',COMP005:'アート・エス',COMP006:'',COMP007:''};
+  return mp[id]||id;
+}
+// Hub受注(DB.projects)から会社別リピート品をライブ検出(関連会社向け)
+function _liveRepeats_(companyId){
+  var byKey={};
+  (DB.projects||[]).forEach(function(p){
+    if(!p||p._testData) return;
+    if(companyId && p.companyId!==companyId) return;
+    var it=(p.item||'').trim(); if(!it) return;
+    var k=(p.companyId||'')+'|'+(p.cust||'')+'|'+it;
+    (byKey[k]=byKey[k]||[]).push(p);
+  });
+  var out=[];
+  Object.keys(byKey).forEach(function(k){
+    var g=byKey[k]; if(g.length<2) return;                 // 2回以上=リピート
+    var months=[0,0,0,0,0,0,0,0,0,0,0,0], qtys=[], amts=0;
+    var last=g[0];
+    g.forEach(function(p){
+      var m=parseInt(String(p.orderDate||p.dueDate||'').slice(5,7),10);
+      if(m>=1&&m<=12) months[m-1]++;
+      if(p.qty) qtys.push(+p.qty);
+      amts+=(+p.exTax||0);
+      if(String(p.orderDate||'')>String(last.orderDate||'')) last=p;
+    });
+    qtys.sort(function(a,b){return a-b;});
+    var med=qtys.length?qtys[Math.floor(qtys.length/2)]:0;
+    var slow=months.map(function(v,i){return [i+1,v];}).sort(function(a,b){return a[1]-b[1];}).slice(0,3).map(function(x){return x[0];});
+    out.push({id:'LIV-'+k, cust:last.cust||'', item:last.item||'', unit:last.unit||'',
+      companyId:last.companyId||'', years:new Set(g.map(function(p){return String(p.orderDate||'').slice(0,4);})).size,
+      orders:g.length, perYear:g.length, cleanPct:100, lastDate:last.orderDate||last.dueDate||'',
+      lastQty:last.qty||null, lastUp:null, medQty:med, stockQty:med, sumAmt:Math.round(amts),
+      paper:last.size||'', slowMonths:slow, months:months, src:'Hub受注'});
+  });
+  return out;
+}
+// 会社スコープの月次負荷指数(繁忙/閑散)。トキワはFMプロファイル、他社はHub受注から算出
+function _prodForecast_(companyId){
+  if(companyId==='COMP002'||companyId==='COMP003'){ return {index:TK_LOAD_INDEX.slice(), src:'FM実績', n:31640}; }
+  var mc=[0,0,0,0,0,0,0,0,0,0,0,0], n=0;
+  (DB.projects||[]).forEach(function(p){
+    if(!p||p._testData) return;
+    if(companyId && p.companyId!==companyId) return;
+    var m=parseInt(String(p.orderDate||p.dueDate||'').slice(5,7),10);
+    if(m>=1&&m<=12){ mc[m-1]++; n++; }
+  });
+  if(n<12){ return {index:TK_LOAD_INDEX.slice(), src:'参考(トキワ実績)', n:n}; } // データ不足時はTKで代用
+  var avg=n/12;
+  return {index:mc.map(function(v){return Math.round(v/avg*100)/100;}), src:'Hub受注', n:n};
+}
+
 // ── リピート品（在庫品候補）: FM2020-26で繰り返し・仕様変更なしの受注を抽出 ──
 function renderStockCandidates(mp){
   DB.stockCandidates=DB.stockCandidates||[];
@@ -10927,8 +10984,16 @@ function renderStockCandidates(mp){
   var MN=['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
   var q=(document.getElementById('m-q-stock')?.value||'').toLowerCase();
   var sort=window._stkSort_||'orders';
-  var all=DB.stockCandidates.slice();
-  var data=all.filter(function(r){ return !q || ((r.cust||'')+(r.item||'')+(r.paper||'')).toLowerCase().indexOf(q)>=0; });
+  // 会社スコープ: 管理会社(TK)は全社/会社別を切替、他社は自社のみ
+  var isAdmin=(typeof _isAdminCompany_==='function')?_isAdminCompany_():((currentAuth&&(currentAuth.companyId==='COMP002'||currentAuth.companyId==='COMP003'))||false);
+  var scope=window._stkScope_; if(scope===undefined) scope=isAdmin?'all':(currentAuth&&currentAuth.companyId)||'all';
+  if(!isAdmin) scope=(currentAuth&&currentAuth.companyId)||'all';
+  // トキワFM候補(=stockCandidates, companyId無=COMP002扱い) ＋ 各社Hub受注のライブ候補
+  var fm=DB.stockCandidates.map(function(r){ var o=Object.assign({},r); if(!o.companyId)o.companyId='COMP002'; if(!o.src)o.src='トキワFM'; return o; });
+  var live=_liveRepeats_('');
+  var combined=fm.concat(live);
+  var all=combined.filter(function(r){ return scope==='all' || r.companyId===scope; });
+  var data=all.filter(function(r){ return !q || ((r.cust||'')+(r.item||'')+(r.paper||'')+(r.src||'')).toLowerCase().indexOf(q)>=0; });
   data.sort(function(a,b){
     if(sort==='orders') return (b.orders||0)-(a.orders||0);
     if(sort==='amt') return (b.sumAmt||0)-(a.sumAmt||0);
@@ -10953,9 +11018,11 @@ function renderStockCandidates(mp){
       var h=Math.round((v/mx)*16)+2, isSlow=(r.slowMonths||[]).indexOf(i+1)>=0;
       return '<span title="'+MN[i+1]+': '+v+'回" style="display:inline-block;width:7px;height:'+h+'px;background:'+(isSlow?'#e8b4a8':'var(--hub-a,#1f6f9d)')+';margin-right:1px;vertical-align:bottom;border-radius:1px"></span>';
     }).join('');
+    var srcTag=r.src==='Hub受注'?'<span style="font-size:9.5px;background:#e8f0fe;color:#1b4fc0;padding:1px 5px;border-radius:8px;margin-left:5px">Hub受注</span>':'';
+    var coTag=(scope==='all'&&r.companyId)?'<div style="font-size:10px;color:#8d897f">'+esc(_stkCoName_(r.companyId))+'</div>':'';
     return '<tr>'
-      +'<td style="font-weight:600">'+esc(r.cust||'')+'</td>'
-      +'<td>'+esc(r.item||'')+(r.paper?'<div style="font-size:10px;color:#a39f97">'+esc(r.paper)+'</div>':'')+'</td>'
+      +'<td style="font-weight:600">'+esc(r.cust||'')+coTag+'</td>'
+      +'<td>'+esc(r.item||'')+srcTag+(r.paper?'<div style="font-size:10px;color:#a39f97">'+esc(r.paper)+'</div>':'')+'</td>'
       +'<td style="text-align:right;font-variant-numeric:tabular-nums"><b>'+(r.orders||0)+'</b><div style="font-size:10px;color:#a39f97">年'+(r.perYear||0)+'・'+(r.years||0)+'年</div></td>'
       +'<td style="text-align:right;font-variant-numeric:tabular-nums">'+(r.lastQty!=null?Math.round(r.lastQty).toLocaleString():'-')+(r.unit?('<span style="font-size:10px;color:#a39f97">'+esc(r.unit)+'</span>'):'')+'<div style="font-size:10px;color:#a39f97">@'+(r.lastUp!=null?r.lastUp:'-')+'</div></td>'
       +'<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:#b3361f">'+(r.stockQty!=null?r.stockQty.toLocaleString():'-')+'</td>'
@@ -10965,10 +11032,61 @@ function renderStockCandidates(mp){
       +'</tr>';
   }).join('');
 
+  // ── 会社スコープ切替チップ（管理会社のみ全社/会社別を選べる） ──
+  var scopeChips='';
+  if(isAdmin){
+    var scopes=[['all','🏢 全社']];
+    var seen={};
+    combined.forEach(function(r){ if(r.companyId&&!seen[r.companyId]){ seen[r.companyId]=1; scopes.push([r.companyId,_stkCoName_(r.companyId)]); } });
+    scopeChips=scopes.map(function(s){ var on=(scope===s[0]);
+      return '<button onclick="window._stkScope_=\''+s[0]+'\';renderMaster(\'stock\')" style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;border:1px solid '+(on?'#1c1b18':'#d8d4c8')+';background:'+(on?'#1c1b18':'#fff')+';color:'+(on?'#fff':'#6b6a63')+';cursor:pointer;margin-right:4px">'+esc(s[1])+'</button>';
+    }).join('');
+  }
+  // ── 繁忙期予測 & 見込み生産カレンダー ──
+  var fcScope=(scope==='all')?'COMP002':scope;
+  var fc=_prodForecast_(fcScope);
+  var idx=fc.index, now=new Date(), curM=now.getMonth()+1;
+  var loadBars=idx.map(function(v,i){
+    var busy=v>=1.1, slow=v<=0.9, col=busy?'#b3361f':(slow?'#1f9d55':'#c9c5bd');
+    var h=Math.round(Math.min(v,1.6)/1.6*48)+4, isCur=(i+1===curM);
+    return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">'
+      +'<div style="width:100%;display:flex;align-items:flex-end;height:54px"><div style="width:100%;height:'+h+'px;background:'+col+';border-radius:4px 4px 0 0;'+(isCur?'outline:2px solid #1c1b18;outline-offset:1px':'')+'" title="'+MN[i+1]+' 負荷指数'+v+'"></div></div>'
+      +'<span style="font-size:9.5px;color:'+(isCur?'#1c1b18':'#a39f97')+';font-weight:'+(isCur?'800':'400')+'">'+(i+1)+'</span></div>';
+  }).join('');
+  // 直近6ヶ月のうち閑散(指数<=0.95)の月に、各社リピート品を先行生産する提案
+  var plan='';
+  for(var off=1;off<=6;off++){
+    var mm=((curM-1+off)%12)+1;
+    if(idx[mm-1]>0.95) continue;
+    var recs=all.filter(function(r){ return (r.slowMonths||[]).indexOf(mm)>=0; }).sort(function(a,b){return (b.orders||0)-(a.orders||0);}).slice(0,5);
+    if(!recs.length) recs=all.slice().sort(function(a,b){return (b.orders||0)-(a.orders||0);}).slice(0,3);
+    var chips=recs.map(function(r){ return '<span style="display:inline-block;font-size:11px;background:#fff;border:1px solid #e3ddd2;border-radius:8px;padding:3px 8px;margin:2px 3px 0 0">'+esc(r.item||'')+' <b style="color:#b3361f">'+(r.stockQty||0).toLocaleString()+'</b><span style="color:#a39f97">'+esc(r.unit||'')+'</span></span>'; }).join('');
+    plan+='<div style="margin-top:8px;padding:8px 10px;background:#f4f7f4;border-left:3px solid #1f9d55;border-radius:6px">'
+      +'<div style="font-size:12px;font-weight:800;color:#1f6d3c">'+MN[mm]+'（閑散・負荷'+idx[mm-1]+'）に先行生産を推奨</div>'
+      +'<div style="margin-top:3px">'+chips+'</div></div>';
+  }
+  if(!plan) plan='<div style="font-size:11.5px;color:#8d897f;margin-top:6px">直近6ヶ月に明確な閑散月はありません（負荷が平準化されています）。</div>';
+  var busyMs=idx.map(function(v,i){return[i+1,v];}).filter(function(x){return x[1]>=1.1;}).sort(function(a,b){return b[1]-a[1];}).map(function(x){return MN[x[0]];}).join('・');
+  var slowMs=idx.map(function(v,i){return[i+1,v];}).filter(function(x){return x[1]<=0.9;}).sort(function(a,b){return a[1]-b[1];}).map(function(x){return MN[x[0]];}).join('・');
+
+  var fcPanel=
+    '<div class="sec" style="margin-bottom:12px">'
+    +'<div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">📅 繁忙期予測 & 見込み生産カレンダー'
+      +'<span style="font-size:11px;font-weight:500;color:#8d897f">'+(scope==='all'?'グループ主力(トキワ実績)':_stkCoName_(scope))+' ／ 実績元: '+esc(fc.src)+'（'+fc.n.toLocaleString()+'件）</span>'
+      +'<span style="flex:1"></span>'+scopeChips
+    +'</div>'
+    +'<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:8px">'
+      +'<div style="flex:1;min-width:280px"><div style="display:flex;gap:2px;align-items:flex-end">'+loadBars+'</div>'
+        +'<div style="font-size:10.5px;color:#8d897f;margin-top:6px"><span style="color:#b3361f;font-weight:700">■</span>繁忙 '+(busyMs||'-')+'　<span style="color:#1f9d55;font-weight:700">■</span>閑散 '+(slowMs||'-')+'　（□枠=今月）</div>'
+      +'</div>'
+      +'<div style="flex:1;min-width:280px">'+plan+'</div>'
+    +'</div></div>';
+
   mp.innerHTML=
-    '<div class="sec">'
+    fcPanel
+    +'<div class="sec">'
     +'<div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">🔁 リピート品（在庫品候補）'
-      +'<span style="font-size:11px;font-weight:500;color:#8d897f">FM2020-26で「リピート・仕様変更なし・版下変更なし」を3年以上繰り返した品目</span>'
+      +'<span style="font-size:11px;font-weight:500;color:#8d897f">繰り返し受注（トキワ=FM実績／関連会社=Hub受注から自動検出）</span>'
       +'<span style="flex:1"></span>'
       +'<input id="m-q-stock" placeholder="得意先・品名で検索…" value="'+esc(q).replace(/"/g,'&quot;')+'" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderMaster(\'stock\')">'
       +'<button class="btn" onclick="document.getElementById(\'stock-imp-file\').click()">📥 取込</button>'
