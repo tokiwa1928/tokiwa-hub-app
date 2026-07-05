@@ -1452,9 +1452,8 @@ setTimeout(_removeBootLoader_, 5000);
         <option value="">すべての会社</option>
         <option value="own">自社のみ</option>
       </select>
-      <select id="proj-cust-f" style="font-size:12px;padding:4px 8px" onchange="_onProjFilterChange_()" title="得意先で絞り込み">
-        <option value="">🏢 全得意先</option>
-      </select>
+      <input id="proj-cust-f" list="proj-cust-datalist" style="font-size:12px;padding:4px 8px;width:160px" oninput="_onProjFilterChange_()" placeholder="🏢 得意先（入力/選択）" title="得意先を入力または選択で絞り込み（部分一致）">
+      <datalist id="proj-cust-datalist"></datalist>
       <button class="btn" style="font-size:11px;padding:3px 8px;color:#666" onclick="_clearProjFilters_()" title="絞り込みをすべて解除">✕ クリア</button>
     </div>
     <!-- 行3: 一時保存(下書き) / 進行中案件 で振り分け表示 -->
@@ -36527,13 +36526,11 @@ function _clearProjFilters_(){
 }
 // 得意先ドロップダウン + 検索候補を案件データから生成 (1度だけ毎回再構築)
 function _populateProjFilterOptions_(){
-  var custSel = document.getElementById('proj-cust-f');
-  if(custSel && !custSel.dataset.built){
+  var dlCust = document.getElementById('proj-cust-datalist');
+  if(dlCust && !dlCust.dataset.built){
     var custs = Array.from(new Set((DB.projects||[]).map(function(p){ return p.cust || p.from_company || ''; }).filter(Boolean))).sort();
-    var cur = custSel.value;
-    custSel.innerHTML = '<option value="">🏢 全得意先</option>' + custs.map(function(c){ return '<option value="' + _escAttr_(c) + '">' + _escDiff(c) + '</option>'; }).join('');
-    custSel.value = cur;
-    custSel.dataset.built = '1';
+    dlCust.innerHTML = custs.map(function(c){ return '<option value="' + _escAttr_(c) + '">'; }).join('');
+    dlCust.dataset.built = '1';
   }
   // 検索候補 (品名 + よく出る仕様語)
   var dl = document.getElementById('proj-q-suggest');
@@ -36609,6 +36606,17 @@ function importArtesProjects(inp){
   };
   fr.readAsText(f);
 }
+// ステータス・ドロップダウンの各項目に該当件数を表示（value は状態名のまま固定）
+function _updateProjStatusCounts_(baseRows){
+  var sel=document.getElementById('proj-status-f'); if(!sel) return;
+  var cnt={}; (baseRows||[]).forEach(function(r){ var s=r.status||''; cnt[s]=(cnt[s]||0)+1; });
+  Array.prototype.forEach.call(sel.options, function(op){
+    if(op.dataset.label===undefined){ op.dataset.label = op.textContent.replace(/\s*\(\d+\)\s*$/,''); op.dataset.stat = (op.getAttribute('value')!==null ? op.value : op.textContent).replace(/\s*\(\d+\)\s*$/,''); }
+    op.value = op.dataset.stat;                     // カウントを付けても value は状態名で固定
+    var n = op.dataset.stat==='' ? (baseRows||[]).length : (cnt[op.dataset.stat]||0);
+    op.textContent = op.dataset.label + ' (' + n + ')';
+  });
+}
 function renderProjects(){
   if(typeof _migrateProjStatuses_ === 'function') _migrateProjStatuses_();
   if(typeof _checkMasterPriceRises_ === 'function') _checkMasterPriceRises_();
@@ -36632,8 +36640,9 @@ function renderProjects(){
   // 期間セレクタを描画
   var pwProj = document.getElementById('proj-period-wrapper');
   if(pwProj) pwProj.innerHTML = _renderPeriodFilter_('proj-body', 'renderProjects', allProjs.length);
-  const rows=periodFilteredProjs.filter(r=>{
-    if(sf&&r.status!==sf)return false;
+  // 状態フィルタ以外の条件で絞った基準リスト（＝ステータス別カウント用）
+  const _custFL = custF.toLowerCase();
+  const baseRows=periodFilteredProjs.filter(r=>{
     // NNNNN-1: ステージフィルタ
     if(stage !== 'all' && stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
     // AAAAAA-1: チップ式 複数キーワード AND 判定 (得意先/品名/仕様/種別)
@@ -36645,10 +36654,13 @@ function renderProjects(){
       const isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId==='COMP001');
       if(!isOwn) return false;
     }
-    // 得意先フィルタ (GEN風: 取引先で絞り込み)
-    if(custF){ const rc = r.cust || r.from_company || ''; if(rc !== custF) return false; }
+    // 得意先フィルタ (入力/選択・部分一致)
+    if(_custFL){ const rc = (r.cust || r.from_company || '').toLowerCase(); if(rc.indexOf(_custFL) < 0) return false; }
     return true;
   });
+  // ステータス別の該当件数をドロップダウンに反映
+  if(typeof _updateProjStatusCounts_ === 'function') _updateProjStatusCounts_(baseRows);
+  const rows = sf ? baseRows.filter(r=>r.status===sf) : baseRows;
   // XPPPP-1: 集計バー (絞り込み結果の 件数・受注金額・粗利)
   if(typeof _renderProjSummaryBar_ === 'function') _renderProjSummaryBar_(rows);
   const body=document.getElementById('proj-body');if(!body)return;
@@ -37533,17 +37545,18 @@ function renderProjStageTabs(){
       st.icon+' '+st.label+' <span style="background:'+(active?'rgba(255,255,255,.25)':'#f3f4f6')+';color:'+(active?'#fff':st.color)+';padding:0 6px;border-radius:8px;font-size:10px;font-weight:700">'+n+'</span>'+
       '</button>';
   }
-  // 受注グループ／見積グループを枠で分けて見やすく（受注・失注も押しやすく）
-  function groupBox(label, labelColor, keys){
-    return '<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid #d6d3ca;border-radius:12px;padding:5px 9px 5px 11px;background:#faf9f6">'+
-      '<span style="font-size:10px;font-weight:800;color:'+labelColor+';letter-spacing:.06em;white-space:nowrap">'+label+'</span>'+
+  // 見積フェーズ→受注フェーズ を番号・色・矢印で明確化（案件の流れが一目で分かるように）
+  function groupBox(label, labelColor, tint, keys){
+    return '<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid '+labelColor+'44;border-radius:12px;padding:5px 10px;background:'+tint+'">'+
+      '<span style="font-size:11px;font-weight:800;color:'+labelColor+';letter-spacing:.03em;white-space:nowrap">'+label+'</span>'+
       keys.map(tabBtn).join('')+'</span>';
   }
-  container.style.display='flex'; container.style.flexWrap='wrap'; container.style.alignItems='center'; container.style.gap='10px';
+  container.style.display='flex'; container.style.flexWrap='wrap'; container.style.alignItems='center'; container.style.gap='8px';
   container.innerHTML =
     tabBtn('all') +
-    groupBox('📝 見積', '#7c3aed', ['allquote','quote','lost']) +
-    groupBox('📋 受注', '#15803d', ['orders','active','done']);
+    groupBox('① 見積', '#7c3aed', '#faf7ff', ['allquote','quote','lost']) +
+    '<span style="font-size:15px;color:#b4afa6;font-weight:700" title="見積が受注になると次のフェーズへ">→</span>' +
+    groupBox('② 受注・製造', '#15803d', '#f4fdf6', ['orders','active','done']);
 }
 
 function setProjStage(stage){
