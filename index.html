@@ -8211,6 +8211,7 @@ function buildPanel(id,initData){
   </div>
 </div>`;
   document.getElementById('tab-panels').appendChild(div);
+  try{ if(typeof _est3Init_==='function') _est3Init_(id); }catch(e){ console.warn('est3 init', e); }
   CATS.forEach(c=>{
     const b=document.createElement('button');b.className='pill';b.textContent=c;
     b.onclick=()=>{const s=ts(id);s.cat=c;s.sub='';s.type=TYPE_MAP[c]||'other';document.querySelectorAll(`#cat-row-${id} .pill`).forEach(x=>x.classList.remove('sel'));b.classList.add('sel');buildSubRow(id,c);renderPast(id);buildFormArea(id,null);updateProdQuickFilter(id,c);if(typeof _setProdBaseFromCat_==='function')_setProdBaseFromCat_(id,c);};
@@ -24670,6 +24671,8 @@ function _renderEstModeCtrl_(tid){
   wrap.style.cssText = 'position:absolute;top:6px;right:14px;display:flex;gap:8px;align-items:center;z-index:2;flex-wrap:wrap;justify-content:flex-end;max-width:72%';
   wrap.innerHTML = html;
   hb.appendChild(wrap);
+  // EST3: 編集状態(受注/見積)が確定した後にタブバーの表示条件を再評価
+  try{ if(typeof _est3RenderBar_==='function') _est3RenderBar_(tid); }catch(e){}
 }
 function _enableEstEdit_(tid){
   _setEstReadonly_(tid, false);
@@ -35776,6 +35779,144 @@ function _showSeizouPreviewModal_(proj){
     + '<div>' + _renderSeizouSheet(proj) + '</div></div>';
   document.body.appendChild(m);
 }
+
+// ══════════════ EST3: 入力／見積書／製造指示書 の3タブ切替 ══════════════
+// 1回の入力データから、見積書(得意先向け)と製造指示書(現場向け)を同一パネル内で切替表示する。
+// 受注案件登録からスタートした場合は②見積書を既定で隠し、「後で作成」で後追い発行できる。
+function _est3StartedAsOrder_(id){
+  var s = (typeof ts==='function') ? ts(id) : null; if(!s) return false;
+  if(s._editingProjId) return true;      // 既存の受注案件を開いている
+  if(s._editingEstId) return false;      // 既存の見積を開いている
+  var k = document.querySelector('input[name="entry-kind-'+id+'"]:checked');
+  return !!(k && k.value==='order');     // 新規作成で「受注」種別
+}
+function _est3QuoteIssued_(id){
+  var s = (typeof ts==='function') ? ts(id) : null; if(!s) return false;
+  if(s._quoteIssuedAt) return true;
+  if(s._editingEstId) return true;       // 見積として存在＝提出物あり
+  if(s._editingProjId){
+    var p = (DB.projects||[]).find(function(x){ return x.id===s._editingProjId; });
+    if(p && (p._quoteIssuedAt || p.estId || p.quoteId || p.fromEstimate)) return true;
+  }
+  return false;
+}
+// ②見積書タブを出すか（見積スタート/後追い有効/既に提出済み なら表示）
+function _est3QuoteVisible_(id){
+  var s = (typeof ts==='function') ? ts(id) : null;
+  if(s && s._quoteEnabled) return true;
+  if(!_est3StartedAsOrder_(id)) return true;
+  return _est3QuoteIssued_(id);
+}
+function _est3Init_(id){
+  var tp = document.getElementById('tp-'+id); if(!tp || tp._est3) return; tp._est3 = true;
+  // バー
+  var bar = document.createElement('div'); bar.className='est3-bar'; bar.id='est3-bar-'+id;
+  bar.style.cssText='display:flex;align-items:center;gap:4px;border-bottom:1px solid #d8d5ce;margin:0 0 12px;flex-wrap:wrap';
+  tp.insertBefore(bar, tp.firstChild);
+  // 既存フォーム内容をラッパへ移動（各要素のdisplay状態を保つため）
+  var wrap = document.createElement('div'); wrap.className='est3-formwrap'; wrap.id='est3-form-'+id;
+  while(bar.nextSibling){ wrap.appendChild(bar.nextSibling); }
+  tp.appendChild(wrap);
+  // プレビュー枠
+  var prev = document.createElement('div'); prev.className='est3-prev'; prev.id='est3-prev-'+id; prev.style.display='none';
+  tp.appendChild(prev);
+  _est3RenderBar_(id);
+  _est3Switch_(id,'in');
+}
+function _est3Tab_(id,which,label,icon,active,badge){
+  var on = active;
+  return '<button type="button" onclick="_est3Switch_('+id+',\''+which+'\')" '
+    + 'style="all:unset;cursor:pointer;padding:8px 15px;font-size:13px;display:inline-flex;align-items:center;gap:6px;border-radius:8px 8px 0 0;margin-bottom:-1px;'
+    + (on?'background:#fff;color:#1a1a1a;font-weight:700;border:1px solid #d8d5ce;border-bottom:1px solid #fff':'background:transparent;color:#64748b;border:1px solid transparent')+'">'
+    + '<span style="font-size:14px">'+icon+'</span>'+label
+    + (badge?('<span style="'+badge.css+'">'+badge.text+'</span>'):'') + '</button>';
+}
+function _est3RenderBar_(id){
+  var bar = document.getElementById('est3-bar-'+id); if(!bar) return;
+  var cur = bar._cur || 'in';
+  var html = _est3Tab_(id,'in','入力','📝',cur==='in');
+  if(_est3QuoteVisible_(id)){
+    var issued = _est3QuoteIssued_(id);
+    var badge = issued
+      ? {text:'提出済', css:'margin-left:2px;font-size:10px;font-weight:700;background:#dcfce7;color:#15803d;padding:1px 7px;border-radius:8px'}
+      : {text:'未提出', css:'margin-left:2px;font-size:10px;font-weight:700;background:#fef3c7;color:#92400e;padding:1px 7px;border-radius:8px'};
+    html += _est3Tab_(id,'quote','見積書','📄',cur==='quote',badge);
+  } else {
+    html += '<button type="button" onclick="_est3EnableQuote_('+id+')" title="受注登録スタートですが、見積書を後追いで作成できます" '
+      + 'style="all:unset;cursor:pointer;padding:7px 12px;font-size:12px;color:#0e7490;background:#ecfeff;border:1px dashed #67e8f9;border-radius:8px;margin:0 2px 4px;display:inline-flex;align-items:center;gap:5px">＋ 見積書を後で作成</button>';
+  }
+  html += _est3Tab_(id,'mfg','製造指示書','🏭',cur==='mfg');
+  bar.innerHTML = html;
+}
+function _est3EnableQuote_(id){
+  var s = (typeof ts==='function') ? ts(id) : null; if(s) s._quoteEnabled = true;
+  _est3RenderBar_(id);
+  _est3Switch_(id,'quote');
+  if(typeof _toastMsg==='function') _toastMsg('📄 見積書を作成できます（後追い）。内容は入力タブと同じデータです');
+}
+function _est3MarkIssued_(id){
+  var s = (typeof ts==='function') ? ts(id) : null; if(!s) return;
+  s._quoteIssuedAt = new Date().toISOString();
+  if(s._editingProjId){
+    var p = (DB.projects||[]).find(function(x){ return x.id===s._editingProjId; });
+    if(p){ p._quoteIssuedAt = s._quoteIssuedAt; if(typeof saveDB==='function') saveDB(); }
+  }
+  _est3RenderBar_(id);
+  _est3Switch_(id,'quote');
+  if(typeof _toastMsg==='function') _toastMsg('✅ 見積書を「提出済」にしました');
+}
+function _est3QuoteHtml_(id){
+  try{
+    if(typeof showPV!=='function') return '<div style="padding:1.5rem;color:#991b1b">見積書プレビュー機能がありません</div>';
+    showPV([id]);
+    var ov = document.getElementById('pv-overlay');
+    var body = document.getElementById('pv-content');
+    var html = body ? body.innerHTML : '';
+    if(ov) ov.classList.remove('show');   // モーダルは即閉じ、内容だけインライン利用
+    return html || '<div style="padding:1.5rem;color:#64748b">表示できる見積書がありません</div>';
+  }catch(e){ return '<div style="padding:1.5rem;color:#991b1b">見積書の生成に失敗: '+hubEsc2_(e.message)+'</div>'; }
+}
+function _est3SeizouHtml_(id){
+  try{
+    if(typeof _renderSeizouSheet!=='function') return '<div style="padding:1.5rem;color:#991b1b">製造指示書機能がありません</div>';
+    var s = ts(id);
+    var g = function(f){ var el=document.getElementById(f+'-'+id); return el?el.value:''; };
+    var qty = (s.qtyPats && s.qtyPats[0]) ? s.qtyPats[0].v : (parseInt(g('qty'))||0);
+    var spec = '';
+    try{ spec = (s.lines||[]).map(function(l){ return [l.item,l.spec].filter(Boolean).join(' '); }).filter(Boolean).join(' / '); }catch(e){}
+    var proj = { id: g('estno')||'(未発番)', cust: g('cust'), item: g('prod'),
+      spec: spec || g('prod'), qty: qty, unit: g('unit')||'枚', due: g('due')||'',
+      enduser: g('enduser'), _provisional:false, status:'受注(プレビュー)' };
+    return _renderSeizouSheet(proj);
+  }catch(e){ return '<div style="padding:1.5rem;color:#991b1b">製造指示書の生成に失敗: '+hubEsc2_(e.message)+'</div>'; }
+}
+function _est3Switch_(id, which){
+  var bar = document.getElementById('est3-bar-'+id);
+  var form = document.getElementById('est3-form-'+id);
+  var prev = document.getElementById('est3-prev-'+id);
+  if(!bar||!form||!prev) return;
+  if(which!=='in' && which==='quote' && !_est3QuoteVisible_(id)){ which='in'; }
+  bar._cur = which;
+  if(which==='in'){
+    form.style.display=''; prev.style.display='none';
+  } else {
+    var inner = (which==='quote') ? _est3QuoteHtml_(id) : _est3SeizouHtml_(id);
+    var head = (which==='quote')
+      ? '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
+          + '<span style="font-size:12px;color:#64748b">得意先向けの御見積書（入力タブと同じデータ）</span>'
+          + '<span style="display:flex;gap:6px">'
+          + '<button class="btn" style="font-size:12px;padding:5px 12px" onclick="showPV(['+id+'])" title="拡大表示・印刷・PDF">🖨 印刷 / PDF</button>'
+          + (_est3QuoteIssued_(id)?'':'<button class="btn" style="font-size:12px;padding:5px 12px;background:#16a34a;color:#fff;border-color:#16a34a" onclick="_est3MarkIssued_('+id+')" title="この見積書を提出済みにします">✅ 提出済にする</button>')
+          + '</span></div>'
+      : '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
+          + '<span style="font-size:12px;color:#64748b">現場向けの製造指示書（入力タブと同じデータ）</span>'
+          + '<button class="btn" style="font-size:12px;padding:5px 12px" onclick="_previewSeizouFromTab_('+id+')" title="拡大表示・印刷">🖨 印刷</button></div>';
+    prev.innerHTML = '<div class="est3-prev-inner" style="background:#f4f3f0;border:1px solid #e2e0da;border-radius:10px;padding:14px">'+head+'<div style="background:#fff;border-radius:8px;overflow:auto">'+inner+'</div></div>';
+    form.style.display='none'; prev.style.display='block';
+  }
+  _est3RenderBar_(id);
+}
+function hubEsc2_(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // PPPPP-1: 見積作成タブの内容を「見積中」として保存 (案件管理の見積中に表示)
 function saveEstimateAsQuote(tabId){
