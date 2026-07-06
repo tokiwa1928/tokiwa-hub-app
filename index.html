@@ -8438,7 +8438,8 @@ function stackCostPanels(area,id){
         pa.innerHTML='<b style="color:#3730a3">🎯 刷版 自動計算</b>'+
           '<label style="color:#4338ca">色数 <input id="plate-colors-'+id+'" type="number" min="0" value="1" style="width:46px;font-size:12px" oninput="calc('+id+')" title="特色・白版・ニス版も各1版で数える"></label>'+
           '<label style="color:#4338ca">面 <select id="plate-sides-'+id+'" style="font-size:12px" onchange="calc('+id+')"><option value="1">片面</option><option value="2">両面</option></select></label>'+
-          '<label style="color:#4338ca">版単価 ¥<input id="plate-unit-'+id+'" type="number" min="0" value="'+_defUnit+'" style="width:64px;font-size:12px" oninput="calc('+id+')" title="製版・CTPマスタの版単価（サイズ別に変える場合はここを変更）"></label>'+
+          '<label style="color:#4338ca">版サイズ <select id="plate-size-'+id+'" style="font-size:12px" onchange="_plateSizeChange_('+id+')"><option value="auto">🔄 自動（面付で選定）</option>'+PLATE_PRESSES.map(function(p){return '<option value="'+p.key+'">'+p.label+' ¥'+p.price+'</option>';}).join('')+'</select><span id="plate-size-hint-'+id+'" style="margin-left:4px;color:#6d5ae0;font-size:11px"></span></label>'+
+          '<label style="color:#4338ca">版単価 ¥<input id="plate-unit-'+id+'" type="number" min="0" value="'+_defUnit+'" style="width:64px;font-size:12px" oninput="calc('+id+')" title="版サイズ選択で自動セット。手動変更も可"></label>'+
           '<span style="color:#4338ca">= 版数 <b id="plate-count-'+id+'">1</b> 版</span>'+
           '<span style="margin-left:auto;font-weight:800;color:#3730a3">刷版代 <span id="plate-auto-amt-'+id+'">¥'+_defUnit.toLocaleString()+'</span></span>';
         h.insertAdjacentElement('afterend', pa);
@@ -9610,6 +9611,36 @@ function autoSheetsRow(tr,qty){
 
 // ═══ アナログ(オフセット) vs デジタル 原価比較 ═══
 // デジタル機のクリック単価（1通し=1シートあたり。s=片面/d=両面）
+// オフセット刷版の版サイズ×機械×版単価（2026-07-06。取り急ぎ・後で変更あり）
+var PLATE_PRESSES=[
+  {key:'roland', label:'ローランド 740×605', w:740, h:605, price:872},
+  {key:'hamadaB3', label:'ハマダB3 564×470', w:564, h:470, price:515},
+  {key:'hamadaA3', label:'ハマダA3カード機 324×492', w:324, h:492, price:317},
+];
+// 仕上がりが1面以上収まる最小の版を自動選択（面付で版を選ぶ・後で機械特徴で精緻化）
+function _autoPlatePress_(finishSizeName){
+  var fin=(typeof getSizeMM==='function')?getSizeMM(finishSizeName):null;
+  var order=[PLATE_PRESSES[2],PLATE_PRESSES[1],PLATE_PRESSES[0]]; // 小→中→大
+  if(fin){ for(var i=0;i<order.length;i++){ var p=order[i]; var a=Math.floor(p.w/(fin.w+3))*Math.floor(p.h/(fin.h+3)); var b=Math.floor(p.w/(fin.h+3))*Math.floor(p.h/(fin.w+3)); if(Math.max(a,b)>=1) return order[i]; } }
+  return PLATE_PRESSES[0]; // 判定不可は大版
+}
+// 版サイズselectの変更→版単価をセットして再計算（自動なら仕上がりサイズから選定）
+function _plateSizeChange_(id){
+  var sel=document.getElementById('plate-size-'+id); if(!sel) return;
+  var unitEl=document.getElementById('plate-unit-'+id); if(!unitEl) return;
+  var press;
+  if(sel.value==='auto'){
+    var fin=document.getElementById('finish-sel-'+id); var finV=fin?(fin.value||''):'';
+    press=_autoPlatePress_(finV);
+    var hint=document.getElementById('plate-size-hint-'+id);
+    if(hint) hint.textContent='→ '+press.label+' ¥'+press.price;
+  } else {
+    press=PLATE_PRESSES.find(function(p){return p.key===sel.value;})||PLATE_PRESSES[0];
+    var hint2=document.getElementById('plate-size-hint-'+id); if(hint2) hint2.textContent='';
+  }
+  unitEl.value=press.price;
+  if(typeof calc==='function') calc(id);
+}
 var DIGITAL_RATES={
   'COMP002':{ label:'トキワデジタル', machines:[
     {n:'bizhub Press 1052', modes:{mono:{s:0.7,d:1.4}}},
@@ -9780,6 +9811,15 @@ function calc(id){
   document.querySelectorAll(`#pl-${id} tr`).forEach(tr=>{plT+=saWithMC(tr);});
   // 刷版 自動原価: 版数(色数×面)×版単価 を製版合計に加算（刷版は保管しないので毎回発生）
   {
+    // 版サイズが🔄自動なら、仕上がりサイズから版を再解決して版単価をセット（再帰なしで直接）
+    const _pszEl=document.getElementById(`plate-size-${id}`);
+    const _punEl=document.getElementById(`plate-unit-${id}`);
+    if(_pszEl && _punEl && _pszEl.value==='auto'){
+      const _fin=document.getElementById(`finish-sel-${id}`); const _finV=_fin?(_fin.value||''):'';
+      const _ap=_autoPlatePress_(_finV);
+      _punEl.value=_ap.price;
+      const _hint=document.getElementById(`plate-size-hint-${id}`); if(_hint)_hint.textContent='→ '+_ap.label+' ¥'+_ap.price;
+    }
     const _pcol=parseFloat(document.getElementById(`plate-colors-${id}`)?.value)||0;
     const _psid=parseFloat(document.getElementById(`plate-sides-${id}`)?.value)||1;
     const _pun=parseFloat(document.getElementById(`plate-unit-${id}`)?.value)||0;
