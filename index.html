@@ -4280,6 +4280,11 @@ async function loadFromCloud() {
     DB.calendarOrders = result.data.calendarOrders;
   }
 
+  // 連絡宛先マスタ（LW/メール宛先・全社共有／会社別閲覧権限）
+  if (Array.isArray(result.data.contactTargets)) {
+    DB.contactTargets = result.data.contactTargets;
+  }
+
   // 問い合わせ
   if (result.data.inquiries) {
     DB.inquiries = result.data.inquiries;
@@ -4798,6 +4803,7 @@ async function saveToCloud() {
     purchaseOrders: DB.purchaseOrders || [],
     bookmarks: DB.bookmarks || [],
     bookmarkCategories: DB.bookmarkCategories || [],
+    contactTargets: DB.contactTargets || [],
     leadTimeMaster: DB.leadTimeMaster || {},
     bookmarksDeleted: (DB.bookmarksDeleted || []).slice(-500),
     bookmarkCategoriesDeleted: (DB.bookmarkCategoriesDeleted || []).slice(-200)
@@ -17471,7 +17477,7 @@ function showOutsourceQuoteModal(inqId){
 
   // 連絡宛先マスタからLW/LINE宛先も
   var lwTargets = (typeof _getContactTargets_ === 'function')
-    ? _getContactTargets_().filter(function(t){ return t.type === 'lw_user' || t.type === 'lw_channel'; })
+    ? _visibleContactTargets_().filter(function(t){ return t.type === 'lw_user' || t.type === 'lw_channel'; })
     : [];
 
   // 匿名化された依頼内容を生成
@@ -22684,7 +22690,7 @@ function _mitRenderLwSend_(){
   // LINE WORKS トークルーム候補: 会社別既定 + 連絡宛先マスタ(lw_channel)
   var rooms=[]; var seen={};
   if(typeof MIT_LW_ROOMS!=='undefined' && MIT_LW_ROOMS[co]){ var d=MIT_LW_ROOMS[co]; rooms.push({name:d.name+'（既定）',targetId:d.targetId}); seen[d.targetId]=1; }
-  try{ (typeof _getContactTargets_==='function'?_getContactTargets_():[]).filter(function(t){return t.type==='lw_channel';}).forEach(function(t){ if(t.targetId&&!seen[t.targetId]){ rooms.push({name:t.name||t.targetId,targetId:t.targetId}); seen[t.targetId]=1; } }); }catch(e){}
+  try{ (typeof _visibleContactTargets_==='function'?_visibleContactTargets_():[]).filter(function(t){return t.type==='lw_channel';}).forEach(function(t){ if(t.targetId&&!seen[t.targetId]){ rooms.push({name:t.name||t.targetId,targetId:t.targetId}); seen[t.targetId]=1; } }); }catch(e){}
   var roomOpts=rooms.map(function(t){ return '<option value="'+_formEsc_(t.targetId)+'">'+_formEsc_(t.name)+'</option>'; }).join('');
   var ist='font-size:12px;padding:5px 8px;border:1px solid #ccc;border-radius:6px';
   var lwInner = rooms.length
@@ -27803,6 +27809,7 @@ async function submitDriveRoot(){
 var CONTACT_TARGET_TYPES = {
   'lw_user':     { label:'📲 LW ユーザー',    color:'#10b981' },
   'lw_channel':  { label:'💬 LW トークルーム', color:'#06b6d4' },
+  'email':       { label:'✉️ メール',         color:'#6366f1' },
   'line_notify': { label:'💚 LINE Notify',    color:'#06c755' }
 };
 
@@ -27812,10 +27819,32 @@ function _getContactTargets_(){
   return DB.contactTargets;
 }
 
-function _filterContactTargets_(typeFilter){
+// 閲覧権限(scope): 'all'=全社共有 / 'COMP00X'=その会社のみ。TK管理者は全件閲覧可・作成者は自分のは常に可。
+function _ctCanView_(t){
+  if(!t) return false;
+  var sc = t.scope || 'all';
+  if(sc === 'all') return true;
+  try{ if(typeof _canSeeAllCosts_==='function' && _canSeeAllCosts_()) return true; }catch(e){}
+  var myCo = (typeof currentAuth!=='undefined' && currentAuth && currentAuth.companyId) || '';
+  if(sc === myCo) return true;
+  if(t.createdBy && typeof currentAuth!=='undefined' && currentAuth && t.createdBy === currentAuth.email) return true;
+  return false;
+}
+// 閲覧権限ラベル（会社名 or 全社）
+function _ctScopeLabel_(sc){
+  if(!sc || sc === 'all') return '全社共有';
+  var c = (DB.companies||[]).find(function(x){ return x.id === sc; });
+  return c ? c.name : sc;
+}
+// 表示・選択用: 現ユーザーが閲覧できる宛先だけ返す
+function _visibleContactTargets_(typeFilter){
   return _getContactTargets_().filter(function(t){
-    return !typeFilter || t.type === typeFilter;
+    return _ctCanView_(t) && (!typeFilter || t.type === typeFilter);
   });
+}
+
+function _filterContactTargets_(typeFilter){
+  return _visibleContactTargets_(typeFilter);
 }
 
 function addContactTarget(opts){
@@ -27826,6 +27855,7 @@ function addContactTarget(opts){
     type: opts.type || 'lw_user',
     targetId: opts.targetId || '',
     group: opts.group || '',
+    scope: opts.scope || 'all',
     note: opts.note || '',
     createdAt: new Date().toISOString(),
     createdBy: (currentAuth && currentAuth.email) || ''
@@ -27850,7 +27880,7 @@ function deleteContactTarget(id){
 
 // 宛先マスタ管理モーダル
 function showContactTargetMaster(){
-  var list = _getContactTargets_();
+  var list = _visibleContactTargets_();
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
@@ -27866,7 +27896,8 @@ function showContactTargetMaster(){
         var meta = CONTACT_TARGET_TYPES[t.type] || { label:t.type, color:'#888' };
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:#f9fafb;border-radius:4px;margin-bottom:4px">' +
           '<div style="flex:1">' +
-            '<div style="display:flex;gap:6px;align-items:center"><span style="background:' + meta.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700">' + meta.label + '</span><strong style="font-size:13px">' + _escDiff(t.name) + '</strong></div>' +
+            '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="background:' + meta.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700">' + meta.label + '</span><strong style="font-size:13px">' + _escDiff(t.name) + '</strong>' +
+              '<span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;' + ((!t.scope||t.scope==='all')?'background:#e0e7ff;color:#3730a3':'background:#fef3c7;color:#92400e') + '">' + ((!t.scope||t.scope==='all')?'🌐 ':'🔒 ') + _escDiff(_ctScopeLabel_(t.scope)) + '</span></div>' +
             '<div style="font-size:10px;color:#888;font-family:monospace;margin-top:2px">' + _escDiff(t.targetId) + '</div>' +
             (t.note ? '<div style="font-size:10px;color:#666;margin-top:2px">' + _escDiff(t.note) + '</div>' : '') +
           '</div>' +
@@ -27894,6 +27925,8 @@ function showContactTargetAddModal(){
   var typeOpts = Object.keys(CONTACT_TARGET_TYPES).map(function(k){
     return '<option value="' + k + '">' + CONTACT_TARGET_TYPES[k].label + '</option>';
   }).join('');
+  var scopeOpts = '<option value="all">🌐 全社共有（全員が使える）</option>' +
+    (DB.companies||[]).map(function(c){ return '<option value="' + c.id + '">🔒 ' + _escDiff(c.name) + ' のみ</option>'; }).join('');
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
@@ -27903,7 +27936,8 @@ function showContactTargetAddModal(){
       '<div style="padding:18px 20px;display:grid;gap:10px">' +
         '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">種別</div><select id="ct-type" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + typeOpts + '</select></label>' +
         '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">表示名 *</div><input id="ct-name" placeholder="例: 田中製造部長 / 制作部チャット" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
-        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">ID / トークンキー *</div><input id="ct-targetId" placeholder="LW: user-uuid または channel-id / LINE: トークンキー名 (default 等)" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">ID / メール / トークンキー *</div><input id="ct-targetId" placeholder="LW: user-uuid / channel-id ／ メール: address@example.com ／ LINE: トークンキー名" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">閲覧権限 (誰が使える)</div><select id="ct-scope" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + scopeOpts + '</select></label>' +
         '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">グループ (任意)</div><input id="ct-group" placeholder="例: 制作部 / 営業部 / 配送部" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px" list="ct-group-list"><datalist id="ct-group-list">' + Array.from(new Set(_getContactTargets_().map(function(t){ return t.group || ''; }).filter(Boolean))).map(function(g){ return '<option value="' + g + '">'; }).join('') + '</datalist></label>' +
         '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">備考</div><textarea id="ct-note" rows="2" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical"></textarea></label>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">' +
@@ -28039,6 +28073,7 @@ function submitContactTargetAdd(){
     type: document.getElementById('ct-type')?.value || 'lw_user',
     targetId: targetId,
     group: (document.getElementById('ct-group')?.value || '').trim(),
+    scope: document.getElementById('ct-scope')?.value || 'all',
     note: (document.getElementById('ct-note')?.value || '').trim()
   });
   document.querySelector('.proof-modal')?.remove();
@@ -45472,7 +45507,7 @@ function showLineworksForwardModal(inqId, prefilledText){
             '<option value="">— マスタから選ぶ —</option>' +
             (function(){
               var groups = {};
-              _getContactTargets_().filter(function(t){ return t.type === 'lw_user' || t.type === 'lw_channel'; }).forEach(function(t){
+              _visibleContactTargets_().filter(function(t){ return t.type === 'lw_user' || t.type === 'lw_channel'; }).forEach(function(t){
                 var g = t.group || '(未分類)';
                 if(!groups[g]) groups[g] = [];
                 groups[g].push(t);
