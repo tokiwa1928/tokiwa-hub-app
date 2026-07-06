@@ -7974,6 +7974,19 @@ function buildPanel(id,initData){
     </div>
   </div>
 </div>
+<!-- ⚖️ アナログ vs デジタル 原価比較 -->
+<div class="sec" id="price-compare-sec-${id}" style="background:#f5f3ff;border:1px solid #ddd6fe">
+  <div class="st" style="color:#5b21b6;display:flex;align-items:center;gap:8px;flex-wrap:wrap">⚖️ アナログ vs デジタル 原価比較
+    <span style="font-size:11px;font-weight:400;color:#7c3aed">同じ仕様で両方式の原価を出し、安い方を選べます（少部数=デジタル・多部数=アナログが有利）</span></div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;font-size:12px">
+    <div class="f" style="min-width:74px"><label>数量</label><input id="pc-qty-${id}" type="number" min="1" placeholder="例:500" oninput="_renderPriceCompare_(${id})"></div>
+    <div class="f" style="min-width:74px"><label>面付数</label><input id="pc-men-${id}" type="number" min="1" value="1" oninput="_renderPriceCompare_(${id})"></div>
+    <div class="f" style="min-width:110px"><label>色モード</label><select id="pc-mode-${id}" onchange="_renderPriceCompare_(${id})"><option value="color">カラー</option><option value="monocolor">モノカラー(1色)</option><option value="mono">モノクロ</option></select></div>
+    <div class="f" style="min-width:78px"><label>面</label><select id="pc-sides-${id}" onchange="_renderPriceCompare_(${id})"><option value="1">片面</option><option value="2">両面</option></select></div>
+    <div class="f" style="min-width:150px"><label>デジタル機（既定=最安）</label><select id="pc-machine-${id}" onchange="_renderPriceCompare_(${id})"></select></div>
+  </div>
+  <div id="pc-result-${id}" style="margin-top:8px"><div style="font-size:12px;color:#7c3aed">数量・面付を入れると比較が出ます</div></div>
+</div>
 <div class="sec">
   <div class="st" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
     <span>数量・単価（見積明細）</span>
@@ -9587,6 +9600,68 @@ function autoSheetsRow(tr,qty){
   }
 }
 
+// ═══ アナログ(オフセット) vs デジタル 原価比較 ═══
+// デジタル機のクリック単価（1通し=1シートあたり。s=片面/d=両面）
+var DIGITAL_RATES={
+  'COMP002':{ label:'トキワデジタル', machines:[
+    {n:'bizhub Press 1052', modes:{mono:{s:0.7,d:1.4}}},
+    {n:'AccurioPress C4080', modes:{color:{s:5.5,d:11}, mono:{s:0.7,d:1.4}, monocolor:{s:3,d:6}}},
+    {n:'AccurioPress C3070', modes:{color:{s:6,d:12}, mono:{s:0.7,d:1.4}, monocolor:{s:3.4,d:6.8}}},
+  ]},
+  'COMP004':{ label:'北上デジタル', machines:[
+    {n:'北上デジタル', modes:{color:{s:8,d:16}, mono:{s:1.5,d:3}, monocolor:{s:8,d:16}}},
+  ]},
+};
+function _digitalGroupFor_(companyId){ return DIGITAL_RATES[companyId] ? companyId : 'COMP002'; }
+// 会社・色モード・面から使える機械リスト（単価付き）。安い順
+function _digitalMachines_(companyId, mode, sides){
+  var grp=DIGITAL_RATES[_digitalGroupFor_(companyId)]; var sk=sides>=2?'d':'s';
+  var out=[];
+  grp.machines.forEach(function(m){ var r=m.modes[mode]; if(r&&r[sk]!=null) out.push({name:m.n, unit:r[sk]}); });
+  out.sort(function(a,b){return a.unit-b.unit;});
+  return out;
+}
+function _renderPriceCompare_(id){
+  var host=document.getElementById('pc-result-'+id); if(!host) return;
+  var parts=(window._costParts_&&window._costParts_[id])||{grand:0,plate:0,print:0};
+  var qty=parseFloat(document.getElementById('pc-qty-'+id)?.value)||0;
+  var men=parseFloat(document.getElementById('pc-men-'+id)?.value)||1; if(men<1)men=1;
+  var mode=document.getElementById('pc-mode-'+id)?.value||'color';
+  var sides=parseFloat(document.getElementById('pc-sides-'+id)?.value)||1;
+  var companyId=(window.currentAuth&&currentAuth.companyId)||'COMP002';
+  // 機械ドロップダウン（安い順・既定=最安）
+  var machines=_digitalMachines_(companyId, mode, sides);
+  var sel=document.getElementById('pc-machine-'+id);
+  if(sel){
+    var prev=sel.value;
+    sel.innerHTML=machines.map(function(m){return '<option value="'+m.name+'|'+m.unit+'">'+m.name+' ¥'+m.unit+'/通</option>';}).join('');
+    if(prev && [...sel.options].some(function(o){return o.value===prev;})) sel.value=prev; // 手動選択を維持
+  }
+  var chosen=(sel&&sel.value)?{name:sel.value.split('|')[0], unit:parseFloat(sel.value.split('|')[1])}:(machines[0]||{name:'-',unit:0});
+  var sheets=men>0?Math.ceil(qty/men):qty;
+  var digitalPrint=Math.round(sheets*(chosen.unit||0));
+  var analog=parts.grand||0;
+  var digital=(parts.grand||0)-(parts.plate||0)-(parts.print||0)+digitalPrint;
+  var cheaper=digital<analog?'デジタル':'アナログ';
+  var diff=Math.abs(analog-digital);
+  var fmt2=function(n){return '¥'+Math.round(n||0).toLocaleString();};
+  function box(name,val,recommend){ return '<div style="flex:1;min-width:150px;background:'+(recommend?'#ecfdf5':'#fff')+';border:2px solid '+(recommend?'#10b981':'#e5e7eb')+';border-radius:10px;padding:10px 12px">'
+    +'<div style="font-size:12px;font-weight:800;color:#374151">'+name+(recommend?' <span style="color:#059669">👍 推奨</span>':'')+'</div>'
+    +'<div style="font-size:22px;font-weight:900;color:#111827;margin-top:2px">'+fmt2(val)+'</div>'
+    +'<button class="btn" style="margin-top:6px;font-size:11px;'+(recommend?'background:#10b981;color:#fff;border-color:#10b981':'')+'" onclick="_selectPrintMethod_('+id+',\''+(name.indexOf("デジタル")>=0?"digital":"analog")+'\','+val+')">この方式で確定</button>'
+    +'</div>'; }
+  host.innerHTML='<div style="display:flex;gap:10px;flex-wrap:wrap">'
+    + box('🖨 アナログ(オフセット)', analog, cheaper==='アナログ')
+    + box('💻 デジタル('+chosen.name+')', digital, cheaper==='デジタル')
+    + '</div>'
+    + '<div style="margin-top:6px;font-size:12px;color:#4b5563">印刷数量 '+sheets.toLocaleString()+' 通（'+qty.toLocaleString()+'部÷面付'+men+'）× ¥'+chosen.unit+'/通 = デジタル印刷費 '+fmt2(digitalPrint)+'　｜　差額 <b style="color:#b45309">'+fmt2(diff)+'</b>（'+cheaper+'が安い）</div>';
+}
+function _selectPrintMethod_(id, method, cost){
+  window._printMethod_=window._printMethod_||{}; window._printMethod_[id]=method;
+  var t=(typeof ts==='function')?ts(id):null; if(t){ t.printMethod=method; }
+  alert((method==='digital'?'デジタル':'アナログ(オフセット)')+' を採用しました（原価 '+('¥'+Math.round(cost).toLocaleString())+'）。見積・原価に反映されます。');
+}
+
 function calc(id){
   const s=ts(id);const type=s.type;
   let pT=0,prT=0,plT=0,bT=0;
@@ -9703,6 +9778,8 @@ function calc(id){
   const grand=pT+prT+plT+dtT+bT;
   ['paper','print','plate','data','bind'].forEach((k,i)=>{const v=[pT,prT,plT,dtT,bT][i];const b=document.getElementById(`cb-${k}-${id}`);if(b)b.textContent=v>0?fmt(v):'¥0';const g=document.getElementById(`g-${k}-${id}`);if(g)g.textContent=fmt(v);const sub=document.getElementById(`sub-${k}-${id}`);if(sub)sub.textContent=fmt(v);});
   const gg=document.getElementById(`g-grand-${id}`);if(gg)gg.textContent=fmt(grand);
+  // アナログ/デジタル比較用に原価内訳を保持（共通費=grand−刷版−オフセット印刷）
+  try{ window._costParts_=window._costParts_||{}; window._costParts_[id]={grand:grand, plate:plT, print:prT, paper:pT, common:grand-plT-prT}; if(typeof _renderPriceCompare_==='function' && document.getElementById(`pc-result-${id}`)) _renderPriceCompare_(id); }catch(e){}
 
   const tr2=parseFloat(document.getElementById(`trate-${id}`)?.value)/100||0.75;
   const unit=document.getElementById(`unit-${id}`)?.value||'セット';
