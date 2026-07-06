@@ -14042,7 +14042,9 @@ function renderProcessBoard(){
   var pw=document.getElementById('pb-period-wrapper');
   if(pw && typeof _renderPeriodFilter_==='function') pw.innerHTML=_renderPeriodFilter_('sched-body','renderProcessBoard', scoped.length);
   if(typeof _pbSummaryBar_==='function') _pbSummaryBar_(list);
-  if(!list.length){ box.innerHTML='<div style="text-align:center;color:#94a3b8;padding:2rem;font-size:13px">該当する案件がありません</div>'; return; }
+  // 「未確定・要入力」カードで絞り込み中は該当のみ表示（集計はサマリーで全体表示済み）
+  if(window._pbOnlyProvisional_){ list=list.filter(function(r){ return r._provisional || !(r.exTax>0); }); }
+  if(!list.length){ box.innerHTML='<div style="text-align:center;color:#94a3b8;padding:2rem;font-size:13px">'+(window._pbOnlyProvisional_?'未確定・要入力の案件はありません（漏れなし）':'該当する案件がありません')+'</div>'; return; }
   var LIMIT=200;
   var shown=list.slice(0,LIMIT);
   var remMap=_pbReminderMap_();
@@ -14252,7 +14254,7 @@ function _pbSummaryBar_(list){
   list=list||[];
   var today=new Date().toISOString().slice(0,10), todayT=new Date(today).getTime();
   function isDoneP(r){ return r.status==='納品済'||r.status==='完了'||r.status==='キャンセル'||(r.steps&&r.steps['納品']==='納品済'); }
-  var n=list.length, overdue=0, soon=0, extN=0;
+  var n=list.length, overdue=0, soon=0, extN=0, provN=0;
   list.forEach(function(r){
     var done=isDoneP(r);
     if(r.dueDate && !done){
@@ -14263,16 +14265,28 @@ function _pbSummaryBar_(list){
       || (DB.outsourceOrders||[]).some(function(o){return o&&o.projectId===r.id;})
       || (DB.intercoOrders||[]).some(function(o){return o&&o.projectId===r.id;});
     if(hasExt) extN++;
+    // 漏れ検知: 進行中なのに未確定(⚠) or 金額未入力 = 受注/見積の入れ忘れの兆候
+    if(!done && (r._provisional || !(r.exTax>0))) provN++;
   });
   var rem=_pbReminderMap_(); var remTot=0; Object.keys(rem).forEach(function(k){ remTot+=rem[k]; });
   function card(jp,val,bg){ return '<div style="background:'+bg+';border-radius:7px;padding:8px 14px;min-width:96px">'
     +'<div style="font-size:10.5px;color:rgba(255,255,255,.8)">'+jp+'</div>'
     +'<div style="font-size:19px;font-weight:700;color:#fff;font-family:\'JetBrains Mono\',monospace;margin-top:1px">'+val+'<span style="font-size:12px;font-weight:400;color:rgba(255,255,255,.7)"> 件</span></div></div>'; }
+  // 漏れ検知カードはクリックで該当案件だけに絞り込み
+  function alertCard(jp,val,bg,onclk){ return '<div onclick="'+onclk+'" style="background:'+bg+';border-radius:7px;padding:8px 14px;min-width:96px;cursor:pointer" title="クリックで該当案件だけ表示">'
+    +'<div style="font-size:10.5px;color:rgba(255,255,255,.85)">'+jp+'</div>'
+    +'<div style="font-size:19px;font-weight:700;color:#fff;font-family:\'JetBrains Mono\',monospace;margin-top:1px">'+val+'<span style="font-size:12px;font-weight:400;color:rgba(255,255,255,.7)"> 件</span></div></div>'; }
   bar.innerHTML=card('対象案件', n.toLocaleString(), '#211f1c')
+    +alertCard('⚠未確定・要入力', provN.toLocaleString(), provN>0?'#b91c1c':'#211f1c', '_pbFilterProvisional_()')
     +card('納期遅れ', overdue.toLocaleString(), overdue>0?'#7f1d1d':'#211f1c')
     +card('納期間近 7日', soon.toLocaleString(), soon>0?'#854d0e':'#211f1c')
     +card('外注あり', extN.toLocaleString(), extN>0?'#9a3412':'#211f1c')
     +card('確認連絡', remTot.toLocaleString(), remTot>0?'#0f6e56':'#211f1c');
+}
+// 「未確定・要入力」カードのクリック→検索欄を使わず一時フラグで絞り込み
+function _pbFilterProvisional_(){
+  window._pbOnlyProvisional_ = !window._pbOnlyProvisional_;
+  if(typeof renderProcessBoard==='function') renderProcessBoard();
 }
 // 送信待ち確認連絡の projectId→件数 マップ（行内バッジ用。旧 projectSchedules 由来）
 function _pbReminderMap_(){
