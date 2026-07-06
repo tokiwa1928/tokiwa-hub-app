@@ -7861,6 +7861,14 @@ function buildPanel(id,initData){
         <option value="yes">有</option>
       </select>
     </div>
+    <div class="f" style="min-width:120px">
+      <label>用紙区分 <span style="font-size:9px;color:#a8641f">工程連動</span></label>
+      <select id="paper-mode-${id}" title="自社手配=用紙注文工程を出す／支給=用紙待ちを表示／不要=用紙工程なし">
+        <option value="self">自社手配</option>
+        <option value="supply">支給（用紙待ち）</option>
+        <option value="none">不要</option>
+      </select>
+    </div>
   </div>
   <!-- 発注形態（独立ブロック） -->
   <div style="margin-top:6px;padding:.5rem .8rem;background:#eef2ff;border:1px solid #c7d2fe;border-radius:7px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -14133,7 +14141,7 @@ function renderProcessBoard(){
   var shown=list.slice(0,LIMIT);
   var remMap=_pbReminderMap_();
   // 工程列（受注＋版下→校了→色合わせ→ミシン出し→印刷→加工→納品）。各セルに日程が入る
-  var COLS=[{k:'受注',ic:'📝'},{k:'版下',ic:'📐'},{k:'校了',ic:'🆗'},{k:'色合わせ',ic:'🎨'},{k:'ミシン出し',ic:'🪡'},{k:'印刷',ic:'🖨'},{k:'加工',ic:'✂'},{k:'納品',ic:'🚚'}];
+  var COLS=[{k:'受注',ic:'📝'},{k:'用紙',ic:'📄'},{k:'版下',ic:'📐'},{k:'校了',ic:'🆗'},{k:'色合わせ',ic:'🎨'},{k:'ミシン出し',ic:'🪡'},{k:'印刷',ic:'🖨'},{k:'加工',ic:'✂'},{k:'納品',ic:'🚚'}];
   function md(d){ d=String(d||''); return d.length>=10? d.slice(5).replace('-','/') : d; }
   var BD='1px solid #b4b0a4';
   // ヘッダー（案件管理と同じ黒帯）
@@ -14209,6 +14217,18 @@ function renderProcessBoard(){
       // この案件に適用されない工程（例: ミシン出し/色合わせ無し）はグレーで対象外
       if(applic.indexOf(c.k)<0){
         td+='<td style="border:'+BD+';text-align:center;background:#f7f6f2;color:#cfccc3;font-size:12.5px">·</td>';
+        return;
+      }
+      // 用紙列＝仕入。支給→⏳用紙待ち、自社手配→未発注/発注済/入荷。クリックで状態を進める
+      if(c.k==='用紙'){
+        var pm=r.paperMode; var uv=r.steps['用紙']||'';
+        var uDone=/入荷|完了|受領|済/.test(uv);
+        var uLabel, uBg, uCol;
+        if(pm==='supply'){ if(uDone){ uLabel='✅入荷済'; uBg='#f0fdf4'; uCol='#15803d'; } else { uLabel='⏳用紙待ち'; uBg='#fef3c7'; uCol='#92400e'; } }
+        else { if(uDone){ uLabel='✅入荷'; uBg='#f0fdf4'; uCol='#15803d'; } else if(/発注/.test(uv)){ uLabel='📦発注済'; uBg='#eff6ff'; uCol='#1d4ed8'; } else { uLabel='未発注'; uBg='#fff'; uCol='#94a3b8'; } }
+        var uPlan=r.stepPlanned['用紙']||'';
+        var uPlanSpan='<div style="margin-top:1px"><span onclick="event.stopPropagation();_pbSetStepPlanned_('+oi+',\'用紙\',event)" style="cursor:pointer;color:'+(uPlan?'#475569':'#b9b5aa')+';font-size:10px">'+(uPlan?('📅'+md(uPlan)):'📅予定')+'</span></div>';
+        td+='<td onclick="event.stopPropagation();_pbCyclePaper_('+oi+',event)" title="用紙('+(pm==='supply'?'支給':'自社手配')+')。クリックで状態を進める" style="border:'+BD+';text-align:center;font-size:11.5px;font-weight:'+(uDone?'700':'600')+';background:'+uBg+';color:'+uCol+';white-space:nowrap;cursor:pointer">'+uLabel+uPlanSpan+'</td>';
         return;
       }
       // 校了列＝校正BOX(proofings)連動。校数(初校〜n校)はBOXで管理し、ここは「○校中／校了」を表示
@@ -14370,6 +14390,19 @@ function _pbSummaryBar_(list){
 // 「未確定・要入力」カードのクリック→検索欄を使わず一時フラグで絞り込み
 function _pbFilterProvisional_(){
   window._pbOnlyProvisional_ = !window._pbOnlyProvisional_;
+  if(typeof renderProcessBoard==='function') renderProcessBoard();
+}
+// 用紙工程の状態をクリックで進める（支給: 待ち→入荷済／自社手配: 未発注→発注済→入荷）
+function _pbCyclePaper_(oi, ev){
+  if(ev) ev.stopPropagation();
+  var p=(DB.projects||[])[oi]; if(!p) return;
+  p.steps=p.steps||{}; p.stepDates=p.stepDates||{};
+  var cyc = p.paperMode==='supply' ? ['','入荷済'] : ['','発注済','入荷'];
+  var cur=p.steps['用紙']||''; var i=cyc.indexOf(cur); if(i<0)i=0; i=(i+1)%cyc.length;
+  p.steps['用紙']=cyc[i];
+  if(/入荷|済/.test(cyc[i])) p.stepDates['用紙']=new Date().toISOString().slice(0,10); else delete p.stepDates['用紙'];
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') saveToCloud();
   if(typeof renderProcessBoard==='function') renderProcessBoard();
 }
 // 送信待ち確認連絡の projectId→件数 マップ（行内バッジ用。旧 projectSchedules 由来）
@@ -34717,6 +34750,10 @@ function _procStepsFor_(p){
   var steps=(typeof PROC_STEPS!=='undefined'?PROC_STEPS:['版下','校了','印刷','加工','納品']).slice();
   if(!p) return steps;
   function insBeforePrint(name){ if(steps.indexOf(name)>=0) return; var i=steps.indexOf('印刷'); if(i<0)i=steps.length; steps.splice(i,0,name); }
+  // 用紙(仕入): 自社手配/支給なら先頭に工程追加。不要/未設定は出さない(既存案件は従来通り)
+  if(p.paperMode==='self' || p.paperMode==='supply'){ if(steps.indexOf('用紙')<0) steps.unshift('用紙'); }
+  // 版下: リピートで版下変更なし(既存版)は版下工程を出さない
+  if((p.jobType==='repeat'||p.isRepeat||p.repeatFrom) && (p.plateChange==='no'||p.plateChange===false)){ var vi=steps.indexOf('版下'); if(vi>=0) steps.splice(vi,1); }
   // 色合わせ（任意・必要時のみ。リピートは不要が基本）
   if(p.needColorMatch && !(p.repeatFrom||p.isRepeat)) insBeforePrint('色合わせ');
   // ミシン出し（ミシン×トキワ内製で自動。p.skipMishin で除外可）
@@ -35197,7 +35234,7 @@ function confirmOrder(tabId){
     const domVals = {};
     ['cust','prod','date','spec','memo','estno','unit','valid','erate','trate',
      'finish-sel','finish-w','finish-h','expand-sel','expand-w','expand-h',
-     'job-type','spec-change','plate-change','delivery-note'].forEach(f=>{
+     'job-type','spec-change','plate-change','paper-mode','delivery-note'].forEach(f=>{
       const el=document.getElementById(`${f}-${tabId}`);
       if(el) domVals[f]=el.value;
     });
@@ -35225,6 +35262,9 @@ function confirmOrder(tabId){
     status: 'データ作成中',
     assignee: '',
     memo: '',
+    paperMode: (domVals['paper-mode']||''),   // 用紙区分: self=自社手配/supply=支給/none=不要 → 工程表の用紙工程・用紙待ちに連動
+    jobType: (domVals['job-type']||'new'),
+    plateChange: (domVals['plate-change']||''),
     steps:{版下:'─',校了:'─',印刷:'─',加工:'─',納品:'─'},
     stepDates:{},
     createdAt: new Date().toISOString(),
