@@ -4029,7 +4029,7 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   // AAAA-1: マスター番号 backfill (起動時に既存データに割り当て)
   if(typeof _backfillMasterNos_ === 'function') _backfillMasterNos_();
   // 移行による変更を永続化（しないと次回リロードで元に戻り、フラグだけ立って再実行もされない）
-  if(_didMigrate){ try{ localStorage.setItem(DBKEY, JSON.stringify(DB)); }catch(e){} }
+  if(_didMigrate){ try{ _persistLocal_(); }catch(e){} }
 }}catch(e){}}
 
 // AAAA-1/2: 既存データにマスター番号を後付けで一括割り当て (全書類)
@@ -4081,25 +4081,49 @@ function _backfillMasterNos_(){
 
     if(changed){
       console.log('🔢 マスター番号 backfill 完了 (counter=' + (DB.conf._masterNoCounter||0) + ')');
-      try { localStorage.setItem(DBKEY, JSON.stringify(DB)); } catch(e){}
+      try { _persistLocal_(); } catch(e){}
     }
   } catch(e){
     console.warn('master_no backfill failed:', e);
   }
 }
 
-function saveDB(){
-  // ローカルに保存
-  try{
-    localStorage.setItem(DBKEY,JSON.stringify(DB));
-  }catch(e){
-    try{
-      const slim={...DB,master:{...DB.master,paper:[],envelope:[]}};
-      localStorage.setItem(DBKEY,JSON.stringify(slim));
-      alert('容量超過のため用紙マスターは保存されませんでした（初期値を使用）');
-    }catch(e2){alert('ローカル保存失敗');}
+// ── localStorage 容量対策 ──────────────────────────────────────
+// 問い合わせ(inquiries)の body(メール全文)が localStorage 最大の重り(全体の約7割・数MB)。
+// 問い合わせはクラウド側で別ストア(Communications)が正: ログイン時の syncAll で毎回フル復元され、
+// 編集は updateCommunication で直接クラウドへ永続化される(saveAll は inquiries を破棄)。
+// よって localStorage ミラーは一覧表示用の軽量フィールドだけ持てば十分で、body等は保持しない。
+const _INQ_LITE_KEYS = ['id','subject','kind','status','priority','source_type','channel_company',
+  'from_name','from_email','from_company','custName','received_at','createdAt','updatedAt',
+  'assignee','category','isSpam','tags','linked_project_id','linked_quote_id','linked_invoice_id','cust_id','tel'];
+function _inqLite_(r){
+  if(!r || typeof r!=='object') return r;
+  const o={}; _INQ_LITE_KEYS.forEach(function(k){ if(k in r) o[k]=r[k]; }); o._lite=true; return o;
+}
+// level 0=問い合わせ軽量化 / 1=問い合わせ空 / 2=用紙・封筒マスタと履歴も落とす
+function _localMirror_(db, level){
+  const inq = db && db.inquiries;
+  let out = db;
+  if(Array.isArray(inq) && inq.length){
+    out = {...db, inquiries:(level>=1 ? [] : inq.map(_inqLite_))};
   }
-  // クラウドに保存
+  if(level>=2) out = {...out, master:{...(out.master||{}), paper:[], envelope:[]}, history:[]};
+  return out;
+}
+// DB を localStorage へ保存する唯一の入口。容量超過時は段階的に削って必ずどこかで成功させる。
+// 返り値: 使ったレベル(0=通常) / 全滅なら -1。
+function _persistLocal_(){
+  for(let lvl=0; lvl<=2; lvl++){
+    try{ localStorage.setItem(DBKEY, JSON.stringify(_localMirror_(DB, lvl))); return lvl; }
+    catch(e){ /* さらに削って再試行 */ }
+  }
+  try{ _toastMsg('⚠ ローカル保存に失敗（クラウドには保存されます）'); }catch(_){}
+  return -1;
+}
+function saveDB(){
+  const lvl=_persistLocal_();
+  if(lvl>=1){ try{ _toastMsg('💾 ローカルは軽量版で保存（問い合わせ全文はクラウド）'); }catch(_){} }
+  // クラウドに保存（メモリDBのフルデータを送る。問い合わせは GAS 側で別ストア管理）
   if(CLOUD_CONFIG.CLOUD_MODE && currentAuth.loggedIn){
     saveToCloud();
   }
@@ -4331,9 +4355,9 @@ async function loadFromCloud() {
     DB.conf = { ...DB.conf, ...result.data.config };
   }
   
-  // ローカルにも保存
+  // ローカルにも保存（軽量ミラー経由）
   try {
-    localStorage.setItem(DBKEY, JSON.stringify(DB));
+    _persistLocal_();
   } catch(e) {}
 
   // 🤖 自動抽出された問い合わせの件数をユーザーに通知 (Approach A: ワンクリックで見積化)
@@ -4701,7 +4725,7 @@ async function _autoRegisterExtractedEstimates_(){
   }
 
   if (registered > 0) {
-    try { localStorage.setItem(DBKEY, JSON.stringify(DB)); } catch(e){}
+    try { _persistLocal_(); } catch(e){}
     if (typeof saveToCloud === 'function') {
       try { await saveToCloud(); } catch(e){}
     }
@@ -44050,7 +44074,7 @@ function openInquiryDetail(id) {
           📨 受信メール
           ${inq.source_url ? `<a href="${inq.source_url}" target="_blank" style="font-size:11px;color:#3b82f6;text-decoration:none;font-weight:400">↗ 元を開く</a>` : ''}
         </div>
-        <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:14px;font-size:14px;line-height:1.7;white-space:pre-wrap;flex:1;min-height:440px;max-height:600px;overflow-y:auto;box-shadow:0 1px 3px rgba(0,0,0,.04)">${_escDiff(inq.body || '(本文なし)')}</div>
+        <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:14px;font-size:14px;line-height:1.7;white-space:pre-wrap;flex:1;min-height:440px;max-height:600px;overflow-y:auto;box-shadow:0 1px 3px rgba(0,0,0,.04)">${inq.body ? _escDiff(inq.body) : ((inq._lite||inq._bodyOmitted) ? ('📥 本文はクラウドから読み込みます（同期後に表示）。' + (inq.source_url ? '\nすぐ見る場合は右上の「↗ 元を開く」から。' : '')) : '(本文なし)')}</div>
       </div>
 
       <!-- RIGHT: 返信ボックス -->

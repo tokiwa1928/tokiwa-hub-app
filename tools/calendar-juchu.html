@@ -392,14 +392,28 @@ var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycb
 var HUB_API_KEY = 'mitsumori-2024';
 function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ console.error(e); return null; } }
 function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
+// localStorage容量対策: 問い合わせ本文(body)等はクラウド(Communications)が正なので、
+// 端末ミラーには一覧最小限だけ残す。容量超過時に本文を落として保存を通す。
+function _hubInqLite_(db){
+  if(!db || !Array.isArray(db.inquiries) || !db.inquiries.length) return db;
+  var KEEP=['id','subject','kind','status','priority','source_type','channel_company','from_name','from_email','from_company','custName','received_at','createdAt','updatedAt','assignee','category','isSpam','tags','linked_project_id','linked_quote_id','linked_invoice_id','cust_id','tel'];
+  var lite=db.inquiries.map(function(r){ if(!r||typeof r!=='object') return r; var o={}; KEEP.forEach(function(k){ if(k in r) o[k]=r[k]; }); o._lite=true; return o; });
+  return Object.assign({}, db, {inquiries:lite});
+}
 function hubSave(mutator){
   var db = hubLoad();
   if(!db){ hubToast('❌ 本体データが見つかりません。先に本体アプリへログインしてください'); return false; }
   try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
-  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }
-  catch(e){ hubToast('❌ 保存失敗 (容量?): ' + e); return false; }
+  var _lok=false;
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); _lok=true; }
+  catch(e){
+    // 容量超過: 問い合わせ本文等を軽量化して再試行（本文はクラウドが正）
+    try { localStorage.setItem(HUB_DBKEY, JSON.stringify(_hubInqLite_(db))); _lok=true; }
+    catch(e2){ try { var _b=_hubInqLite_(db); _b.inquiries=[]; _b.history=[]; localStorage.setItem(HUB_DBKEY, JSON.stringify(_b)); _lok=true; } catch(e3){} }
+    hubToast(_lok ? '💾 端末保存は軽量化しました（データはクラウドに保存）' : '⚠ 端末保存失敗・クラウドには保存します');
+  }
   try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
-  hubCloudPushSoon();   // 本体アプリを開いていなくても全社クラウドへ反映（消失防止）
+  hubCloudPushSoon();   // ローカル保存の成否に関わらず全社クラウドへ反映（消失防止）
   return true;
 }
 // ツール単独で全社クラウド(GAS saveAll)へ即保存。本体経由・BroadcastChannel依存をやめ、強制リロードで消えるのを防ぐ。

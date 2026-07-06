@@ -160,16 +160,66 @@
 var HUB_DBKEY = 'murayama_v15';
 var HUB_AUTHKEY = 'murayama_auth';
 var HUB_TOOL_ID = 'arteso-kanri';
+// 本体(index.html)の CLOUD_CONFIG と同じ値。ツール単独でも全社クラウド(GAS)へ直接保存するために使う。
+var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
+var HUB_API_KEY = 'mitsumori-2024';
 function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ console.error(e); return null; } }
 function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
+// localStorage容量対策: 問い合わせ本文(body)等はクラウド(Communications)が正なので、
+// 端末ミラーには一覧最小限だけ残す。容量超過時に本文を落として保存を通す。
+function _hubInqLite_(db){
+  if(!db || !Array.isArray(db.inquiries) || !db.inquiries.length) return db;
+  var KEEP=['id','subject','kind','status','priority','source_type','channel_company','from_name','from_email','from_company','custName','received_at','createdAt','updatedAt','assignee','category','isSpam','tags','linked_project_id','linked_quote_id','linked_invoice_id','cust_id','tel'];
+  var lite=db.inquiries.map(function(r){ if(!r||typeof r!=='object') return r; var o={}; KEEP.forEach(function(k){ if(k in r) o[k]=r[k]; }); o._lite=true; return o; });
+  return Object.assign({}, db, {inquiries:lite});
+}
 function hubSave(mutator){
   var db = hubLoad();
   if(!db){ hubToast('❌ 本体データが見つかりません。先に本体アプリへログインしてください'); return false; }
   try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
-  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }
-  catch(e){ hubToast('❌ 保存失敗 (容量?): ' + e); return false; }
+  var _lok=false;
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); _lok=true; }
+  catch(e){
+    try { localStorage.setItem(HUB_DBKEY, JSON.stringify(_hubInqLite_(db))); _lok=true; }
+    catch(e2){ try { var _b=_hubInqLite_(db); _b.inquiries=[]; _b.history=[]; localStorage.setItem(HUB_DBKEY, JSON.stringify(_b)); _lok=true; } catch(e3){} }
+    hubToast(_lok ? '💾 端末保存は軽量化しました（データはクラウドに保存）' : '⚠ 端末保存失敗・クラウドには保存します');
+  }
   try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
+  hubCloudPushSoon();   // ローカル保存の成否に関わらず全社クラウドへ反映（消失防止）
   return true;
+}
+// ツール単独で全社クラウド(GAS saveAll)へ即保存。本体経由・BroadcastChannel依存をやめ、強制リロードで消えるのを防ぐ。
+// 注: 本体 saveToCloud と同じく localStorage の全DBを送る（=本体と同一の保存モデル）。
+async function hubCloudPush(){
+  var db = hubLoad(), auth = hubAuth();
+  if(!db) return false;
+  if(!auth || !auth.loggedIn || !auth.companyId) return false;   // 未ログインはローカルのみ
+  var data = {
+    master: db.master, config: db.conf,
+    projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
+    intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
+    outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
+    calendarOrders: db.calendarOrders||[], inquiries: db.inquiries||[],
+    deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
+    inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
+    toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
+    bookmarkCategories: db.bookmarkCategories||[], leadTimeMaster: db.leadTimeMaster||{},
+    bookmarksDeleted: (db.bookmarksDeleted||[]).slice(-500),
+    bookmarkCategoriesDeleted: (db.bookmarkCategoriesDeleted||[]).slice(-200)
+  };
+  try {
+    var url = new URL(HUB_GAS_URL);
+    url.searchParams.set('action','saveAll');
+    url.searchParams.set('apiKey', HUB_API_KEY);
+    var res = await fetch(url.toString(), { method:'POST', body: JSON.stringify({ companyId: auth.companyId, data: data }), redirect:'follow' });
+    var r = await res.json();
+    return !!(r && r.success);
+  } catch(e){ console.warn('[Tool] cloud push failed', e); return false; }
+}
+var _hubCloudTimer = null;
+function hubCloudPushSoon(){
+  if(_hubCloudTimer) clearTimeout(_hubCloudTimer);
+  _hubCloudTimer = setTimeout(function(){ _hubCloudTimer=null; hubCloudPush(); }, 1500);
 }
 function hubEsc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function hubToast(msg){ var t = document.getElementById('toast'); if(!t) return alert(msg); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._tm); t._tm = setTimeout(function(){ t.style.display='none'; }, 2800); }
