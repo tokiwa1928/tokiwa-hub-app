@@ -77,6 +77,7 @@
     <span id="saved-info" style="font-size:11px;color:var(--muted);align-self:center"></span>
   </div>
 
+  <datalist id="payee-list"></datalist>
   <!-- 諸経費明細（変動） -->
   <div class="card">
     <h2><span class="n">明細</span>諸経費等 明細（この月の変動分）</h2>
@@ -150,6 +151,10 @@
           <div style="flex:1"><label>住所</label><input id="co-addr" style="width:260px"></div>
           <div><label>郵便番号</label><input id="co-zip" style="width:100px"></div>
         </div>
+        <div style="margin-top:12px"><label>支払先マスタ（1行1件・諸経費/固定の入力候補になります。未登録は入力すると自動追加）</label>
+          <textarea id="payee-master" rows="6" style="width:100%;padding:8px;border:1px solid #c9c6bf;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical"></textarea>
+          <div style="margin-top:4px"><button class="btn sm" onclick="savePayeeMaster()">支払先マスタを保存</button></div>
+        </div>
         <div style="margin-top:8px"><button class="btn sm p" onclick="saveMaster()">マスタ・定数を保存</button></div>
       </div>
     </details>
@@ -181,12 +186,19 @@ var DEFAULT_HOTEN=[
   {type:'リース',payee:'㈱ クレディセゾン',amount:64680,memo:'ﾘｺｰ ﾌﾟﾘﾝﾀｰ ProC5300S',paid:'2026-08-04'},
   {type:'リース',payee:'オリックス ㈱',amount:20460,memo:'電話設備',paid:'2028-09-30'}
 ];
+var DEFAULT_PAYEES=[
+  '西武信用金庫村山支店','多摩信用金庫残堀支店','青梅信用金庫武蔵村山支店','比留志郎',
+  '㈱ クレディセゾン','リコーリース ㈱','オリックス ㈱',
+  '消防団第七分団','武蔵村山市役所','法務協会','東新社','井上自動車','ＮＴＴドコモ',
+  'りそなカード','ジェーシービー','NTT','りそな銀行','リコージャパン','ハルエネ','青山税理士法人'
+];
 var DB=load();
 function load(){
   var d; try{ d=JSON.parse(localStorage.getItem(LSKEY)); }catch(e){}
   if(!d) d={};
   d.master=d.master||{};
   if(!Array.isArray(d.master.hoten)||!d.master.hoten.length) d.master.hoten=JSON.parse(JSON.stringify(DEFAULT_HOTEN));
+  if(!Array.isArray(d.master.payees)||!d.master.payees.length) d.master.payees=DEFAULT_PAYEES.slice();
   if(d.master.kaikake==null) d.master.kaikake=-440000;
   if(d.master.jiyu==null) d.master.jiyu=75000;
   d.company=d.company||{ name:'村山印刷有限会社', addr:'東京都武蔵村山市残堀2-1-1', zip:'208-0034', rep:'本多　亮', to:'トキワ印刷株式会社' };
@@ -197,6 +209,31 @@ function persist(){ try{ localStorage.setItem(LSKEY, JSON.stringify(DB)); }catch
 function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; setTimeout(function(){t.style.display='none';},1900); }
 function yen(n){ n=Math.round(Number(n)||0); return (n<0?'−¥'+Math.abs(n).toLocaleString():'¥'+n.toLocaleString()); }
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// ── 支払先マスタ（選択式・未登録は入力で自動追加） ──
+function renderPayeeDatalist(){
+  var dl=document.getElementById('payee-list'); if(!dl) return;
+  var set={}, out=[];
+  (DB.master.payees||[]).forEach(function(p){ p=(p||'').trim(); if(p&&!set[p]){ set[p]=1; out.push(p); } });
+  dl.innerHTML=out.sort(function(a,b){return a.localeCompare(b,'ja');}).map(function(p){ return '<option value="'+esc(p)+'">'; }).join('');
+}
+function collectPayees(){
+  var set={}; (DB.master.payees||[]).forEach(function(p){ set[(p||'').trim()]=1; });
+  var add=[];
+  // 現在の諸経費行 + 固定マスタ の支払先を吸収
+  document.querySelectorAll('#shokei-tbl [data-k="payee"], #hoten-tbl [data-k="payee"]').forEach(function(el){
+    var v=(el.value||'').trim(); if(v && !set[v]){ set[v]=1; add.push(v); }
+  });
+  if(add.length){ DB.master.payees=(DB.master.payees||[]).concat(add); persist(); renderPayeeDatalist(); }
+  return add.length;
+}
+function renderPayeeMaster(){
+  var el=document.getElementById('payee-master'); if(el) el.value=(DB.master.payees||[]).join('\n');
+}
+function savePayeeMaster(){
+  var raw=document.getElementById('payee-master').value||'';
+  DB.master.payees=raw.split('\n').map(function(s){return s.trim();}).filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;});
+  persist(); renderPayeeDatalist(); toast('支払先マスタを保存しました（'+DB.master.payees.length+'件）');
+}
 function key(){ return document.getElementById('ym-year').value+'-'+('0'+document.getElementById('ym-month').value).slice(-2); }
 function prevKey(){ var y=+document.getElementById('ym-year').value,m=+document.getElementById('ym-month').value; m--; if(m<1){m=12;y--;} return y+'-'+('0'+m).slice(-2); }
 function mm(){ return ('0'+document.getElementById('ym-month').value).slice(-2); }
@@ -215,6 +252,7 @@ function monthEnd(){ var y=+document.getElementById('ym-year').value,m=+document
   renderHoten();
   document.getElementById('kaikake').value=DB.master.kaikake;
   document.getElementById('jiyu').value=DB.master.jiyu;
+  renderPayeeDatalist(); renderPayeeMaster();
   loadMonth();
 })();
 
@@ -225,7 +263,7 @@ function renderHoten(){
     var tr=document.createElement('tr');
     tr.innerHTML='<td class="c">'+(i+1)+'</td>'
       +'<td><select data-i="'+i+'" data-k="type">'+['借入金返済','利子','リース','その他'].map(function(o){return '<option'+(r.type===o?' selected':'')+'>'+o+'</option>';}).join('')+'</select></td>'
-      +'<td><input data-i="'+i+'" data-k="payee" value="'+esc(r.payee)+'"></td>'
+      +'<td><input data-i="'+i+'" data-k="payee" list="payee-list" value="'+esc(r.payee)+'"></td>'
       +'<td><input class="num" data-i="'+i+'" data-k="amount" type="number" value="'+(r.amount||0)+'"></td>'
       +'<td><input data-i="'+i+'" data-k="memo" value="'+esc(r.memo)+'"></td>'
       +'<td><input data-i="'+i+'" data-k="paid" type="date" value="'+esc(r.paid)+'"></td>'
@@ -263,7 +301,7 @@ function addShokei(r){
     +'<td><input data-k="d" type="date" value="'+esc(r.d||monthEnd())+'"></td>'
     +'<td><input class="num" data-k="amount" type="number" value="'+(r.amount||'')+'"></td>'
     +'<td><select data-k="type">'+['現金','普通預金','当座','その他'].map(function(o){return '<option'+(r.type===o?' selected':'')+'>'+o+'</option>';}).join('')+'</select></td>'
-    +'<td><input data-k="payee" value="'+esc(r.payee||'')+'"></td>'
+    +'<td><input data-k="payee" list="payee-list" value="'+esc(r.payee||'')+'"></td>'
     +'<td><input data-k="memo" value="'+esc(r.memo||'')+'"></td>'
     +'<td class="c"><button class="btn sm" onclick="this.closest(\'tr\').remove();reindexShokei();calc()">×</button></td>';
   tb.appendChild(tr); reindexShokei(); calc();
@@ -350,7 +388,7 @@ async function importScan(){
     all.forEach(function(r){
       addShokei({ d:(r.d||'').slice(0,10), amount:Math.round(Number(String(r.amount==null?'':r.amount).replace(/[^\d.-]/g,''))||0), type:(r.type||'その他'), payee:(r.payee||''), memo:(r.memo||'') });
     });
-    calc();
+    calc(); collectPayees();
     st.textContent='✅ '+all.length+'件を取り込みました（金額・支払先をご確認ください）';
   }catch(e){ st.textContent='取込失敗: '+e.message; }
 }
@@ -404,7 +442,7 @@ function loadMonth(){
   calc();
 }
 function saveMonth(){
-  var k=key(); calc();
+  var k=key(); calc(); collectPayees();
   DB.months[k]={
     shokei:shokeiRows(), uriage:+document.getElementById('uriage').value||0,
     kurikoshi:+document.getElementById('kurikoshi').value||0,
