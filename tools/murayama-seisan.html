@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>村山→トキワ 月次精算（補填金精算書・諸経費明細書・月末請求書）</title>
+<style>
+  :root{ --line:#1a1a1a; --hd:#efece4; --muted:#64748b; --accent:#1e40af; --red:#c0261c; }
+  *{box-sizing:border-box}
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; color:#1a1a1a; background:#f4f3f0; font-size:13px; }
+  .wrap{ max-width:1000px; margin:0 auto; padding:14px; }
+  h1{ font-size:17px; margin:0 0 2px; }
+  .sub{ color:var(--muted); font-size:11px; margin-bottom:12px; }
+  .card{ background:#fff; border:1px solid #d8d5ce; border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .card h2{ font-size:14px; margin:0 0 8px; display:flex; align-items:center; gap:8px; }
+  .card h2 .n{ background:var(--line); color:#fff; font-size:11px; padding:2px 8px; border-radius:5px; }
+  label{ font-size:11px; color:#475569; font-weight:700; display:block; margin-bottom:2px; }
+  input,select,button{ font-family:inherit; font-size:13px; }
+  input,select{ padding:6px 8px; border:1px solid #c9c6bf; border-radius:6px; background:#fff; }
+  input.num{ text-align:right; font-family:'Roboto Mono',monospace; }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .btn{ padding:7px 14px; border:1px solid #c9c6bf; border-radius:7px; background:#fff; cursor:pointer; font-weight:700; }
+  .btn.p{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn.g{ background:#15803d; color:#fff; border-color:#15803d; }
+  .btn.sm{ padding:3px 9px; font-size:11px; }
+  table.edit{ width:100%; border-collapse:collapse; }
+  table.edit th{ background:var(--hd); font-size:10.5px; padding:4px 5px; border:1px solid #d8d5ce; }
+  table.edit td{ border:1px solid #e5e2db; padding:2px; }
+  table.edit td input,table.edit td select{ width:100%; border:none; padding:4px 5px; background:transparent; }
+  table.edit td input:focus{ background:#fffbe8; outline:1px solid var(--accent); }
+  .sumline{ display:flex; justify-content:flex-end; gap:16px; align-items:baseline; margin-top:6px; font-size:13px; }
+  .sumline b{ font-family:'Roboto Mono',monospace; font-size:16px; }
+  .calc{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .calc .m{ background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; }
+  .calc .m .k{ font-size:11px; color:var(--muted); }
+  .calc .m .v{ font-size:19px; font-weight:800; font-family:'Roboto Mono',monospace; }
+  .calc .m.blk{ background:var(--line); color:#fff; } .calc .m.blk .k{ color:#bbb; }
+  .neg{ color:var(--red); }
+  details summary{ cursor:pointer; font-weight:700; font-size:12px; color:var(--accent); }
+  .toolbar{ position:sticky; top:0; background:#f4f3f0; padding:8px 0; z-index:5; display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; border-bottom:1px solid #ddd; }
+  /* ── 帳票 ── */
+  .docs{ display:none; }
+  .doc{ background:#fff; border:1px solid #999; padding:18px 22px; margin:0 auto 18px; max-width:800px; }
+  .doc .dh{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
+  .doc .dt{ font-size:20px; font-weight:800; letter-spacing:.15em; }
+  .doc .co{ text-align:right; font-size:12px; line-height:1.6; }
+  .doc table{ width:100%; border-collapse:collapse; font-size:12px; }
+  .doc th,.doc td{ border:1px solid #333; padding:4px 7px; }
+  .doc th{ background:#eee; }
+  .doc .r{ text-align:right; font-family:'Roboto Mono',monospace; }
+  .doc .c{ text-align:center; }
+  .doc .tot td{ background:#f6f6f2; font-weight:700; }
+  @media print{
+    body{ background:#fff; } .wrap>*:not(.docs){ display:none !important; } .docs{ display:block !important; }
+    .doc{ border:none; page-break-after:always; max-width:100%; }
+    @page{ size:A4 portrait; margin:10mm; }
+  }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>村山 → トキワ 月次精算</h1>
+  <div class="sub">補填金精算書兼諸経費等請求予定額 ／ 諸経費等明細書 ／ 月末請求書 を自動生成。固定分（借入返済・利子・リース）はマスタ登録済。毎月「諸経費明細・売上益」を入れるだけ。</div>
+
+  <div class="toolbar">
+    <div><label>対象月</label>
+      <select id="ym-year"></select>
+      <select id="ym-month"></select>
+    </div>
+    <div><label>発行日</label><input id="issue-date" type="date" style="width:150px"></div>
+    <div><label>代表者</label><input id="rep" style="width:130px"></div>
+    <button class="btn g" onclick="saveMonth()">💾 保存</button>
+    <button class="btn p" onclick="renderDocs();window.print()">🖨 3帳票を印刷</button>
+    <span id="saved-info" style="font-size:11px;color:var(--muted);align-self:center"></span>
+  </div>
+
+  <!-- 諸経費明細（変動） -->
+  <div class="card">
+    <h2><span class="n">明細</span>諸経費等 明細（この月の変動分）</h2>
+    <table class="edit" id="shokei-tbl">
+      <thead><tr><th style="width:34px">№</th><th style="width:96px">月日</th><th style="width:110px">金額</th><th style="width:110px">種類</th><th>支払先</th><th>備考</th><th style="width:34px"></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div style="margin-top:6px"><button class="btn sm" onclick="addShokei()">＋ 行を追加</button></div>
+    <div class="sumline">別紙計（諸経費等）<b id="betsushi">¥0</b></div>
+  </div>
+
+  <!-- トキワ側 -->
+  <div class="card">
+    <h2><span class="n">相殺</span>トキワ印刷との相殺</h2>
+    <div class="row">
+      <div><label>売上益（トキワより・マイナスで相殺）</label><input id="uriage" class="num" type="number" style="width:150px" oninput="calc()" placeholder="例: -107161"></div>
+      <div><label>前月までの繰越残（自動）</label><input id="kurikoshi" class="num" type="number" style="width:150px" oninput="calc()"></div>
+      <div style="align-self:center;font-size:11px;color:var(--muted)">前月を保存済みなら自動で入ります（手修正可）</div>
+    </div>
+  </div>
+
+  <!-- 計算 -->
+  <div class="card">
+    <h2><span class="n">計算</span>集計</h2>
+    <div class="calc">
+      <div class="m"><div class="k">補填予定額 小計（固定）</div><div class="v" id="c-hoten">¥0</div></div>
+      <div class="m"><div class="k">補填金精算額（−買掛440,000）</div><div class="v" id="c-seisan">¥0</div></div>
+      <div class="m"><div class="k">諸経費等（別紙計）</div><div class="v" id="c-betsushi">¥0</div></div>
+      <div class="m"><div class="k">売上益（相殺）</div><div class="v" id="c-uriage">¥0</div></div>
+      <div class="m"><div class="k">自由裁量売上益（固定）</div><div class="v" id="c-jiyu">¥0</div></div>
+      <div class="m"><div class="k">諸経費等請求額</div><div class="v" id="c-shokei">¥0</div></div>
+      <div class="m"><div class="k">前月繰越残</div><div class="v" id="c-kuri">¥0</div></div>
+      <div class="m blk" style="grid-column:span 2"><div class="k">合計請求額（＝月末請求 税込）</div><div class="v" id="c-goukei">¥0</div></div>
+    </div>
+    <div class="sumline" style="justify-content:flex-start;margin-top:8px;color:var(--muted);font-size:12px">
+      月末請求書：税抜 <b id="c-nuki" style="font-size:14px">¥0</b>　＋　消費税10% <b id="c-tax" style="font-size:14px">¥0</b>　＝　税込 <b id="c-komi" style="font-size:14px">¥0</b>
+    </div>
+    <div id="neg-warn" style="display:none;margin-top:6px;color:var(--red);font-size:12px;font-weight:700">⚠ 合計がマイナスのため、この月は月末請求書は発行せず翌月へ繰り越します（補填金精算書のみ）。</div>
+  </div>
+
+  <!-- 固定マスタ -->
+  <div class="card">
+    <details>
+      <summary>⚙ 補填予定額 固定マスタ（借入返済・利子・リース）＋ 定数を編集</summary>
+      <div style="margin-top:8px">
+        <table class="edit" id="hoten-tbl">
+          <thead><tr><th style="width:34px">№</th><th style="width:110px">種類</th><th>支払先</th><th style="width:110px">金額</th><th>備考（機種等）</th><th style="width:100px">完済日</th><th style="width:34px"></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div style="margin-top:6px"><button class="btn sm" onclick="addHoten()">＋ 行を追加</button></div>
+        <div class="sumline">補填予定額 小計<b id="hoten-sub">¥0</b></div>
+        <div class="row" style="margin-top:8px">
+          <div><label>買掛未払金（トキワより・マイナス）</label><input id="kaikake" class="num" type="number" style="width:150px" oninput="calc()"></div>
+          <div><label>自由裁量売上益（固定）</label><input id="jiyu" class="num" type="number" style="width:130px" oninput="calc()"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div style="flex:1"><label>会社名</label><input id="co-name" style="width:220px"></div>
+          <div style="flex:1"><label>住所</label><input id="co-addr" style="width:260px"></div>
+          <div><label>郵便番号</label><input id="co-zip" style="width:100px"></div>
+        </div>
+        <div style="margin-top:8px"><button class="btn sm p" onclick="saveMaster()">マスタ・定数を保存</button></div>
+      </div>
+    </details>
+  </div>
+
+  <!-- 帳票プレビュー領域（印刷対象） -->
+  <div class="docs" id="docs"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+var LSKEY='murayama_seisan_v1';
+var DEFAULT_HOTEN=[
+  {type:'借入金返済',payee:'西武信用金庫村山支店',amount:42000,memo:'',paid:'2027-02-23'},
+  {type:'借入金返済',payee:'多摩信用金庫残堀支店',amount:50000,memo:'',paid:'2026-07-26'},
+  {type:'借入金返済',payee:'青梅信用金庫武蔵村山支店',amount:42000,memo:'',paid:'2027-11-10'},
+  {type:'借入金返済',payee:'多摩信用金庫残堀支店',amount:33000,memo:'',paid:'2027-01-23'},
+  {type:'借入金返済',payee:'青梅信用金庫武蔵村山支店',amount:21000,memo:'',paid:'2026-07-10'},
+  {type:'借入金返済',payee:'比留志郎',amount:50000,memo:'',paid:'2026-12-01'},
+  {type:'利子',payee:'西武信用金庫村山支店',amount:1947,memo:'',paid:'2027-02-23'},
+  {type:'利子',payee:'多摩信用金庫残堀支店',amount:1061,memo:'',paid:'2026-07-26'},
+  {type:'利子',payee:'青梅信用金庫武蔵村山支店',amount:2512,memo:'',paid:'2027-11-10'},
+  {type:'利子',payee:'多摩信用金庫残堀支店',amount:1553,memo:'',paid:'2027-01-23'},
+  {type:'利子',payee:'青梅信用金庫武蔵村山支店',amount:892,memo:'',paid:'2026-07-10'},
+  {type:'利子',payee:'比留志郎',amount:2400,memo:'',paid:''},
+  {type:'リース',payee:'㈱ クレディセゾン',amount:6050,memo:'ﾈｵ･ｺｰﾎﾟﾚｰｼｮﾝ 電子ブレーカー(2)',paid:'2028-04-04'},
+  {type:'リース',payee:'リコーリース ㈱',amount:10340,memo:'ﾊﾟｿｺﾝ(ﾋｭｰﾚｯﾄﾊﾟｯｶｰﾄﾞ I5-10500 NP)',paid:'2026-07-04'},
+  {type:'リース',payee:'リコーリース ㈱',amount:27500,memo:'ｺﾋﾟｰ･FAX･ﾌﾟﾘﾝﾀｰ複合機(ﾘｺｰ IM C4500)',paid:'2026-07-04'},
+  {type:'リース',payee:'㈱ クレディセゾン',amount:64680,memo:'ﾘｺｰ ﾌﾟﾘﾝﾀｰ ProC5300S',paid:'2026-08-04'},
+  {type:'リース',payee:'オリックス ㈱',amount:20460,memo:'電話設備',paid:'2028-09-30'}
+];
+var DB=load();
+function load(){
+  var d; try{ d=JSON.parse(localStorage.getItem(LSKEY)); }catch(e){}
+  if(!d) d={};
+  d.master=d.master||{};
+  if(!Array.isArray(d.master.hoten)||!d.master.hoten.length) d.master.hoten=JSON.parse(JSON.stringify(DEFAULT_HOTEN));
+  if(d.master.kaikake==null) d.master.kaikake=-440000;
+  if(d.master.jiyu==null) d.master.jiyu=75000;
+  d.company=d.company||{ name:'村山印刷有限会社', addr:'東京都武蔵村山市残堀2-1-1', zip:'208-0034', rep:'本多　亮', to:'トキワ印刷株式会社' };
+  d.months=d.months||{};
+  return d;
+}
+function persist(){ try{ localStorage.setItem(LSKEY, JSON.stringify(DB)); }catch(e){ toast('保存失敗:'+e); } }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; setTimeout(function(){t.style.display='none';},1900); }
+function yen(n){ n=Math.round(Number(n)||0); return (n<0?'−¥'+Math.abs(n).toLocaleString():'¥'+n.toLocaleString()); }
+function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function key(){ return document.getElementById('ym-year').value+'-'+('0'+document.getElementById('ym-month').value).slice(-2); }
+function prevKey(){ var y=+document.getElementById('ym-year').value,m=+document.getElementById('ym-month').value; m--; if(m<1){m=12;y--;} return y+'-'+('0'+m).slice(-2); }
+function mm(){ return ('0'+document.getElementById('ym-month').value).slice(-2); }
+function monthEnd(){ var y=+document.getElementById('ym-year').value,m=+document.getElementById('ym-month').value; return new Date(y,m,0).toISOString().slice(0,10); }
+
+// ── 初期化 ──
+(function init(){
+  var ys=document.getElementById('ym-year'), ms=document.getElementById('ym-month');
+  for(var y=2024;y<=2030;y++) ys.add(new Option(y+'年',y));
+  for(var m=1;m<=12;m++) ms.add(new Option(m+'月',m));
+  var now=new Date(); ys.value=now.getFullYear(); ms.value=now.getMonth()+1;
+  ys.onchange=ms.onchange=loadMonth;
+  document.getElementById('co-name').value=DB.company.name;
+  document.getElementById('co-addr').value=DB.company.addr;
+  document.getElementById('co-zip').value=DB.company.zip;
+  renderHoten();
+  document.getElementById('kaikake').value=DB.master.kaikake;
+  document.getElementById('jiyu').value=DB.master.jiyu;
+  loadMonth();
+})();
+
+// ── 固定マスタ ──
+function renderHoten(){
+  var tb=document.querySelector('#hoten-tbl tbody'); tb.innerHTML='';
+  DB.master.hoten.forEach(function(r,i){
+    var tr=document.createElement('tr');
+    tr.innerHTML='<td class="c">'+(i+1)+'</td>'
+      +'<td><select data-i="'+i+'" data-k="type">'+['借入金返済','利子','リース','その他'].map(function(o){return '<option'+(r.type===o?' selected':'')+'>'+o+'</option>';}).join('')+'</select></td>'
+      +'<td><input data-i="'+i+'" data-k="payee" value="'+esc(r.payee)+'"></td>'
+      +'<td><input class="num" data-i="'+i+'" data-k="amount" type="number" value="'+(r.amount||0)+'"></td>'
+      +'<td><input data-i="'+i+'" data-k="memo" value="'+esc(r.memo)+'"></td>'
+      +'<td><input data-i="'+i+'" data-k="paid" type="date" value="'+esc(r.paid)+'"></td>'
+      +'<td class="c"><button class="btn sm" onclick="delHoten('+i+')">×</button></td>';
+    tb.appendChild(tr);
+  });
+  tb.oninput=function(e){ var el=e.target,i=el.dataset.i,k=el.dataset.k; if(i==null)return; DB.master.hoten[i][k]=(el.type==='number')?(+el.value||0):el.value; calc(); };
+  tb.onchange=tb.oninput;
+  calc();
+}
+function addHoten(){ DB.master.hoten.push({type:'その他',payee:'',amount:0,memo:'',paid:''}); renderHoten(); }
+function delHoten(i){ DB.master.hoten.splice(i,1); renderHoten(); }
+function saveMaster(){
+  DB.master.kaikake=+document.getElementById('kaikake').value||0;
+  DB.master.jiyu=+document.getElementById('jiyu').value||0;
+  DB.company.name=document.getElementById('co-name').value;
+  DB.company.addr=document.getElementById('co-addr').value;
+  DB.company.zip=document.getElementById('co-zip').value;
+  persist(); toast('マスタ・定数を保存しました'); calc();
+}
+
+// ── 諸経費明細 ──
+function shokeiRows(){ return Array.from(document.querySelectorAll('#shokei-tbl tbody tr')).map(function(tr){
+  var g=function(k){ var el=tr.querySelector('[data-k="'+k+'"]'); return el?el.value:''; };
+  return { d:g('d'), amount:+g('amount')||0, type:g('type'), payee:g('payee'), memo:g('memo') };
+}); }
+function renderShokei(list){
+  var tb=document.querySelector('#shokei-tbl tbody'); tb.innerHTML='';
+  (list&&list.length?list:[{}]).forEach(function(r){ addShokei(r); });
+}
+function addShokei(r){
+  r=r||{}; var tb=document.querySelector('#shokei-tbl tbody');
+  var tr=document.createElement('tr');
+  tr.innerHTML='<td class="c idx"></td>'
+    +'<td><input data-k="d" type="date" value="'+esc(r.d||monthEnd())+'"></td>'
+    +'<td><input class="num" data-k="amount" type="number" value="'+(r.amount||'')+'"></td>'
+    +'<td><select data-k="type">'+['現金','普通預金','当座','その他'].map(function(o){return '<option'+(r.type===o?' selected':'')+'>'+o+'</option>';}).join('')+'</select></td>'
+    +'<td><input data-k="payee" value="'+esc(r.payee||'')+'"></td>'
+    +'<td><input data-k="memo" value="'+esc(r.memo||'')+'"></td>'
+    +'<td class="c"><button class="btn sm" onclick="this.closest(\'tr\').remove();reindexShokei();calc()">×</button></td>';
+  tb.appendChild(tr); reindexShokei(); calc();
+  tb.oninput=function(){ calc(); };
+}
+function reindexShokei(){ Array.from(document.querySelectorAll('#shokei-tbl tbody .idx')).forEach(function(td,i){ td.textContent=i+1; }); }
+
+// ── 計算 ──
+function computeGoukeiFor(k){ // 保存済み月の合計請求額（繰越用）
+  var m=DB.months[k]; if(!m) return null;
+  var hotenSub=DB.master.hoten.reduce(function(s,r){return s+(+r.amount||0);},0);
+  var seisan=hotenSub+(+DB.master.kaikake||0);
+  var betsu=(m.shokei||[]).reduce(function(s,r){return s+(+r.amount||0);},0);
+  var shokeiSeikyu=seisan+betsu+(+m.uriage||0)+(+DB.master.jiyu||0);
+  var kuri=(m.kurikoshi!=null?+m.kurikoshi:(computeGoukeiFor(prevKeyOf(k))||0));
+  return shokeiSeikyu+kuri;
+}
+function prevKeyOf(k){ var p=k.split('-'),y=+p[0],m=+p[1]-1; if(m<1){m=12;y--;} return y+'-'+('0'+m).slice(-2); }
+function calc(){
+  var hotenSub=DB.master.hoten.reduce(function(s,r){return s+(+r.amount||0);},0);
+  var kaikake=+document.getElementById('kaikake').value||0;
+  var jiyu=+document.getElementById('jiyu').value||0;
+  var seisan=hotenSub+kaikake;
+  var betsu=shokeiRows().reduce(function(s,r){return s+r.amount;},0);
+  var uriage=+document.getElementById('uriage').value||0;
+  var kuri=+document.getElementById('kurikoshi').value||0;
+  var shokeiSeikyu=seisan+betsu+uriage+jiyu;
+  var goukei=shokeiSeikyu+kuri;
+  var komi=goukei, nuki=Math.round(goukei/1.1), tax=goukei-nuki;
+  var set=function(id,v,neg){ var el=document.getElementById(id); el.textContent=yen(v); el.classList.toggle('neg',neg&&v<0); };
+  document.getElementById('hoten-sub').textContent=yen(hotenSub);
+  document.getElementById('betsushi').textContent=yen(betsu);
+  set('c-hoten',hotenSub); set('c-seisan',seisan,1); set('c-betsushi',betsu); set('c-uriage',uriage,1);
+  set('c-jiyu',jiyu); set('c-shokei',shokeiSeikyu,1); set('c-kuri',kuri,1); set('c-goukei',goukei,1);
+  document.getElementById('c-nuki').textContent=yen(nuki);
+  document.getElementById('c-tax').textContent=yen(tax);
+  document.getElementById('c-komi').textContent=yen(komi);
+  document.getElementById('neg-warn').style.display=(goukei<0?'block':'none');
+  window._calc={hotenSub:hotenSub,seisan:seisan,betsu:betsu,uriage:uriage,jiyu:jiyu,shokeiSeikyu:shokeiSeikyu,kuri:kuri,goukei:goukei,nuki:nuki,tax:tax,komi:komi};
+}
+
+// ── 月の保存/読込 ──
+function loadMonth(){
+  var k=key();
+  var m=DB.months[k]||{};
+  renderShokei(m.shokei);
+  document.getElementById('uriage').value=(m.uriage!=null?m.uriage:'');
+  document.getElementById('rep').value=(m.rep||DB.company.rep||'');
+  document.getElementById('issue-date').value=(m.issue||monthEnd());
+  // 繰越: 保存済みなら値、無ければ前月合計を自動
+  var kuri=(m.kurikoshi!=null? m.kurikoshi : (computeGoukeiFor(prevKey())||0));
+  document.getElementById('kurikoshi').value=kuri;
+  document.getElementById('saved-info').textContent=DB.months[k]?('保存済（'+(m.savedAt||'').slice(0,10)+'）'):'未保存';
+  calc();
+}
+function saveMonth(){
+  var k=key(); calc();
+  DB.months[k]={
+    shokei:shokeiRows(), uriage:+document.getElementById('uriage').value||0,
+    kurikoshi:+document.getElementById('kurikoshi').value||0,
+    rep:document.getElementById('rep').value, issue:document.getElementById('issue-date').value,
+    goukei:window._calc.goukei, savedAt:new Date().toISOString()
+  };
+  DB.company.rep=document.getElementById('rep').value;
+  persist();
+  document.getElementById('saved-info').textContent='保存しました';
+  toast('『'+k+'』を保存しました');
+}
+
+// ── 帳票生成 ──
+function renderDocs(){
+  calc(); var c=window._calc;
+  var yy=+document.getElementById('ym-year').value, m=mm(), issue=document.getElementById('issue-date').value;
+  var rep=document.getElementById('rep').value, co=DB.company;
+  var jp=function(n){ n=Math.round(Number(n)||0); return (n<0?'△'+Math.abs(n).toLocaleString():n.toLocaleString()); };
+  var coBlock='<div class="co"><div style="font-size:13px;font-weight:700">'+esc(co.name)+'</div><div>〒'+esc(co.zip)+' '+esc(co.addr)+'</div><div>代表取締役 '+esc(rep)+'</div></div>';
+  var dateJ=issue.replace(/-/g,'/');
+
+  // ① 補填金精算書
+  var hRows=DB.master.hoten.map(function(r,i){
+    return '<tr><td class="c">'+(i+1)+'</td><td class="c">'+dateJ+'</td><td class="r">'+jp(r.amount)+'</td><td>'+esc(r.type)+'</td><td>'+esc(r.payee)+'</td><td>'+esc(r.memo)+'</td><td class="c">'+esc(r.paid?r.paid.replace(/-/g,'/'):'')+'</td></tr>';
+  }).join('');
+  var n=DB.master.hoten.length;
+  var calcRows=''
+    +'<tr class="tot"><td class="c">'+(n+1)+'</td><td></td><td class="r">'+jp(c.hotenSub)+'</td><td>小計</td><td>'+m+'月分補填予定額</td><td></td><td></td></tr>'
+    +'<tr><td class="c">'+(n+2)+'</td><td></td><td class="r">'+jp(DB.master.kaikake)+'</td><td>買掛未払金</td><td>買掛未払金</td><td>トキワ印刷より</td><td></td></tr>'
+    +'<tr class="tot"><td class="c">'+(n+3)+'</td><td></td><td class="r">'+jp(c.seisan)+'</td><td>計</td><td>'+m+'月分補填金精算額</td><td></td><td></td></tr>'
+    +'<tr><td class="c">'+(n+4)+'</td><td></td><td class="r">'+jp(c.betsu)+'</td><td>別紙計</td><td>'+m+'月分諸経費等</td><td></td><td></td></tr>'
+    +'<tr><td class="c">'+(n+5)+'</td><td></td><td class="r">'+jp(c.uriage)+'</td><td>(−)</td><td>'+m+'月分売上益</td><td>トキワ印刷より</td><td></td></tr>'
+    +'<tr><td class="c">'+(n+6)+'</td><td></td><td class="r">'+jp(c.jiyu)+'</td><td></td><td>自由裁量売上益</td><td>トキワ印刷より</td><td></td></tr>'
+    +'<tr class="tot"><td class="c">'+(n+7)+'</td><td></td><td class="r">'+jp(c.shokeiSeikyu)+'</td><td>計</td><td>'+m+'月分諸経費等請求額</td><td></td><td></td></tr>'
+    +(c.kuri?('<tr><td class="c">'+(n+8)+'</td><td></td><td class="r">'+jp(c.kuri)+'</td><td>計</td><td>前月までの繰越残</td><td></td><td></td></tr>'
+      +'<tr class="tot"><td class="c">'+(n+9)+'</td><td></td><td class="r">'+jp(c.goukei)+'</td><td>計</td><td>合計請求額</td><td></td><td></td></tr>'):'');
+  var doc1='<div class="doc"><div class="dh"><div><div style="font-size:12px">'+dateJ+'</div><div class="dt">補填金精算書兼諸経費等請求予定額</div></div>'+coBlock+'</div>'
+    +'<table><thead><tr><th style="width:34px">番号</th><th style="width:80px">月 日</th><th style="width:90px">金 額</th><th style="width:90px">種 類</th><th>支 払 先</th><th>備 考</th><th style="width:80px">完済日</th></tr></thead>'
+    +'<tbody>'+hRows+calcRows+'</tbody></table></div>';
+
+  // ② 諸経費等明細書
+  var sk=shokeiRows().filter(function(r){return r.amount||r.payee;});
+  var sRows=sk.map(function(r,i){ return '<tr><td class="c">'+(i+1)+'</td><td class="c">'+(r.d?r.d.replace(/-/g,'/'):'')+'</td><td class="r">'+jp(r.amount)+'</td><td>'+esc(r.type)+'</td><td>'+esc(r.payee)+'</td><td>'+esc(r.memo)+'</td></tr>'; }).join('');
+  var doc2='<div class="doc"><div class="dh"><div><div style="font-size:12px">'+dateJ+'</div><div class="dt">諸経費等明細書</div></div>'+coBlock+'</div>'
+    +'<table><thead><tr><th style="width:34px">番号</th><th style="width:80px">月 日</th><th style="width:100px">金 額</th><th style="width:90px">種 類</th><th>支 払 先</th><th>備 考</th></tr></thead>'
+    +'<tbody>'+sRows+'<tr class="tot"><td colspan="2" class="c">合計</td><td class="r">'+jp(c.betsu)+'</td><td colspan="3"></td></tr></tbody></table></div>';
+
+  // ③ 月末請求書
+  var doc3='<div class="doc"><div class="dh"><div><div class="dt" style="letter-spacing:.3em">請求書</div><div style="margin-top:8px;font-size:14px;border-bottom:1px solid #999;display:inline-block;padding:0 20px 2px">'+esc(co.to)+' 様</div><div style="font-size:12px;margin-top:6px">下記の通りご請求申しあげます。</div></div>'
+    +'<div class="co"><div>'+dateJ+'</div><div style="font-size:13px;font-weight:700;margin-top:4px">'+esc(co.name)+'</div><div>〒'+esc(co.zip)+' '+esc(co.addr)+'</div><div>代表取締役 '+esc(rep)+'</div></div></div>'
+    +'<table style="margin-top:10px"><thead><tr><th style="width:34px">№</th><th>件 名</th><th style="width:60px">数量</th><th style="width:50px">単位</th><th style="width:110px">金額</th><th style="width:120px">備 考</th></tr></thead>'
+    +'<tbody><tr><td class="c">1</td><td>'+m+'月分その他諸経費精算</td><td class="c">1</td><td class="c">式</td><td class="r">'+jp(c.nuki)+'</td><td>別紙の通り</td></tr>'
+    +'<tr><td colspan="4" class="c" style="background:#eee;font-weight:700">税抜合計</td><td class="r">'+jp(c.nuki)+'</td><td></td></tr>'
+    +'<tr><td colspan="4" class="c" style="background:#eee;font-weight:700">消費税及び地方消費税</td><td class="r">'+jp(c.tax)+'</td><td class="c">10%</td></tr>'
+    +'<tr class="tot"><td colspan="4" class="c">税込合計</td><td class="r">'+jp(c.komi)+'</td><td></td></tr></tbody></table></div>';
+
+  document.getElementById('docs').innerHTML=doc1+doc2+doc3;
+}
+</script>
+</body>
+</html>
