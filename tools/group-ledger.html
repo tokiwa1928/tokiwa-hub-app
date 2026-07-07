@@ -62,9 +62,12 @@
     <div class="grid">
       <input type="hidden" id="f-id">
       <div class="full" style="position:relative;background:#f1f5f9;padding:8px;border-radius:8px">
-        <label>🔁 過去案件から引用（顧客・案件・伝票番号で検索→選ぶと下欄に流し込み）</label>
+        <label style="display:flex;justify-content:space-between;align-items:center">
+          <span>🔁 過去案件から引用（顧客・案件・伝票番号で検索→選ぶと下欄に流し込み）</span>
+          <span style="font-weight:400;font-size:11px"><input type="checkbox" id="quote-all" onchange="quoteSearch()"> 全社から探す（他社案件を流用＝伝票番号でリンク）</span>
+        </label>
         <input id="f-quote" placeholder="過去の顧客名・案件名・伝票番号で検索…" oninput="quoteSearch()" autocomplete="off">
-        <div id="quote-results" style="display:none;position:absolute;left:8px;right:8px;top:100%;z-index:5;background:#fff;border:1px solid #c9c6bf;border-radius:0 0 8px 8px;max-height:220px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.15)"></div>
+        <div id="quote-results" style="display:none;position:absolute;left:8px;right:8px;top:100%;z-index:5;background:#fff;border:1px solid #c9c6bf;border-radius:0 0 8px 8px;max-height:240px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.15)"></div>
       </div>
       <div><label>伝票番号（トキワ採番）*</label><input id="f-denpyo" list="denpyo-list" placeholder="a0xxxxx" oninput="onDenpyo()"></div>
       <div><label>状況</label><input id="f-status2" list="status-list" placeholder="進行中 / 納品済 / 中止…"></div>
@@ -205,25 +208,37 @@ function openForm(id, asCopy){
 }
 function closeForm(){ document.getElementById('form-modal').style.display='none'; _quoteClear_(); }
 function _quoteClear_(){ var q=document.getElementById('f-quote'); if(q) q.value=''; var box=document.getElementById('quote-results'); if(box){ box.style.display='none'; box.innerHTML=''; } }
-var _quoteHits_=[];
-function quoteSearch(){
+var _quoteHits_=[], ALLCASES=null;
+async function _ensureAllCases_(){ if(ALLCASES) return; try{ var r=await api('ledgerList',{}); ALLCASES=r.cases||[]; }catch(e){ ALLCASES=[]; } }
+async function quoteSearch(){
   var q=(document.getElementById('f-quote').value||'').toLowerCase().trim(), box=document.getElementById('quote-results');
+  var allScope=document.getElementById('quote-all').checked;
   if(!q){ box.style.display='none'; box.innerHTML=''; return; }
+  var pool=CASES;
+  if(allScope){ box.innerHTML='<div style="padding:8px;color:#94a3b8">全社を検索中…</div>'; box.style.display='block'; await _ensureAllCases_(); pool=ALLCASES; }
   var qs=q.split(/\s+/);
-  _quoteHits_=CASES.filter(function(c){ var hay=[c.denpyo,c.customer,c.item].join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } return true; })
-    .sort(function(a,b){ return _caseTime_(b)-_caseTime_(a); }).slice(0,15);
+  _quoteHits_=pool.filter(function(c){ var hay=[c.denpyo,c.customer,c.item,c.company].join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } return true; })
+    .sort(function(a,b){ return _caseTime_(b)-_caseTime_(a); }).slice(0,20);
   if(!_quoteHits_.length){ box.innerHTML='<div style="padding:8px;color:#94a3b8">該当なし</div>'; box.style.display='block'; return; }
   box.innerHTML=_quoteHits_.map(function(c,i){
+    var other=(c.company&&c.company!==COMPANY);
+    var badge=other?'<span style="background:#c0261c;color:#fff;font-size:10px;padding:1px 5px;border-radius:4px;margin-left:6px">流用 '+esc(c.company)+'</span>':'';
     return '<div onclick="quotePick('+i+')" style="padding:6px 9px;border-bottom:1px solid #eee;cursor:pointer" onmouseover="this.style.background=\'#eef6fb\'" onmouseout="this.style.background=\'\'">'+
-      '<b>'+esc(c.denpyo||'（伝票なし）')+'</b> '+esc(c.customer||'')+'<br><span style="font-size:11px;color:#64748b">'+esc(c.item||'')+' ／ '+esc(c.qty||'')+esc(c.unit||'')+' ／ '+esc(c.orderDate||'')+'</span></div>';
+      '<b>'+esc(c.denpyo||'（伝票なし）')+'</b> '+esc(c.customer||'')+badge+'<br><span style="font-size:11px;color:#64748b">'+esc(c.item||'')+' ／ '+esc(c.qty||'')+esc(c.unit||'')+' ／ '+esc(c.orderDate||'')+'</span></div>';
   }).join('');
   box.style.display='block';
 }
 function quotePick(i){
   var c=_quoteHits_[i]; if(!c) return;
-  // 内容を土台に流し込み（新規扱い・伝票番号と日付は入れ直し）
+  var other=(c.company&&c.company!==COMPANY);
+  // 内容を土台に流し込み。他社からの流用は伝票番号を保持（=関連会社リンク成立）／同社リピートは新規採番のため空
   ['customer','item','qty','unit','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','deliverTo','memo'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=(c[f]!=null?c[f]:''); });
   document.getElementById('f-multiPack').checked=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE');
+  if(other){
+    document.getElementById('f-denpyo').value=c.denpyo||'';   // 流用＝同じ伝票番号で自社行を作る
+    if(c.hopeDate) document.getElementById('f-hopeDate').value=c.hopeDate; // 希望納期(=着日)も引き継ぐ
+    onDenpyo();
+  }
   if(!document.getElementById('f-orderDate').value) document.getElementById('f-orderDate').value=ymd(new Date());
   _quoteClear_();
   document.getElementById('f-denpyo').focus();
