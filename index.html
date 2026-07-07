@@ -4285,6 +4285,11 @@ async function loadFromCloud() {
     DB.contactTargets = result.data.contactTargets;
   }
 
+  // 送信・転送履歴ログ（全社共有）
+  if (Array.isArray(result.data.commLog)) {
+    DB.commLog = result.data.commLog;
+  }
+
   // 問い合わせ
   if (result.data.inquiries) {
     DB.inquiries = result.data.inquiries;
@@ -4804,6 +4809,7 @@ async function saveToCloud() {
     bookmarks: DB.bookmarks || [],
     bookmarkCategories: DB.bookmarkCategories || [],
     contactTargets: DB.contactTargets || [],
+    commLog: (DB.commLog || []).slice(-2000),
     leadTimeMaster: DB.leadTimeMaster || {},
     bookmarksDeleted: (DB.bookmarksDeleted || []).slice(-500),
     bookmarkCategoriesDeleted: (DB.bookmarkCategoriesDeleted || []).slice(-200)
@@ -17475,10 +17481,15 @@ function showOutsourceQuoteModal(inqId){
     return true;
   });
 
-  // 連絡宛先マスタからLW/LINE宛先も
-  var lwTargets = (typeof _getContactTargets_ === 'function')
-    ? _visibleContactTargets_().filter(function(t){ return t.type === 'lw_user' || t.type === 'lw_channel'; })
-    : [];
+  // 連絡宛先マスタからLW宛先も（統一連絡先→チャンネル毎に展開）
+  var lwTargets = [];
+  if(typeof _visibleContactTargets_ === 'function'){
+    _visibleContactTargets_().forEach(function(t){
+      var chs = _ctChannels_(t);
+      if(chs.lwUser)    lwTargets.push({ cbId: t.id + '#user',    name: t.name, kind: 'user',    targetId: chs.lwUser });
+      if(chs.lwChannel) lwTargets.push({ cbId: t.id + '#channel', name: t.name, kind: 'channel', targetId: chs.lwChannel });
+    });
+  }
 
   // 匿名化された依頼内容を生成
   var anonymizedBody = (typeof _anonymizeBody_ === 'function')
@@ -17520,9 +17531,9 @@ function showOutsourceQuoteModal(inqId){
     '<div style="font-size:12px;font-weight:700;margin:10px 0 6px;color:#065f46">📲 LINE WORKS 宛先 (任意)</div>' +
     lwTargets.map(function(t){
       return '<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#ecfdf5;border:1px solid #86efac;border-radius:4px;margin-bottom:4px;cursor:pointer;font-size:12px">' +
-        '<input type="checkbox" class="oq-lw-cb" data-id="' + t.id + '" style="width:16px;height:16px">' +
-        '<strong style="flex:1">' + t.name + '</strong>' +
-        '<span style="color:#888;font-size:10px">' + (t.type === 'lw_channel' ? '💬 トーク' : '👤 ユーザー') + '</span>' +
+        '<input type="checkbox" class="oq-lw-cb" data-id="' + t.cbId + '" style="width:16px;height:16px">' +
+        '<strong style="flex:1">' + _escDiff(t.name) + '</strong>' +
+        '<span style="color:#888;font-size:10px">' + (t.kind === 'channel' ? '💬 トーク' : '👤 ユーザー') + '</span>' +
       '</label>';
     }).join('');
 
@@ -17590,17 +17601,22 @@ async function submitOutsourceQuote(inqId){
     } catch(e){ failed++; console.warn('mail failed:', v.email, e); }
   }
 
-  // LINE WORKS 送信
+  // LINE WORKS 送信（cbId = 連絡先ID#kind を解釈）
   var ct = (typeof _getContactTargets_ === 'function') ? _getContactTargets_() : [];
   for(var j = 0; j < selectedLw.length; j++){
-    var target = ct.find(t => t.id === selectedLw[j]);
-    if(!target) continue;
+    var _cb = String(selectedLw[j]||''), _hash = _cb.lastIndexOf('#');
+    var _cid = _hash>=0 ? _cb.slice(0,_hash) : _cb, _kind = _hash>=0 ? _cb.slice(_hash+1) : 'user';
+    var _rec = ct.find(t => t.id === _cid);
+    if(!_rec) continue;
+    var _chs = _ctChannels_(_rec);
+    var _tid = _kind === 'channel' ? _chs.lwChannel : _chs.lwUser;
+    if(!_tid) continue;
     try {
       if(typeof callCloudAPI === 'function'){
         var resp2 = await callCloudAPI('forwardInquiryToLineworks', {}, {
           inquiryId: inqId,
-          target: target.type === 'lw_channel' ? 'channel' : 'user',
-          targetId: target.targetId,
+          target: _kind === 'channel' ? 'channel' : 'user',
+          targetId: _tid,
           message: '【外注見積依頼】\n\n' + message,
           by: currentAuth?.userName || ''
         });
@@ -22690,7 +22706,7 @@ function _mitRenderLwSend_(){
   // LINE WORKS トークルーム候補: 会社別既定 + 連絡宛先マスタ(lw_channel)
   var rooms=[]; var seen={};
   if(typeof MIT_LW_ROOMS!=='undefined' && MIT_LW_ROOMS[co]){ var d=MIT_LW_ROOMS[co]; rooms.push({name:d.name+'（既定）',targetId:d.targetId}); seen[d.targetId]=1; }
-  try{ (typeof _visibleContactTargets_==='function'?_visibleContactTargets_():[]).filter(function(t){return t.type==='lw_channel';}).forEach(function(t){ if(t.targetId&&!seen[t.targetId]){ rooms.push({name:t.name||t.targetId,targetId:t.targetId}); seen[t.targetId]=1; } }); }catch(e){}
+  try{ (typeof _visibleContactTargets_==='function'?_visibleContactTargets_():[]).forEach(function(t){ var cid=(typeof _ctChannels_==='function'?_ctChannels_(t).lwChannel:t.targetId); if(cid&&!seen[cid]){ rooms.push({name:t.name||cid,targetId:cid}); seen[cid]=1; } }); }catch(e){}
   var roomOpts=rooms.map(function(t){ return '<option value="'+_formEsc_(t.targetId)+'">'+_formEsc_(t.name)+'</option>'; }).join('');
   var ist='font-size:12px;padding:5px 8px;border:1px solid #ccc;border-radius:6px';
   var lwInner = rooms.length
@@ -27847,13 +27863,108 @@ function _filterContactTargets_(typeFilter){
   return _visibleContactTargets_(typeFilter);
 }
 
+// 統一連絡先: 1件に複数チャンネル(LWユーザー/LWトークルーム/メール/LINE)を持てる。
+var CT_CHANNELS = [
+  { key:'lwUser',     label:'📲 LW ユーザー',    color:'#10b981', ph:'ログインID / user-uuid' },
+  { key:'lwChannel',  label:'💬 LW トークルーム', color:'#06b6d4', ph:'channel-id（グループトーク）' },
+  { key:'email',      label:'✉️ メール',         color:'#6366f1', ph:'address@example.com' },
+  { key:'lineNotify', label:'💚 LINE Notify',    color:'#06c755', ph:'トークンキー名（default 等）' }
+];
+// レコードの保有チャンネルを正規化（新: 個別フィールド / 旧: type+targetId を吸収）
+function _ctChannels_(t){
+  if(!t) return {};
+  var c = { lwUser:t.lwUser||'', lwChannel:t.lwChannel||'', email:t.email||'', lineNotify:t.lineNotify||'' };
+  if(t.type && t.targetId){
+    if(t.type==='lw_user'      && !c.lwUser)     c.lwUser=t.targetId;
+    else if(t.type==='lw_channel' && !c.lwChannel) c.lwChannel=t.targetId;
+    else if(t.type==='email'      && !c.email)     c.email=t.targetId;
+    else if(t.type==='line_notify'&& !c.lineNotify)c.lineNotify=t.targetId;
+  }
+  return c;
+}
+// あるチャンネルを持つ可視連絡先だけ返す（ピッカー用）: chKey='lwUser'|'lwChannel'|'email'|'lineNotify'
+function _contactsWithChannel_(chKey){
+  return _visibleContactTargets_().filter(function(t){ return !!_ctChannels_(t)[chKey]; });
+}
+// 任意のチャンネル値(ID/メール/channel-id)から連絡先を逆引き（名前解決用・新旧両形式）
+function _findContactByAnyId_(id){
+  if(!id) return null;
+  return _getContactTargets_().find(function(t){
+    if(t.targetId === id) return true;
+    var c = _ctChannels_(t);
+    return c.lwUser === id || c.lwChannel === id || c.email === id || c.lineNotify === id;
+  }) || null;
+}
+
+// 📜 送信/転送/返信 履歴ログ（DB.commLog に一元記録・全社同期）
+function _getCommLog_(){
+  if(!window.DB) window.DB = {};
+  if(!Array.isArray(DB.commLog)) DB.commLog = [];
+  return DB.commLog;
+}
+function _logComm_(entry){
+  var log = _getCommLog_();
+  var nm = (entry && entry.targetName) || '';
+  if(!nm && entry && entry.targetId){ try{ var c=_findContactByAnyId_(entry.targetId); if(c) nm=c.name; }catch(e){} }
+  var rec = {
+    id: 'CL-' + Date.now() + '-' + Math.floor(Math.random()*1000),
+    at: new Date().toISOString(),
+    by: (currentAuth && (currentAuth.userName||currentAuth.email)) || '',
+    action: (entry&&entry.action) || 'forward',   // forward | reply
+    channel: (entry&&entry.channel) || '',        // lineworks | line | email
+    kind: (entry&&entry.kind) || '',              // user | channel
+    targetName: nm,
+    targetId: (entry&&entry.targetId) || '',
+    inquiryId: (entry&&entry.inquiryId) || '',
+    subject: (entry&&entry.subject) || '',
+    preview: ((entry&&entry.preview) || '').slice(0, 160),
+    ok: (entry&&entry.ok) !== false
+  };
+  log.push(rec);
+  if(log.length > 2000) DB.commLog = log.slice(-2000);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  return rec;
+}
+var COMM_CH_META = { lineworks:{icon:'📲',label:'LINE WORKS',color:'#10b981'}, line:{icon:'💚',label:'LINE',color:'#06c755'}, email:{icon:'✉️',label:'メール',color:'#6366f1'} };
+// 送信履歴ビューア
+function showCommLog(){
+  var log = _getCommLog_().slice().reverse();
+  var rows = log.length ? log.slice(0, 300).map(function(r){
+    var m = COMM_CH_META[r.channel] || {icon:'•',label:r.channel,color:'#888'};
+    var dt = ''; try{ dt = new Date(r.at).toLocaleString('ja-JP'); }catch(e){ dt = r.at; }
+    return '<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border-bottom:1px solid #eee;font-size:12px">' +
+      '<span style="background:'+m.color+';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap;font-weight:700">'+m.icon+' '+m.label+'</span>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div><b>'+_escDiff(r.targetName||r.targetId||'(宛先不明)')+'</b>'+(r.kind==='channel'?' <span style="color:#888;font-size:10px">💬トーク</span>':'')+(r.ok===false?' <span style="color:#dc2626;font-size:10px">⚠失敗</span>':'')+'</div>' +
+        (r.subject?'<div style="color:#555">'+_escDiff(r.subject)+'</div>':'') +
+        (r.preview?'<div style="color:#888;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_escDiff(r.preview)+'</div>':'') +
+        '<div style="color:#94a3b8;font-size:10px;margin-top:1px">'+dt+' ／ '+_escDiff(r.by||'')+(r.action==='reply'?' ／ 返信':' ／ 転送')+'</div>' +
+      '</div></div>';
+  }).join('') : '<div style="text-align:center;color:#888;padding:30px">まだ送信履歴がありません</div>';
+  var modal = document.createElement('div');
+  modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:640px;max-height:92vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">' +
+      '<div style="padding:14px 20px;background:#0f766e;color:#fff;display:flex;justify-content:space-between;align-items:center">' +
+        '<div><strong>📜 送信・転送履歴</strong><div style="font-size:11px;opacity:.85;margin-top:2px">LINE WORKS / メール 等の送信ログ（全社共有・直近300件）</div></div>' +
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
+      '</div>' +
+      '<div style="overflow-y:auto;flex:1">' + rows + '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
 function addContactTarget(opts){
   var list = _getContactTargets_();
   var rec = {
     id: 'CT-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
     name: opts.name || '',
-    type: opts.type || 'lw_user',
-    targetId: opts.targetId || '',
+    lwUser: opts.lwUser || '',
+    lwChannel: opts.lwChannel || '',
+    email: opts.email || '',
+    lineNotify: opts.lineNotify || '',
     group: opts.group || '',
     scope: opts.scope || 'all',
     note: opts.note || '',
@@ -27893,15 +28004,21 @@ function showContactTargetMaster(){
   var groupHtml = Object.keys(groups).sort().map(function(g){
     return '<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px;border-bottom:1px solid #c7d2fe;padding-bottom:3px">📂 ' + g + ' (' + groups[g].length + ')</div>' +
       groups[g].map(function(t){
-        var meta = CONTACT_TARGET_TYPES[t.type] || { label:t.type, color:'#888' };
-        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:#f9fafb;border-radius:4px;margin-bottom:4px">' +
+        var chs = _ctChannels_(t);
+        var chChips = CT_CHANNELS.filter(function(c){ return chs[c.key]; }).map(function(c){
+          return '<div style="display:flex;gap:5px;align-items:center;margin-top:2px"><span style="background:'+c.color+';color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700;white-space:nowrap">'+c.label+'</span><span style="font-size:10px;color:#555;font-family:monospace">'+_escDiff(chs[c.key])+'</span></div>';
+        }).join('') || '<div style="font-size:10px;color:#dc2626;margin-top:2px">連絡手段なし</div>';
+        return '<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 8px;background:#f9fafb;border-radius:4px;margin-bottom:4px">' +
           '<div style="flex:1">' +
-            '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="background:' + meta.color + ';color:#fff;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700">' + meta.label + '</span><strong style="font-size:13px">' + _escDiff(t.name) + '</strong>' +
+            '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><strong style="font-size:13px">' + _escDiff(t.name) + '</strong>' +
               '<span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;' + ((!t.scope||t.scope==='all')?'background:#e0e7ff;color:#3730a3':'background:#fef3c7;color:#92400e') + '">' + ((!t.scope||t.scope==='all')?'🌐 ':'🔒 ') + _escDiff(_ctScopeLabel_(t.scope)) + '</span></div>' +
-            '<div style="font-size:10px;color:#888;font-family:monospace;margin-top:2px">' + _escDiff(t.targetId) + '</div>' +
+            chChips +
             (t.note ? '<div style="font-size:10px;color:#666;margin-top:2px">' + _escDiff(t.note) + '</div>' : '') +
           '</div>' +
-          '<button class="btn" style="font-size:10px;padding:2px 6px;background:#fee;color:#dc2626;border-color:#fca5a5" onclick="if(deleteContactTarget(\'' + t.id + '\')){this.closest(\'.proof-modal\').remove();showContactTargetMaster();}">🗑</button>' +
+          '<div style="display:flex;gap:4px;flex-shrink:0">' +
+            '<button class="btn" style="font-size:10px;padding:2px 6px" onclick="var t=_getContactTargets_().find(function(x){return x.id===\'' + t.id + '\'});this.closest(\'.proof-modal\').remove();showContactTargetAddModal(t);">✏</button>' +
+            '<button class="btn" style="font-size:10px;padding:2px 6px;background:#fee;color:#dc2626;border-color:#fca5a5" onclick="if(deleteContactTarget(\'' + t.id + '\')){this.closest(\'.proof-modal\').remove();showContactTargetMaster();}">🗑</button>' +
+          '</div>' +
         '</div>';
       }).join('') + '</div>';
   }).join('') || '<div style="text-align:center;color:#888;padding:30px">宛先がまだ登録されていません</div>';
@@ -27913,36 +28030,43 @@ function showContactTargetMaster(){
         '<div style="font-size:11px;opacity:.85;margin-top:2px">LINE WORKS ユーザー/トークルーム / LINE Notify を一元管理 (転送モーダルでプルダウン選択可)</div></div>' +
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>' +
       '</div>' +
-      '<div style="padding:14px 20px;background:#f9fafb;border-bottom:1px solid #e5e7eb">' +
+      '<div style="padding:14px 20px;background:#f9fafb;border-bottom:1px solid #e5e7eb;display:flex;gap:8px;flex-wrap:wrap">' +
         '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="showContactTargetAddModal()">＋ 宛先を追加</button>' +
+        '<button class="btn" style="background:#f0fdfa;border-color:#5eead4;color:#0f766e" onclick="this.closest(\'.proof-modal\').remove();showCommLog()">📜 送信・転送履歴</button>' +
       '</div>' +
       '<div style="overflow-y:auto;flex:1;padding:14px 20px">' + groupHtml + '</div>' +
     '</div>';
   document.body.appendChild(modal);
 }
 
-function showContactTargetAddModal(){
-  var typeOpts = Object.keys(CONTACT_TARGET_TYPES).map(function(k){
-    return '<option value="' + k + '">' + CONTACT_TARGET_TYPES[k].label + '</option>';
+function showContactTargetAddModal(edit){
+  var e = edit || {};
+  var ch = _ctChannels_(e);
+  var scopeOpts = ['all'].concat((DB.companies||[]).map(function(c){ return c.id; })).map(function(v){
+    var lbl = (v==='all') ? '🌐 全社共有（全員が使える）' : ('🔒 ' + ((DB.companies||[]).find(function(c){return c.id===v;})||{}).name + ' のみ');
+    return '<option value="' + v + '"' + (((e.scope||'all')===v)?' selected':'') + '>' + _escDiff(lbl) + '</option>';
   }).join('');
-  var scopeOpts = '<option value="all">🌐 全社共有（全員が使える）</option>' +
-    (DB.companies||[]).map(function(c){ return '<option value="' + c.id + '">🔒 ' + _escDiff(c.name) + ' のみ</option>'; }).join('');
+  var chFields = CT_CHANNELS.map(function(c){
+    return '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px"><span style="background:'+c.color+';color:#fff;font-size:10px;padding:1px 6px;border-radius:3px">'+c.label+'</span></div>'
+      + '<input id="ct-ch-'+c.key+'" value="'+_escDiff(ch[c.key]||'')+'" placeholder="'+c.ph+'（任意）" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>';
+  }).join('');
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
   modal.innerHTML =
-    '<div style="background:#fff;width:100%;max-width:520px;border-radius:10px;overflow:hidden">' +
-      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between"><strong>＋ 宛先を追加</strong><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
-      '<div style="padding:18px 20px;display:grid;gap:10px">' +
-        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">種別</div><select id="ct-type" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + typeOpts + '</select></label>' +
-        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">表示名 *</div><input id="ct-name" placeholder="例: 田中製造部長 / 制作部チャット" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
-        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">ID / メール / トークンキー *</div><input id="ct-targetId" placeholder="LW: user-uuid / channel-id ／ メール: address@example.com ／ LINE: トークンキー名" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:monospace"></label>' +
+    '<div style="background:#fff;width:100%;max-width:520px;max-height:92vh;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">' +
+      '<div style="padding:14px 20px;background:#1e40af;color:#fff;display:flex;justify-content:space-between"><strong>'+(e.id?'✏ 宛先を編集':'＋ 宛先を追加')+'</strong><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
+      '<div style="padding:18px 20px;display:grid;gap:10px;overflow-y:auto">' +
+        '<input type="hidden" id="ct-edit-id" value="'+_escDiff(e.id||'')+'">' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">表示名 *</div><input id="ct-name" value="'+_escDiff(e.name||'')+'" placeholder="例: 田中製造部長 / 制作部チャット" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px"></label>' +
+        '<div style="font-size:11px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:7px 10px">連絡手段は<b>1つ以上</b>入力。1件に複数入れてOK（メール＋LW等）。<b>グループトークはトークルームだけ</b>入れればOK。</div>' +
+        chFields +
         '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">閲覧権限 (誰が使える)</div><select id="ct-scope" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' + scopeOpts + '</select></label>' +
-        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">グループ (任意)</div><input id="ct-group" placeholder="例: 制作部 / 営業部 / 配送部" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px" list="ct-group-list"><datalist id="ct-group-list">' + Array.from(new Set(_getContactTargets_().map(function(t){ return t.group || ''; }).filter(Boolean))).map(function(g){ return '<option value="' + g + '">'; }).join('') + '</datalist></label>' +
-        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">備考</div><textarea id="ct-note" rows="2" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical"></textarea></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">グループ (任意)</div><input id="ct-group" value="'+_escDiff(e.group||'')+'" placeholder="例: 制作部 / 営業部 / 配送部" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px" list="ct-group-list"><datalist id="ct-group-list">' + Array.from(new Set(_getContactTargets_().map(function(t){ return t.group || ''; }).filter(Boolean))).map(function(g){ return '<option value="' + g + '">'; }).join('') + '</datalist></label>' +
+        '<label><div style="font-size:12px;color:#555;font-weight:600;margin-bottom:3px">備考</div><textarea id="ct-note" rows="2" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical">'+_escDiff(e.note||'')+'</textarea></label>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">' +
           '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
-          '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="submitContactTargetAdd()">登録</button>' +
+          '<button class="btn btn-p" style="background:#1e40af;border-color:#1e40af" onclick="submitContactTargetAdd()">'+(e.id?'保存':'登録')+'</button>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -28066,16 +28190,34 @@ function showOrgRollupReport(parentCode){
 
 function submitContactTargetAdd(){
   var name = (document.getElementById('ct-name')?.value || '').trim();
-  var targetId = (document.getElementById('ct-targetId')?.value || '').trim();
-  if(!name || !targetId){ alert('表示名と ID を入力してください'); return; }
-  addContactTarget({
+  if(!name){ alert('表示名を入力してください'); return; }
+  var vals = {
     name: name,
-    type: document.getElementById('ct-type')?.value || 'lw_user',
-    targetId: targetId,
+    lwUser: (document.getElementById('ct-ch-lwUser')?.value || '').trim(),
+    lwChannel: (document.getElementById('ct-ch-lwChannel')?.value || '').trim(),
+    email: (document.getElementById('ct-ch-email')?.value || '').trim(),
+    lineNotify: (document.getElementById('ct-ch-lineNotify')?.value || '').trim(),
     group: (document.getElementById('ct-group')?.value || '').trim(),
     scope: document.getElementById('ct-scope')?.value || 'all',
     note: (document.getElementById('ct-note')?.value || '').trim()
-  });
+  };
+  if(!vals.lwUser && !vals.lwChannel && !vals.email && !vals.lineNotify){
+    alert('連絡手段を1つ以上入力してください（LWユーザー / トークルーム / メール / LINE のいずれか）'); return;
+  }
+  var editId = document.getElementById('ct-edit-id')?.value || '';
+  if(editId){
+    var rec = _getContactTargets_().find(function(t){ return t.id === editId; });
+    if(rec){
+      // 旧形式(type/targetId)は編集で新形式に移行するため除去
+      delete rec.type; delete rec.targetId;
+      Object.keys(vals).forEach(function(k){ rec[k] = vals[k]; });
+      rec.updatedAt = new Date().toISOString();
+      if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+      if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+    }
+  } else {
+    addContactTarget(vals);
+  }
   document.querySelector('.proof-modal')?.remove();
   showContactTargetMaster();
 }
@@ -28402,8 +28544,10 @@ function _pickLwUserId_(btn){
   // 連絡宛先マスタ (DB.contactTargets) からも取得 — 名前と紐付ける
   var targets = (typeof _getContactTargets_ === 'function') ? _getContactTargets_() : (DB.contactTargets || []);
   var nameOf = function(id){
-    var t = (targets || []).find(function(x){ return x.targetId === id; });
-    return t ? (t.name + (t.type === 'lw_channel' ? ' (トーク)' : ' (ユーザー)')) : '';
+    var t = (typeof _findContactByAnyId_ === 'function') ? _findContactByAnyId_(id) : (targets || []).find(function(x){ return x.targetId === id; });
+    if(!t) return '';
+    var _c = (typeof _ctChannels_ === 'function') ? _ctChannels_(t) : {};
+    return t.name + (_c.lwChannel === id ? ' (トーク)' : ' (ユーザー)');
   };
 
   // モーダル表示
@@ -29020,9 +29164,9 @@ function openDriverRouteInMaps(driverKey, date){
 function _resolveAssigneeLwUserId_(assigneeName){
   if(!assigneeName) return '';
   var ct = _getContactTargets_().find(function(t){
-    return t.type === 'lw_user' && (t.name === assigneeName || t.name.indexOf(assigneeName) >= 0);
+    return _ctChannels_(t).lwUser && (t.name === assigneeName || (t.name||'').indexOf(assigneeName) >= 0);
   });
-  return ct ? ct.targetId : '';
+  return ct ? _ctChannels_(ct).lwUser : '';
 }
 
 // 全アラート候補を集計
@@ -41917,12 +42061,13 @@ function _destinationDisplay_(key){
     var company = '';
     var icon = '💬';
     try {
-      var t = (DB.contactTargets || []).find(function(x){ return x.targetId === dest; });
+      var t = _findContactByAnyId_(dest);
       if(t){
         name = t.name || dest;
         company = t.group || '';
-        if(t.type === 'lw_user') icon = '👤';
-        else if(t.type === 'lw_channel') icon = '💬';
+        var _c = _ctChannels_(t);
+        if(_c.lwUser === dest) icon = '👤';
+        else if(_c.lwChannel === dest) icon = '💬';
       }
     } catch(e){}
     return {
@@ -41937,7 +42082,7 @@ function _destinationDisplay_(key){
     var nameL = dest;
     var companyL = '';
     try {
-      var tL = (DB.contactTargets || []).find(function(x){ return x.targetId === dest; });
+      var tL = _findContactByAnyId_(dest);
       if(tL){ nameL = tL.name || dest; companyL = tL.group || ''; }
     } catch(e){}
     return {
@@ -45470,6 +45615,16 @@ async function _dispatchDraftToEmail_(inqId){
   showEmailReplyModal(inqId, draft);
 }
 
+// 宛先マスタのプルダウン選択 → 種別(user/channel)とIDを反映
+function _lwPickTarget_(sel){
+  var v = sel && sel.value; if(!v) return;
+  var i = v.indexOf(':'); if(i < 0) return;
+  var kind = v.slice(0, i), id = v.slice(i + 1);
+  var idEl = document.getElementById('lw-target-id'); if(idEl) idEl.value = id;
+  var opt = document.querySelector('.lwtg-opt[data-target="' + kind + '"]');
+  if(opt) opt.click();
+  else { var r = document.querySelector('input[name="lw-target"][value="' + kind + '"]'); if(r) r.checked = true; }
+}
 // ─────────────────────────────────────────────────────
 // 📲 III-1: LINE WORKS 転送モーダル
 // ─────────────────────────────────────────────────────
@@ -45494,7 +45649,7 @@ function showLineworksForwardModal(inqId, prefilledText){
       '<div style="overflow-y:auto;flex:1;padding:18px 20px">' +
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;padding:7px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px">' +
           '<span style="font-size:11px;color:#166534">送れない時はまず接続確認 →</span>' +
-          '<button class="btn" style="font-size:11px;padding:4px 10px" onclick="_checkLwStatus_()">🔍 LINE WORKS 設定を確認</button>' +
+          '<span style="display:flex;gap:6px"><button class="btn" style="font-size:11px;padding:4px 10px" onclick="showCommLog()">📜 履歴</button><button class="btn" style="font-size:11px;padding:4px 10px" onclick="_checkLwStatus_()">🔍 設定を確認</button></span>' +
         '</div>' +
         '<div id="lw-status-box" style="font-size:11px;margin-bottom:12px;display:none"></div>' +
         '<div style="display:flex;gap:6px;margin-bottom:12px">' +
@@ -45503,18 +45658,23 @@ function showLineworksForwardModal(inqId, prefilledText){
         '</div>' +
         '<label style="font-size:12px;font-weight:700;color:#555">送信先 (マスタから選択 or 直接入力)</label>' +
         '<div style="display:flex;gap:6px;margin:6px 0 14px">' +
-          '<select id="lw-target-saved" onchange="if(this.value){document.getElementById(\'lw-target-id\').value=this.value;var t=_getContactTargets_().find(function(x){return x.targetId===this.value}.bind(this));if(t)document.querySelector(\'input[value=\\\'\'+ (t.type===\'lw_channel\'?\'channel\':\'user\') +\'\\\']\')?.click();}" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">' +
+          '<select id="lw-target-saved" onchange="_lwPickTarget_(this)" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">' +
             '<option value="">— マスタから選ぶ —</option>' +
             (function(){
               var groups = {};
-              _visibleContactTargets_().filter(function(t){ return t.type === 'lw_user' || t.type === 'lw_channel'; }).forEach(function(t){
+              _visibleContactTargets_().forEach(function(t){
+                var chs = _ctChannels_(t);
+                if(!chs.lwUser && !chs.lwChannel) return;
                 var g = t.group || '(未分類)';
                 if(!groups[g]) groups[g] = [];
                 groups[g].push(t);
               });
               return Object.keys(groups).sort().map(function(g){
                 return '<optgroup label="' + g + '">' + groups[g].map(function(t){
-                  return '<option value="' + t.targetId + '">' + (CONTACT_TARGET_TYPES[t.type]?.label || '') + ' ' + t.name + '</option>';
+                  var chs = _ctChannels_(t), opts = '';
+                  if(chs.lwUser)    opts += '<option value="user:' + _escDiff(chs.lwUser) + '">📲 ' + _escDiff(t.name) + '（ユーザー）</option>';
+                  if(chs.lwChannel) opts += '<option value="channel:' + _escDiff(chs.lwChannel) + '">💬 ' + _escDiff(t.name) + '（トークルーム）</option>';
+                  return opts;
                 }).join('') + '</optgroup>';
               }).join('');
             })() +
@@ -45556,13 +45716,16 @@ async function _submitLineworksForward_(inqId){
       inquiryId: inqId, target: target, targetId: targetId, message: text,
       by: currentAuth?.userName || ''
     });
+    var _inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }) || {};
     if(resp && resp.success){
       if(typeof _addAuditLog_ === 'function') _addAuditLog_('forward', 'inquiry:' + inqId, 'LINE WORKS 転送 (' + target + ': ' + targetId + ')');
+      try{ _logComm_({ action:'forward', channel:'lineworks', kind:target, targetId:targetId, inquiryId:inqId, subject:(_inq.subject||''), preview:text, ok:true }); }catch(e){}
       alert('✅ LINE WORKS に送信しました');
       document.querySelector('.proof-modal')?.remove();
       if(typeof loadFromCloud === 'function') await loadFromCloud();
       if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId);
     } else {
+      try{ _logComm_({ action:'forward', channel:'lineworks', kind:target, targetId:targetId, inquiryId:inqId, subject:(_inq.subject||''), preview:text, ok:false }); }catch(e){}
       alert(_lwErrMsg_(resp?.error || '送信失敗'));
     }
   } catch(e){
