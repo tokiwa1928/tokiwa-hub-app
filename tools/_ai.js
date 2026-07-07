@@ -22,17 +22,21 @@ function tqCanvasToB64(cv, maxDim, quality){
 
 // 画像(1枚以上のbase64) + プロンプト → AIのテキスト応答
 // images: base64文字列 または canvas の配列
-async function tqAiVision(prompt, images, maxTokens){
+// opts: { model, maxDim, quality } — 高精度OCR時に高解像度＋上位モデルを指定可
+async function tqAiVision(prompt, images, maxTokens, opts){
+  opts = opts || {};
   var b64s = (images || []).map(function(im){
-    return (im && im.getContext) ? tqCanvasToB64(im) : String(im).replace(/^data:[^,]*,/, '');
+    return (im && im.getContext) ? tqCanvasToB64(im, opts.maxDim, opts.quality) : String(im).replace(/^data:[^,]*,/, '');
   });
   if(!b64s.length) throw new Error('画像がありません');
   var url = new URL(TQ_GAS_URL);
   url.searchParams.set('action', 'claudeVision');
   url.searchParams.set('apiKey', TQ_GAS_KEY);
+  var payload = { prompt: prompt, images: b64s, maxTokens: maxTokens || 3000 };
+  if(opts.model) payload.model = opts.model;   // GASが未対応でも無視されHaikuになる（後方互換）
   var res = await fetch(url.toString(), {
     method: 'POST', redirect: 'follow',
-    body: JSON.stringify({ prompt: prompt, images: b64s, maxTokens: maxTokens || 3000 })
+    body: JSON.stringify(payload)
   });
   var j;
   try { j = await res.json(); }
