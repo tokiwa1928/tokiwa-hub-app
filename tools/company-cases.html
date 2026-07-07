@@ -21,8 +21,10 @@
   table{ border-collapse:separate; border-spacing:0; width:100%; font-size:11.5px; }
   thead th{ position:sticky; top:0; z-index:3; background:var(--hd); color:#fff; padding:6px 8px; white-space:nowrap; text-align:left; cursor:pointer; border-right:1px solid #444; }
   thead th:hover{ background:#33302b; }
-  tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; white-space:nowrap; vertical-align:top; }
-  tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; }
+  tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; white-space:normal; word-break:break-word; overflow-wrap:anywhere; vertical-align:top; max-width:240px; }
+  tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; white-space:nowrap; }
+  .kpi.clickable{ cursor:pointer; } .kpi.clickable:hover{ outline:2px solid #93c5fd; }
+  .kpi.on{ outline:2px solid #60a5fa; background:#0e7490; }
   tbody tr:nth-child(even){ background:#faf9f6; } tbody tr:hover{ background:#eef6fb; }
   .stat{ display:inline-block; font-size:10px; font-weight:700; padding:1px 7px; border-radius:9px; }
   #status{ font-size:11px; color:var(--muted); }
@@ -53,6 +55,18 @@ var DISPLAY_CAP=2000;
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function isNum(v){ return v!=='' && v!=null && !isNaN(Number(String(v).replace(/,/g,''))); }
 function yen(n){ n=Math.round(Number(n)||0); return (n<0?'−¥'+Math.abs(n).toLocaleString():'¥'+n.toLocaleString()); }
+var deliveryMode=''; // '' | 'today' | 'week'
+// 文字列→Date（yyyy-M-d / yyyy/M/d / M/d[今年補完]。不明はnull）
+function parseD(v){
+  if(!v) return null; var s=String(v).trim();
+  var m=s.match(/(\d{4})[-\/年](\d{1,2})[-\/月](\d{1,2})/); if(m) return new Date(+m[1],+m[2]-1,+m[3]);
+  m=s.match(/^(\d{1,2})[-\/](\d{1,2})$/); if(m){ var y=new Date().getFullYear(); return new Date(y,+m[1]-1,+m[2]); }
+  return null;
+}
+function ymd(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+function weekRange(){ var t=new Date(); t.setHours(0,0,0,0); var dow=(t.getDay()+6)%7; var mon=new Date(t); mon.setDate(t.getDate()-dow); var sun=new Date(mon); sun.setDate(mon.getDate()+6); return [mon,sun]; }
+function toNum(v){ var n=Number(String(v==null?'':v).replace(/[,¥]/g,'')); return isNaN(n)?null:n; }
+function isMoneyCol(h){ return /金額|利益|請求.*額|振込.*額|振込金額|支払.*額|受注.*額|合計金額/.test(h) && !/単価/.test(h); }
 async function api(action, params){
   var url=new URL(GAS_URL); url.searchParams.set('action',action); url.searchParams.set('apiKey',GAS_KEY);
   Object.keys(params||{}).forEach(function(k){ url.searchParams.set(k,params[k]); });
@@ -101,10 +115,12 @@ function applyFilter(){
   var q=(document.getElementById('q').value||'').toLowerCase().trim();
   var qs=q?q.split(/\s+/):[];
   var fs=document.getElementById('f-status').value, fm=document.getElementById('f-month').value;
-  var si=findCol(/状況/), mi=findCol(/請求月/);
+  var si=findCol(/状況/), mi=findCol(/請求月/), di=findCol(/納品日/);
+  var wk=weekRange(), today=ymd(new Date());
   VIEW=DATA.rows.filter(function(r){
     if(fs && String(r[si])!==fs) return false;
     if(fm && String(r[mi])!==fm) return false;
+    if(deliveryMode && di>=0){ var dd=parseD(r[di]); if(!dd) return false; if(deliveryMode==='today'){ if(ymd(dd)!==today) return false; } else if(deliveryMode==='week'){ if(dd<wk[0]||dd>wk[1]) return false; } }
     if(qs.length){ var hay=r.join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } }
     return true;
   });
@@ -112,10 +128,33 @@ function applyFilter(){
   renderKpis(); renderBody();
 }
 function renderKpis(){
-  var kp=document.getElementById('kpis'); var cards='<div class="kpi"><div class="k">件数（絞込）</div><div class="v">'+VIEW.length.toLocaleString()+'</div></div>';
-  DATA.header.forEach(function(h,i){ if(/金額|利益/.test(h)){ var sum=VIEW.reduce(function(s,r){ var n=Number(String(r[i]).replace(/,/g,'')); return s+(isNaN(n)?0:n); },0); cards+='<div class="kpi"><div class="k">'+esc(h)+' 計</div><div class="v">'+yen(sum)+'</div></div>'; } });
+  var kp=document.getElementById('kpis');
+  var cards='<div class="kpi"><div class="k">件数（絞込）</div><div class="v">'+VIEW.length.toLocaleString()+'</div></div>';
+  // 全金額列の合計（絞込後）
+  DATA.header.forEach(function(h,i){ if(isMoneyCol(h)){ var sum=VIEW.reduce(function(s,r){ var n=toNum(r[i]); return s+(n||0); },0); cards+='<div class="kpi"><div class="k">'+esc(h)+' 計</div><div class="v">'+yen(sum)+'</div></div>'; } });
+  // 納品（今日・今週）— 全データ基準。クリックで絞込
+  var di=findCol(/納品日/);
+  if(di>=0){
+    var today=ymd(new Date()), wk=weekRange(), tN=0, wN=0;
+    DATA.rows.forEach(function(r){ var d=parseD(r[di]); if(!d) return; if(ymd(d)===today) tN++; if(d>=wk[0]&&d<=wk[1]) wN++; });
+    cards+='<div class="kpi clickable'+(deliveryMode==='today'?' on':'')+'" onclick="toggleDelivery(\'today\')"><div class="k">今日の納品</div><div class="v">'+tN+'</div></div>';
+    cards+='<div class="kpi clickable'+(deliveryMode==='week'?' on':'')+'" onclick="toggleDelivery(\'week\')"><div class="k">今週の納品</div><div class="v">'+wN+'</div></div>';
+  }
+  // 今月・前月の 案件数／受注額（受注日ベース。金額は最初の金額列）
+  var oi=findCol(/受注日/), amtI=-1;
+  for(var c=0;c<DATA.header.length;c++){ if(isMoneyCol(DATA.header[c])){ amtI=c; break; } }
+  if(oi>=0){
+    var now=new Date(), curKey=now.getFullYear()+'-'+(now.getMonth()+1);
+    var pm=new Date(now.getFullYear(), now.getMonth()-1, 1), pmKey=pm.getFullYear()+'-'+(pm.getMonth()+1);
+    var agg={}; DATA.rows.forEach(function(r){ var d=parseD(r[oi]); if(!d) return; var k=d.getFullYear()+'-'+(d.getMonth()+1); if(!agg[k]) agg[k]={n:0,amt:0}; agg[k].n++; if(amtI>=0){ var a=toNum(r[amtI]); if(a) agg[k].amt+=a; } });
+    var cur=agg[curKey]||{n:0,amt:0}, prev=agg[pmKey]||{n:0,amt:0};
+    var diffN=cur.n-prev.n, diffA=cur.amt-prev.amt;
+    cards+='<div class="kpi"><div class="k">今月の案件数（受注日）</div><div class="v">'+cur.n+' <span style="font-size:11px;color:#9db">'+(diffN>=0?'+':'')+diffN+'</span></div></div>';
+    if(amtI>=0) cards+='<div class="kpi"><div class="k">今月の受注額</div><div class="v" style="font-size:15px">'+yen(cur.amt)+' <span style="font-size:10px;color:#9db">前月比'+(diffA>=0?'+':'−')+'¥'+Math.abs(diffA).toLocaleString()+'</span></div></div>';
+  }
   kp.innerHTML=cards;
 }
+function toggleDelivery(mode){ deliveryMode=(deliveryMode===mode?'':mode); applyFilter(); }
 function renderBody(){
   var rows=VIEW.slice(0,DISPLAY_CAP);
   var html=rows.map(function(r){
