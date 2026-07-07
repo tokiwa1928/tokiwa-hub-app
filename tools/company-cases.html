@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>グループ会社 案件管理（村山／北上／中尾／ヤマウチ／アート）</title>
+<style>
+  :root{ --line:#1a1a1a; --hd:#211f1c; --muted:#64748b; --accent:#1e40af; }
+  *{box-sizing:border-box}
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; color:#1a1a1a; background:#f4f3f0; font-size:12.5px; }
+  .wrap{ padding:12px; }
+  h1{ font-size:16px; margin:0 0 2px; } .sub{ color:var(--muted); font-size:11px; margin-bottom:10px; }
+  .toolbar{ position:sticky; top:0; z-index:10; background:#f4f3f0; display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 0; border-bottom:1px solid #ddd; }
+  select,input,button{ font-family:inherit; font-size:12.5px; }
+  select,input{ padding:6px 8px; border:1px solid #c9c6bf; border-radius:6px; background:#fff; }
+  .btn{ padding:6px 12px; border:1px solid #c9c6bf; border-radius:7px; background:#fff; cursor:pointer; font-weight:700; }
+  .btn.p{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  #kpis{ display:flex; gap:8px; flex-wrap:wrap; margin:10px 0; }
+  .kpi{ background:#211f1c; color:#fff; border-radius:8px; padding:7px 13px; } .kpi .k{ font-size:10px; color:#bbb; } .kpi .v{ font-size:17px; font-weight:800; font-family:'Roboto Mono',monospace; }
+  .tblwrap{ overflow:auto; max-height:74vh; border:1.5px solid var(--line); border-radius:10px; background:#fff; }
+  table{ border-collapse:separate; border-spacing:0; width:100%; font-size:11.5px; }
+  thead th{ position:sticky; top:0; z-index:3; background:var(--hd); color:#fff; padding:6px 8px; white-space:nowrap; text-align:left; cursor:pointer; border-right:1px solid #444; }
+  thead th:hover{ background:#33302b; }
+  tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; white-space:nowrap; vertical-align:top; }
+  tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; }
+  tbody tr:nth-child(even){ background:#faf9f6; } tbody tr:hover{ background:#eef6fb; }
+  .stat{ display:inline-block; font-size:10px; font-weight:700; padding:1px 7px; border-radius:9px; }
+  #status{ font-size:11px; color:var(--muted); }
+  .neg{ color:#c0261c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>グループ会社 案件管理</h1>
+  <div class="sub">各社のGoogleスプレッドシートをHub上で横断表示・検索。元データはシート（Hubは常に最新を読込）。※まずは閲覧・検索・CSV。編集反映は次段。</div>
+  <div class="toolbar">
+    <select id="company" onchange="loadCompany()"></select>
+    <button class="btn" onclick="loadCompany()">🔄 再読込</button>
+    <input id="q" placeholder="🔍 顧客・案件・伝票番号で検索…" style="width:240px" oninput="applyFilter()">
+    <select id="f-status" onchange="applyFilter()"><option value="">状況：すべて</option></select>
+    <select id="f-month" onchange="applyFilter()"><option value="">請求月：すべて</option></select>
+    <button class="btn" onclick="exportCsv()">⬇ CSV</button>
+    <span id="status"></span>
+  </div>
+  <div id="kpis"></div>
+  <div class="tblwrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+</div>
+<script>
+var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
+var GAS_KEY='mitsumori-2024';
+var DATA={ header:[], rows:[], company:'' }, VIEW=[], sortCol=-1, sortDir=1, colIdx={};
+var DISPLAY_CAP=2000;
+function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function isNum(v){ return v!=='' && v!=null && !isNaN(Number(String(v).replace(/,/g,''))); }
+function yen(n){ n=Math.round(Number(n)||0); return (n<0?'−¥'+Math.abs(n).toLocaleString():'¥'+n.toLocaleString()); }
+async function api(action, params){
+  var url=new URL(GAS_URL); url.searchParams.set('action',action); url.searchParams.set('apiKey',GAS_KEY);
+  Object.keys(params||{}).forEach(function(k){ url.searchParams.set(k,params[k]); });
+  var r=await fetch(url.toString(),{redirect:'follow'}); return r.json();
+}
+async function init(){
+  try{
+    var r=await api('caseCompanies');
+    var sel=document.getElementById('company');
+    (r.companies||[]).forEach(function(c){ sel.add(new Option(c.name+(c.dir?'（'+c.dir+'）':''), c.key)); });
+    loadCompany();
+  }catch(e){ document.getElementById('status').textContent='会社一覧の取得に失敗: '+e.message; }
+}
+async function loadCompany(){
+  var key=document.getElementById('company').value; if(!key) return;
+  document.getElementById('status').textContent='読込中…';
+  document.getElementById('tbody').innerHTML=''; document.getElementById('kpis').innerHTML='';
+  try{
+    var r=await api('caseLoad',{company:key});
+    if(!r.success){ document.getElementById('status').textContent='読込失敗: '+(r.error||''); return; }
+    DATA={ header:r.header||[], rows:r.rows||[], company:r.company||'' };
+    colIdx={}; DATA.header.forEach(function(h,i){ colIdx[h]=i; });
+    buildHead(); buildFilters(); applyFilter();
+  }catch(e){ document.getElementById('status').textContent='読込失敗: '+e.message; }
+}
+function findCol(re){ for(var i=0;i<DATA.header.length;i++){ if(re.test(DATA.header[i])) return i; } return -1; }
+function buildHead(){
+  var tr='<tr>'+DATA.header.map(function(h,i){ var ar=(sortCol===i?(sortDir>0?' ▲':' ▼'):''); return '<th onclick="sortBy('+i+')">'+esc(h)+ar+'</th>'; }).join('')+'</tr>';
+  document.getElementById('thead').innerHTML=tr;
+}
+function buildFilters(){
+  var si=findCol(/状況/), mi=findCol(/請求月/);
+  var sset={}, mset={};
+  DATA.rows.forEach(function(r){ if(si>=0&&r[si]!=='') sset[r[si]]=1; if(mi>=0&&r[mi]!=='') mset[r[mi]]=1; });
+  var sf=document.getElementById('f-status'), mf=document.getElementById('f-month');
+  sf.innerHTML='<option value="">状況：すべて</option>'+Object.keys(sset).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join('');
+  mf.innerHTML='<option value="">請求月：すべて</option>'+Object.keys(mset).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join('');
+}
+function applyFilter(){
+  var q=(document.getElementById('q').value||'').toLowerCase().trim();
+  var qs=q?q.split(/\s+/):[];
+  var fs=document.getElementById('f-status').value, fm=document.getElementById('f-month').value;
+  var si=findCol(/状況/), mi=findCol(/請求月/);
+  VIEW=DATA.rows.filter(function(r){
+    if(fs && String(r[si])!==fs) return false;
+    if(fm && String(r[mi])!==fm) return false;
+    if(qs.length){ var hay=r.join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } }
+    return true;
+  });
+  if(sortCol>=0){ VIEW.sort(function(a,b){ var x=a[sortCol],y=b[sortCol]; if(isNum(x)&&isNum(y)){ return (Number(String(x).replace(/,/g,''))-Number(String(y).replace(/,/g,'')))*sortDir; } return String(x).localeCompare(String(y),'ja')*sortDir; }); }
+  renderKpis(); renderBody();
+}
+function renderKpis(){
+  var kp=document.getElementById('kpis'); var cards='<div class="kpi"><div class="k">件数（絞込）</div><div class="v">'+VIEW.length.toLocaleString()+'</div></div>';
+  DATA.header.forEach(function(h,i){ if(/金額|利益/.test(h)){ var sum=VIEW.reduce(function(s,r){ var n=Number(String(r[i]).replace(/,/g,'')); return s+(isNaN(n)?0:n); },0); cards+='<div class="kpi"><div class="k">'+esc(h)+' 計</div><div class="v">'+yen(sum)+'</div></div>'; } });
+  kp.innerHTML=cards;
+}
+function renderBody(){
+  var rows=VIEW.slice(0,DISPLAY_CAP);
+  var html=rows.map(function(r){
+    return '<tr>'+DATA.header.map(function(h,i){ var v=r[i]; var cls=(/金額|単価|数量|利益/.test(h)&&isNum(v))?' class="num'+((Number(String(v).replace(/,/g,''))<0)?' neg':'')+'"':(isNum(v)&&/^-?[\d,]+\.?\d*$/.test(String(v))?' class="num"':''); return '<td'+cls+'>'+esc(v)+'</td>'; }).join('')+'</tr>';
+  }).join('');
+  document.getElementById('tbody').innerHTML=html;
+  var more=VIEW.length>DISPLAY_CAP?('（表示は先頭'+DISPLAY_CAP.toLocaleString()+'件。検索で絞ってください）'):'';
+  document.getElementById('status').textContent=DATA.company+'：全'+DATA.rows.length.toLocaleString()+'件 / 絞込 '+VIEW.length.toLocaleString()+'件 '+more;
+}
+function sortBy(i){ if(sortCol===i) sortDir=-sortDir; else { sortCol=i; sortDir=1; } buildHead(); applyFilter(); }
+function exportCsv(){
+  var esc2=function(s){ s=(s==null?'':String(s)); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  var lines=[DATA.header.map(esc2).join(',')].concat(VIEW.map(function(r){ return r.map(esc2).join(','); }));
+  var blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=DATA.company+'_案件管理_'+new Date().toISOString().slice(0,10)+'.csv'; a.click();
+}
+init();
+</script>
+</body>
+</html>
