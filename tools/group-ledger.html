@@ -61,6 +61,11 @@
     <h2><span id="form-title">案件入力</span><button onclick="closeForm()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer">×</button></h2>
     <div class="grid">
       <input type="hidden" id="f-id">
+      <div class="full" style="position:relative;background:#f1f5f9;padding:8px;border-radius:8px">
+        <label>🔁 過去案件から引用（顧客・案件・伝票番号で検索→選ぶと下欄に流し込み）</label>
+        <input id="f-quote" placeholder="過去の顧客名・案件名・伝票番号で検索…" oninput="quoteSearch()" autocomplete="off">
+        <div id="quote-results" style="display:none;position:absolute;left:8px;right:8px;top:100%;z-index:5;background:#fff;border:1px solid #c9c6bf;border-radius:0 0 8px 8px;max-height:220px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.15)"></div>
+      </div>
       <div><label>伝票番号（トキワ採番）*</label><input id="f-denpyo" list="denpyo-list" placeholder="a0xxxxx" oninput="onDenpyo()"></div>
       <div><label>状況</label><input id="f-status2" list="status-list" placeholder="進行中 / 納品済 / 中止…"></div>
       <div><label>顧客名</label><input id="f-customer"></div>
@@ -132,20 +137,25 @@ function filtered(){
     return true;
   });
 }
+var DISPLAY_CAP=400;
+function _caseTime_(c){ var d=parseD(c.orderDate); if(d) return d.getTime(); var u=c.updatedAt?Date.parse(c.updatedAt):0; return u||0; }
 function render(){
   var V=filtered();
+  V.sort(function(a,b){ return _caseTime_(b)-_caseTime_(a); }); // 新しい順（過去は検索で引く）
+  var shown=V.slice(0,DISPLAY_CAP);
   document.getElementById('thead').innerHTML='<tr>'+COLS.map(function(c){return '<th>'+c[1]+'</th>';}).join('')+'<th>操作</th></tr>';
-  document.getElementById('tbody').innerHTML=V.map(function(c){
+  document.getElementById('tbody').innerHTML=shown.map(function(c){
     var red=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE'||c.deliverTo);
     var tds=COLS.map(function(col){ var k=col[0], v=c[k];
       if(k==='multiPack') v=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE')?'⚠ 複数梱包':'';
       var cls=(/金額|利益/.test(col[1])&&v!=='')?' class="num"':'';
       return '<td'+cls+'>'+esc(v)+'</td>';
     }).join('');
-    return '<tr class="'+(red?'rowred':'')+'">'+tds+'<td><button class="btn sm" onclick="openForm(\''+c.id+'\')">✏</button></td></tr>';
+    return '<tr class="'+(red?'rowred':'')+'">'+tds+'<td style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="この内容で新規（過去から引用）" onclick="openForm(\''+c.id+'\',true)">🔁</button></td></tr>';
   }).join('');
   renderKpis(V);
-  document.getElementById('status').textContent=COMPANY+'：'+CASES.length+'件 / 絞込 '+V.length+'件';
+  var more=V.length>DISPLAY_CAP?('　（新しい順 先頭'+DISPLAY_CAP+'件を表示。過去は🔍検索で絞込）'):'';
+  document.getElementById('status').textContent=COMPANY+'：'+CASES.length+'件 / 絞込 '+V.length+'件'+more;
 }
 function renderKpis(V){
   var wk=weekRange(), today=ymd(new Date()), tN=0,wN=0;
@@ -168,19 +178,56 @@ function renderKpis(V){
 function tglDlv(m){ deliveryMode=(deliveryMode===m?'':m); render(); }
 // ── 入力フォーム ──
 var editing=null;
-function openForm(id){
-  editing=id?CASES.find(function(c){return c.id===id;}):null;
-  var g=function(f){ return editing?(editing[f]!=null?editing[f]:''):''; };
-  document.getElementById('form-title').textContent=editing?'案件を編集':'新規入力（'+COMPANY+'）';
+// openForm(id)         … 既存案件を編集
+// openForm(id, true)   … その案件の内容を引用して「新規」入力（過去から引っ張る）
+// openForm()           … 空の新規入力
+function openForm(id, asCopy){
+  var src=id?CASES.find(function(c){return c.id===id;}):null;
+  editing=(src && !asCopy)?src:null; // asCopy時は新規扱い（保存で別案件になる）
+  var g=function(f){ return src?(src[f]!=null?src[f]:''):''; };
+  document.getElementById('form-title').textContent=editing?'案件を編集':(asCopy?'新規入力（過去から引用）':'新規入力（'+COMPANY+'）');
   document.getElementById('f-id').value=editing?editing.id:'';
   ['denpyo','customer','item','qty','unit','orderDate','hopeDate','deliveryDate','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','deliverTo','memo'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=g(f); });
   document.getElementById('f-status2').value=g('status');
-  document.getElementById('f-multiPack').checked=(editing&&(editing.multiPack===true||editing.multiPack==='true'||editing.multiPack==='TRUE'));
-  document.getElementById('f-linked').value=g('_linkedArrival');
+  document.getElementById('f-multiPack').checked=(src&&(src.multiPack===true||src.multiPack==='true'||src.multiPack==='TRUE'));
+  document.getElementById('f-linked').value=(editing?g('_linkedArrival'):'');
+  if(asCopy){ // 引用は「元の内容を土台に、新規伝票・新規日付」で入れ直す想定
+    document.getElementById('f-denpyo').value='';       // 伝票番号はトキワが新規採番
+    document.getElementById('f-orderDate').value=ymd(new Date());
+    document.getElementById('f-hopeDate').value='';
+    document.getElementById('f-deliveryDate').value='';
+    document.getElementById('f-status2').value='';
+    document.getElementById('f-linked').value='';
+  }
   document.getElementById('del-btn').style.visibility=editing?'visible':'hidden';
   document.getElementById('form-modal').style.display='flex';
+  if(asCopy) setTimeout(function(){ document.getElementById('f-denpyo').focus(); },50);
 }
-function closeForm(){ document.getElementById('form-modal').style.display='none'; }
+function closeForm(){ document.getElementById('form-modal').style.display='none'; _quoteClear_(); }
+function _quoteClear_(){ var q=document.getElementById('f-quote'); if(q) q.value=''; var box=document.getElementById('quote-results'); if(box){ box.style.display='none'; box.innerHTML=''; } }
+var _quoteHits_=[];
+function quoteSearch(){
+  var q=(document.getElementById('f-quote').value||'').toLowerCase().trim(), box=document.getElementById('quote-results');
+  if(!q){ box.style.display='none'; box.innerHTML=''; return; }
+  var qs=q.split(/\s+/);
+  _quoteHits_=CASES.filter(function(c){ var hay=[c.denpyo,c.customer,c.item].join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } return true; })
+    .sort(function(a,b){ return _caseTime_(b)-_caseTime_(a); }).slice(0,15);
+  if(!_quoteHits_.length){ box.innerHTML='<div style="padding:8px;color:#94a3b8">該当なし</div>'; box.style.display='block'; return; }
+  box.innerHTML=_quoteHits_.map(function(c,i){
+    return '<div onclick="quotePick('+i+')" style="padding:6px 9px;border-bottom:1px solid #eee;cursor:pointer" onmouseover="this.style.background=\'#eef6fb\'" onmouseout="this.style.background=\'\'">'+
+      '<b>'+esc(c.denpyo||'（伝票なし）')+'</b> '+esc(c.customer||'')+'<br><span style="font-size:11px;color:#64748b">'+esc(c.item||'')+' ／ '+esc(c.qty||'')+esc(c.unit||'')+' ／ '+esc(c.orderDate||'')+'</span></div>';
+  }).join('');
+  box.style.display='block';
+}
+function quotePick(i){
+  var c=_quoteHits_[i]; if(!c) return;
+  // 内容を土台に流し込み（新規扱い・伝票番号と日付は入れ直し）
+  ['customer','item','qty','unit','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','deliverTo','memo'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=(c[f]!=null?c[f]:''); });
+  document.getElementById('f-multiPack').checked=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE');
+  if(!document.getElementById('f-orderDate').value) document.getElementById('f-orderDate').value=ymd(new Date());
+  _quoteClear_();
+  document.getElementById('f-denpyo').focus();
+}
 function onDenpyo(){ // 同じ伝票番号が既にあれば顧客/案件を補完＋着日リンク表示
   var dp=document.getElementById('f-denpyo').value.trim(); if(!dp) return;
   var same=CASES.find(function(c){ return c.denpyo===dp && c.id!==document.getElementById('f-id').value; });
