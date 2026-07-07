@@ -99,17 +99,21 @@ async function loadCompany(){
   }catch(e){ document.getElementById('status').textContent='読込失敗: '+e.message; }
 }
 function findCol(re){ for(var i=0;i<DATA.header.length;i++){ if(re.test(DATA.header[i])) return i; } return -1; }
+// 請求月を「YYYY年M月」表示に。並び順維持用にキー「YYYY-MM」も用意
+function monthLabel(v){ var m=String(v==null?'':v).match(/(\d{4})[-\/年\.](\d{1,2})/); return m?(m[1]+'年'+parseInt(m[2],10)+'月'):String(v==null?'':v); }
+function monthKey(v){ var m=String(v==null?'':v).match(/(\d{4})[-\/年\.](\d{1,2})/); return m?(m[1]+'-'+('0'+m[2]).slice(-2)):String(v==null?'':v); }
 function buildHead(){
   var tr='<tr>'+DATA.header.map(function(h,i){ var ar=(sortCol===i?(sortDir>0?' ▲':' ▼'):''); return '<th onclick="sortBy('+i+')">'+esc(h)+ar+'</th>'; }).join('')+'</tr>';
   document.getElementById('thead').innerHTML=tr;
 }
 function buildFilters(){
   var si=findCol(/状況/), mi=findCol(/請求月/);
-  var sset={}, mset={};
-  DATA.rows.forEach(function(r){ if(si>=0&&r[si]!=='') sset[r[si]]=1; if(mi>=0&&r[mi]!=='') mset[r[mi]]=1; });
+  var sset={}, mmap={};
+  DATA.rows.forEach(function(r){ if(si>=0&&r[si]!=='') sset[r[si]]=1; if(mi>=0&&r[mi]!=='') mmap[monthLabel(r[mi])]=monthKey(r[mi]); });
   var sf=document.getElementById('f-status'), mf=document.getElementById('f-month');
   sf.innerHTML='<option value="">状況：すべて</option>'+Object.keys(sset).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join('');
-  mf.innerHTML='<option value="">請求月：すべて</option>'+Object.keys(mset).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join('');
+  var mopts=Object.keys(mmap).sort(function(a,b){ return mmap[a]<mmap[b]?-1:(mmap[a]>mmap[b]?1:0); });
+  mf.innerHTML='<option value="">請求月：すべて</option>'+mopts.map(function(v){return '<option>'+esc(v)+'</option>';}).join('');
 }
 function applyFilter(){
   var q=(document.getElementById('q').value||'').toLowerCase().trim();
@@ -119,7 +123,7 @@ function applyFilter(){
   var wk=weekRange(), today=ymd(new Date());
   VIEW=DATA.rows.filter(function(r){
     if(fs && String(r[si])!==fs) return false;
-    if(fm && String(r[mi])!==fm) return false;
+    if(fm && monthLabel(r[mi])!==fm) return false;
     if(deliveryMode && di>=0){ var dd=parseD(r[di]); if(!dd) return false; if(deliveryMode==='today'){ if(ymd(dd)!==today) return false; } else if(deliveryMode==='week'){ if(dd<wk[0]||dd>wk[1]) return false; } }
     if(qs.length){ var hay=r.join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } }
     return true;
@@ -158,7 +162,7 @@ function toggleDelivery(mode){ deliveryMode=(deliveryMode===mode?'':mode); apply
 function renderBody(){
   var rows=VIEW.slice(0,DISPLAY_CAP);
   var html=rows.map(function(r){
-    return '<tr>'+DATA.header.map(function(h,i){ var v=r[i]; var cls=(/金額|単価|数量|利益/.test(h)&&isNum(v))?' class="num'+((Number(String(v).replace(/,/g,''))<0)?' neg':'')+'"':(isNum(v)&&/^-?[\d,]+\.?\d*$/.test(String(v))?' class="num"':''); return '<td'+cls+'>'+esc(v)+'</td>'; }).join('')+'</tr>';
+    return '<tr>'+DATA.header.map(function(h,i){ var v=r[i]; if(/請求月/.test(h)) v=monthLabel(v); var cls=(/金額|単価|数量|利益/.test(h)&&isNum(v))?' class="num'+((Number(String(v).replace(/,/g,''))<0)?' neg':'')+'"':(isNum(v)&&/^-?[\d,]+\.?\d*$/.test(String(v))?' class="num"':''); return '<td'+cls+'>'+esc(v)+'</td>'; }).join('')+'</tr>';
   }).join('');
   document.getElementById('tbody').innerHTML=html;
   var more=VIEW.length>DISPLAY_CAP?('（表示は先頭'+DISPLAY_CAP.toLocaleString()+'件。検索で絞ってください）'):'';
@@ -167,7 +171,8 @@ function renderBody(){
 function sortBy(i){ if(sortCol===i) sortDir=-sortDir; else { sortCol=i; sortDir=1; } buildHead(); applyFilter(); }
 function exportCsv(){
   var esc2=function(s){ s=(s==null?'':String(s)); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
-  var lines=[DATA.header.map(esc2).join(',')].concat(VIEW.map(function(r){ return r.map(esc2).join(','); }));
+  var mi=findCol(/請求月/);
+  var lines=[DATA.header.map(esc2).join(',')].concat(VIEW.map(function(r){ return r.map(function(v,i){ return esc2(i===mi?monthLabel(v):v); }).join(','); }));
   var blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv'});
   var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=DATA.company+'_案件管理_'+new Date().toISOString().slice(0,10)+'.csv'; a.click();
 }
