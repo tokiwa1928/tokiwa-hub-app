@@ -44,8 +44,9 @@
   <div class="sub">Hubが正の統合台帳。伝票番号（トキワ採番）で会社横断リンク。希望納期＝各社の着日。同じ伝票番号が他社にあれば着日が自動で出ます。※移管期間中は各社シート（閲覧ツール）と併用。</div>
   <div class="toolbar">
     <select id="company" onchange="loadList()"></select>
-    <button class="btn g" onclick="openForm()">＋ 新規登録</button>
-    <button class="btn p" onclick="openReuse()" title="過去案件・他社案件を引用して登録（他社案件は伝票番号でリンク）">🔁 流用登録</button>
+    <span id="scope-badge" style="display:none;font-size:11px;font-weight:700;color:#0e7490;background:#e0f2fe;padding:4px 9px;border-radius:6px"></span>
+    <button class="btn g" onclick="openForm()">＋ 新規追加</button>
+    <button class="btn p" onclick="openReuse()" title="過去案件から引用して追加（リピート）。トキワは他社案件の流用も可（伝票番号でリンク）">🔁 リピート追加</button>
     <input id="q" placeholder="🔍 伝票番号・顧客・案件で検索" style="width:220px" oninput="render()">
     <select id="f-status" onchange="render()"><option value="">状況：すべて</option></select>
     <button class="btn" onclick="loadList(true)">🔄 再読込</button>
@@ -66,7 +67,7 @@
       <div class="full" style="position:relative;background:#f1f5f9;padding:8px;border-radius:8px">
         <label style="display:flex;justify-content:space-between;align-items:center">
           <span>🔁 過去案件から引用（顧客・案件・伝票番号で検索→選ぶと下欄に流し込み）</span>
-          <span style="font-weight:400;font-size:11px"><input type="checkbox" id="quote-all" onchange="quoteSearch()"> 全社から探す（他社案件を流用＝伝票番号でリンク）</span>
+          <span id="quote-all-wrap" style="font-weight:400;font-size:11px"><input type="checkbox" id="quote-all" onchange="quoteSearch()"> 全社から探す（他社案件を流用＝伝票番号でリンク）</span>
         </label>
         <input id="f-quote" placeholder="過去の顧客名・案件名・伝票番号で検索…" oninput="quoteSearch()" autocomplete="off">
         <div id="quote-results" style="display:none;position:absolute;left:8px;right:8px;top:100%;z-index:5;background:#fff;border:1px solid #c9c6bf;border-radius:0 0 8px 8px;max-height:240px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.15)"></div>
@@ -116,22 +117,42 @@ async function api(action, params, post){
   var opt={redirect:'follow'}; if(post){ opt.method='POST'; opt.body=JSON.stringify(post); }
   var r=await fetch(url.toString(),opt); return r.json();
 }
+// ── 会社スコープ：関連会社は自社のみ、トキワ(TK/COMP002)=管理会社は全社 ──
+var AUTH_KEY_HUB='murayama_auth';
+var CODE2LEDGER={ MU:'村山印刷', KT:'北上プリント', YM:'ヤマウチ印刷', NK:'中尾印刷', AS:'アート・エス', TS:'津島プリント' };
+var MY_CODE='', MY_LEDGER='', IS_TK=true;
+function _readAuth_(){
+  try{ var s=localStorage.getItem(AUTH_KEY_HUB); if(s){ var a=JSON.parse(s)||{};
+    MY_CODE=a.companyCode||''; MY_LEDGER=CODE2LEDGER[MY_CODE]||'';
+    IS_TK=(a.companyId==='COMP002'||a.companyCode==='TK'||!MY_LEDGER); // TK・未判定は全社
+  } }catch(e){ IS_TK=true; }
+}
 async function init(){
+  _readAuth_();
   try{ var r=await api('caseCompanies'); var sel=document.getElementById('company');
-    (r.companies||[]).filter(function(c){return c.cat==='案件管理';}).forEach(function(c){ NAMEKEY[c.name]=c.key; sel.add(new Option(c.name,c.name)); });
+    var list=(r.companies||[]).filter(function(c){return c.cat==='案件管理';});
+    if(!IS_TK && MY_LEDGER) list=list.filter(function(c){ return c.name===MY_LEDGER; }); // 自社のみ
+    list.forEach(function(c){ NAMEKEY[c.name]=c.key; sel.add(new Option(c.name,c.name)); });
+    if(!IS_TK){
+      sel.disabled=true;                                     // 会社固定（切替不可）
+      var badge=document.getElementById('scope-badge'); if(badge){ badge.style.display=''; badge.textContent='自社のみ表示：'+(MY_LEDGER||MY_CODE); }
+      var qw=document.getElementById('quote-all-wrap'); if(qw) qw.style.display='none';   // 全社流用は非表示
+      var ib=document.getElementById('import-btn'); if(ib) ib.style.display='none';       // 取込はトキワのみ
+    }
     loadList();
   }catch(e){ document.getElementById('status').textContent='会社一覧取得失敗: '+e.message; }
 }
 // 全社データを1回だけ取得→メモリ＆セッションにキャッシュ。会社別は端末側で絞り込み（二重取得を廃止）。
 var _ALL_TS=0, _STALE_MS=60000;
+function _cacheKey_(){ return 'ledger_all_'+(IS_TK?'ALL':(MY_CODE||'X')); }
 async function loadAll(){
-  var r=await api('ledgerList',{}); // 全社ぶん
+  var r=await api('ledgerList', IS_TK?{}:{company:MY_LEDGER}); // TK=全社／関連会社=自社のみ
   if(r&&r.success){ ALLCASES=r.cases||[]; _ALL_TS=Date.now();
-    try{ sessionStorage.setItem('ledger_all',JSON.stringify({t:_ALL_TS,c:ALLCASES})); }catch(e){}
-  } else if(!r||!r.success){ throw new Error((r&&r.error)||'unknown'); }
+    try{ sessionStorage.setItem(_cacheKey_(),JSON.stringify({t:_ALL_TS,c:ALLCASES})); }catch(e){}
+  } else { throw new Error((r&&r.error)||'unknown'); }
   return ALLCASES||[];
 }
-function _sessionCache_(){ try{ var s=sessionStorage.getItem('ledger_all'); if(s){ var o=JSON.parse(s); if(o&&o.c) return o; } }catch(e){} return null; }
+function _sessionCache_(){ try{ var s=sessionStorage.getItem(_cacheKey_()); if(s){ var o=JSON.parse(s); if(o&&o.c) return o; } }catch(e){} return null; }
 // 伝票番号で他社の希望納期(=着日)を端末側で解決
 function _linkArrivals_(all, rows){
   var byDen={}; all.forEach(function(r){ if(r.denpyo){ (byDen[r.denpyo]=byDen[r.denpyo]||[]).push(r); } });
@@ -145,7 +166,7 @@ function _applyCompany_(){
 }
 async function loadList(force){
   COMPANY=document.getElementById('company').value;
-  document.getElementById('import-btn').style.display=IMPORTABLE[NAMEKEY[COMPANY]]?'':'none';
+  document.getElementById('import-btn').style.display=(IS_TK&&IMPORTABLE[NAMEKEY[COMPANY]])?'':'none';
   // 1) メモリ→セッションの順でまず即描画（stale-while-revalidate）
   if(!ALLCASES){ var cc=_sessionCache_(); if(cc){ ALLCASES=cc.c; _ALL_TS=cc.t; } }
   if(ALLCASES) _applyCompany_(); else document.getElementById('status').textContent='読込中…';
@@ -255,7 +276,7 @@ var _quoteHits_=[], ALLCASES=null;
 async function _ensureAllCases_(){ if(ALLCASES) return; try{ await loadAll(); }catch(e){ ALLCASES=ALLCASES||[]; } }
 async function quoteSearch(){
   var q=(document.getElementById('f-quote').value||'').toLowerCase().trim(), box=document.getElementById('quote-results');
-  var allScope=document.getElementById('quote-all').checked;
+  var allScope=IS_TK && document.getElementById('quote-all').checked; // 全社流用はトキワのみ
   if(!q){ box.style.display='none'; box.innerHTML=''; return; }
   var pool=CASES;
   if(allScope){ box.innerHTML='<div style="padding:8px;color:#94a3b8">全社を検索中…</div>'; box.style.display='block'; await _ensureAllCases_(); pool=ALLCASES; }
