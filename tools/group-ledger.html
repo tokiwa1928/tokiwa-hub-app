@@ -48,6 +48,7 @@
     <input id="q" placeholder="🔍 伝票番号・顧客・案件で検索" style="width:220px" oninput="render()">
     <select id="f-status" onchange="render()"><option value="">状況：すべて</option></select>
     <button class="btn" onclick="loadList()">🔄 再読込</button>
+    <button class="btn" id="import-btn" onclick="importSheet()" style="display:none" title="各社シートの新規行だけをHubに追加（既存・手編集は上書きしません）">🔽 シート取込</button>
     <span id="status"></span>
   </div>
   <div id="kpis"></div>
@@ -90,7 +91,8 @@
 <script>
 var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
 var GAS_KEY='mitsumori-2024';
-var CASES=[], COMPANY='', deliveryMode='';
+var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={};
+var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
 var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_linkedArrival','着日リンク'],['deliveryDate','納品日'],['status','状況'],['amtSelf','金額(自社)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['deliverTo','納品先'],['memo','備考']];
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function yen(n){ n=Math.round(Number(n)||0); return (n<0?'−¥'+Math.abs(n).toLocaleString():'¥'+n.toLocaleString()); }
@@ -106,12 +108,13 @@ async function api(action, params, post){
 }
 async function init(){
   try{ var r=await api('caseCompanies'); var sel=document.getElementById('company');
-    (r.companies||[]).filter(function(c){return c.cat==='案件管理';}).forEach(function(c){ sel.add(new Option(c.name,c.name)); });
+    (r.companies||[]).filter(function(c){return c.cat==='案件管理';}).forEach(function(c){ NAMEKEY[c.name]=c.key; sel.add(new Option(c.name,c.name)); });
     loadList();
   }catch(e){ document.getElementById('status').textContent='会社一覧取得失敗: '+e.message; }
 }
 async function loadList(){
   COMPANY=document.getElementById('company').value;
+  document.getElementById('import-btn').style.display=IMPORTABLE[NAMEKEY[COMPANY]]?'':'none';
   document.getElementById('status').textContent='読込中…';
   try{ var r=await api('ledgerList',{company:COMPANY}); if(!r.success){ document.getElementById('status').textContent='読込失敗: '+r.error; return; }
     CASES=r.cases||[]; buildStatusFilter(); buildDenpyoList(); render();
@@ -197,6 +200,15 @@ async function saveCase(){
     multiPack:document.getElementById('f-multiPack').checked, deliverTo:document.getElementById('f-deliverTo').value, memo:document.getElementById('f-memo').value };
   try{ var r=await api('ledgerSave',{},{case:c,by:'hub'}); if(!r.success){ alert('保存失敗: '+r.error); return; } closeForm(); await loadList(); }
   catch(e){ alert('保存失敗: '+e.message); }
+}
+async function importSheet(){
+  var key=NAMEKEY[COMPANY]; if(!IMPORTABLE[key]){ alert('この会社はシート取込に未対応です'); return; }
+  if(!confirm(COMPANY+' のシートから新規行だけをHubに追加します。\n（既存・手編集した案件は上書きしません）\n実行しますか？')) return;
+  var btn=document.getElementById('import-btn'); btn.disabled=true; btn.textContent='取込中…';
+  try{ var r=await api('ledgerImport',{company:key}); if(!r.success){ alert('取込失敗: '+r.error); }
+    else alert('取込完了\n新規追加: '+r.inserted+'件 / 既存スキップ: '+r.skippedExisting+'件'); await loadList(); }
+  catch(e){ alert('取込失敗: '+e.message); }
+  finally{ btn.disabled=false; btn.textContent='🔽 シート取込'; }
 }
 async function delCase(){
   var id=document.getElementById('f-id').value; if(!id) return; if(!confirm('この案件を削除しますか？')) return;
