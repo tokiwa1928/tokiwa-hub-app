@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>村山→トキワ 月次精算（補填金精算書・諸経費明細書・月末請求書）</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="_ai.js"></script>
 <style>
   :root{ --line:#1a1a1a; --hd:#efece4; --muted:#64748b; --accent:#1e40af; --red:#c0261c; }
   *{box-sizing:border-box}
@@ -78,6 +80,13 @@
   <!-- 諸経費明細（変動） -->
   <div class="card">
     <h2><span class="n">明細</span>諸経費等 明細（この月の変動分）</h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px">
+      <span style="font-size:11px;color:#1e40af;font-weight:700">📷 スキャン取込（AI-OCR）</span>
+      <input id="scan-file" type="file" accept="image/*,.pdf" multiple style="font-size:12px">
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#475569"><input type="checkbox" id="scan-append" checked>既存行に追加</label>
+      <button class="btn sm p" onclick="importScan()">読み込む</button>
+      <span id="scan-status" style="font-size:11px;color:var(--muted)"></span>
+    </div>
     <table class="edit" id="shokei-tbl">
       <thead><tr><th style="width:34px">№</th><th style="width:96px">月日</th><th style="width:110px">金額</th><th style="width:110px">種類</th><th>支払先</th><th>備考</th><th style="width:34px"></th></tr></thead>
       <tbody></tbody>
@@ -255,6 +264,69 @@ function addShokei(r){
   tb.oninput=function(){ calc(); };
 }
 function reindexShokei(){ Array.from(document.querySelectorAll('#shokei-tbl tbody .idx')).forEach(function(td,i){ td.textContent=i+1; }); }
+
+// ── スキャン取込（AI-OCR: 画像/PDF → 諸経費明細） ──
+try{ if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){}
+async function fileToCanvases(file){
+  if(/\.pdf$/i.test(file.name) || file.type==='application/pdf'){
+    if(!window.pdfjsLib) throw new Error('PDF読込ライブラリが読めていません（通信を確認）');
+    var buf=await file.arrayBuffer();
+    var doc=await pdfjsLib.getDocument({data:buf}).promise;
+    var cvs=[], N=Math.min(doc.numPages, 10);
+    for(var p=1;p<=N;p++){
+      var page=await doc.getPage(p);
+      var vp=page.getViewport({scale:2.2});
+      var cv=document.createElement('canvas'); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+      await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+      cvs.push(cv);
+    }
+    return cvs;
+  }
+  return new Promise(function(res,rej){
+    var img=new Image();
+    img.onload=function(){ var cv=document.createElement('canvas'); cv.width=img.naturalWidth; cv.height=img.naturalHeight; cv.getContext('2d').drawImage(img,0,0); URL.revokeObjectURL(img.src); res([cv]); };
+    img.onerror=function(){ rej(new Error('画像の読込に失敗')); };
+    img.src=URL.createObjectURL(file);
+  });
+}
+function _parseJsonArray_(txt){
+  var s=String(txt||'').replace(/```json/gi,'').replace(/```/g,'').trim();
+  var a=s.indexOf('['), b=s.lastIndexOf(']');
+  if(a>=0 && b>a) s=s.slice(a,b+1);
+  return JSON.parse(s);
+}
+async function importScan(){
+  var st=document.getElementById('scan-status');
+  if(typeof tqAiVision!=='function'){ st.textContent='AI機能が読めていません（_ai.js）'; return; }
+  var files=Array.from(document.getElementById('scan-file').files||[]);
+  if(!files.length){ st.textContent='ファイルを選択してください'; return; }
+  st.textContent='画像を準備中…';
+  try{
+    var canvases=[];
+    for(var i=0;i<files.length;i++){ var cs=await fileToCanvases(files[i]); canvases=canvases.concat(cs); }
+    if(canvases.length>12) canvases=canvases.slice(0,12);
+    st.textContent='AIで読み取り中…（'+canvases.length+'枚）';
+    var y=document.getElementById('ym-year').value, m=document.getElementById('ym-month').value;
+    var prompt='これは村山印刷の「諸経費（経費支払）」の一覧・明細・レシートのスキャンです。'
+      +'支出の各行を抽出し、JSON配列だけで返してください（説明文なし）。'
+      +'各要素の形式: {"d":"YYYY-MM-DD","amount":整数,"type":"現金"|"普通預金"|"当座"|"その他","payee":"支払先","memo":"備考"}。'
+      +'年は'+y+'年、基準月は'+m+'月。日付が「月/日」や「日」だけの場合もこの年月で補完。'
+      +'金額は円の整数（¥・カンマ・小数を除去）。種類が読めなければ"その他"。'
+      +'合計行・見出し行・小計は除外。読み取れた支出行のみ。';
+    var reply=await tqAiVision(prompt, canvases, 4000);
+    var rows=_parseJsonArray_(reply);
+    if(!Array.isArray(rows)||!rows.length){ st.textContent='抽出できる明細がありませんでした'; return; }
+    if(!document.getElementById('scan-append').checked){ document.querySelector('#shokei-tbl tbody').innerHTML=''; }
+    // 空の1行だけなら消す
+    var tb=document.querySelector('#shokei-tbl tbody');
+    if(tb.children.length===1){ var only=shokeiRows()[0]; if(only && !only.amount && !only.payee) tb.innerHTML=''; }
+    rows.forEach(function(r){
+      addShokei({ d:(r.d||'').slice(0,10), amount:Math.round(Number(String(r.amount).replace(/[^\d.-]/g,''))||0), type:(r.type||'その他'), payee:(r.payee||''), memo:(r.memo||'') });
+    });
+    calc();
+    st.textContent='✅ '+rows.length+'件を取り込みました（内容をご確認ください）';
+  }catch(e){ st.textContent='取込失敗: '+e.message; }
+}
 
 // ── 計算 ──
 function computeGoukeiFor(k){ // 保存済み月の合計請求額（繰越用）
