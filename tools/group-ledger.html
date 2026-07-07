@@ -48,7 +48,7 @@
     <button class="btn p" onclick="openReuse()" title="過去案件・他社案件を引用して登録（他社案件は伝票番号でリンク）">🔁 流用登録</button>
     <input id="q" placeholder="🔍 伝票番号・顧客・案件で検索" style="width:220px" oninput="render()">
     <select id="f-status" onchange="render()"><option value="">状況：すべて</option></select>
-    <button class="btn" onclick="loadList()">🔄 再読込</button>
+    <button class="btn" onclick="loadList(true)">🔄 再読込</button>
     <button class="btn" id="import-btn" onclick="importSheet()" style="display:none" title="各社シートの新規行だけをHubに追加（既存・手編集は上書きしません）">🔽 シート取込</button>
     <span id="status"></span>
   </div>
@@ -122,14 +122,40 @@ async function init(){
     loadList();
   }catch(e){ document.getElementById('status').textContent='会社一覧取得失敗: '+e.message; }
 }
-async function loadList(){
+// 全社データを1回だけ取得→メモリ＆セッションにキャッシュ。会社別は端末側で絞り込み（二重取得を廃止）。
+var _ALL_TS=0, _STALE_MS=60000;
+async function loadAll(){
+  var r=await api('ledgerList',{}); // 全社ぶん
+  if(r&&r.success){ ALLCASES=r.cases||[]; _ALL_TS=Date.now();
+    try{ sessionStorage.setItem('ledger_all',JSON.stringify({t:_ALL_TS,c:ALLCASES})); }catch(e){}
+  } else if(!r||!r.success){ throw new Error((r&&r.error)||'unknown'); }
+  return ALLCASES||[];
+}
+function _sessionCache_(){ try{ var s=sessionStorage.getItem('ledger_all'); if(s){ var o=JSON.parse(s); if(o&&o.c) return o; } }catch(e){} return null; }
+// 伝票番号で他社の希望納期(=着日)を端末側で解決
+function _linkArrivals_(all, rows){
+  var byDen={}; all.forEach(function(r){ if(r.denpyo){ (byDen[r.denpyo]=byDen[r.denpyo]||[]).push(r); } });
+  rows.forEach(function(r){ var l=(byDen[r.denpyo]||[]).filter(function(x){ return x.company!==r.company && x.hopeDate; });
+    r._linkedArrival=l.length?l.map(function(x){ return x.company+':'+x.hopeDate; }).join(' / '):''; });
+}
+function _applyCompany_(){
+  CASES=(ALLCASES||[]).filter(function(c){ return c.company===COMPANY; });
+  _linkArrivals_(ALLCASES||[], CASES);
+  buildStatusFilter(); buildDenpyoList(); buildCustomerMaster(); render();
+}
+async function loadList(force){
   COMPANY=document.getElementById('company').value;
   document.getElementById('import-btn').style.display=IMPORTABLE[NAMEKEY[COMPANY]]?'':'none';
-  document.getElementById('status').textContent='読込中…';
-  try{ var r=await api('ledgerList',{company:COMPANY}); if(!r.success){ document.getElementById('status').textContent='読込失敗: '+r.error; return; }
-    CASES=r.cases||[]; buildStatusFilter(); buildDenpyoList(); buildCustomerMaster(); render();
-    _ensureAllCases_().then(buildCustomerMaster); // 全社の社名で背景マスタを充実
-  }catch(e){ document.getElementById('status').textContent='読込失敗: '+e.message; }
+  // 1) メモリ→セッションの順でまず即描画（stale-while-revalidate）
+  if(!ALLCASES){ var cc=_sessionCache_(); if(cc){ ALLCASES=cc.c; _ALL_TS=cc.t; } }
+  if(ALLCASES) _applyCompany_(); else document.getElementById('status').textContent='読込中…';
+  // 2) 初回・強制・古い(60秒)なら最新を取得して差し替え
+  var stale=force||!_ALL_TS||(Date.now()-_ALL_TS>_STALE_MS);
+  if(!ALLCASES||stale){
+    if(ALLCASES){ var st=document.getElementById('status'); st.textContent=st.textContent+'　（最新に更新中…）'; }
+    try{ await loadAll(); _applyCompany_(); }
+    catch(e){ if(!ALLCASES) document.getElementById('status').textContent='読込失敗: '+e.message; }
+  }
 }
 function buildStatusFilter(){ var set={}; CASES.forEach(function(c){ if(c.status) set[c.status]=1; }); document.getElementById('f-status').innerHTML='<option value="">状況：すべて</option>'+Object.keys(set).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join(''); }
 function buildDenpyoList(){ var set={}; CASES.forEach(function(c){ if(c.denpyo) set[c.denpyo]=1; }); document.getElementById('denpyo-list').innerHTML=Object.keys(set).sort().map(function(v){return '<option value="'+esc(v)+'">';}).join(''); }
@@ -226,7 +252,7 @@ function openReuse(){
 function closeForm(){ document.getElementById('form-modal').style.display='none'; _quoteClear_(); }
 function _quoteClear_(){ var q=document.getElementById('f-quote'); if(q) q.value=''; var box=document.getElementById('quote-results'); if(box){ box.style.display='none'; box.innerHTML=''; } }
 var _quoteHits_=[], ALLCASES=null;
-async function _ensureAllCases_(){ if(ALLCASES) return; try{ var r=await api('ledgerList',{}); ALLCASES=r.cases||[]; }catch(e){ ALLCASES=[]; } }
+async function _ensureAllCases_(){ if(ALLCASES) return; try{ await loadAll(); }catch(e){ ALLCASES=ALLCASES||[]; } }
 async function quoteSearch(){
   var q=(document.getElementById('f-quote').value||'').toLowerCase().trim(), box=document.getElementById('quote-results');
   var allScope=document.getElementById('quote-all').checked;
@@ -277,7 +303,7 @@ async function saveCase(){
     unitSelf:document.getElementById('f-unitSelf').value, amtSelf:document.getElementById('f-amtSelf').value,
     unitTokiwa:document.getElementById('f-unitTokiwa').value, amtTokiwa:document.getElementById('f-amtTokiwa').value, profit:document.getElementById('f-profit').value,
     multiPack:document.getElementById('f-multiPack').checked, deliverTo:document.getElementById('f-deliverTo').value, memo:document.getElementById('f-memo').value };
-  try{ var r=await api('ledgerSave',{},{case:c,by:'hub'}); if(!r.success){ alert('保存失敗: '+r.error); return; } closeForm(); await loadList(); }
+  try{ var r=await api('ledgerSave',{},{case:c,by:'hub'}); if(!r.success){ alert('保存失敗: '+r.error); return; } closeForm(); await loadList(true); }
   catch(e){ alert('保存失敗: '+e.message); }
 }
 async function importSheet(){
@@ -285,13 +311,13 @@ async function importSheet(){
   if(!confirm(COMPANY+' のシートから新規行だけをHubに追加します。\n（既存・手編集した案件は上書きしません）\n実行しますか？')) return;
   var btn=document.getElementById('import-btn'); btn.disabled=true; btn.textContent='取込中…';
   try{ var r=await api('ledgerImport',{company:key}); if(!r.success){ alert('取込失敗: '+r.error); }
-    else alert('取込完了\n新規追加: '+r.inserted+'件 / 既存スキップ: '+r.skippedExisting+'件'); await loadList(); }
+    else alert('取込完了\n新規追加: '+r.inserted+'件 / 既存スキップ: '+r.skippedExisting+'件'); await loadList(true); }
   catch(e){ alert('取込失敗: '+e.message); }
   finally{ btn.disabled=false; btn.textContent='🔽 シート取込'; }
 }
 async function delCase(){
   var id=document.getElementById('f-id').value; if(!id) return; if(!confirm('この案件を削除しますか？')) return;
-  try{ var r=await api('ledgerDelete',{id:id},{}); if(!r.success){ alert('削除失敗: '+r.error); return; } closeForm(); await loadList(); }
+  try{ var r=await api('ledgerDelete',{id:id},{}); if(!r.success){ alert('削除失敗: '+r.error); return; } closeForm(); await loadList(true); }
   catch(e){ alert('削除失敗: '+e.message); }
 }
 init();
