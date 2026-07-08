@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>グループ 統合案件台帳（入力・運用）</title>
+<title>案件管理（各社・相互送信）</title>
 <style>
   :root{ --line:#1a1a1a; --hd:#211f1c; --muted:#64748b; --accent:#1e40af; --red:#c0261c; }
   *{box-sizing:border-box}
@@ -40,8 +40,8 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>グループ 統合案件台帳（入力・運用）</h1>
-  <div class="sub">Hubが正の統合台帳。伝票番号（トキワ採番）で会社横断リンク。希望納期＝各社の着日。同じ伝票番号が他社にあれば着日が自動で出ます。※移管期間中は各社シート（閲覧ツール）と併用。</div>
+  <h1>案件管理（各社・相互送信）</h1>
+  <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加されます。希望納期＝各社の着日。※将来はHubへ移管。</div>
   <div class="toolbar">
     <select id="company" onchange="loadList()"></select>
     <span id="scope-badge" style="display:none;font-size:11px;font-weight:700;color:#0e7490;background:#e0f2fe;padding:4px 9px;border-radius:6px"></span>
@@ -101,7 +101,7 @@
 <script>
 var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
 var GAS_KEY='mitsumori-2024';
-var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={};
+var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
 var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_linkedArrival','着日リンク'],['deliveryDate','納品日'],['status','状況'],['amtSelf','金額(自社)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['deliverTo','納品先'],['memo','備考']];
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -132,9 +132,12 @@ async function init(){
   _readAuth_();
   var ib=document.getElementById('import-btn'); if(ib) ib.style.display='none'; // シート直運用のため取込は廃止
   try{ var r=await api('caseCompanies'); var sel=document.getElementById('company');
-    var list=(r.companies||[]).filter(function(c){return c.cat==='案件管理' && SHEET_CAPABLE[c.key];}); // シート対応済のみ
+    var capable=(r.companies||[]).filter(function(c){return c.cat==='案件管理' && SHEET_CAPABLE[c.key];}); // シート対応済のみ
+    capable.forEach(function(c){ NAMEKEY[c.name]=c.key; }); // 送信先解決用に全対応会社を登録
+    ALL_TARGETS=capable.map(function(c){ return {name:c.name, key:c.key}; });
+    var list=capable.slice();
     if(!IS_TK && MY_LEDGER) list=list.filter(function(c){ return c.name===MY_LEDGER; });               // 自社のみ
-    list.forEach(function(c){ NAMEKEY[c.name]=c.key; sel.add(new Option(c.name,c.name)); });
+    list.forEach(function(c){ sel.add(new Option(c.name,c.name)); });
     if(!IS_TK){
       sel.disabled=true;
       var badge=document.getElementById('scope-badge'); if(badge){ badge.style.display=''; badge.textContent='自社のみ表示：'+(MY_LEDGER||MY_CODE); }
@@ -228,7 +231,7 @@ function render(){
       var cls=(/金額|利益/.test(col[1])&&v!=='')?' class="num"':'';
       return '<td'+cls+'>'+esc(v)+'</td>';
     }).join('');
-    return '<tr class="'+(red?'rowred':'')+'">'+tds+'<td style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="この内容で新規（過去から引用）" onclick="openForm(\''+c.id+'\',true)">🔁</button></td></tr>';
+    return '<tr class="'+(red?'rowred':'')+'">'+tds+'<td style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="この内容で新規（過去から引用）" onclick="openForm(\''+c.id+'\',true)">🔁</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button></td></tr>';
   }).join('');
   renderKpis(V);
   var more=V.length>DISPLAY_CAP?('　（新しい順 先頭'+DISPLAY_CAP+'件を表示。過去は🔍検索で絞込）'):'';
@@ -369,6 +372,37 @@ async function delCase(){
     if(!r.success){ alert('削除失敗: '+(r.error||'')+'\n（行がずれた可能性。再読込してやり直してください）'); return; }
     closeForm(); await loadList(true);
   }catch(e){ alert('削除失敗: '+e.message); }
+}
+// ── 他社へ送る：相手会社の管理表(シート)に同じ伝票番号で1行追加 ──
+var _sendCase_=null;
+function openSend(id){
+  var c=(CASES||[]).find(function(x){return x.id===id;}); if(!c) return;
+  _sendCase_=c;
+  var targets=ALL_TARGETS.filter(function(t){ return t.name!==c.company; });
+  var back=document.getElementById('send-modal'); if(back) back.remove();
+  var m=document.createElement('div'); m.id='send-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:2rem;z-index:60';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;width:min(420px,92vw)">'
+    +'<div style="padding:12px 16px;background:#15803d;color:#fff;border-radius:10px 10px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center">📤 他社へ送る<span onclick="document.getElementById(\'send-modal\').remove()" style="cursor:pointer">×</span></div>'
+    +'<div style="padding:14px 16px">'
+    +'<div style="font-size:12px;color:#475569;margin-bottom:10px">この案件を選んだ会社の管理表に<b>同じ伝票番号で追加</b>します（相手にも受注として出現）。<br>伝票番号 <b>'+(c.denpyo||'')+'</b> ／ '+(c.customer||'')+' ／ '+(c.item||'')+'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:7px">'
+    +(targets.length?targets.map(function(t){ return '<button class="btn" style="justify-content:flex-start" onclick="doSend(\''+t.key+'\')">🏢 '+t.name+' に送る</button>'; }).join(''):'<div style="color:#94a3b8;font-size:12px">送信先がありません</div>')
+    +'</div></div></div>';
+  document.body.appendChild(m);
+}
+async function doSend(targetKey){
+  var c=_sendCase_; if(!c) return;
+  var tname=(ALL_TARGETS.find(function(t){return t.key===targetKey;})||{}).name||targetKey;
+  var payload={ denpyo:c.denpyo, customer:c.customer, item:c.item, qty:c.qty, unit:c.unit,
+    orderDate:ymd(new Date()), hopeDate:c.hopeDate, memo:('【'+(c.company||'')+'より依頼】 '+(c.memo||'')).trim() };
+  var btns=document.querySelectorAll('#send-modal button'); btns.forEach(function(b){ b.disabled=true; });
+  try{ var r=await api('sheetLedgerAppend',{},{company:targetKey,case:payload});
+    if(!r.success){ alert('送信失敗: '+(r.error||'')); btns.forEach(function(b){ b.disabled=false; }); return; }
+    var m=document.getElementById('send-modal'); if(m) m.remove();
+    alert('✅ '+tname+' の管理表に追加しました（伝票番号 '+(c.denpyo||'')+'）');
+    if(NAMEKEY[COMPANY]===targetKey || IS_TK) await loadList(true); // 表示中に反映
+  }catch(e){ alert('送信失敗: '+e.message); btns.forEach(function(b){ b.disabled=false; }); }
 }
 init();
 </script>
