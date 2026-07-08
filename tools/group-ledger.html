@@ -61,7 +61,8 @@
   <h1>案件管理（各社・相互送信）</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加されます。希望納期＝各社の着日。※将来はHubへ移管。</div>
   <div class="toolbar">
-    <select id="company" onchange="loadList()"></select>
+    <div id="co-current" style="font-weight:800;font-size:15px;white-space:nowrap"></div>
+    <button class="btn" id="co-switch-btn" onclick="openCoSelect()" title="会社を切り替える" style="display:none">🏢 会社切替</button>
     <span id="scope-badge" style="display:none;font-size:11px;font-weight:700;color:#0e7490;background:#e0f2fe;padding:4px 9px;border-radius:6px"></span>
     <button class="btn g" onclick="openForm()">＋ 新規追加</button>
     <button class="btn p" onclick="openReuse()" title="過去案件から引用して追加（リピート）。トキワは他社案件の流用も可（伝票番号でリンク）">🔁 リピート追加</button>
@@ -72,6 +73,14 @@
   </div>
   <div id="kpis"></div>
   <div class="tblwrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+</div>
+<!-- 会社選択画面（トキワ管理者のみ・ログイン時の社名選択と同じイメージ） -->
+<div id="co-select-screen" style="display:none;position:fixed;inset:0;background:linear-gradient(135deg,#1a1a1a 0%,#2d2d2d 100%);z-index:80;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:1.8rem 2rem;width:min(440px,92vw);max-height:84vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.35)">
+    <div style="text-align:center;font-size:19px;font-weight:800;color:#1a1a1a">🏢 管理する会社を選択</div>
+    <div style="text-align:center;font-size:12px;color:#888;margin:4px 0 16px">トキワ印刷（管理会社）はすべての会社を切り替えて見られます</div>
+    <div id="co-select-list" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
 </div>
 <div id="doc-print"></div>
 <div class="modal" id="doc-modal">
@@ -169,27 +178,48 @@ function _readAuth_(){
     IS_TK=(a.companyId==='COMP002'||a.companyCode==='TK'||!MY_LEDGER); // TK・未判定は全社
   } }catch(e){ IS_TK=true; }
 }
+var COMPANIES_CASE=[];
 async function init(){
   _readAuth_();
-  var ib=document.getElementById('import-btn'); if(ib) ib.style.display='none'; // シート直運用のため取込は廃止
-  try{ var r=await api('caseCompanies'); var sel=document.getElementById('company');
-    var capable=(r.companies||[]).filter(function(c){return c.cat==='案件管理' && SHEET_CAPABLE[c.key];}); // シート対応済のみ
-    capable.forEach(function(c){ NAMEKEY[c.name]=c.key; }); // 送信先解決用に全対応会社を登録
-    ALL_TARGETS=capable.map(function(c){ return {name:c.name, key:c.key}; });
-    var list=capable.slice();
-    if(!IS_TK && MY_LEDGER) list=list.filter(function(c){ return c.name===MY_LEDGER; });               // 自社のみ
-    list.forEach(function(c){ sel.add(new Option(c.name,c.name)); });
-    if(!IS_TK){
-      sel.disabled=true;
-      var badge=document.getElementById('scope-badge'); if(badge){ badge.style.display=''; badge.textContent='自社のみ表示：'+(MY_LEDGER||MY_CODE); }
+  try{
+    var r=await api('caseCompanies');
+    COMPANIES_CASE=(r.companies||[]).filter(function(c){return c.cat==='案件管理';}); // 案件管理6社
+    COMPANIES_CASE.forEach(function(c){ NAMEKEY[c.name]=c.key; });
+    ALL_TARGETS=COMPANIES_CASE.filter(function(c){return SHEET_CAPABLE[c.key];}).map(function(c){ return {name:c.name, key:c.key}; });
+    if(IS_TK){
+      // トキワ管理者：ログイン時と同じ会社選択画面（カード）で全社を切替
+      document.getElementById('co-switch-btn').style.display='';
+      openCoSelect(); // 起動時に選択画面を表示（選ぶと入る）
+    } else {
+      // 関連会社：会社選択画面は出さず自社に直行
+      if(!MY_KEY || !SHEET_CAPABLE[MY_KEY]){
+        document.getElementById('co-current').textContent=(MY_LEDGER||MY_CODE||'');
+        document.getElementById('status').textContent='この会社はまだ移行対応していません（対応: 村山・北上）';
+        return;
+      }
+      COMPANY=MY_LEDGER;
+      document.getElementById('co-current').textContent='🏢 '+MY_LEDGER;
+      var badge=document.getElementById('scope-badge'); if(badge){ badge.style.display=''; badge.textContent='自社のみ'; }
       var qw=document.getElementById('quote-all-wrap'); if(qw) qw.style.display='none';
+      loadList();
     }
-    if(!sel.options.length){ // 自社がまだ移行未対応
-      document.getElementById('status').textContent='この会社はまだ移行対応していません（対応: 村山・北上）';
-      return;
-    }
-    loadList();
   }catch(e){ document.getElementById('status').textContent='会社一覧取得失敗: '+e.message; }
+}
+// 会社選択画面（トキワ管理者のみ）
+function renderCoSelect(){
+  var box=document.getElementById('co-select-list'); if(!box) return;
+  box.innerHTML=COMPANIES_CASE.map(function(c){
+    var cap=!!SHEET_CAPABLE[c.key], cur=(c.name===COMPANY);
+    if(cap) return '<div onclick="pickCompany(\''+c.name+'\')" style="padding:12px 16px;border:1px solid '+(cur?'#15803d':'#e0e0e0')+';border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:12px;background:'+(cur?'#f0fdf4':'#fff')+'" onmouseover="this.style.background=\'#eef6fb\'" onmouseout="this.style.background=\''+(cur?'#f0fdf4':'#fff')+'\'"><span style="font-size:22px">🏢</span><div style="font-weight:700;font-size:14px">'+c.name+(cur?' <span style="color:#15803d;font-size:11px">（表示中）</span>':'')+'</div></div>';
+    return '<div style="padding:12px 16px;border:1px dashed #ddd;border-radius:8px;display:flex;align-items:center;gap:12px;color:#aaa;background:#fafafa"><span style="font-size:22px">🏢</span><div style="font-size:13px">'+c.name+'<span style="font-size:11px">（移行準備中）</span></div></div>';
+  }).join('');
+}
+function openCoSelect(){ renderCoSelect(); document.getElementById('co-select-screen').style.display='flex'; }
+function pickCompany(name){
+  COMPANY=name;
+  document.getElementById('co-select-screen').style.display='none';
+  document.getElementById('co-current').textContent='🏢 '+name;
+  loadList();
 }
 // 各社スプレッドシートを直読み（唯一の正）。会社別はキー単位で読み、メモリ＆セッションにキャッシュ。
 var _ALL_TS=0, _STALE_MS=60000;
@@ -227,7 +257,7 @@ function _applyCompany_(){
   buildStatusFilter(); buildDenpyoList(); buildCustomerMaster(); render();
 }
 async function loadList(force){
-  COMPANY=document.getElementById('company').value;
+  if(!COMPANY) return; // 会社未選択（トキワの選択画面待ち）
   // 1) メモリ→セッションの順でまず即描画（stale-while-revalidate）
   if(!ALLCASES){ var cc=_sessionCache_(); if(cc){ ALLCASES=cc.c; _ALL_TS=cc.t; } }
   if(ALLCASES) _applyCompany_(); else document.getElementById('status').textContent='読込中…';
