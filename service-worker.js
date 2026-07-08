@@ -5,8 +5,8 @@
 // - キャッシュ名の version を上げると自動で旧キャッシュを掃除
 // ============================================================
 
-const CACHE_VERSION = 'tokiwa-hub-v178';
-const RUNTIME_CACHE = 'tokiwa-hub-runtime-v177';
+const CACHE_VERSION = 'tokiwa-hub-v179';
+const RUNTIME_CACHE = 'tokiwa-hub-runtime-v178';
 
 // 起動時に最低限プリキャッシュするアセット (任意で増やせる)
 const PRECACHE_URLS = [
@@ -80,11 +80,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // アプリ本体 (index.html / ナビゲーション) は Network First で常に最新を配信
+  // アプリ本体 (index.html / tools/*.html / ナビゲーション) は Network First で常に最新を配信
   //   → デプロイした変更がリロードで即反映される (Cache First だと旧版が出続ける)
   const isAppShell =
     req.mode === 'navigate' ||
-    url.pathname.endsWith('/index.html') ||
+    url.pathname.endsWith('.html') ||
+    url.pathname.includes('/tools/') ||
     url.pathname.endsWith('/tokiwa-hub-app/') ||
     url.pathname === '/' || url.pathname.endsWith('/');
   if (isAppShell) {
@@ -95,7 +96,8 @@ self.addEventListener('fetch', (event) => {
         .then((res) => {
           if (res && res.status === 200) {
             const clone = res.clone();
-            caches.open(CACHE_VERSION).then((cache) => cache.put('./index.html', clone));
+            // 各ページを自分のURLキーで保存 (旧実装はツールページで index.html を上書きしていた)
+            caches.open(CACHE_VERSION).then((cache) => cache.put(req, clone));
           }
           return res;
         })
