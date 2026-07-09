@@ -106,7 +106,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v191</span>
+    <span class="mini" style="margin-left:auto">v192</span>
   </div>
   <h1 style="margin-top:0">案件管理（各社・相互送信）</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の着日。</div>
@@ -258,15 +258,32 @@ var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（
 var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','着日'],['deliveryDate','納品日'],['status','状況'],['amtSelf','金額(自社)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['deliverTo','納品先'],['memo','備考']];
 // 合成列: 発注先・着日（希望納期=納期の日にちとは分離。着日は自動表示で上書きしない）
 //   由来①発送メール(プリントパック/グラフィック=Arrivals) ②他社リンク(同じ伝票番号の他社希望納期=例:北上)
+//   ②はトキワ=全社読込から即計算(_linkedArrival)／関連会社=LinkMapキャッシュ(社名は「グループ内」に伏せる)
+var LINKS_BY_DEN=null;
+async function loadLinkMap(){
+  try{ var r=await api('linkMapList',{});
+    if(r&&r.success){ LINKS_BY_DEN={};
+      (r.links||[]).forEach(function(x){
+        if(!x.denpyo || x.company===MY_LEDGER) return;              // 自社の行は除外
+        if(!/^\d{4}-\d{2}-\d{2}/.test(String(x.hopeDate))) return;  // 日付のみ採用
+        (LINKS_BY_DEN[x.denpyo]=LINKS_BY_DEN[x.denpyo]||[]).push(x);
+      });
+      render();
+    } else { LINKS_BY_DEN={}; }
+  }catch(e){ LINKS_BY_DEN={}; }
+}
 function _mailArr_(c){ return (c&&c.denpyo&&ARR_BY_DEN[c.denpyo])||null; }
+function _linkArr_(c){ return (!IS_TK && LINKS_BY_DEN && c.denpyo && LINKS_BY_DEN[c.denpyo])||null; }
 function _vendVal_(c){
   var parts=[]; var m=_mailArr_(c); if(m&&m.vendor) parts.push(m.vendor);
-  if(c._linkedArrival) String(c._linkedArrival).split(' / ').forEach(function(x){ var nm=x.split(':')[0]; if(nm&&parts.indexOf(nm)<0) parts.push(nm); });
+  if(c._linkedArrival){ String(c._linkedArrival).split(' / ').forEach(function(x){ var nm=x.split(':')[0]; if(nm&&parts.indexOf(nm)<0) parts.push(nm); }); }
+  else if(_linkArr_(c)){ if(parts.indexOf('グループ内')<0) parts.push('グループ内'); } // 関連会社には社名を出さない
   return parts.join(' / ');
 }
 function _arrVal_(c){
   var m=_mailArr_(c); if(m&&m.arrival) return m.arrival;
   if(c._linkedArrival){ return String(c._linkedArrival).split(' / ').map(function(x){ var i=x.indexOf(':'); return i>=0?x.slice(i+1):x; }).join(' / '); }
+  var ls=_linkArr_(c); if(ls&&ls.length){ return ls.map(function(x){ return x.hopeDate; }).filter(function(v,i,a){return a.indexOf(v)===i;}).join(' / '); }
   return '';
 }
 function getColVal(c,k){
@@ -414,6 +431,7 @@ function _applyCompany_(){
 async function loadList(force){
   if(!COMPANY) return; // 会社未選択（トキワの選択画面待ち）
   if(ARRIVALS===null){ ARRIVALS=[]; loadArrivals(); } // 着日メール台帳を背景で読込(初回のみ)
+  if(!IS_TK && LINKS_BY_DEN===null){ LINKS_BY_DEN={}; loadLinkMap(); } // 関連会社: 他社リンク着日(社名は伏せる)
   // 1) メモリ→セッションの順でまず即描画（stale-while-revalidate）
   if(!ALLCASES){ var cc=_sessionCache_(); if(cc){ ALLCASES=cc.c; _ALL_TS=cc.t; } }
   if(ALLCASES) _applyCompany_(); else document.getElementById('status').textContent='読込中…';
