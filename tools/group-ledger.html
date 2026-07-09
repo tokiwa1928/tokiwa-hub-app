@@ -106,7 +106,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v192</span>
+    <span class="mini" style="margin-left:auto">v193</span>
   </div>
   <h1 style="margin-top:0">案件管理（各社・相互送信）</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の着日。</div>
@@ -204,8 +204,9 @@
           <div class="s2"><label>受注日</label><input id="f-orderDate" type="date"></div>
           <div class="s2"><label>希望納期（＝各社の着日）</label><input id="f-hopeDate" type="date"></div>
           <div class="s2"><label>納品日</label><input id="f-deliveryDate" type="date"></div>
-          <div class="s3"><label>状況</label><input id="f-status2" list="status-list" placeholder="進行中 / 納品済 / 中止…"></div>
-          <div class="s3"><label>着日リンク（他社の希望納期）</label><input id="f-linked" readonly style="background:#f1f5f9;color:#0e7490;font-weight:700"></div>
+          <div class="s2"><label>状況</label><input id="f-status2" list="status-list" placeholder="進行中 / 納品済 / 中止…"></div>
+          <div class="s2"><label>請求月</label><input id="f-billMonth" placeholder="例: 2026-07-01"></div>
+          <div class="s2"><label>着日リンク（他社の希望納期）</label><input id="f-linked" readonly style="background:#f1f5f9;color:#0e7490;font-weight:700"></div>
         </div>
       </div>
 
@@ -255,7 +256,10 @@ var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nn
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
-var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','着日'],['deliveryDate','納品日'],['status','状況'],['amtSelf','金額(自社)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['deliverTo','納品先'],['memo','備考']];
+var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','着日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['amtSelf','金額(自社)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['deliverTo','納品先'],['memo','備考']];
+// 請求月は「YYYY年M月」表示（並び順は年月キーで正しく）
+function monthLabel(v){ var m=String(v==null?'':v).match(/(\d{4})[-\/年\.](\d{1,2})/); return m?(m[1]+'年'+parseInt(m[2],10)+'月'):String(v==null?'':v); }
+function monthKey(v){ var m=String(v==null?'':v).match(/(\d{4})[-\/年\.](\d{1,2})/); return m?(m[1]+'-'+('0'+m[2]).slice(-2)):String(v==null?'':v); }
 // 合成列: 発注先・着日（希望納期=納期の日にちとは分離。着日は自動表示で上書きしない）
 //   由来①発送メール(プリントパック/グラフィック=Arrivals) ②他社リンク(同じ伝票番号の他社希望納期=例:北上)
 //   ②はトキワ=全社読込から即計算(_linkedArrival)／関連会社=LinkMapキャッシュ(社名は「グループ内」に伏せる)
@@ -290,6 +294,7 @@ function getColVal(c,k){
   if(k==='multiPack') return (c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE')?'⚠ 複数梱包':'';
   if(k==='_vendor') return _vendVal_(c);
   if(k==='_arrival') return _arrVal_(c);
+  if(k==='billMonth') return monthLabel(c.billMonth);
   var v=c[k]; return (v==null?'':v);
 }
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -333,6 +338,7 @@ function _readAuth_(){
 var COMPANIES_CASE=[];
 async function init(){
   _readAuth_();
+  if(!IS_TK) COLS=COLS.filter(function(c){ return c[0]!=='_vendor'; }); // 発注先はトキワのみ表示
   try{
     var r=await api('caseCompanies');
     COMPANIES_CASE=(r.companies||[]).filter(function(c){return c.cat==='案件管理';}); // 案件管理6社
@@ -481,6 +487,7 @@ function _sortV_(V){
   if(SORTSTATE.dir&&SORTSTATE.k){
     var k=SORTSTATE.k, dir=SORTSTATE.dir;
     V.sort(function(a,b){ var x=getColVal(a,k), y=getColVal(b,k);
+      if(k==='billMonth') return String(monthKey(a.billMonth)).localeCompare(String(monthKey(b.billMonth)),'ja')*dir;
       var nx=toNum(x), ny=toNum(y);
       if(x!==''&&y!==''&&String(nx)===String(x).replace(/,/g,'')&&String(ny)===String(y).replace(/,/g,'')) return (nx-ny)*dir;
       return String(x).localeCompare(String(y),'ja')*dir; });
@@ -497,11 +504,8 @@ function render(){
     var on=_cfActive_(k)||SORTSTATE.k===k&&SORTSTATE.dir;
     var arrow=SORTSTATE.k===k?(SORTSTATE.dir===1?' ▲':SORTSTATE.dir===-1?' ▼':''):'';
     return '<th style="white-space:nowrap">'+col[1]+arrow+' <span class="cfbtn'+(on?' on':'')+'" onclick="openColMenu(event,\''+k+'\')" title="絞り込み・並べ替え">▼</span></th>';
-  }).join('')+'<th>操作</th></tr>';
-  var h2='<tr class="cfrow">'+COLS.map(function(col){ var k=col[0]; var f=COLFILTER[k];
-    return '<th><input class="cf" data-k="'+k+'" value="'+esc(f?f.q:'')+'" placeholder="ワード" oninput="onColQ(this)"></th>';
-  }).join('')+'<th style="text-align:center">'+((Object.keys(COLFILTER).some(_cfActive_)||SORTSTATE.dir)?'<button class="btn sm" onclick="clearColFilters()" title="列フィルタを全て解除">✕解除</button>':'')+'</th></tr>';
-  document.getElementById('thead').innerHTML=h1+h2;
+  }).join('')+'<th style="white-space:nowrap">操作'+((Object.keys(COLFILTER).some(_cfActive_)||SORTSTATE.dir)?' <span class="cfbtn on" onclick="clearColFilters()" title="列フィルタ/並べ替えを全て解除">✕解除</span>':'')+'</th></tr>';
+  document.getElementById('thead').innerHTML=h1;
   document.getElementById('tbody').innerHTML=shown.map(function(c){
     var red=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE'||c.deliverTo);
     var tds=COLS.map(function(col){ var k=col[0], v=getColVal(c,k);
@@ -600,7 +604,7 @@ function openForm(id, asCopy){
   var g=function(f){ return src?(src[f]!=null?src[f]:''):''; };
   document.getElementById('form-title').textContent=editing?'案件を編集':(asCopy?'新規入力（過去から引用）':'新規入力（'+COMPANY+'）');
   document.getElementById('f-id').value=editing?editing.id:'';
-  ['denpyo','customer','item','qty','unit','orderDate','hopeDate','deliveryDate','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','deliverTo','memo'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=g(f); });
+  ['denpyo','customer','item','qty','unit','orderDate','hopeDate','deliveryDate','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','deliverTo','memo','billMonth'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=g(f); });
   document.getElementById('f-status2').value=g('status');
   var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/^(【複数梱包】|【納品先:[^】]*】)+\s*/,''); // タグは別欄で管理
   document.getElementById('f-multiPack').checked=(src&&(src.multiPack===true||src.multiPack==='true'||src.multiPack==='TRUE'));
@@ -651,7 +655,7 @@ function quotePick(i){
   var c=_quoteHits_[i]; if(!c) return;
   var other=(c.company&&c.company!==COMPANY);
   // 内容を土台に流し込み。他社からの流用は伝票番号を保持（=関連会社リンク成立）／同社リピートは新規採番のため空
-  ['customer','item','qty','unit','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','deliverTo','memo'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=(c[f]!=null?c[f]:''); });
+  ['customer','item','qty','unit','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','deliverTo','memo','billMonth'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=(c[f]!=null?c[f]:''); });
   document.getElementById('f-multiPack').checked=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE');
   if(other){
     document.getElementById('f-denpyo').value=c.denpyo||'';   // 流用＝同じ伝票番号で自社行を作る
@@ -688,7 +692,8 @@ async function saveCase(){
     orderDate:document.getElementById('f-orderDate').value, hopeDate:document.getElementById('f-hopeDate').value, deliveryDate:document.getElementById('f-deliveryDate').value,
     status:document.getElementById('f-status2').value,
     unitSelf:document.getElementById('f-unitSelf').value, amtSelf:document.getElementById('f-amtSelf').value,
-    unitTokiwa:document.getElementById('f-unitTokiwa').value, amtTokiwa:document.getElementById('f-amtTokiwa').value, profit:document.getElementById('f-profit').value };
+    unitTokiwa:document.getElementById('f-unitTokiwa').value, amtTokiwa:document.getElementById('f-amtTokiwa').value, profit:document.getElementById('f-profit').value,
+    billMonth:document.getElementById('f-billMonth').value };
   // 複数梱包・納品先はシートに専用列が無いため備考に畳んで保存（情報を失わない・重複防止）
   var mp=document.getElementById('f-multiPack').checked, dt=(document.getElementById('f-deliverTo').value||'').trim();
   var memo=(document.getElementById('f-memo').value||'').replace(/^(【複数梱包】|【納品先:[^】]*】)+\s*/,'');
