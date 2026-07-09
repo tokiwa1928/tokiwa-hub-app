@@ -99,7 +99,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v189</span>
+    <span class="mini" style="margin-left:auto">v190</span>
   </div>
   <h1 style="margin-top:0">案件管理（各社・相互送信）</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の着日。</div>
@@ -387,6 +387,7 @@ function _applyCompany_(){
 }
 async function loadList(force){
   if(!COMPANY) return; // 会社未選択（トキワの選択画面待ち）
+  if(ARRIVALS===null){ ARRIVALS=[]; loadArrivals(); } // 着日メール台帳を背景で読込(初回のみ)
   // 1) メモリ→セッションの順でまず即描画（stale-while-revalidate）
   if(!ALLCASES){ var cc=_sessionCache_(); if(cc){ ALLCASES=cc.c; _ALL_TS=cc.t; } }
   if(ALLCASES) _applyCompany_(); else document.getElementById('status').textContent='読込中…';
@@ -429,7 +430,9 @@ function render(){
     var tds=COLS.map(function(col){ var k=col[0], v=c[k];
       if(k==='multiPack') v=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE')?'⚠ 複数梱包':'';
       var cls=(/金額|利益/.test(col[1])&&v!=='')?' class="num"':'';
-      return '<td'+cls+'>'+esc(v)+'</td>';
+      var cell=esc(v);
+      if(k==='hopeDate' && c.denpyo && ARR_BY_DEN[c.denpyo]){ cell+=' <span style="cursor:pointer" title="発送メールを確認（着日の根拠）" onclick="showArrMail(\''+c.denpyo+'\')">📧</span>'; }
+      return '<td'+cls+'>'+cell+'</td>';
     }).join('');
     return '<tr class="'+(red?'rowred':'')+'">'+tds+'<td style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="この内容で新規（過去から引用）" onclick="openForm(\''+c.id+'\',true)">🔁</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button></td></tr>';
   }).join('');
@@ -639,7 +642,7 @@ function renderArrival(){
   var b=document.getElementById('arr-body'); if(!b) return;
   if(!_arrMails_.length){ b.innerHTML='<div style="color:#94a3b8;padding:12px">直近14日の発送メールは見つかりませんでした。</div>'; return; }
   var html='<div style="font-size:11px;color:#64748b;margin-bottom:8px">伝票番号（発注時に品名の頭へ付けた aNNNNNN）で '+COMPANY+' の案件と自動照合します。チェックした行の <b>着日（＝発送日の翌日）</b> を案件の希望納期に反映します。</div>'
-    +'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="background:#211f1c;color:#fff"><th style="padding:5px 7px"></th><th style="padding:5px 7px;text-align:left">発送元</th><th style="padding:5px 7px;text-align:left">伝票番号</th><th style="padding:5px 7px;text-align:left">品名（メール）</th><th style="padding:5px 7px">発送日</th><th style="padding:5px 7px;background:#0e7490">着日</th><th style="padding:5px 7px;text-align:left">照合結果</th><th style="padding:5px 7px;text-align:left">追跡</th></tr>';
+    +'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="background:#211f1c;color:#fff"><th style="padding:5px 7px"></th><th style="padding:5px 7px;text-align:left">発送元</th><th style="padding:5px 7px;text-align:left">伝票番号</th><th style="padding:5px 7px;text-align:left">品名（メール）</th><th style="padding:5px 7px">発送日</th><th style="padding:5px 7px;background:#0e7490">着日</th><th style="padding:5px 7px;text-align:left">照合結果</th><th style="padding:5px 7px;text-align:left">追跡</th><th style="padding:5px 7px">原文</th></tr>';
   _arrMails_.forEach(function(a,i){
     var hits=a.denpyo?(CASES||[]).filter(function(c){ return c.denpyo===a.denpyo; }):[];
     a._hits=hits;
@@ -657,29 +660,59 @@ function renderArrival(){
       +'<td style="padding:4px 7px;text-align:center">'+a.shipDate+'</td>'
       +'<td style="padding:4px 7px;text-align:center;font-weight:800;color:#0e7490">'+a.arrival+'</td>'
       +'<td style="padding:4px 7px">'+st+'</td>'
-      +'<td style="padding:4px 7px;font-size:10px;color:#64748b">'+(a.carrier||'')+' '+(a.track||'')+'</td></tr>';
+      +'<td style="padding:4px 7px;font-size:10px;color:#64748b">'+(a.carrier||'')+' '+(a.track||'')+'</td>'
+      +'<td style="padding:4px 7px;text-align:center">'+(a.mailBody?'<button class="btn sm" title="メール原文を確認" onclick="arrToggleBody('+i+')">📄</button>':'')+'</td></tr>'
+      +(a.mailBody?('<tr id="arr-body-'+i+'" style="display:none"><td colspan="9" style="background:#f8f7f4;padding:8px 12px;border-bottom:1px solid #e5e3dc"><pre style="white-space:pre-wrap;font-size:10.5px;line-height:1.5;max-height:230px;overflow:auto;margin:0;font-family:inherit;color:#3f3c37">'+esc(a.mailBody)+'</pre></td></tr>'):'');
   });
   html+='</table><div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">'
     +'<button class="btn" onclick="document.getElementById(\'arr-modal\').remove()">閉じる</button>'
     +'<button class="btn xl dark" onclick="applyArrivals()">✅ チェックした案件に着日を反映</button></div>';
   b.innerHTML=html;
 }
+function arrToggleBody(i){ var tr=document.getElementById('arr-body-'+i); if(tr) tr.style.display=(tr.style.display==='none'?'':'none'); }
 async function applyArrivals(){
   var cks=[...document.querySelectorAll('.arr-ck:checked')];
   if(!cks.length){ alert('反映する行にチェックを入れてください'); return; }
   var ok=0, ng=0;
   for(var x=0;x<cks.length;x++){
     var a=_arrMails_[Number(cks[x].dataset.i)];
+    // 備考に確認用の記録を自動追記（既存の【着日…】は入れ替え）
+    var mk='【着日'+a.arrival+' '+a.vendor+' '+a.shipDate+'発送'+(a.track?(' '+(a.carrier||'')+a.track):'')+'】';
     for(var h=0;h<(a._hits||[]).length;h++){
       var c=a._hits[h];
-      try{ var r=await api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{hopeDate:a.arrival}});
+      var newMemo=((c.memo||'').replace(/【着日[^】]*】/g,'').replace(/\s+$/,'')+' '+mk).trim();
+      try{ var r=await api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{hopeDate:a.arrival, memo:newMemo}});
         if(r&&r.success) ok++; else ng++;
       }catch(e){ ng++; }
     }
   }
-  alert('着日を反映しました: '+ok+'件'+(ng?('（失敗 '+ng+'件）'):''));
+  alert('着日を反映しました: '+ok+'件（備考に発送メールの記録も追記）'+(ng?('（失敗 '+ng+'件）'):''));
   var mo=document.getElementById('arr-modal'); if(mo) mo.remove();
+  ARRIVALS=null; // 再取得して📧を更新
   await loadList(true);
+}
+// ── 一覧の希望納期セルに📧（メール原文の確認導線） ──
+var ARRIVALS=null, ARR_BY_DEN={};
+async function loadArrivals(){
+  try{ var r=await api('arrivalList',{});
+    if(r&&r.success){ ARRIVALS=r.arrivals||[]; ARR_BY_DEN={};
+      ARRIVALS.forEach(function(a){ if(a.denpyo && !ARR_BY_DEN[a.denpyo]) ARR_BY_DEN[a.denpyo]=a; });
+      if(ARRIVALS.length) render();
+    } else { ARRIVALS=[]; }
+  }catch(e){ ARRIVALS=[]; }
+}
+function showArrMail(denpyo){
+  var a=ARR_BY_DEN[denpyo]; if(!a) return;
+  var old=document.getElementById('arrmail-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='arrmail-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:2rem;z-index:75;overflow:auto';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;width:min(680px,94vw)">'
+    +'<div style="padding:11px 16px;background:#0e7490;color:#fff;border-radius:10px 10px 0 0;font-weight:700;display:flex;justify-content:space-between">📧 発送メール（'+esc(a.vendor)+'／'+esc(a.denpyo)+'）<span onclick="document.getElementById(\'arrmail-modal\').remove()" style="cursor:pointer">×</span></div>'
+    +'<div style="padding:12px 16px;font-size:12px">'
+    +'<div style="margin-bottom:8px;color:#334155">発送日 <b>'+esc(a.shipDate)+'</b>　→　着日 <b style="color:#0e7490">'+esc(a.arrival)+'</b>'+(a.track?('　／　'+esc(a.carrier||'')+' '+esc(a.track)):'')+'</div>'
+    +'<pre style="white-space:pre-wrap;font-size:10.5px;line-height:1.55;max-height:56vh;overflow:auto;background:#f8f7f4;border:1px solid #e5e3dc;border-radius:8px;padding:10px 12px;margin:0;font-family:inherit;color:#3f3c37">'+esc(a.mailBody||'（本文なし）')+'</pre>'
+    +'</div></div>';
+  document.body.appendChild(m);
 }
 // ── 帳票（納品書・受領書・請求書・領収書） ──
 var CO_NAMES={ murayama:'村山印刷有限会社', kitakami:'有限会社北上プリント', yamauchi:'ヤマウチ印刷株式会社', nakao:'中尾印刷株式会社', arteso:'有限会社アート・エス', tsushima:'株式会社津島プリント社' };
