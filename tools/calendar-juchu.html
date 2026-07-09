@@ -1227,6 +1227,12 @@ function loadInfo(cb){
   var b=document.createElement('script'); b.src='calendar-juchu-vendor.js?v=1'; b.onload=fin; b.onerror=fin; document.head.appendChild(b);
 }
 function normVendor(s){ s=String(s==null?'':s).normalize('NFKC'); s=s.replace(/株式会社|有限会社|合資会社/g,'').replace(/[(](株|有|資)[)]/g,'').replace(/[\s　・.,，、]+/g,''); return s.trim(); }
+function loadRef2(cb){
+  if(window.JU_REF2) return cb();
+  var s=document.createElement('script'); s.src='calendar-juchu-ref2.js?v=1';
+  s.onload=function(){ cb(); }; s.onerror=function(){ cb(); };
+  document.head.appendChild(s);
+}
 function normCust(s){
   s=String(s==null?'':s).normalize('NFKC');
   s=s.replace(/株式会社|有限会社|合資会社|学校法人/g,'');
@@ -1526,14 +1532,17 @@ function applyGenPass(){   // GENを正に: 受注番号を実レコードへ・
 // 軽い追記処理（再投入なし）: 発注紐付け(外注先/仕入)＋顧客名を顧客リスト表記へ統一。
 // データの削除・再投入は一切しないので前年コピー等は消えない。
 function applyLightRefine(){
-  loadHatchu(function(){ loadCust(function(){ loadInfo(function(){
-    var hat=window.GEN_HATCHU||{}, disp=window.CUST_DISPLAY||{}, info=window.CUST_INFO||{}, vfull=window.VENDOR_FULL||{};
+  loadHatchu(function(){ loadInfo(function(){ loadRef2(function(){
+    var hat=window.GEN_HATCHU||{}, info=window.CUST_INFO||{}, vfull=window.VENDOR_FULL||{};
+    var ref2=window.JU_REF2||{}, name2=window.JU_NAME2||{};
     var changed=false;
     var ok=hubSave(function(db){
       (db[COLL]||[]).forEach(function(r){
         var ref=(r.ref==null?'':String(r.ref)).trim();
         if(ref && hat[ref]){ var h=hat[ref]; if(h[0]) r.vendor=h[0]; if(h[1]) r.cost=h[1]; r.purAmt=h[2]; changed=true; }
-        var d=disp[normCust(r.cust||'')]; if(d && d!==r.cust){ r.cust=d; changed=true; }   // 顧客リスト表記へ
+        // 受注登録を正に: 得意先/ユーザー/数量/売価。refありは受注番号で、refなしは名称のみ受注登録表記へ
+        if(ref && ref2[ref]){ var q=ref2[ref]; if(q[0]&&q[0]!==r.cust){ r.cust=q[0]; changed=true; } if(q[1]&&q[1]!==r.user){ r.user=q[1]; changed=true; } if(q[2]!==''&&q[2]!=null){ r.orderQty=q[2]; } if(q[3]!==''&&q[3]!=null){ r.orderPrice=q[3]; } }
+        else { var nm=name2[normCust(r.cust||'')]; if(nm && nm!==r.cust){ r.cust=nm; changed=true; } }
         // 製品名: 日表9号の後ろの相生/天王(得意先名)を除去
         var np=String(r.product||'').replace(/(日表9号)[\s　]*(相生|天王)/,'$1').trim();
         if(np!==r.product){ r.product=np; changed=true; }
@@ -1548,9 +1557,9 @@ function applyLightRefine(){
         var ci=info[normCust(r.cust||'')];
         if(ci){ if(ci[0]&&!r.addr){ r.addr=ci[0]; changed=true; } if(ci[1]&&!r.tel){ r.tel=ci[1]; changed=true; } if(ci[2]&&!r.contact){ r.contact=ci[2]; changed=true; } }
       });
-      var m=db._calMig||(db._calMig={}); m['CAL-HATCHU-1']=true; m['CAL-NAME-1']=true; m['CAL-INFO-1']=true;
+      var m=db._calMig||(db._calMig={}); m['CAL-HATCHU-1']=true; m['CAL-NAME-1']=true; m['CAL-INFO-1']=true; m['CAL-JU-1']=true;
     });
-    if(ok && changed){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildCats(); render(); hubToast('✅ 外注先・住所・電話・製品名を反映しました'); }); }
+    if(ok && changed){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildCats(); render(); hubToast('✅ 得意先・ユーザー・数量・売価・外注先などを反映しました'); }); }
   }); }); });
 }
 // 自己修復つき自動移行: 履歴(発注日付き)・2024・受注用 が揃うよう毎回チェック。
@@ -1566,7 +1575,7 @@ function autoMigrate(){
   // データが揃って処理済みなら、重い再投入は絶対にしない＝前年コピー等を守る。
   // 発注紐付け(外注先/仕入)だけ未適用なら、既存行に追記する軽い処理だけ行う(再投入なし)
   if(has2024 && hasHist && hasJuchu && !needsShift){
-    if(!marks['CAL-NAME-1'] || !marks['CAL-INFO-1']) applyLightRefine();
+    if(!marks['CAL-NAME-1'] || !marks['CAL-INFO-1'] || !marks['CAL-JU-1']) applyLightRefine();
     return;
   }
   showBusy('🔄 データを準備中…');
