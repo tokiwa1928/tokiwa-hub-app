@@ -22,6 +22,13 @@
   .tblwrap{ overflow:auto; max-height:70vh; border:1.5px solid var(--line); border-radius:10px; background:#fff; }
   table{ border-collapse:separate; border-spacing:0; width:100%; font-size:11.5px; }
   thead th{ position:sticky; top:0; z-index:3; background:var(--hd); color:#fff; padding:6px 8px; white-space:nowrap; text-align:left; border-right:1px solid #444; }
+  /* Excel風フィルタ: ▼ボタン＋列内ワード行（2段目ヘッダーも固定） */
+  .cfbtn{ display:inline-block; cursor:pointer; font-size:9px; color:#cbd5e1; border:1px solid #4b5563; border-radius:4px; padding:0 4px; margin-left:2px; vertical-align:1px; }
+  .cfbtn:hover{ background:#374151; }
+  .cfbtn.on{ background:#0e7490; border-color:#0e7490; color:#fff; }
+  thead tr.cfrow th{ top:29px; background:#efece6; border-right:1px solid #ddd8ce; border-bottom:2px solid var(--line); padding:3px 4px; }
+  thead tr.cfrow input.cf{ width:100%; min-width:52px; box-sizing:border-box; padding:3px 6px; font-size:11px; border:1px solid #d5d0c6; border-radius:5px; background:#fff; }
+  thead tr.cfrow input.cf:focus{ border-color:#0e7490; outline:none; }
   tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; vertical-align:top; white-space:normal; word-break:break-word; max-width:240px; }
   tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; white-space:nowrap; }
   tbody tr:nth-child(even){ background:#faf9f6 } tbody tr:hover{ background:#eef6fb }
@@ -99,7 +106,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v190</span>
+    <span class="mini" style="margin-left:auto">v191</span>
   </div>
   <h1 style="margin-top:0">案件管理（各社・相互送信）</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の着日。</div>
@@ -248,7 +255,26 @@ var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nn
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
-var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_linkedArrival','着日リンク'],['deliveryDate','納品日'],['status','状況'],['amtSelf','金額(自社)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['deliverTo','納品先'],['memo','備考']];
+var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','着日'],['deliveryDate','納品日'],['status','状況'],['amtSelf','金額(自社)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['deliverTo','納品先'],['memo','備考']];
+// 合成列: 発注先・着日（希望納期=納期の日にちとは分離。着日は自動表示で上書きしない）
+//   由来①発送メール(プリントパック/グラフィック=Arrivals) ②他社リンク(同じ伝票番号の他社希望納期=例:北上)
+function _mailArr_(c){ return (c&&c.denpyo&&ARR_BY_DEN[c.denpyo])||null; }
+function _vendVal_(c){
+  var parts=[]; var m=_mailArr_(c); if(m&&m.vendor) parts.push(m.vendor);
+  if(c._linkedArrival) String(c._linkedArrival).split(' / ').forEach(function(x){ var nm=x.split(':')[0]; if(nm&&parts.indexOf(nm)<0) parts.push(nm); });
+  return parts.join(' / ');
+}
+function _arrVal_(c){
+  var m=_mailArr_(c); if(m&&m.arrival) return m.arrival;
+  if(c._linkedArrival){ return String(c._linkedArrival).split(' / ').map(function(x){ var i=x.indexOf(':'); return i>=0?x.slice(i+1):x; }).join(' / '); }
+  return '';
+}
+function getColVal(c,k){
+  if(k==='multiPack') return (c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE')?'⚠ 複数梱包':'';
+  if(k==='_vendor') return _vendVal_(c);
+  if(k==='_arrival') return _arrVal_(c);
+  var v=c[k]; return (v==null?'':v);
+}
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function yen(n){ n=Math.round(Number(n)||0); return (n<0?'−¥'+Math.abs(n).toLocaleString():'¥'+n.toLocaleString()); }
 function toNum(v){ var n=Number(String(v==null?'':v).replace(/[,¥]/g,'')); return isNaN(n)?0:n; }
@@ -408,6 +434,11 @@ function buildCustomerMaster(){
   var names=Object.keys(set).sort(function(a,b){ return a.localeCompare(b,'ja'); });
   document.getElementById('customer-list').innerHTML=names.map(function(v){return '<option value="'+esc(v)+'">';}).join('');
 }
+// ── Excel風フィルタ状態 ──
+//   COLFILTER[k] = { q:'列内ワード', set:Set(選択値)|null }  SORTSTATE={k,dir} dir=1昇順/-1降順/0既定(新しい順)
+var COLFILTER={}, SORTSTATE={k:'',dir:0};
+function _cf_(k){ if(!COLFILTER[k]) COLFILTER[k]={q:'',set:null}; return COLFILTER[k]; }
+function _cfActive_(k){ var f=COLFILTER[k]; return !!(f&&((f.q&&f.q.trim())||f.set)); }
 function filtered(){
   var q=(document.getElementById('q').value||'').toLowerCase().trim(), qs=q?q.split(/\s+/):[];
   var fs=document.getElementById('f-status').value, wk=weekRange(), today=ymd(new Date());
@@ -415,31 +446,112 @@ function filtered(){
     if(fs && c.status!==fs) return false;
     if(deliveryMode){ var d=parseD(c.deliveryDate); if(!d) return false; if(deliveryMode==='today'&&ymd(d)!==today) return false; if(deliveryMode==='week'&&(d<wk[0]||d>wk[1])) return false; }
     if(qs.length){ var hay=[c.denpyo,c.customer,c.item,c.memo].join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } }
+    // 列ごとのフィルタ（ワード＋値選択）
+    for(var ci=0;ci<COLS.length;ci++){
+      var k=COLS[ci][0], f=COLFILTER[k]; if(!f) continue;
+      var val=String(getColVal(c,k));
+      if(f.q && f.q.trim()){ var ws=f.q.toLowerCase().trim().split(/\s+/), low=val.toLowerCase();
+        for(var w=0;w<ws.length;w++){ if(low.indexOf(ws[w])<0) return false; } }
+      if(f.set && !f.set.has(val===''?'(空白)':val)) return false;
+    }
     return true;
   });
 }
 var DISPLAY_CAP=400;
 function _caseTime_(c){ var d=parseD(c.orderDate); if(d) return d.getTime(); var u=c.updatedAt?Date.parse(c.updatedAt):0; return u||0; }
+function _sortV_(V){
+  if(SORTSTATE.dir&&SORTSTATE.k){
+    var k=SORTSTATE.k, dir=SORTSTATE.dir;
+    V.sort(function(a,b){ var x=getColVal(a,k), y=getColVal(b,k);
+      var nx=toNum(x), ny=toNum(y);
+      if(x!==''&&y!==''&&String(nx)===String(x).replace(/,/g,'')&&String(ny)===String(y).replace(/,/g,'')) return (nx-ny)*dir;
+      return String(x).localeCompare(String(y),'ja')*dir; });
+  } else {
+    V.sort(function(a,b){ return _caseTime_(b)-_caseTime_(a); }); // 既定=新しい順
+  }
+  return V;
+}
 function render(){
-  var V=filtered();
-  V.sort(function(a,b){ return _caseTime_(b)-_caseTime_(a); }); // 新しい順（過去は検索で引く）
+  var V=_sortV_(filtered());
   var shown=V.slice(0,DISPLAY_CAP);
-  document.getElementById('thead').innerHTML='<tr>'+COLS.map(function(c){return '<th>'+c[1]+'</th>';}).join('')+'<th>操作</th></tr>';
+  // ヘッダー2段: ①ラベル＋▼(値選択/並べ替え) ②列内ワード検索
+  var h1='<tr>'+COLS.map(function(col){ var k=col[0];
+    var on=_cfActive_(k)||SORTSTATE.k===k&&SORTSTATE.dir;
+    var arrow=SORTSTATE.k===k?(SORTSTATE.dir===1?' ▲':SORTSTATE.dir===-1?' ▼':''):'';
+    return '<th style="white-space:nowrap">'+col[1]+arrow+' <span class="cfbtn'+(on?' on':'')+'" onclick="openColMenu(event,\''+k+'\')" title="絞り込み・並べ替え">▼</span></th>';
+  }).join('')+'<th>操作</th></tr>';
+  var h2='<tr class="cfrow">'+COLS.map(function(col){ var k=col[0]; var f=COLFILTER[k];
+    return '<th><input class="cf" data-k="'+k+'" value="'+esc(f?f.q:'')+'" placeholder="ワード" oninput="onColQ(this)"></th>';
+  }).join('')+'<th style="text-align:center">'+((Object.keys(COLFILTER).some(_cfActive_)||SORTSTATE.dir)?'<button class="btn sm" onclick="clearColFilters()" title="列フィルタを全て解除">✕解除</button>':'')+'</th></tr>';
+  document.getElementById('thead').innerHTML=h1+h2;
   document.getElementById('tbody').innerHTML=shown.map(function(c){
     var red=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE'||c.deliverTo);
-    var tds=COLS.map(function(col){ var k=col[0], v=c[k];
-      if(k==='multiPack') v=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE')?'⚠ 複数梱包':'';
+    var tds=COLS.map(function(col){ var k=col[0], v=getColVal(c,k);
       var cls=(/金額|利益/.test(col[1])&&v!=='')?' class="num"':'';
       var cell=esc(v);
-      if(k==='hopeDate' && c.denpyo && ARR_BY_DEN[c.denpyo]){ cell+=' <span style="cursor:pointer" title="発送メールを確認（着日の根拠）" onclick="showArrMail(\''+c.denpyo+'\')">📧</span>'; }
+      if(k==='_arrival' && _mailArr_(c)){ cell='<b style="color:#0e7490">'+esc(v)+'</b> <span style="cursor:pointer" title="発送メールを確認（着日の根拠）" onclick="showArrMail(\''+c.denpyo+'\')">📧</span>'; }
+      else if(k==='_arrival' && v){ cell='<span style="color:#0e7490">'+esc(v)+'</span>'; }
       return '<td'+cls+'>'+cell+'</td>';
     }).join('');
     return '<tr class="'+(red?'rowred':'')+'">'+tds+'<td style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="この内容で新規（過去から引用）" onclick="openForm(\''+c.id+'\',true)">🔁</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button></td></tr>';
   }).join('');
   renderKpis(V);
-  var more=V.length>DISPLAY_CAP?('　（新しい順 先頭'+DISPLAY_CAP+'件を表示。過去は🔍検索で絞込）'):'';
+  var more=V.length>DISPLAY_CAP?('　（先頭'+DISPLAY_CAP+'件を表示。フィルタで絞込）'):'';
   document.getElementById('status').textContent=COMPANY+'：'+CASES.length+'件 / 絞込 '+V.length+'件'+more;
 }
+// 列内ワード入力（フォーカスを保ったまま本体だけ再描画）
+var _cfTimer_=null;
+function onColQ(inp){
+  _cf_(inp.dataset.k).q=inp.value;
+  clearTimeout(_cfTimer_);
+  _cfTimer_=setTimeout(function(){
+    var focusK=inp.dataset.k, pos=inp.selectionStart;
+    render();
+    var el=document.querySelector('.cf[data-k="'+focusK+'"]'); if(el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} }
+  },250);
+}
+function clearColFilters(){ COLFILTER={}; SORTSTATE={k:'',dir:0}; render(); }
+// ── Excel風 ▼メニュー（昇順/降順・値のチェック選択） ──
+function closeColMenu(){ var m=document.getElementById('colmenu'); if(m) m.remove(); document.removeEventListener('mousedown',_cmOut_); }
+function _cmOut_(e){ var m=document.getElementById('colmenu'); if(m && !m.contains(e.target)) closeColMenu(); }
+function openColMenu(ev,k){
+  ev.stopPropagation(); closeColMenu();
+  var col=COLS.find(function(c){return c[0]===k;});
+  // 値一覧（この列以外のフィルタ適用後の値で集計）
+  var saved=COLFILTER[k]; delete COLFILTER[k];
+  var pool=filtered(); COLFILTER[k]=saved;
+  var cnt={}; pool.forEach(function(c){ var v=String(getColVal(c,k)); if(v==='') v='(空白)'; cnt[v]=(cnt[v]||0)+1; });
+  var vals=Object.keys(cnt).sort(function(a,b){ return a.localeCompare(b,'ja'); }).slice(0,300);
+  var sel=(saved&&saved.set)?saved.set:null;
+  var m=document.createElement('div'); m.id='colmenu';
+  var r=ev.target.getBoundingClientRect();
+  m.style.cssText='position:fixed;top:'+(r.bottom+4)+'px;left:'+Math.min(r.left,window.innerWidth-280)+'px;z-index:90;background:#fff;border:1px solid #c9c6bf;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.2);width:260px;font-size:12px';
+  m.innerHTML='<div style="padding:8px 10px;border-bottom:1px solid #eee;font-weight:800">'+col[1]+'</div>'
+    +'<div style="display:flex;gap:6px;padding:7px 10px;border-bottom:1px solid #eee">'
+      +'<button class="btn sm" onclick="setSort(\''+k+'\',1)">↑ 昇順</button>'
+      +'<button class="btn sm" onclick="setSort(\''+k+'\',-1)">↓ 降順</button>'
+      +'<button class="btn sm" style="margin-left:auto" onclick="colSetClear(\''+k+'\')">解除</button></div>'
+    +'<div style="padding:6px 10px"><input id="cm-q" placeholder="値を検索" style="width:100%" oninput="cmFilterList(this.value)"></div>'
+    +'<div style="padding:2px 10px 4px;display:flex;gap:10px;font-size:11px;color:#0e7490"><span style="cursor:pointer" onclick="cmAll(true)">すべて選択</span><span style="cursor:pointer" onclick="cmAll(false)">すべて解除</span></div>'
+    +'<div id="cm-list" style="max-height:240px;overflow:auto;padding:2px 10px 8px">'
+    +vals.map(function(v){ var ck=(!sel||sel.has(v))?' checked':'';
+      return '<label class="cmi" data-v="'+esc(v)+'" style="display:flex;gap:6px;align-items:center;padding:2px 0;cursor:pointer"><input type="checkbox" class="cmck" data-v="'+esc(v)+'"'+ck+' onchange="cmApply(\''+k+'\')"><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(v)+'</span><span style="color:#94a3b8;font-size:10px">'+cnt[v]+'</span></label>'; }).join('')
+    +'</div>';
+  document.body.appendChild(m);
+  window._cmK_=k;
+  setTimeout(function(){ document.addEventListener('mousedown',_cmOut_); },0);
+}
+function cmFilterList(q){ q=(q||'').toLowerCase(); document.querySelectorAll('#cm-list .cmi').forEach(function(l){ l.style.display=(l.dataset.v.toLowerCase().indexOf(q)>=0)?'':'none'; }); }
+function cmAll(on){ document.querySelectorAll('#cm-list .cmi').forEach(function(l){ if(l.style.display!=='none'){ l.querySelector('.cmck').checked=on; } }); cmApply(window._cmK_); }
+function cmApply(k){
+  var cks=[...document.querySelectorAll('#cm-list .cmck')];
+  var sel=new Set(); var all=true;
+  cks.forEach(function(c){ if(c.checked) sel.add(c.dataset.v); else all=false; });
+  _cf_(k).set=all?null:sel;
+  render();
+}
+function setSort(k,dir){ SORTSTATE=(SORTSTATE.k===k&&SORTSTATE.dir===dir)?{k:'',dir:0}:{k:k,dir:dir}; closeColMenu(); render(); }
+function colSetClear(k){ delete COLFILTER[k]; if(SORTSTATE.k===k) SORTSTATE={k:'',dir:0}; closeColMenu(); render(); }
 function renderKpis(V){
   var wk=weekRange(), today=ymd(new Date()), tN=0,wN=0;
   CASES.forEach(function(c){ var d=parseD(c.deliveryDate); if(!d)return; if(ymd(d)===today)tN++; if(d>=wk[0]&&d<=wk[1])wN++; });
@@ -641,19 +753,14 @@ async function openArrival(){
 function renderArrival(){
   var b=document.getElementById('arr-body'); if(!b) return;
   if(!_arrMails_.length){ b.innerHTML='<div style="color:#94a3b8;padding:12px">直近14日の発送メールは見つかりませんでした。</div>'; return; }
-  var html='<div style="font-size:11px;color:#64748b;margin-bottom:8px">伝票番号（発注時に品名の頭へ付けた aNNNNNN）で '+COMPANY+' の案件と自動照合します。チェックした行の <b>着日（＝発送日の翌日）</b> を案件の希望納期に反映します。</div>'
-    +'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="background:#211f1c;color:#fff"><th style="padding:5px 7px"></th><th style="padding:5px 7px;text-align:left">発送元</th><th style="padding:5px 7px;text-align:left">伝票番号</th><th style="padding:5px 7px;text-align:left">品名（メール）</th><th style="padding:5px 7px">発送日</th><th style="padding:5px 7px;background:#0e7490">着日</th><th style="padding:5px 7px;text-align:left">照合結果</th><th style="padding:5px 7px;text-align:left">追跡</th><th style="padding:5px 7px">原文</th></tr>';
+  var html='<div style="font-size:11px;color:#64748b;margin-bottom:8px">伝票番号（発注時に品名の頭へ付けた aNNNNNN）で照合し、<b>一覧の「着日」列に自動表示</b>されます（希望納期は上書きしません）。この画面はメール原文の確認用です。📄で原文を開けます。</div>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="background:#211f1c;color:#fff"><th style="padding:5px 7px;text-align:left">発送元</th><th style="padding:5px 7px;text-align:left">伝票番号</th><th style="padding:5px 7px;text-align:left">品名（メール）</th><th style="padding:5px 7px">発送日</th><th style="padding:5px 7px;background:#0e7490">着日</th><th style="padding:5px 7px;text-align:left">照合結果</th><th style="padding:5px 7px;text-align:left">追跡</th><th style="padding:5px 7px">原文</th></tr>';
   _arrMails_.forEach(function(a,i){
     var hits=a.denpyo?(CASES||[]).filter(function(c){ return c.denpyo===a.denpyo; }):[];
-    a._hits=hits;
-    var already=hits.length&&hits.every(function(c){ return c.hopeDate===a.arrival; });
     var st= !a.denpyo?'<span style="color:#94a3b8">伝票番号なし</span>'
       : !hits.length?'<span style="color:#94a3b8">'+COMPANY+'に該当なし</span>'
-      : already?'<span style="color:#16a34a">✓ 反映済</span>'
-      : '<span style="color:#0e7490;font-weight:700">✓ '+hits.length+'件一致</span>'+(hits[0].hopeDate?'<span style="font-size:10px;color:#b45309">（現在 '+hits[0].hopeDate+'）</span>':'');
-    var checkable=hits.length&&!already;
+      : '<span style="color:#0e7490;font-weight:700">✓ '+hits.length+'件一致（着日列に表示）</span>';
     html+='<tr style="border-bottom:1px solid #e5e3dc">'
-      +'<td style="padding:4px 7px;text-align:center">'+(checkable?'<input type="checkbox" class="arr-ck" data-i="'+i+'" checked>':'')+'</td>'
       +'<td style="padding:4px 7px">'+a.vendor+'</td>'
       +'<td style="padding:4px 7px;font-family:monospace;font-weight:700">'+(a.denpyo||'—')+'</td>'
       +'<td style="padding:4px 7px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+String(a.item).replace(/"/g,'&quot;')+'">'+a.item+'</td>'
@@ -662,12 +769,13 @@ function renderArrival(){
       +'<td style="padding:4px 7px">'+st+'</td>'
       +'<td style="padding:4px 7px;font-size:10px;color:#64748b">'+(a.carrier||'')+' '+(a.track||'')+'</td>'
       +'<td style="padding:4px 7px;text-align:center">'+(a.mailBody?'<button class="btn sm" title="メール原文を確認" onclick="arrToggleBody('+i+')">📄</button>':'')+'</td></tr>'
-      +(a.mailBody?('<tr id="arr-body-'+i+'" style="display:none"><td colspan="9" style="background:#f8f7f4;padding:8px 12px;border-bottom:1px solid #e5e3dc"><pre style="white-space:pre-wrap;font-size:10.5px;line-height:1.5;max-height:230px;overflow:auto;margin:0;font-family:inherit;color:#3f3c37">'+esc(a.mailBody)+'</pre></td></tr>'):'');
+      +(a.mailBody?('<tr id="arr-body-'+i+'" style="display:none"><td colspan="8" style="background:#f8f7f4;padding:8px 12px;border-bottom:1px solid #e5e3dc"><pre style="white-space:pre-wrap;font-size:10.5px;line-height:1.5;max-height:230px;overflow:auto;margin:0;font-family:inherit;color:#3f3c37">'+esc(a.mailBody)+'</pre></td></tr>'):'');
   });
   html+='</table><div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">'
-    +'<button class="btn" onclick="document.getElementById(\'arr-modal\').remove()">閉じる</button>'
-    +'<button class="btn xl dark" onclick="applyArrivals()">✅ チェックした案件に着日を反映</button></div>';
+    +'<button class="btn" onclick="document.getElementById(\'arr-modal\').remove()">閉じる</button></div>';
   b.innerHTML=html;
+  // 取込直後に一覧の着日列も最新化
+  loadArrivals();
 }
 function arrToggleBody(i){ var tr=document.getElementById('arr-body-'+i); if(tr) tr.style.display=(tr.style.display==='none'?'':'none'); }
 async function applyArrivals(){
