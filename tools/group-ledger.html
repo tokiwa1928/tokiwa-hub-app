@@ -99,7 +99,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v186</span>
+    <span class="mini" style="margin-left:auto">v188</span>
   </div>
   <h1 style="margin-top:0">案件管理（各社・相互送信）</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の着日。</div>
@@ -120,6 +120,7 @@
       <input id="q" placeholder="🔍 伝票番号・顧客・案件で検索" style="flex:1;min-width:150px" oninput="render()">
       <select id="f-status" onchange="render()"><option value="">状況：すべて</option></select>
       <button class="btn sm" onclick="loadList(true)" title="最新に更新">🔄</button>
+      <button class="btn sm" onclick="openArrival()" title="プリントパック/グラフィックの発送メールから着日(発送翌日)を取込">📧 着日取込</button>
     </div>
     <span id="status" style="flex-basis:100%;font-size:11px;color:#64748b"></span>
   </div>
@@ -613,6 +614,72 @@ async function doSend(targetKey){
     alert('✅ '+tname+' の管理表に追加しました（伝票番号 '+(c.denpyo||'')+'）');
     if(NAMEKEY[COMPANY]===targetKey || IS_TK) await loadList(true); // 表示中に反映
   }catch(e){ alert('送信失敗: '+e.message); btns.forEach(function(b){ b.disabled=false; }); }
+}
+// ── 着日取込：プリントパック/グラフィックの発送メール → 着日(発送翌日)を案件へ ──
+var _arrMails_=[];
+async function openArrival(){
+  var old=document.getElementById('arr-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='arr-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:2rem;z-index:65;overflow:auto';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;width:min(860px,95vw)">'
+    +'<div style="padding:12px 16px;background:#0e7490;color:#fff;border-radius:10px 10px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center">📧 着日取込（発送メール → 発送翌日を着日に）<span onclick="document.getElementById(\'arr-modal\').remove()" style="cursor:pointer">×</span></div>'
+    +'<div id="arr-body" style="padding:14px 16px;font-size:12px"><div style="color:#94a3b8;padding:16px">発送メールを確認中…</div></div></div>';
+  document.body.appendChild(m);
+  try{
+    var r=await api('arrivalScan',{days:14});
+    if(!r||!r.success){
+      document.getElementById('arr-body').innerHTML='<div style="color:#b91c1c;line-height:1.8">メール取込はまだ初期設定待ちです。<br><span style="font-size:11px;color:#64748b">必要な設定: ①GAS(info@tokiwap-group.com)のGmail承認 ②media@宛の発送メールをinfo@へ自動転送。<br>エラー: '+((r&&r.error)||'unknown')+'</span></div>';
+      return;
+    }
+    _arrMails_=r.mails||[];
+    renderArrival();
+  }catch(e){ var b=document.getElementById('arr-body'); if(b) b.innerHTML='<div style="color:#b91c1c">取得失敗: '+e.message+'</div>'; }
+}
+function renderArrival(){
+  var b=document.getElementById('arr-body'); if(!b) return;
+  if(!_arrMails_.length){ b.innerHTML='<div style="color:#94a3b8;padding:12px">直近14日の発送メールは見つかりませんでした。</div>'; return; }
+  var html='<div style="font-size:11px;color:#64748b;margin-bottom:8px">伝票番号（発注時に品名の頭へ付けた aNNNNNN）で '+COMPANY+' の案件と自動照合します。チェックした行の <b>着日（＝発送日の翌日）</b> を案件の希望納期に反映します。</div>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="background:#211f1c;color:#fff"><th style="padding:5px 7px"></th><th style="padding:5px 7px;text-align:left">発送元</th><th style="padding:5px 7px;text-align:left">伝票番号</th><th style="padding:5px 7px;text-align:left">品名（メール）</th><th style="padding:5px 7px">発送日</th><th style="padding:5px 7px;background:#0e7490">着日</th><th style="padding:5px 7px;text-align:left">照合結果</th><th style="padding:5px 7px;text-align:left">追跡</th></tr>';
+  _arrMails_.forEach(function(a,i){
+    var hits=a.denpyo?(CASES||[]).filter(function(c){ return c.denpyo===a.denpyo; }):[];
+    a._hits=hits;
+    var already=hits.length&&hits.every(function(c){ return c.hopeDate===a.arrival; });
+    var st= !a.denpyo?'<span style="color:#94a3b8">伝票番号なし</span>'
+      : !hits.length?'<span style="color:#94a3b8">'+COMPANY+'に該当なし</span>'
+      : already?'<span style="color:#16a34a">✓ 反映済</span>'
+      : '<span style="color:#0e7490;font-weight:700">✓ '+hits.length+'件一致</span>'+(hits[0].hopeDate?'<span style="font-size:10px;color:#b45309">（現在 '+hits[0].hopeDate+'）</span>':'');
+    var checkable=hits.length&&!already;
+    html+='<tr style="border-bottom:1px solid #e5e3dc">'
+      +'<td style="padding:4px 7px;text-align:center">'+(checkable?'<input type="checkbox" class="arr-ck" data-i="'+i+'" checked>':'')+'</td>'
+      +'<td style="padding:4px 7px">'+a.vendor+'</td>'
+      +'<td style="padding:4px 7px;font-family:monospace;font-weight:700">'+(a.denpyo||'—')+'</td>'
+      +'<td style="padding:4px 7px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+String(a.item).replace(/"/g,'&quot;')+'">'+a.item+'</td>'
+      +'<td style="padding:4px 7px;text-align:center">'+a.shipDate+'</td>'
+      +'<td style="padding:4px 7px;text-align:center;font-weight:800;color:#0e7490">'+a.arrival+'</td>'
+      +'<td style="padding:4px 7px">'+st+'</td>'
+      +'<td style="padding:4px 7px;font-size:10px;color:#64748b">'+(a.carrier||'')+' '+(a.track||'')+'</td></tr>';
+  });
+  html+='</table><div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">'
+    +'<button class="btn" onclick="document.getElementById(\'arr-modal\').remove()">閉じる</button>'
+    +'<button class="btn xl dark" onclick="applyArrivals()">✅ チェックした案件に着日を反映</button></div>';
+  b.innerHTML=html;
+}
+async function applyArrivals(){
+  var cks=[...document.querySelectorAll('.arr-ck:checked')];
+  if(!cks.length){ alert('反映する行にチェックを入れてください'); return; }
+  var ok=0, ng=0;
+  for(var x=0;x<cks.length;x++){
+    var a=_arrMails_[Number(cks[x].dataset.i)];
+    for(var h=0;h<(a._hits||[]).length;h++){
+      var c=a._hits[h];
+      try{ var r=await api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{hopeDate:a.arrival}});
+        if(r&&r.success) ok++; else ng++;
+      }catch(e){ ng++; }
+    }
+  }
+  alert('着日を反映しました: '+ok+'件'+(ng?('（失敗 '+ng+'件）'):''));
+  var mo=document.getElementById('arr-modal'); if(mo) mo.remove();
+  await loadList(true);
 }
 // ── 帳票（納品書・受領書・請求書・領収書） ──
 var CO_NAMES={ murayama:'村山印刷有限会社', kitakami:'有限会社北上プリント', yamauchi:'ヤマウチ印刷株式会社', nakao:'中尾印刷株式会社', arteso:'有限会社アート・エス', tsushima:'株式会社津島プリント社' };
