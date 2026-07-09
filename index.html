@@ -23895,42 +23895,70 @@ function _showSimpleAddModal_(title, color, fields, onSubmit, opts){
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
-  var fieldsHtml = fields.map(function(f, i){
-    var input;
-    if(f.type === 'textarea') input = '<textarea id="_sm_f_' + i + '" rows="2" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:inherit"></textarea>';
-    else if(f.type === 'select') input = '<select id="_sm_f_' + i + '" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px">' + f.options.map(function(o){ return '<option>'+o+'</option>'; }).join('') + '</select>';
-    else if(f.type === 'itempick') input = '<input id="_sm_f_' + i + '" list="_sm_itemdl" autocomplete="off" placeholder="品名を入力/選択（品目マスタ）" oninput="_smItemPick_(this)" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px">';
-    else input = '<input id="_sm_f_' + i + '" type="' + (f.type||'text') + '" value="' + (f.default || '') + '" style="font-size:13px;padding:6px 8px;border:1px solid #ccc;border-radius:4px">';
-    return '<label style="font-weight:700;align-self:center">' + f.label + '</label>' + input;
-  }).join('');
+  // techC型: 項目を業務の流れ順に自動分類 → 01相手先・品目 / 02日程 / 03金額(黒メトリクス) / 04備考
+  function _secOf(f){
+    if(f.type === 'textarea') return 'note';
+    if(f.type === 'date') return 'sched';
+    if(f.type === 'number' && /amount|price|unitp|fee|total/.test(f.key)) return 'price';
+    return 'main';
+  }
+  function _inputHtml(f, i){
+    if(f.type === 'textarea') return '<textarea id="_sm_f_' + i + '" rows="2" style="font-size:13px;font-family:inherit"></textarea>';
+    if(f.type === 'select') return '<select id="_sm_f_' + i + '" style="font-size:13px">' + f.options.map(function(o){ return '<option>'+o+'</option>'; }).join('') + '</select>';
+    if(f.type === 'itempick') return '<input id="_sm_f_' + i + '" list="_sm_itemdl" autocomplete="off" placeholder="品名を入力/選択（品目マスタ）" oninput="_smItemPick_(this)" style="font-size:13px">';
+    return '<input id="_sm_f_' + i + '" type="' + (f.type||'text') + '" value="' + (f.default || '') + '" style="font-size:13px">';
+  }
+  function _fieldHtml(f, i){
+    var wide = (f.type==='textarea' || f.type==='itempick' || /vendor|cust|item|name|memo/.test(f.key));
+    return '<div' + (wide?' class="smf-w"':'') + '><label>' + f.label.replace('*','<span style="color:#c0261c">*</span>') + '</label>' + _inputHtml(f, i) + '</div>';
+  }
+  var secs = { main:[], sched:[], price:[], note:[] };
+  fields.forEach(function(f, i){ secs[_secOf(f)].push(_fieldHtml(f, i)); });
+  var priceIdx = []; fields.forEach(function(f, i){ if(_secOf(f)==='price') priceIdx.push(i); });
+  var no = 0;
+  function _sec(titleJp, arr, extra){
+    if(!arr.length && !extra) return '';
+    no++;
+    return '<div class="smf-sec"><div class="smf-h"><span class="no">0' + no + '</span><span class="t">' + titleJp + '</span></div>'
+      + (arr.length ? '<div class="smf-grid">' + arr.join('') + '</div>' : '') + (extra||'') + '</div>';
+  }
+  var calcHtml = priceIdx.length ? '<div class="smcalc"><span class="k">金額（自動表示）</span><span class="v" id="_sm_calcv">—</span></div>' : '';
+  var sectionsHtml = _sec('相手先・品目', secs.main) + _sec('日程', secs.sched)
+    + (secs.price.length ? _sec('金額', secs.price, calcHtml) : '') + _sec('備考', secs.note);
   // 品目ピッカー用 datalist (品目マスタ DB.itemMaster)
   var _needItemDL = fields.some(function(f){ return f.type === 'itempick'; });
   var itemDL = _needItemDL ? ('<datalist id="_sm_itemdl">' + (DB.itemMaster||[]).slice(0,3000).map(function(r){
       return '<option value="' + String(r.name||'').replace(/"/g,'&quot;') + '">' + [r.code, r.kd].filter(Boolean).join(' · ') + '</option>';
     }).join('') + '</datalist>') : '';
-  // 案件紐付け欄 (opts.allowProject の場合のみ)
+  // 案件紐付け欄 (opts.allowProject の場合のみ)：最初の導線＝案件から引用して自動補完
   var projHtml = '';
   if(opts.allowProject){
-    projHtml = '<div style="background:' + color + '20;padding:8px 10px;border-radius:6px;border-left:3px solid ' + color + ';margin-bottom:10px">' +
-      '<strong style="font-size:11px">📁 関連案件 (任意)</strong>' +
-      '<div style="display:flex;gap:6px;margin-top:4px">' +
-      '<input id="_sm_projectId" placeholder="例: PRJ-2026-001" style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:monospace;font-size:12px">' +
+    projHtml = '<div style="background:' + color + '14;padding:9px 12px;border-radius:10px;border:1px solid ' + color + '40;margin-bottom:10px">' +
+      '<strong style="font-size:11.5px;color:' + color + '">📁 案件から引用（任意・選ぶと下欄を自動補完）</strong>' +
+      '<div style="display:flex;gap:6px;margin-top:5px">' +
+      '<input id="_sm_projectId" placeholder="例: PRJ-2026-001" style="flex:1;font-family:monospace;font-size:12px">' +
       '<button class="btn" onclick="showProjectPicker(_fillSimpleAddFromProject_, {title:\'関連案件を選択\'})" style="font-size:11px">📁 案件選択</button>' +
       '</div></div>';
   }
   modal.innerHTML =
-    '<div style="background:#fff;width:100%;max-width:520px;max-height:92vh;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">' +
-      '<div style="padding:14px 20px;background:' + color + ';color:#fff;display:flex;justify-content:space-between;flex-shrink:0"><strong>＋ ' + title + '</strong>' +
+    '<div style="background:#fff;width:100%;max-width:560px;max-height:92vh;border-radius:12px;overflow:hidden;display:flex;flex-direction:column">' +
+      '<div style="padding:13px 20px;background:' + color + ';color:#fff;display:flex;justify-content:space-between;flex-shrink:0"><strong>＋ ' + title + '</strong>' +
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
-      '<div style="padding:18px 20px;overflow-y:auto;flex:1">' + projHtml +
-        '<div style="display:grid;grid-template-columns:120px 1fr;gap:10px 12px;font-size:13px">' + fieldsHtml + '</div>' + itemDL +
-        '<div style="margin-top:18px;display:flex;justify-content:flex-end;gap:8px">' +
-          '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
-          '<button class="btn btn-p" id="_sm_submit_btn" style="background:' + color + ';border-color:' + color + '">登録</button>' +
-        '</div>' +
+      '<div style="padding:14px 18px;overflow-y:auto;flex:1">' + projHtml + sectionsHtml + itemDL + '</div>' +
+      '<div style="padding:11px 18px;border-top:1px solid #eee;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">' +
+        '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
+        '<button class="btn btn-p" id="_sm_submit_btn" style="background:' + color + ' !important;border-color:' + color + ' !important;padding:8px 22px;font-weight:700">登録</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  // 金額の黒メトリクス: 入力に追従してライブ表示
+  window._smUpdBar_ = priceIdx.length ? function(){
+    var el = document.getElementById('_sm_calcv'); if(!el) return;
+    var v = 0; priceIdx.forEach(function(i){ v += Number((document.getElementById('_sm_f_'+i)||{}).value) || 0; });
+    el.textContent = v ? '¥' + v.toLocaleString() : '—';
+  } : null;
+  priceIdx.forEach(function(i){ var el = document.getElementById('_sm_f_'+i); if(el) el.addEventListener('input', window._smUpdBar_); });
+  if(window._smUpdBar_) window._smUpdBar_();
   // 案件選択時のフィールドマッピングを保存 (opts.fieldMap)
   window._smFieldMap_ = opts.fieldMap || null;
   window._smFields_ = fields;
@@ -23969,6 +23997,7 @@ function _smItemPick_(inp){
     var ael = document.getElementById('_sm_f_' + ai);
     if(ael && !ael.value){ ael.value = row.p; }
   }
+  if(typeof window._smUpdBar_ === 'function') window._smUpdBar_(); // 黒メトリクス追従
 }
 // 案件選択時に SimpleAddModal のフィールドを補完
 function _fillSimpleAddFromProject_(p){
@@ -23992,6 +24021,7 @@ function _fillSimpleAddFromProject_(p){
     else if(src === 'memo') val = '案件: ' + p.id + (p.item ? ' / ' + p.item : '');
     if(val) el.value = val;
   });
+  if(typeof window._smUpdBar_ === 'function') window._smUpdBar_(); // 黒メトリクス追従
 }
 
 // ─────────────────────────────────────────────────────
@@ -47938,6 +47968,18 @@ body.new-shell [style*="color:#999"], body.new-shell [style*="color:#aaa"]{ colo
   .page:not(#page-est):not(#page-master) textarea{ padding:6px 10px; }
   /* ボタンの押下感 */
   .btn:active{ transform:translateY(1px); }
+  /* ===== 共通 追加モーダル(_showSimpleAddModal_)のtechC型: 番号セクション＋黒メトリクス ===== */
+  .smf-sec{ border:1px solid #e7e4dc; border-radius:10px; padding:10px 12px 12px; margin-bottom:10px; background:#fdfdfb; }
+  .smf-h{ display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
+  .smf-h .no{ font-size:14px; font-weight:900; font-family:'Roboto Mono',monospace; color:#211f1c; }
+  .smf-h .t{ font-size:12px; font-weight:800; color:#211f1c; }
+  .smf-grid{ display:grid; grid-template-columns:1fr 1fr; gap:9px 12px; }
+  .smf-grid label{ display:block; font-size:10px; font-weight:700; color:#57534e; margin-bottom:3px; letter-spacing:.02em; }
+  .smf-grid input,.smf-grid select,.smf-grid textarea{ width:100%; box-sizing:border-box; }
+  .smf-w{ grid-column:span 2; }
+  .smcalc{ margin-top:9px; background:#211f1c; color:#fff; border-radius:8px; padding:7px 13px; display:flex; justify-content:space-between; align-items:baseline; }
+  .smcalc .k{ font-size:10px; color:#a8a29a; font-weight:700; }
+  .smcalc .v{ font-size:16px; font-weight:800; font-family:'Roboto Mono',monospace; }
 </style>
 </body>
 </html>
