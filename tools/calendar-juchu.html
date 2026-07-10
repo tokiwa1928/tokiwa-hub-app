@@ -314,6 +314,8 @@
     .rowbtn.del{ border-color:#fca5a5; color:#dc2626; }
     .rowbtn.del:hover{ background:#fee2e2; }
     .rowbtn.edit{ border-color:#7dd3fc; color:#0369a1; }
+    .mtbl .rowbtn.add{ border-color:#86efac; color:#15803d; margin-left:3px; }
+    .mtbl .rowbtn.add:hover{ background:#dcfce7; }
     .rowbtn.ok{ border-color:#86efac; color:#16a34a; margin-left:3px; }
     .mtbl td .ti{ width:72px; padding:1px 2px; font-size:12px; color:#0f172a; border:1px solid #cbd5e1; border-radius:4px; background:#fff; font-family:inherit; }
     .yck{ font-size:11px; color:#475569; cursor:pointer; padding:1px 4px; white-space:nowrap; }
@@ -771,7 +773,27 @@ function focusYear(y){
 }
 function prevRecOf(g, r){ var best=null, same=null; g.recs.forEach(function(x){ if(x.year<r.year && mPrice(x)!==''){ if(!best||x.year>best.year) best=x; if(x.product===r.product && (!same||x.year>same.year)) same=x; } }); return same||best; }
 function prevAnyRecOf(g, r){ var best=null; g.recs.forEach(function(x){ if(x.year<r.year){ if(!best||x.year>best.year) best=x; } }); return best; }
-function addProductRow(gi){ var g=_mGroups[gi]; if(!g) return; var cur=curYear(); var past=g.recs.filter(function(x){return x.year<cur;}).sort(function(a,b){return b.year-a.year;})[0]; var rec=newRecord({ year:cur, category:g.category||'カレンダー', cust:g.cust||'', contact:g.contact||'', user:g.user||'', product:past?past.product:'', naire:past?(past.naire||''):'', vendor:past?(past.vendor||''):'' }); if(hubAppend(COLL, rec)){ hubToast('＋ '+cur+'年の商品を追加（昨年の製品・外注先を引継ぎ）'); render(); } }
+// 操作欄「＋追加」: 押した日付の年で同じ行を追加。ユーザー〜数量(ユーザー/製品/名入れ/外注先/数量)を引継ぎ、
+// 伝票番号は引き継がない(新規受注なので別番号になるため)。売価・仕入・日付は空欄。
+function repeatRow(id){
+  var r=(loadAll()||[]).filter(function(x){ return x.id===id; })[0];
+  if(!r){ hubToast('対象の行が見つかりません'); return; }
+  var y=new Date().getFullYear();
+  var rec=newRecord({
+    year:y, category:r.category||'カレンダー',
+    cust:r.cust||'', contact:r.contact||'', addr:r.addr||'', tel:r.tel||'',
+    user:r.user||'', product:r.product||'', naire:r.naire||'', vendor:r.vendor||'', orderQty:r.orderQty||'',
+    ref:'', denpyoNo:'',            // 伝票番号はリピートしない
+    _manual:true                     // 手入力行 → 資料取込で上書き・削除されない
+  });
+  if(hubAppend(COLL, rec)){
+    _editUnlocked[rec.id]=true;
+    yearShow[y]=true;
+    hubToast('＋ '+y+'年の行を追加（ユーザー〜数量を引継ぎ・伝票番号なし）');
+    buildYears(); buildCats(); render();
+  }
+}
+function addProductRow(gi){ var g=_mGroups[gi]; if(!g) return; var cur=curYear(); var past=g.recs.filter(function(x){return x.year<cur;}).sort(function(a,b){return b.year-a.year;})[0]; var rec=newRecord({ year:cur, category:g.category||'カレンダー', cust:g.cust||'', contact:g.contact||'', user:g.user||'', product:past?past.product:'', naire:past?(past.naire||''):'', vendor:past?(past.vendor||''):'', _manual:true }); if(hubAppend(COLL, rec)){ hubToast('＋ '+cur+'年の商品を追加（昨年の製品・外注先を引継ぎ）'); render(); } }
 // ③ 昨年(cur-1)の受注内容を今年にまとめてコピー(得意先/担当/製品/外注先を引継ぎ・数量/価格/日付は空欄・重複スキップ)
 function bulkCopyLastYear(){
   var cur=curYear(), src=cur-1;
@@ -813,7 +835,8 @@ function yearRow2(r, g){
   var crCell=(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':(isCur?'<span class="dim">自動</span>':'—'));
   var editable=isCur||!!_editUnlocked[r.id];
   var delB='<button class="rowbtn del" onclick="delRow(\''+id+'\')" title="この行を削除">🗑</button>';
-  var actCell='<td class="act'+(editable?' curr':'')+'">'+(isCur?delB:(editable?(delB+'<button class="rowbtn ok" onclick="lockEdit(\''+id+'\')" title="編集を終了">✓</button>'):'<button class="rowbtn edit" onclick="unlockEdit(\''+id+'\')" title="この過去データを編集">✏編集</button>'))+'</td>';
+  var addB='<button class="rowbtn add" onclick="repeatRow(\''+id+'\')" title="この行を今日の年で追加（ユーザー〜数量を引継ぎ・伝票番号なし）">＋追加</button>';
+  var actCell='<td class="act'+(editable?' curr':'')+'">'+(isCur?delB:(editable?(delB+'<button class="rowbtn ok" onclick="lockEdit(\''+id+'\')" title="編集を終了">✓</button>'):'<button class="rowbtn edit" onclick="unlockEdit(\''+id+'\')" title="この過去データを編集">✏編集</button>'))+addB+'</td>';
   if(editable){
     return '<td class="ycol curr"><input class="gedit yedit" value="'+r.year+'" data-id="'+id+'" data-f="year" onchange="onEdit(this)">'+alert+'</td><td class="lead curr">'+inp('user','text')+'</td><td class="lprod curr">'+inp('product','text','prodMaster')+'</td><td class="curr">'+inp('denpyoNo','text')+'</td><td class="d curr"><select class="nsel" data-id="'+id+'" data-f="naire" onchange="onEdit(this)"><option value="">—</option><option'+(r.naire==='有'?' selected':'')+'>有</option><option'+(r.naire==='無'?' selected':'')+'>無</option></select></td><td class="lvendor curr">'+inp('vendor','text','vendorMaster')+'</td><td class="n curr">'+inp('orderQty','num')+'</td><td class="n curr">'+inp('orderPrice','num')+'</td><td class="n curr">'+pctSigned(price,prevP,pyl)+'</td><td class="n curr">'+(saAmt!==''?'¥'+fmt(saAmt):'<span class="dim">自動</span>')+'</td><td class="d curr xw"><select class="nsel" data-id="'+id+'" data-f="plateChg" onchange="onEdit(this)"><option value="">—</option><option'+(r.plateChg==='有'?' selected':'')+'>有</option><option'+(r.plateChg==='無'?' selected':'')+'>無</option></select></td><td class="n curr xw">'+inp('plateCost','num')+'</td><td class="n curr xw">'+inp('shipFee','num')+'</td><td class="n curr xw">'+inp('otherAmt','num')+'</td><td class="n curr">'+inp('cost','num')+costDiff+'</td><td class="n curr">'+(siAmt!==''?'¥'+fmt(siAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+crCell+'</td><td class="d curr">'+inp('telDate','date')+'</td><td class="d curr">'+inp('orderDate','date')+'</td><td class="d curr">'+inp('poDate','date')+'</td><td class="d curr">'+inp('poDue','date')+'</td><td class="d curr">'+inp('poConfirm','text')+'</td><td class="d curr">'+inp('inDate','date')+'</td><td class="d curr">'+inp('delivDate','date')+'</td><td class="d curr">'+inp('deliveryMethod','text')+'</td><td class="lead curr">'+inp('delivTo','text')+'</td><td class="lead curr">'+inp('note','text')+'</td>'+actCell;
   }
@@ -1010,7 +1033,7 @@ function pickDate(el){
 function editGroup(gi, field, val){
   var g=_mGroups[gi]; if(!g) return;
   var ids={}; g.recs.forEach(function(r){ ids[r.id]=1; });
-  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]) r[field]=val; }); })){ buildCats(); render(); }
+  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; if(!r._edited) r._edited={}; r._edited[field]=1; } }); })){ buildCats(); render(); }
 }
 function onEdit(elm){
   var id = elm.getAttribute('data-id'), f = elm.getAttribute('data-f'), val = elm.value;
@@ -1023,6 +1046,8 @@ function onEdit(elm){
     var rec = (db[COLL]||[]).find(function(x){ return x.id === id; });
     if(!rec) throw '対象が見つかりません';
     rec[f] = val; rec._updatedAt = new Date().toISOString();
+    if(!rec._edited) rec._edited={};
+    rec._edited[f]=1;   // 手入力を記録 → 以後の資料取込で上書きしない
   });
   if(ok){ if(elm.style){ elm.style.background = '#dcfce7'; setTimeout(function(){ elm.style.background=''; }, 500); } render(); }
 }
@@ -1607,6 +1632,16 @@ function applyLightRefine(){
     var ok=hubSave(function(db){
       (db[COLL]||[]).forEach(function(r){
         var ref=(r.ref==null?'':String(r.ref)).trim();
+        // ★手入力の保護: onEdit/editGroupで触った項目(_edited)と、手動追加行(_manual)の入力済み項目は
+        //   資料取込で絶対に上書きしない。set() を通さない代入を書かないこと。
+        var ed=r._edited||{};
+        var isEmpty=function(v){ return v===''||v==null; };
+        var set=function(f,v){
+          if(ed[f]) return;                              // 手入力した項目は不可侵
+          if(r._manual && !isEmpty(r[f])) return;        // 手動追加行は入力済みなら触らない
+          if(isEmpty(v)) return;
+          if(r[f]!==v){ r[f]=v; changed=true; }
+        };
         // 顧客名に注記が混入している先(例: 迦葉+注記)を先に正名化し、残りは備考へ逃がす
         for(var mi=0; mi<MANUAL_CUST_RE.length; mi++){
           var rx=MANUAL_CUST_RE[mi][0];
@@ -1617,34 +1652,34 @@ function applyLightRefine(){
           }
         }
         // 名称: refありは受注登録名、refなしはNAME2表記へ
-        if(ref && ref2[ref] && ref2[ref][0]){ if(r.cust!==ref2[ref][0]){ r.cust=ref2[ref][0]; changed=true; } }
-        else { var nm=name2[normCust(r.cust||'')]; if(nm && nm!==r.cust){ r.cust=nm; changed=true; } }
+        if(ref && ref2[ref] && ref2[ref][0]){ set('cust', ref2[ref][0]); }
+        else { var nm=name2[normCust(r.cust||'')]; if(nm) set('cust', nm); }
         // refなし: 受注年|得意先(手動反映後)|製品 で受注登録を照合し伝票番号を付与
-        if(!ref){ var ckc=MANUAL_CUST[r.cust]||r.cust; var no=(window.JU_CMATCH||{})[String(r.year)+'|'+normCust(ckc)+'|'+normProd(r.product)]; if(no){ r.ref=no; ref=no; changed=true; } }
+        if(!ref && !r._manual && !ed.denpyoNo){ var ckc=MANUAL_CUST[r.cust]||r.cust; var no=(window.JU_CMATCH||{})[String(r.year)+'|'+normCust(ckc)+'|'+normProd(r.product)]; if(no){ r.ref=no; ref=no; changed=true; } }
         // refあり: 受注登録の得意先/ユーザー/数量/売価
-        if(ref && ref2[ref]){ var q=ref2[ref]; if(q[0]&&q[0]!==r.cust){ r.cust=q[0]; changed=true; } if(q[1]&&q[1]!==r.user){ r.user=q[1]; changed=true; } if(q[2]!==''&&q[2]!=null){ r.orderQty=q[2]; } if(q[3]!==''&&q[3]!=null){ r.orderPrice=q[3]; } r.denpyoNo=ref; }
+        if(ref && ref2[ref]){ var q=ref2[ref]; set('cust',q[0]); set('user',q[1]); set('orderQty',q[2]); set('orderPrice',q[3]); set('denpyoNo',ref); }
         // 発注(発注受入登録)を伝票番号で: 外注先＝発注先、仕入額＝仕入額合計、仕入単価＝仕入額÷数量
-        if(ref && hat[ref]){ var h=hat[ref]; if(h[0]) r.vendor=h[0]; r.purAmt=h[2]; var hq=Number(r.orderQty)||0; r.cost=(hq>0)?Math.round(h[2]/hq):h[1]; changed=true; }
-        if(MANUAL_CUST[r.cust]){ r.cust=MANUAL_CUST[r.cust]; changed=true; }   // 手動修正(最優先)
+        if(ref && hat[ref]){ var h=hat[ref]; set('vendor',h[0]); set('purAmt',h[2]); var hq=Number(r.orderQty)||0; set('cost',(hq>0)?Math.round(h[2]/hq):h[1]); }
+        if(MANUAL_CUST[r.cust]) set('cust', MANUAL_CUST[r.cust]);   // 手動修正(最優先)
         // 製品名: 日表9号の後ろの相生/天王(得意先名)を除去
         var np=String(r.product||'').replace(/(日表9号)[\s　]*(相生|天王)/,'$1').trim();
-        if(np!==r.product){ r.product=np; changed=true; }
+        if(np!==r.product) set('product', np);
         // 外注先をフルネームに（矢印表記は現行先を採用＋前方一致フォールバック）
         if(r.vendor && r.vendor!=='オリジナル'){
           var vcur=String(r.vendor).split(/[⇒→=]+>?/).pop().trim();
           var nv=normVendor(vcur), vf=vfull[nv];
           if(!vf && nv.length>=2){ var hk=Object.keys(vfull).filter(function(k){ return k.length>=2 && k.indexOf(nv)===0; }); if(hk.length===1) vf=vfull[hk[0]]; }
-          if(vf && vf!==r.vendor){ r.vendor=vf; changed=true; }
+          if(vf) set('vendor', vf);
         }
         // 住所・電話・担当者を顧客リストから補完
         var ci=info[normCust(r.cust||'')];
-        if(ci){ if(ci[0]&&!r.addr){ r.addr=ci[0]; changed=true; } if(ci[1]&&!r.tel){ r.tel=ci[1]; changed=true; } if(ci[2]&&!r.contact){ r.contact=ci[2]; changed=true; } }
+        if(ci){ if(!r.addr) set('addr',ci[0]); if(!r.tel) set('tel',ci[1]); if(!r.contact) set('contact',ci[2]); }
       });
       // 完全同一(受注番号+年+製品+数量+売価)の重複だけ1つに(同一番号の別明細=数量/単価違いは残す)
       var arr2=db[COLL]||[], seen={}, dd=[];
       arr2.forEach(function(r){
         var ref=(r.ref==null?'':String(r.ref)).trim();
-        if(!ref){ dd.push(r); return; }
+        if(!ref || r._manual || r._edited){ dd.push(r); return; }   // 手入力行は絶対に消さない
         var k=ref+'|'+r.year+'|'+normProd(r.product)+'|'+(r.orderQty||'')+'|'+(r.orderPrice||'');
         if(seen[k]===undefined){ seen[k]=dd.length; dd.push(r); }
         else { var i=seen[k], keep=dd[i]; if(keep._src!=='旧台帳移行' && r._src==='旧台帳移行'){ dd[i]=r; } changed=true; }   // 発注日/担当/備考を持つ旧台帳を優先
