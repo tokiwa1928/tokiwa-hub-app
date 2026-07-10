@@ -781,6 +781,7 @@ function parseCust(s){ s=String(s||'').replace(/[　\s]+/g,' ').trim(); var cont
 // ===== エクセル風オートフィルタ: 全列 =====
 // 列ごとに「その列以外のフィルタを適用した結果」から選択肢を作る(絞るほど候補が減るカスケード方式)
 var _filters={};   // field -> 選択値(文字列)。空文字/未設定なら絞らない
+var _wordFilters={}; // field -> フリーワード(含む一致)。selectの「🔍ワードで絞る…」から設定
 // 列定義: [フィールド名, 見出し, 値の取り方] ※前年比は他行との比較で決まるためフィルタ対象外
 var FILTER_COLS=[
   'cust','contact','addr','tel','_status','year','user','product','denpyoNo','naire','vendor',
@@ -812,6 +813,10 @@ function passFilters(r, exceptField){
     if(!_filters[k] || k===exceptField) continue;
     if(fVal(r,k)!==_filters[k]) return false;
   }
+  for(var w in _wordFilters){
+    if(!_wordFilters[w] || w===exceptField) continue;
+    if(fVal(r,w).toLowerCase().indexOf(_wordFilters[w].toLowerCase())<0) return false;
+  }
   return true;
 }
 // 見出しに入れる<select>。数値/日付は自然順、それ以外は日本語順
@@ -826,14 +831,27 @@ function filterHtml(f){
   list.sort(numeric
     ? function(a,b){ return parseFloat(a.replace(/[,%]/g,''))-parseFloat(b.replace(/[,%]/g,'')); }
     : function(a,b){ return a.localeCompare(b,'ja'); });
-  var opts='<option value="">（すべて）</option>'+list.map(function(v){
+  var wq=_wordFilters[f]||'';
+  var opts='<option value="">（すべて）</option>'
+    +'<option value="__word__">🔍 ワードで絞る…</option>'
+    +(wq?('<option value="__wq__" selected>🔍 '+hubEsc(wq)+'</option>'):'')
+    +list.map(function(v){
     return '<option value="'+hubEsc(v)+'"'+(v===cur?' selected':'')+'>'+hubEsc(v)+'</option>';
   }).join('');
-  return '<select class="hfilter'+(cur?' on':'')+'" title="この列で絞り込み（'+list.length+'件）" onchange="setFilter(\''+f+'\',this.value)">'+opts+'</select>';
+  return '<select class="hfilter'+((cur||wq)?' on':'')+'" title="この列で絞り込み（'+list.length+'件）" onchange="setFilter(\''+f+'\',this.value)">'+opts+'</select>';
 }
-function setFilter(f, v){ if(v) _filters[f]=v; else delete _filters[f]; render(); }
-function clearFilters(){ _filters={}; render(); }
-function activeFilterCount(){ var n=0; for(var k in _filters){ if(_filters[k]) n++; } return n; }
+function setFilter(f, v){
+  if(v==='__word__'){
+    var q=prompt('この列をワードで絞り込み（含む一致・空欄で解除）', _wordFilters[f]||'');
+    if(q!==null){ q=q.trim(); if(q) _wordFilters[f]=q; else delete _wordFilters[f]; }
+    render(); return;
+  }
+  if(v==='__wq__'){ return; }
+  if(v) _filters[f]=v; else { delete _filters[f]; delete _wordFilters[f]; }
+  render();
+}
+function clearFilters(){ _filters={}; _wordFilters={}; render(); }
+function activeFilterCount(){ var n=0; for(var k in _filters){ if(_filters[k]) n++; } for(var w in _wordFilters){ if(_wordFilters[w]) n++; } return n; }
 function matrixBase(){
   return filterPool().filter(function(r){ return passFilters(r, null); });
 }
