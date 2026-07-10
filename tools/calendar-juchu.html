@@ -212,6 +212,7 @@
       </select>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
+      <button class="btn" id="fClear" onclick="clearFilters()" style="display:none">✕ フィルタ解除</button>
       <span class="rslegend" title="行の色は進捗を表します（失注が最優先）">
         <span><i style="background:#fef9c3"></i>TEL日</span>
         <span><i style="background:#ffe4c4"></i>受注日</span>
@@ -405,8 +406,9 @@
     .mtbl td.lead.lc-lost { background:#ece0fb !important; }
     /* 通常行の罫線も少しはっきりさせる */
     .mtbl tbody td{ border-bottom-color:#d7dbe0; border-right-color:#e2e5ea; }
-    .mtbl th.lead .hfilter{ display:block; width:100%; margin-top:3px; font-size:10px; padding:1px 2px; border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#0f172a; font-family:inherit; max-width:140px; }
-    .mtbl th.lead .hfilter.on{ background:#fde68a; border-color:#f59e0b; font-weight:700; }
+    .mtbl thead th .hfilter{ display:block; width:100%; max-width:100%; margin-top:3px; font-size:9px; padding:1px 0 1px 2px; border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#0f172a; font-family:inherit; box-sizing:border-box; }
+    .mtbl thead th .hfilter.on{ background:#fde68a; border-color:#f59e0b; font-weight:700; }
+    .mtbl thead th{ vertical-align:top; }
     .mtbl td.stcol{ white-space:nowrap; }
     .stbadge{ display:inline-block; font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:9px; border:1px solid rgba(0,0,0,.12); line-height:1.35; }
     .stbadge.st-none { background:#f1f5f9; color:#64748b; }
@@ -765,30 +767,66 @@ function mYmd(s){ if(!s) return ''; var m=String(s).match(/(\d{4})-(\d{2})-(\d{2
 function cleanProd(p){ return String(p||'').replace(/^20\d\d年カレンダー[_\s]?/,'').trim(); }
 // 顧客名から担当者(◯◯様/さま/さん・担当◯◯)を分離 → {company, contact}
 function parseCust(s){ s=String(s||'').replace(/[　\s]+/g,' ').trim(); var contact=''; var m=s.match(/(?:担当\s*)?([^\s]+?)(様|さま|さん)$/); if(m){ contact=m[1]+m[2]; s=s.slice(0,m.index).replace(/担当\s*$/,'').trim(); } return { company:s, contact:contact }; }
-// エクセルのようなフィルタ: 得意先ヘッダーに選択リストを出す(▼で1社に絞る)
-var _custFilter='';
-function custFilterHtml(){
-  var names={};
-  loadAll().forEach(function(r){ var c=(r.cust||'').trim(); if(c) names[c]=1; });
-  var list=Object.keys(names).sort(function(a,b){ return a.localeCompare(b,'ja'); });
-  if(_custFilter && list.indexOf(_custFilter)<0) list.push(_custFilter);   // 絞り込み中の値は必ず残す
-  var opts='<option value="">（すべて）</option>'+list.map(function(c){
-    return '<option value="'+hubEsc(c)+'"'+(c===_custFilter?' selected':'')+'>'+hubEsc(c)+'</option>';
-  }).join('');
-  return '<select class="hfilter'+(_custFilter?' on':'')+'" title="得意先で絞り込み" onchange="setCustFilter(this.value)" onclick="event.stopPropagation()">'+opts+'</select>';
+// ===== エクセル風オートフィルタ: 全列 =====
+// 列ごとに「その列以外のフィルタを適用した結果」から選択肢を作る(絞るほど候補が減るカスケード方式)
+var _filters={};   // field -> 選択値(文字列)。空文字/未設定なら絞らない
+// 列定義: [フィールド名, 見出し, 値の取り方] ※前年比は他行との比較で決まるためフィルタ対象外
+var FILTER_COLS=[
+  'cust','contact','addr','tel','_status','year','user','product','denpyoNo','naire','vendor',
+  'orderQty','orderPrice',null,'_saleAmt','plateChg','plateCost','shipFee','otherAmt',
+  'cost','_purAmt','_costRatio','telDate','orderDate','lostDate','poDate','poDue','poConfirm',
+  'inDate','delivDate','deliveryMethod','delivTo','note'
+];
+function fVal(r, f){
+  if(f==='_status')  return STATUS_LABEL[rowStatusKey(r)];
+  if(f==='_saleAmt'){ var q=mQty(r), p=mPrice(r); return (q!==''&&p!=='')?String(Number(q)*Number(p)):''; }
+  if(f==='_purAmt'){ var q2=mQty(r), c=mCost(r); var v=(r.purAmt!==''&&r.purAmt!=null)?Number(r.purAmt):((q2!==''&&c!=='')?Number(q2)*Number(c):''); return v===''?'':String(v); }
+  if(f==='_costRatio'){ var cr=costRatioVal(r); return cr===''?'':fmtPct(cr); }
+  if(f==='tel')     return String(r.tel==null?'':r.tel);
+  if(f==='product') return cleanProd(r.product);
+  var v2=r[f]; return (v2==null)?'':String(v2);
 }
-function setCustFilter(v){ _custFilter=v||''; render(); }
-function matrixBase(){
-  // 年度では絞らない（全年表示）。カテゴリ＋検索のみ。
+// カテゴリ＋検索だけ適用した母集合(フィルタは含めない)
+function filterPool(){
   var q=(document.getElementById('q').value||'').trim().toLowerCase();
   var cat=curCat();
   return loadAll().filter(function(r){
     if(cat && r.category!==cat) return false;
-    if(_custFilter && (r.cust||'')!==_custFilter) return false;
     if(!q) return true;
     return ((r.cust||'')+(r.user||'')+(r.product||'')+(r.staff||'')).toLowerCase().indexOf(q)>=0;
   });
 }
+function passFilters(r, exceptField){
+  for(var k in _filters){
+    if(!_filters[k] || k===exceptField) continue;
+    if(fVal(r,k)!==_filters[k]) return false;
+  }
+  return true;
+}
+// 見出しに入れる<select>。数値/日付は自然順、それ以外は日本語順
+function filterHtml(f){
+  if(!f) return '';
+  var pool=filterPool(), set={};
+  pool.forEach(function(r){ if(passFilters(r,f)){ var v=fVal(r,f); if(v!=='') set[v]=1; } });
+  var list=Object.keys(set);
+  var cur=_filters[f]||'';
+  if(cur && list.indexOf(cur)<0) list.push(cur);   // 絞り込み中の値は必ず残す
+  var numeric=list.every(function(x){ return /^-?[\d,]+(\.\d+)?%?$/.test(x); });
+  list.sort(numeric
+    ? function(a,b){ return parseFloat(a.replace(/[,%]/g,''))-parseFloat(b.replace(/[,%]/g,'')); }
+    : function(a,b){ return a.localeCompare(b,'ja'); });
+  var opts='<option value="">（すべて）</option>'+list.map(function(v){
+    return '<option value="'+hubEsc(v)+'"'+(v===cur?' selected':'')+'>'+hubEsc(v)+'</option>';
+  }).join('');
+  return '<select class="hfilter'+(cur?' on':'')+'" title="この列で絞り込み（'+list.length+'件）" onchange="setFilter(\''+f+'\',this.value)">'+opts+'</select>';
+}
+function setFilter(f, v){ if(v) _filters[f]=v; else delete _filters[f]; render(); }
+function clearFilters(){ _filters={}; render(); }
+function activeFilterCount(){ var n=0; for(var k in _filters){ if(_filters[k]) n++; } return n; }
+function matrixBase(){
+  return filterPool().filter(function(r){ return passFilters(r, null); });
+}
+
 function crColor(cr){ return cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a'; }
 function pctMini(cur,prev,upColor){ if(cur===''||prev==='')return ''; var d=cur-prev; if(d===0)return ''; var up=d>0,pct=d/prev*100; return '<span class="pm" style="color:'+(up?upColor:'#2563eb')+'">'+(up?'▲':'▼')+Math.abs(pct).toFixed(1)+'%</span>'; }
 function mQty(r){ return (r.orderQty!==''&&r.orderQty!=null)?r.orderQty:((r.pyQty!==''&&r.pyQty!=null)?r.pyQty:''); }
@@ -855,7 +893,7 @@ function renderTrend(){
   buildMasters();
   var showYears=allYears.filter(function(y){ return yearShow[y]!==false; });
   renderYearStats(rows, cur, allYears);
-  document.getElementById('mhead').innerHTML='<tr><th class="lead">得意先'+custFilterHtml()+'</th><th class="lead">担当者</th><th class="lead">住所</th><th class="lead">電話 / FAX</th><th class="d">ステータス</th><th class="ycol">年</th><th class="lead">ユーザー</th><th class="lead">製品</th><th class="lead">伝票番号</th><th class="d">名入れ</th><th class="lead">外注先</th><th class="n">数量</th><th class="n">売価</th><th class="n">前年比(売価)</th><th class="n">金額</th><th class="d xw">版変更<br>有無</th><th class="n xw">版代</th><th class="n xw">送料</th><th class="n xw">その他<br>金額</th><th class="n">仕入単価</th><th class="n">仕入額</th><th class="n">原価率</th><th class="d">TEL日</th><th class="d">受注日</th><th class="d">失注日</th><th class="d">発注日</th><th class="d">発注納期</th><th class="d">発注確認</th><th class="d">製品納入</th><th class="d">納品日</th><th class="d">納品方法</th><th class="lead">納品先</th><th class="lead">備考</th><th class="d">操作</th></tr>';
+  document.getElementById('mhead').innerHTML='<tr><th class="lead">得意先'+''+filterHtml('cust')+'</th><th class="lead">担当者'+filterHtml('contact')+'</th><th class="lead">住所'+filterHtml('addr')+'</th><th class="lead">電話 / FAX'+filterHtml('tel')+'</th><th class="d">ステータス'+filterHtml('_status')+'</th><th class="ycol">年'+filterHtml('year')+'</th><th class="lead">ユーザー'+filterHtml('user')+'</th><th class="lead">製品'+filterHtml('product')+'</th><th class="lead">伝票番号'+filterHtml('denpyoNo')+'</th><th class="d">名入れ'+filterHtml('naire')+'</th><th class="lead">外注先'+filterHtml('vendor')+'</th><th class="n">数量'+filterHtml('orderQty')+'</th><th class="n">売価'+filterHtml('orderPrice')+'</th><th class="n">前年比(売価)</th><th class="n">金額'+filterHtml('_saleAmt')+'</th><th class="d xw">版変更<br>有無'+filterHtml('plateChg')+'</th><th class="n xw">版代'+filterHtml('plateCost')+'</th><th class="n xw">送料'+filterHtml('shipFee')+'</th><th class="n xw">その他<br>金額'+filterHtml('otherAmt')+'</th><th class="n">仕入単価'+filterHtml('cost')+'</th><th class="n">仕入額'+filterHtml('_purAmt')+'</th><th class="n">原価率'+filterHtml('_costRatio')+'</th><th class="d">TEL日'+filterHtml('telDate')+'</th><th class="d">受注日'+filterHtml('orderDate')+'</th><th class="d">失注日'+filterHtml('lostDate')+'</th><th class="d">発注日'+filterHtml('poDate')+'</th><th class="d">発注納期'+filterHtml('poDue')+'</th><th class="d">発注確認'+filterHtml('poConfirm')+'</th><th class="d">製品納入'+filterHtml('inDate')+'</th><th class="d">納品日'+filterHtml('delivDate')+'</th><th class="d">納品方法'+filterHtml('deliveryMethod')+'</th><th class="lead">納品先'+filterHtml('delivTo')+'</th><th class="lead">備考'+filterHtml('note')+'</th><th class="d">操作</th></tr>';
   var mb=document.getElementById('mbody');
   if(!_mGroups.length){ mb.innerHTML='<tr><td colspan="34" style="padding:30px;text-align:center;color:#94a3b8">データがありません。</td></tr>'; return; }
   var ff=(document.getElementById('fFollow')||{}).value||'';
@@ -881,6 +919,8 @@ function renderTrend(){
     recs.forEach(function(r, ri){ html+='<tr class="'+(ri===0?'gstart':'')+(r.year===cur?' curr':'')+rowColorClass(r)+'">'+(ri===0?lead:'')+yearRow2(r, g)+'</tr>'; });
   });
   mb.innerHTML=html;
+  var fc=activeFilterCount(), fb=document.getElementById('fClear');
+  if(fb){ fb.style.display = fc?'':'none'; fb.textContent='✕ フィルタ解除 ('+fc+')'; }
   autoGrowTA();   // 住所・電話を内容の高さに合わせて全文表示
   syncTopScroll();   // 上部の横スクロールバーの幅・位置を合わせる
 }
