@@ -1246,19 +1246,52 @@ function cardDrop(e, targetId, st){
 
 // 1セル編集 → 即保存
 // M/D表示のままクリックでカレンダーを開く（type=dateを隠して使い、選んだ日付をそのまま保存）
-function pickDate(el){
+// 日付セルのカレンダー。隠し<input type="date">を「クリックしたセルの真上」に重ねて開く。
+// 画面外(left:-9999px)に置くとカレンダーも画面外に出て操作できないため、位置合わせが必須。
+function _hdateEl(){
   var dp=document.getElementById('_hdate');
-  if(!dp){ dp=document.createElement('input'); dp.type='date'; dp.id='_hdate'; dp.style.cssText='position:fixed;left:-9999px;top:0;opacity:0'; document.body.appendChild(dp); }
+  if(!dp){
+    dp=document.createElement('input'); dp.type='date'; dp.id='_hdate';
+    dp.setAttribute('tabindex','-1');
+    document.body.appendChild(dp);
+  }
+  return dp;
+}
+function _hdateHide(dp){ dp.style.cssText='position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;'; }
+function pickDate(el){
+  var dp=_hdateEl();
+  var r=el.getBoundingClientRect();
+  // 透明にしてセルへ重ねる → カレンダーがセルの直下に開く
+  dp.style.cssText='position:fixed;z-index:300;left:'+r.left+'px;top:'+r.top+'px;'
+    +'width:'+Math.max(r.width,24)+'px;height:'+Math.max(r.height,18)+'px;'
+    +'opacity:0;border:0;padding:0;margin:0;background:transparent;';
   var cur=el.getAttribute('data-val')||'';
   if(!cur){ var yr=el.getAttribute('data-yr')||curYear(); var dm=String(el.value).match(/(\d{1,2})\D+(\d{1,2})/); if(dm) cur=yr+'-'+('0'+dm[1]).slice(-2)+'-'+('0'+dm[2]).slice(-2); }
   dp.value=cur;
+  var done=false;
   dp.onchange=function(){
+    if(done) return; done=true;
     var v=dp.value, id=el.getAttribute('data-id'), f=el.getAttribute('data-f');
-    var ok=hubSave(function(db){ var rec=(db[COLL]||[]).find(function(x){return x.id===id;}); if(!rec) throw '対象なし'; rec[f]=v; rec._updatedAt=new Date().toISOString(); });
-    if(ok) render();
+    var ok=hubSave(function(db){
+      var rec=(db[COLL]||[]).find(function(x){ return x.id===id; });
+      if(!rec) throw '対象なし';
+      rec[f]=v; rec._updatedAt=new Date().toISOString();
+      if(!rec._edited) rec._edited={};
+      rec._edited[f]=1;   // 手入力を記録 → 資料取込で上書きしない
+    });
+    _hdateHide(dp);
+    if(!ok) return;
+    // その行だけ更新（全体再描画は重いので避ける）
+    el.value=mYmd(v); el.setAttribute('data-val', v||'');
+    if(el.style){ el.style.background='#dcfce7'; setTimeout(function(){ el.style.background=''; }, 500); }
+    if(_ROWCOLOR_FIELDS[f]) refreshRowColor(el, id);
   };
-  if(dp.showPicker){ try{ dp.showPicker(); }catch(e){ dp.focus(); } } else { dp.focus(); }
+  dp.onblur=function(){ setTimeout(function(){ if(!done) _hdateHide(dp); }, 200); };
+  // showPicker はユーザー操作と同じタスク内で呼ぶ必要がある(遅延させると無効)
+  dp.focus({preventScroll:true});
+  if(dp.showPicker){ try{ dp.showPicker(); }catch(e){ console.warn('showPicker失敗', e); } }
 }
+
 // 得意先グループ単位の項目編集(得意先/担当者/住所/電話)＝そのグループ全行に反映
 // 得意先セル: クリックでマスタ候補(datalist)つき入力欄に切替。変更確定 or フォーカス外れで表示に戻す。
 function startGEdit(el, gi, f){
