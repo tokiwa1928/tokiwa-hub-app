@@ -212,7 +212,7 @@
       </select>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
-      <button class="btn" id="fClear" onclick="clearFilters()" style="display:none">✕ フィルタ解除</button>
+      <button class="btn" id="fClear" onclick="clearFilters()" title="すべての列の絞り込みを解除します">✕ フィルタクリア</button>
       <span class="rslegend" title="行の色は進捗を表します（失注が最優先）">
         <span><i style="background:#fef9c3"></i>TEL日</span>
         <span><i style="background:#ffe4c4"></i>受注日</span>
@@ -949,7 +949,13 @@ function renderTrend(){
   });
   mb.innerHTML=html;
   var fc=activeFilterCount(), fb=document.getElementById('fClear');
-  if(fb){ fb.style.display = fc?'':'none'; fb.textContent='✕ フィルタ解除 ('+fc+')'; }
+  if(fb){
+    fb.textContent = fc ? ('✕ フィルタクリア ('+fc+')') : '✕ フィルタクリア';
+    fb.disabled = !fc;
+    fb.style.opacity = fc?'':'.45';
+    fb.style.background = fc?'#fde68a':'';
+    fb.style.borderColor = fc?'#f59e0b':'';
+  }
   autoGrowTA();   // 住所・電話を内容の高さに合わせて全文表示
   syncTopScroll();   // 上部の横スクロールバーの幅・位置を合わせる
 }
@@ -1469,6 +1475,51 @@ function hubTelFaxMap(db){
   return map;
 }
 // ①1セルに混ざったFAXを分離(初回のみ) ②本体HUBに入力済みのTEL/FAXを反映(毎回・手入力は保護)
+// 「〃」「、」「々」など“上と同じ”を表す記号だけの得意先
+var SYM_CUST=/^[\s　〃々"″、，,・‥…]*$/;
+// 既存データの修復: 記号の得意先を、同じ取込元・同じ区分の直前の行の社名で埋める
+// (レコードは取込時の行順で配列に入っているため、直前の行＝上の行)
+function fixCarryCust(){
+  var db=hubLoad(); if(!db || !Array.isArray(db[COLL])) return;
+  var need=db[COLL].some(function(r){ var c=String(r.cust||''); return c!=='' && SYM_CUST.test(c); });
+  if(!need) return;
+  var fixed=0;
+  hubSave(function(d){
+    var last={};
+    (d[COLL]||[]).forEach(function(r){
+      var key=(r._src||'')+'|'+(r.category||'');
+      var c=String(r.cust||'');
+      if(SYM_CUST.test(c)){
+        var ed=r._edited||{};
+        if(!ed.cust && last[key]){ r.cust=last[key]; fixed++; }
+      } else { last[key]=c; }
+    });
+  });
+  if(fixed){ _masterDirty=true; hubToast('得意先の「〃」など'+fixed+'件を上の行の社名で補完しました'); buildCats(); render(); }
+}
+// 本体HUBの得意先マスタ(db.master.cust)の表記を正として、台帳の得意先名を合わせる
+function syncCustFromHub(){
+  var db=hubLoad(); if(!db || !db.master || !Array.isArray(db.master.cust)) return;
+  var map={}, dup={};
+  db.master.cust.forEach(function(c){
+    var org=(typeof c==='string'?c:(c&&c.org||'')).trim(); if(!org) return;
+    var k=normCust(org); if(!k) return;
+    if(map[k]!==undefined && map[k]!==org) dup[k]=1;   // 表記ゆれが複数 → 触らない
+    map[k]=org;
+  });
+  var changed=0;
+  hubSave(function(d){
+    (d[COLL]||[]).forEach(function(r){
+      var ed=r._edited||{};
+      if(ed.cust) return;                       // 手入力は保護
+      var c=String(r.cust||''); if(!c || SYM_CUST.test(c)) return;
+      var k=normCust(c);
+      if(dup[k] || !map[k] || map[k]===c) return;
+      r.cust=map[k]; changed++;
+    });
+  });
+  if(changed){ _masterDirty=true; hubToast('得意先'+changed+'件をHUBの得意先マスタの表記に合わせました'); buildCats(); render(); }
+}
 function syncTelFax(){
   var db=hubLoad(); if(!db) return;
   var needSplit=!(db._calMig||{})['CAL-TELFAX-1'];
@@ -2062,6 +2113,7 @@ function importOldLedger(wb, quiet){
     for(var r=map.hr+1; r<aoa.length; r++){
       var row=aoa[r]; if(!row) continue;
       var cust=clean(at(row,map.cust)), name=clean(at(row,map.name)), hin=map.code!=null?clean(at(row,map.code)):'';
+      if(SYM_CUST.test(cust)) cust='';               // 「〃」「、」等の“上と同じ”記号は空欄扱い
       if(!cust && !name && !hin) continue;
       if(cust) lastCust=cust; else cust=lastCust;   // 顧客名空欄は直前の得意先を引き継ぐ
       var pc=parseCust(cust); var contact=pc.contact; cust=pc.company;   // 担当者を分離
@@ -2303,7 +2355,7 @@ function autoMigrate(){
 // 起動
 buildYears(); buildCats(); setView('matrix'); autoMigrate();
 // 台帳の外注先を本体の外注先マスタへ反映(追加＋名称修正のみ・1回だけ)。移行の遅延ロード完了後に実行。
-setTimeout(function(){ try{ syncVendorMaster(); syncTelFax(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
+setTimeout(function(){ try{ fixCarryCust(); syncCustFromHub(); syncVendorMaster(); syncTelFax(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
 try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 </body>
