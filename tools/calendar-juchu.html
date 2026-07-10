@@ -1625,53 +1625,122 @@ function quotePDF(){
     setTimeout(function(){ window.print(); }, 120);   // 画像描画を待つ
   });
 }
+// ===== 見積書 Excel: 添付ファイルそのものを雛形にし、値だけ差し替える =====
+// SheetJSでは書式・罫線・画像を書き出せないため、xlsx(=zip)を直接書き換える。
+// 変更しないエントリは圧縮済みバイトを流用し、差し替えたシートだけ無圧縮(store)で書き戻す。
+function loadQuoteTpl(cb){
+  if(window.QUOTE_TPL) return cb(true);
+  var sc=document.createElement('script'); sc.src='calendar-juchu-quote-tpl.js?v=1';
+  sc.onload=function(){ cb(true); }; sc.onerror=function(){ cb(false); };
+  document.head.appendChild(sc);
+}
+var _CRCT=(function(){ var t=new Int32Array(256); for(var n=0;n<256;n++){ var c=n; for(var k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c; } return t; })();
+function crc32(buf){ var c=-1; for(var i=0;i<buf.length;i++) c=_CRCT[(c^buf[i])&0xff]^(c>>>8); return (c^-1)>>>0; }
+function b64ToBytes(b64){ var bin=atob(b64), a=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) a[i]=bin.charCodeAt(i); return a; }
+function zipRead(buf){
+  var dv=new DataView(buf.buffer, buf.byteOffset, buf.byteLength), eo=-1;
+  for(var i=buf.length-22; i>=0 && i>buf.length-70000; i--){ if(dv.getUint32(i,true)===0x06054b50){ eo=i; break; } }
+  if(eo<0) throw 'zip: EOCDが見つかりません';
+  var n=dv.getUint16(eo+10,true), off=dv.getUint32(eo+16,true), out=[], p=off, td=new TextDecoder();
+  for(var k=0;k<n;k++){
+    if(dv.getUint32(p,true)!==0x02014b50) throw 'zip: 中央ディレクトリ破損';
+    var method=dv.getUint16(p+10,true), crc=dv.getUint32(p+16,true);
+    var csize=dv.getUint32(p+20,true), size=dv.getUint32(p+24,true);
+    var nlen=dv.getUint16(p+28,true), elen=dv.getUint16(p+30,true), clen=dv.getUint16(p+32,true);
+    var lho=dv.getUint32(p+42,true);
+    var name=td.decode(buf.subarray(p+46, p+46+nlen));
+    var lnlen=dv.getUint16(lho+26,true), lelen=dv.getUint16(lho+28,true);
+    var ds=lho+30+lnlen+lelen;
+    out.push({name:name, method:method, crc:crc, size:size, raw:buf.subarray(ds, ds+csize)});
+    p+=46+nlen+elen+clen;
+  }
+  return out;
+}
+async function inflateRaw(bytes){
+  var ds=new DecompressionStream('deflate-raw');
+  var ab=await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
+  return new Uint8Array(ab);
+}
+function zipWrite(entries){
+  var enc=new TextEncoder(), parts=[], cd=[], off=0;
+  entries.forEach(function(e){
+    var nb=enc.encode(e.name);
+    var lh=new Uint8Array(30+nb.length), d=new DataView(lh.buffer);
+    d.setUint32(0,0x04034b50,true); d.setUint16(4,20,true); d.setUint16(8,e.method,true);
+    d.setUint32(14,e.crc,true); d.setUint32(18,e.raw.length,true); d.setUint32(22,e.size,true);
+    d.setUint16(26,nb.length,true); lh.set(nb,30);
+    parts.push(lh, e.raw);
+    var ch=new Uint8Array(46+nb.length), c=new DataView(ch.buffer);
+    c.setUint32(0,0x02014b50,true); c.setUint16(4,20,true); c.setUint16(6,20,true); c.setUint16(10,e.method,true);
+    c.setUint32(16,e.crc,true); c.setUint32(20,e.raw.length,true); c.setUint32(24,e.size,true);
+    c.setUint16(28,nb.length,true); c.setUint32(42,off,true); ch.set(nb,46);
+    cd.push(ch); off += lh.length + e.raw.length;
+  });
+  var cdLen=cd.reduce(function(a,b){return a+b.length;},0);
+  var eo=new Uint8Array(22), e2=new DataView(eo.buffer);
+  e2.setUint32(0,0x06054b50,true); e2.setUint16(8,entries.length,true); e2.setUint16(10,entries.length,true);
+  e2.setUint32(12,cdLen,true); e2.setUint32(16,off,true);
+  return new Blob(parts.concat(cd,[eo]), {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+function xmlEsc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// セル置換。スタイル(s属性)は必ず引き継ぐ＝罫線・フォント・書式が崩れない
+function setCell(xml, ref, opt){
+  var re=new RegExp('<c r="'+ref+'"([^>/]*)(?:/>|>[\\s\\S]*?</c>)');
+  var m=xml.match(re); if(!m) return xml;
+  var st=(m[1].match(/s="\d+"/)||[''])[0];
+  var attr=' r="'+ref+'"'+(st?' '+st:''), body;
+  if(opt.f!=null){ body='<f>'+xmlEsc(opt.f)+'</f>'+(opt.v!=null?'<v>'+opt.v+'</v>':''); }
+  else if(opt.n!=null){ body='<v>'+opt.n+'</v>'; }
+  else if(opt.s){ attr+=' t="inlineStr"'; body='<is><t xml:space="preserve">'+xmlEsc(opt.s)+'</t></is>'; }
+  else { return xml.replace(re, '<c'+attr+'/>'); }
+  return xml.replace(re, '<c'+attr+'>'+body+'</c>');
+}
+function excelSerial(iso){ return Math.round((new Date(iso+'T00:00:00Z').getTime()-Date.UTC(1899,11,30))/86400000); }
+function quoteExcelXml(xml, q){
+  xml=setCell(xml,'D8',{n:excelSerial(q.date)});
+  xml=setCell(xml,'B11',{s:q.cust});
+  xml=setCell(xml,'E11',{s:q.hon});
+  xml=setCell(xml,'H12',{s:'担当： '+q.staff});
+  xml=setCell(xml,'B35',{s:q.note||''});
+  for(var i=0;i<QUOTE_ROWS;i++){
+    var r=20+i, l=q.lines[i];
+    var qty=(l&&l.qty!==''&&l.qty!=null)?Number(l.qty):null;
+    var pr =(l&&l.price!==''&&l.price!=null)?Number(l.price):null;
+    xml=setCell(xml,'B'+r,{s:l?l.name:''});
+    xml=setCell(xml,'F'+r,(qty!=null)?{n:qty}:{s:''});
+    xml=setCell(xml,'G'+r,{s:(l&&qty!=null)?(l.unit||''):''});
+    xml=setCell(xml,'H'+r,(pr!=null)?{n:pr}:{s:''});
+    xml=setCell(xml,'I'+r,{f:'IF(ISBLANK(H'+r+'),"",H'+r+'*F'+r+')', v:(qty!=null&&pr!=null)?(qty*pr):null});
+  }
+  // 元ファイルの I34 は SUM(I18:I22) で明細13行を拾えないため範囲を正す
+  xml=setCell(xml,'I34',{f:'SUM(I20:I32)', v:q.sub});
+  xml=setCell(xml,'I35',{f:'I34*0.1',      v:q.tax});
+  xml=setCell(xml,'I36',{f:'SUM(I34:I35)', v:q.tot});
+  xml=setCell(xml,'B15',{f:'I36',          v:q.tot});
+  return xml;
+}
 function quoteExcel(){
   var q=buildQuoteSheet();
-  // 添付書式(20260708_アオノ様_カレンダー見積.xlsx / シート「見積書」)と同じセル位置で書き出す
-  var A=[]; for(var r=0;r<48;r++){ A.push(new Array(12).fill(null)); }
-  var put=function(row,col,v){ A[row-1][col-1]=v; };   // 1始まり(行,列)
-  put(3,2,'E S T I M A T E');
-  put(6,2,'御　　見　　積　　書');
-  put(8,2,'D A T E .');   put(8,4,q.dateDot);
-  put(9,8,QUOTE_CO.addr);
-  put(11,2,q.cust);       put(11,5,q.hon);
-  put(12,8,'担当： '+q.staff);
-  put(14,2,'A M O U N T　(税込金額)');
-  put(15,2,q.tot);
-  put(18,2,'D E S C R I P T I O N （品名）'); put(18,6,'Q T Y （数量）');
-  put(18,8,'P R I C E （単価）');             put(18,9,'　A M O U N T （金額）');
-  for(var i=0;i<QUOTE_ROWS;i++){
-    var l=q.lines[i]; if(!l) continue;
-    var r=20+i;
-    put(r,2,l.name||'');
-    if(l.qty!=='' && l.qty!=null) put(r,6,Number(l.qty));
-    put(r,7,l.unit||'');
-    if(l.price!=='' && l.price!=null) put(r,8,Number(l.price));
-    if(l.qty && l.price) put(r,9,Number(l.qty)*Number(l.price));
-  }
-  put(34,2,'Notes (備考):');
-  if(q.note) put(35,2,q.note);
-  put(34,8,'S U B T O T A L (小計) :');   put(34,9,q.sub);
-  put(35,8,'T A X (税) :');               put(35,9,q.tax);
-  put(36,8,'A M O U N T  （合計金額） :'); put(36,9,q.tot);
-  put(43,2,'料金は見積り段階であり、印刷及びデザイン (版) の内容・用いる技術仕様などにより変更になる場合があります。');
-  put(44,1,'T H A N K  Y O U .');
-  put(45,1,'We hope you will be satisfied with our proposal.');
-
-  var ws=XLSX.utils.aoa_to_sheet(A);
-  var M=function(r1,c1,r2,c2){ return {s:{r:r1-1,c:c1-1}, e:{r:r2-1,c:c2-1}}; };
-  ws['!merges']=[ M(3,2,5,4), M(6,2,6,4), M(9,8,11,9), M(11,2,12,4), M(11,5,12,5),
-    M(14,2,14,9), M(15,2,15,9), M(18,2,18,5), M(18,6,18,7), M(35,2,39,4),
-    M(43,2,43,9), M(44,1,44,10), M(45,1,45,10) ];
-  for(var r=19;r<=32;r++) ws['!merges'].push(M(r,2,r,5));   // 品名は B:E 結合
-  ws['!cols']=[{wch:5.6},{wch:20},{wch:9},{wch:9},{wch:9},{wch:11.9},{wch:6},{wch:20},{wch:14},{wch:5.6},{wch:9},{wch:9}];
-  // 金額系は ¥#,##0
-  ['B15','I34','I35','I36'].forEach(function(a){ if(ws[a]) ws[a].z='"¥"#,##0'; });
-  for(var i2=0;i2<QUOTE_ROWS;i2++){ var rr=20+i2; ['F','H','I'].forEach(function(c){ var a=c+rr; if(ws[a]) ws[a].z='#,##0'; }); }
-  var wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '見積書');
-  var fn=(q.date.replace(/-/g,''))+'_'+(q.cust||'見積').replace(/[\/:*?"<>|]/g,'')+'様_見積.xlsx';
-  XLSX.writeFile(wb, fn);
+  loadQuoteTpl(function(ok){
+    if(!ok){ hubToast('❌ 見積書テンプレートを読み込めませんでした'); return; }
+    (async function(){
+      try{
+        var entries=zipRead(b64ToBytes(window.QUOTE_TPL));
+        var sheet=entries.filter(function(e){ return e.name==='xl/worksheets/sheet1.xml'; })[0];
+        var xml=quoteExcelXml(new TextDecoder().decode(await inflateRaw(sheet.raw)), q);
+        var nb=new TextEncoder().encode(xml);
+        sheet.method=0; sheet.raw=nb; sheet.size=nb.length; sheet.crc=crc32(nb);
+        var blob=zipWrite(entries);
+        var fn=(q.date.replace(/-/g,''))+'_'+String(q.cust||'見積').replace(/[\/:*?"<>|\\]/g,'')+'様_カレンダー見積.xlsx';
+        var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fn;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+        hubToast('📊 '+fn+' を書き出しました');
+      }catch(e){ console.error(e); hubToast('❌ Excel書出しに失敗: '+e); }
+    })();
+  });
 }
+
 
 function newRecord(o){
   return Object.assign({
