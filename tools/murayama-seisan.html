@@ -56,7 +56,9 @@
   .doc .tot td{ background:#f6f6f2; font-weight:700; }
   .doc.seikyu{ font-family:'Yu Mincho','Hiragino Mincho ProN','MS Mincho',serif; padding:24px 30px; }
   .doc.seikyu table td{ height:26px; }
+  .docnote{ background:#fff7ed; border:2px dashed #ea580c; border-radius:10px; padding:16px 20px; margin:14px auto; max-width:720px; font-size:13px; color:#9a3412; text-align:center; line-height:1.9; }
   @media print{
+    .docnote{ display:none !important; }
     body{ background:#fff; } .wrap>*:not(.docs){ display:none !important; } .docs{ display:block !important; }
     /* ブラウザの日付/URL/ページ番号を消す：ページ余白を0にし、余白は帳票側で持つ */
     @page{ size:A4 portrait; margin:0; }
@@ -130,8 +132,9 @@
     <div class="row">
       <div><label>売上益（トキワより・入力額をそのまま差し引き）</label><input id="uriage" class="num" type="number" min="0" style="width:150px" oninput="calc()" placeholder="例: 107161"></div>
       <div><label>前月までの繰越残（自動）</label><input id="kurikoshi" class="num" type="number" style="width:150px" oninput="calc()"></div>
-      <div style="align-self:center;font-size:11px;color:var(--muted)">前月を保存済みなら自動で入ります（手修正可）</div>
+      <div style="align-self:center;font-size:11px;color:var(--muted)">前月がマイナス（請求不要）の時だけ自動で入ります（手修正可）</div>
     </div>
+    <div id="kuri-detail" style="font-size:11px;color:#1e40af;font-weight:700;margin-top:6px"></div>
   </div>
 
   <!-- 計算 -->
@@ -150,7 +153,7 @@
     <div class="sumline" style="justify-content:flex-start;margin-top:8px;color:var(--muted);font-size:12px">
       月末請求書：税抜 <b id="c-nuki" style="font-size:14px">¥0</b>　＋　消費税10% <b id="c-tax" style="font-size:14px">¥0</b>　＝　税込 <b id="c-komi" style="font-size:14px">¥0</b>
     </div>
-    <div id="neg-warn" style="display:none;margin-top:6px;color:var(--red);font-size:12px;font-weight:700">⚠ 合計がマイナスのため、この月は月末請求書は発行せず翌月へ繰り越します（補填金精算書のみ）。</div>
+    <div id="neg-warn" style="display:none;margin-top:6px;color:var(--red);font-size:12px;font-weight:700">⚠ 合計がマイナスのため<u>請求不要</u>です。月末請求書は発行されず、全額を翌月の繰越分として翌月の支払いにあてます。</div>
   </div>
 
   <!-- マスタ・設定 -->
@@ -587,22 +590,48 @@ async function importScan(){
 // ── 計算 ──
 function computeGoukeiFor(k){ // 保存済み月の合計請求額（繰越用）
   var m=DB.months[k]; if(!m) return null;
-  var hotenSub=activeHoten().reduce(function(s,r){return s+(+r.amount||0);},0);
+  if(m.goukei!=null) return +m.goukei; // 保存時の確定値を最優先（後からマスタが変わっても過去月はズレない）
+  var hotenSub=activeHoten(k).reduce(function(s,r){return s+(+r.amount||0);},0);
   var seisan=hotenSub+(+DB.master.kaikake||0);
   var betsu=(m.shokei||[]).reduce(function(s,r){return s+(+r.amount||0);},0);
   var shokeiSeikyu=seisan+betsu-Math.abs(+m.uriage||0)+(+DB.master.jiyu||0);
-  var kuri=(m.kurikoshi!=null?+m.kurikoshi:(computeGoukeiFor(prevKeyOf(k))||0));
+  var kuri=(m.kurikoshi!=null?+m.kurikoshi:carryInFor(k));
   return shokeiSeikyu+kuri;
 }
 function prevKeyOf(k){ var p=k.split('-'),y=+p[0],m=+p[1]-1; if(m<1){m=12;y--;} return y+'-'+('0'+m).slice(-2); }
+// 繰越ルール: 前月の合計がマイナス(=請求不要で未請求)の時だけ全額を繰り越す。プラスは請求済みなので繰越0。
+function carryInFor(k){ var t=computeGoukeiFor(prevKeyOf(k)); return (t!=null&&t<0)?t:0; }
+// その月単体の諸経費等請求額（繰越を含まない・内訳表示用）
+function ownSeikyuFor(k){
+  var m=DB.months[k]; if(!m) return null;
+  if(m.goukei!=null) return +m.goukei-(+m.kurikoshi||0); // 保存値から逆算
+  var hotenSub=activeHoten(k).reduce(function(s,r){return s+(+r.amount||0);},0);
+  return hotenSub+(+DB.master.kaikake||0)+(m.shokei||[]).reduce(function(s,r){return s+(+r.amount||0);},0)-Math.abs(+m.uriage||0)+(+DB.master.jiyu||0);
+}
+// 「何月分の繰り越しがいくら」: マイナスが続いた月を遡って内訳にする
+function carryDetail(k){
+  var out=[], pk=prevKeyOf(k), guard=0;
+  while(guard++<24 && DB.months[pk]){
+    var t=computeGoukeiFor(pk); if(t==null||t>=0) break;
+    out.unshift({ym:pk, own:ownSeikyuFor(pk)});
+    pk=prevKeyOf(pk);
+  }
+  return out;
+}
+function _fmtTri_(n){ n=Math.round(+n||0); return (n<0?'△'+Math.abs(n).toLocaleString():n.toLocaleString()); }
+function carryDetailText(k){
+  var d=carryDetail(k); if(!d.length) return '';
+  var cy=+k.split('-')[0];
+  return d.map(function(r){ var p=r.ym.split('-'),y=+p[0],m=+p[1]; return (y!==cy?y+'年':'')+m+'月分 '+_fmtTri_(r.own); }).join(' ／ ');
+}
 // 完済日が過ぎた項目は「翌月の請求」から自動で外す（完済月までは含める）
-function _hotenActive_(r){
+function _hotenActive_(r,k){
   if(!r || !r.paid) return true;
   var pm=String(r.paid).slice(0,7);               // 完済の年月
   if(!/^\d{4}-\d{2}$/.test(pm)) return true;
-  return pm >= key();                              // 対象月 <= 完済月 なら含める
+  return pm >= (k||key());                         // 対象月 <= 完済月 なら含める
 }
-function activeHoten(){ return (DB.master.hoten||[]).filter(_hotenActive_); }
+function activeHoten(k){ return (DB.master.hoten||[]).filter(function(r){ return _hotenActive_(r,k); }); }
 function calc(){
   var hotenSub=activeHoten().reduce(function(s,r){return s+(+r.amount||0);},0);
   var kaikake=+document.getElementById('kaikake').value||0;
@@ -636,8 +665,10 @@ function loadMonth(){
   document.getElementById('issue-date').value=monthEnd(); // 帳票日付は常に対象月の末日(例:6月分→6/30)
   renderHoten(); // 完済除外のグレー表示を対象月に追従
   // 繰越: 保存済みなら値、無ければ前月合計を自動
-  var kuri=(m.kurikoshi!=null? m.kurikoshi : (computeGoukeiFor(prevKey())||0));
+  var kuri=(m.kurikoshi!=null? m.kurikoshi : carryInFor(k));
   document.getElementById('kurikoshi').value=kuri;
+  var kd=document.getElementById('kuri-detail');
+  if(kd){ var dt=carryDetailText(k); kd.textContent=dt?('繰越の内訳：'+dt):(kuri?'':'（前月は請求済みまたはデータなしのため繰越はありません）'); }
   document.getElementById('saved-info').textContent=DB.months[k]?('保存済（'+(m.savedAt||'').slice(0,10)+'）'):'未保存';
   calc();
   applyLock(); // 月切替で作り直した行にも施錠状態を反映
@@ -682,8 +713,8 @@ function renderDocs(){
     +'<tr><td class="c">'+(n+5)+'</td><td></td><td class="r">'+jp(c.uriage)+'</td><td>(−)</td><td>'+m+'月分売上益</td><td>トキワ印刷より</td><td></td></tr>'
     +'<tr><td class="c">'+(n+6)+'</td><td></td><td class="r">'+jp(c.jiyu)+'</td><td></td><td>自由裁量売上益</td><td>トキワ印刷より</td><td></td></tr>'
     +'<tr class="tot"><td class="c">'+(n+7)+'</td><td></td><td class="r">'+jp(c.shokeiSeikyu)+'</td><td>計</td><td>'+m+'月分諸経費等請求額</td><td></td><td></td></tr>'
-    +(c.kuri?('<tr><td class="c">'+(n+8)+'</td><td></td><td class="r">'+jp(c.kuri)+'</td><td>計</td><td>前月までの繰越残</td><td></td><td></td></tr>'
-      +'<tr class="tot"><td class="c">'+(n+9)+'</td><td></td><td class="r">'+jp(c.goukei)+'</td><td>計</td><td>合計請求額</td><td></td><td></td></tr>'):'');
+    +(c.kuri?('<tr><td class="c">'+(n+8)+'</td><td></td><td class="r">'+jp(c.kuri)+'</td><td>計</td><td>前月までの繰越残</td><td>'+esc(carryDetailText(key())||'')+'</td><td></td></tr>'):'')
+    +((c.kuri||c.goukei<0)?('<tr class="tot"><td class="c">'+(n+(c.kuri?9:8))+'</td><td></td><td class="r">'+jp(c.goukei)+'</td><td>計</td><td>合計請求額</td><td>'+(c.goukei<0?'マイナスのため請求不要・翌月へ繰越':'')+'</td><td></td></tr>'):'');
   var doc1='<div class="doc"><div class="dh"><div><div style="font-size:12px">'+dateJ+'</div><div class="dt">補填金精算書兼諸経費等請求予定額</div></div>'+coBlock+'</div>'
     +'<table><thead><tr><th style="width:34px">番号</th><th style="width:80px">月 日</th><th style="width:90px">金 額</th><th style="width:90px">種 類</th><th>支 払 先</th><th>備 考</th><th style="width:80px">完済日</th></tr></thead>'
     +'<tbody>'+hRows+calcRows+'</tbody></table></div>';
@@ -722,6 +753,11 @@ function renderDocs(){
     +'<tr><td colspan="4" class="r" style="background:#f4f2ec;font-weight:700">消費税及び地方消費税（10%）</td><td class="r">'+jp(c.tax)+'</td><td></td></tr>'
     +'<tr class="tot"><td colspan="4" class="r" style="font-weight:800">税込合計</td><td class="r" style="font-weight:800">'+jp(c.komi)+'</td><td></td></tr></tbody></table>'
     +'</div>';
+  // 合計がマイナスの月は「請求不要」: 請求書は発行しない（画面案内のみ・印刷されない）
+  if(c.goukei<0){
+    doc3='<div class="docnote">本月の合計請求額は '+jp(c.goukei)+' 円（マイナス）のため<b>請求不要</b>です。<br>'
+      +'月末請求書は発行されません。全額を翌月の繰越分として、翌月の支払いにあてます。</div>';
+  }
   document.getElementById('docs').innerHTML=doc1+doc2+doc3;
 }
 </script>
