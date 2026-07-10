@@ -302,7 +302,7 @@
     /* 得意先・住所・電話は全文表示(折り返し) */
     .mtbl td.lcust .gcell{ white-space:normal; overflow-wrap:anywhere; word-break:break-word; line-height:1.3; font-size:11px; font-weight:700; color:#0f172a; cursor:text; padding:1px 2px; border:1px dashed transparent; border-radius:4px; min-height:15px; }
     .mtbl td.lcust .gcell:hover{ border-color:#cbd5e1; background:#fff; }
-    .mtbl textarea.gta{ width:100%; resize:none; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; line-height:1.25; font-size:10px; color:#0f172a; padding:1px 3px; border:1px solid #d7dbe0; border-radius:4px; background:#fff; font-family:inherit; box-sizing:border-box; display:block; }
+    .mtbl textarea.gta{ field-sizing:content; width:100%; resize:none; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; line-height:1.25; font-size:10px; color:#0f172a; padding:1px 3px; border:1px solid #d7dbe0; border-radius:4px; background:#fff; font-family:inherit; box-sizing:border-box; display:block; }
     .mtbl textarea.gta:focus{ outline:none; border-color:#0891b2; }
     .mtbl .gedit.yedit{ width:46px; min-width:0; font-size:12px; text-align:center; font-weight:700; }
     .mtbl td.lprod{ vertical-align:top; min-width:124px; max-width:210px; color:#1e293b; white-space:normal; line-height:1.3; font-size:12px; }
@@ -421,7 +421,16 @@ var HUB_TOOL_ID = 'calendar-juchu';
 // 本体(index.html)の CLOUD_CONFIG と同じ値。ツール単独でも全社クラウド(GAS)へ直接保存するために使う。
 var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
 var HUB_API_KEY = 'mitsumori-2024';
-function hubLoad(){ try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ console.error(e); return null; } }
+// 【性能】本体DBは数MBある。1描画パス内で何度もJSON.parseしないよう、同一タスク中はキャッシュを共有する。
+// 同期タスク中にDBが変わることはない。hubSave/外部更新では必ず _hubCacheClear() する。
+var _hubDbCache=null, _hubCacheQueued=false;
+function _hubCacheClear(){ _hubDbCache=null; }
+function hubLoad(){
+  if(_hubDbCache) return _hubDbCache;
+  try { _hubDbCache = JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; } catch(e){ console.error(e); return null; }
+  if(!_hubCacheQueued){ _hubCacheQueued=true; setTimeout(function(){ _hubCacheQueued=false; _hubDbCache=null; }, 0); }
+  return _hubDbCache;
+}
 function hubAuth(){ try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; } }
 // localStorage容量対策: 問い合わせ本文(body)等はクラウド(Communications)が正なので、
 // 端末ミラーには一覧最小限だけ残す。容量超過時に本文を落として保存を通す。
@@ -432,10 +441,13 @@ function _hubInqLite_(db){
   return Object.assign({}, db, {inquiries:lite});
 }
 function hubSave(mutator){
+  _hubCacheClear();               // 常に最新を読む
   var db = hubLoad();
   if(!db){ hubToast('❌ 本体データが見つかりません。先に本体アプリへログインしてください'); return false; }
-  try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
+  try { mutator(db); } catch(e){ _hubCacheClear(); hubToast('❌ 変更失敗: ' + e); return false; }
   var _lok=false;
+  _hubCacheClear();               // 書込後は再読込させる
+  _masterDirty=true;              // 候補リストを次の描画で作り直す
   try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); _lok=true; }
   catch(e){
     // 容量超過: 問い合わせ本文等を軽量化して再試行（本文はクラウドが正）
@@ -1092,15 +1104,22 @@ function syncTopScroll(){
   top.scrollLeft = wrap.scrollLeft;
 }
 // 住所/電話のテキストエリアを内容の高さに合わせる(全文表示)
+var _hasFieldSizing=(function(){ try{ return window.CSS && CSS.supports && CSS.supports('field-sizing','content'); }catch(e){ return false; } })();
 function autoGrowTA(){
+  if(_hasFieldSizing) return;   // 【性能】CSSが高さを合わせるのでJSの強制レイアウト(要素数ぶんのscrollHeight読み)は不要
   var ts=document.querySelectorAll('.mtbl textarea.gta');
-  for(var i=0;i<ts.length;i++){ var t=ts[i]; t.style.height='auto'; t.style.height=(t.scrollHeight+2)+'px'; }
+  var hs=new Array(ts.length);
+  for(var i=0;i<ts.length;i++){ ts[i].style.height='auto'; }        // 書込みをまとめる
+  for(var i=0;i<ts.length;i++){ hs[i]=ts[i].scrollHeight+2; }       // 読取りをまとめる(レイアウト1回)
+  for(var i=0;i<ts.length;i++){ ts[i].style.height=hs[i]+'px'; }
 }
 function editGroup(gi, field, val){
   var g=_mGroups[gi]; if(!g) return;
   var ids={}; g.recs.forEach(function(r){ ids[r.id]=1; });
   if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; if(!r._edited) r._edited={}; r._edited[field]=1; } }); })){ buildCats(); render(); }
 }
+// 変更すると他のセル・集計・グループ分けに波及する項目(=全体の再描画が要る)
+var _RERENDER_FIELDS={ cust:1, year:1, product:1, orderQty:1, orderPrice:1, cost:1, purAmt:1, status:1 };
 function onEdit(elm){
   var id = elm.getAttribute('data-id'), f = elm.getAttribute('data-f'), val = elm.value;
   if(f==='year'){ val=Number(val)||val; }   // 年は数値で保存
@@ -1115,7 +1134,13 @@ function onEdit(elm){
     if(!rec._edited) rec._edited={};
     rec._edited[f]=1;   // 手入力を記録 → 以後の資料取込で上書きしない
   });
-  if(ok){ if(elm.style){ elm.style.background = '#dcfce7'; setTimeout(function(){ elm.style.background=''; }, 500); } render(); }
+  if(ok){
+    if(elm.style){ elm.style.background = '#dcfce7'; setTimeout(function(){ elm.style.background=''; }, 500); }
+    // 【性能】他セル(金額/仕入額/原価率/前年比/集計)やグループ分けに波及する項目だけ全体を描き直す。
+    // それ以外(日付・備考・納品先など)はそのセルだけで完結するので再描画しない。
+    if(_RERENDER_FIELDS[f]){ render(); }
+    else if(elm.getAttribute('data-date')){ elm.value=mYmd(val); elm.setAttribute('data-val', val||''); }
+  }
 }
 function delRow(id){
   if(!confirm('この行を削除します。よろしいですか？')) return;
@@ -1162,11 +1187,18 @@ function syncVendorMaster(){
   });
   if(added||fixed) hubToast('外注先マスタを更新: 追加'+added+'件 / 名称修正'+fixed+'件');
 }
+var _masterDirty=true;   // 保存(hubSave)や外部更新があったときだけ datalist を作り直す
 function buildMasters(){
+  if(!_masterDirty) return;   // 【性能】毎描画で数千<option>を再生成しない
+  _masterDirty=false;
+  var db=hubLoad();
+  var rows=loadAll();
+  var vm=(db&&Array.isArray(db.vendorMaster))?db.vendorMaster:[];
+  var cm=(db&&db.master&&Array.isArray(db.master.cust))?db.master.cust:[];
   var prods={'送料':1,'運賃・送料':1,'値引き':1}, vends={}, custs={};   // 送料等は常に候補に
-  hubVendorNames().forEach(function(v){ vends[v]=1; });   // ①本体の外注先マスタ
-  hubCustNames().forEach(function(c){ custs[c]=1; });     // ①本体の得意先マスタ
-  loadAll().forEach(function(r){                          // ②台帳で実際に使われている値も候補に
+  vm.forEach(function(v){ var n=(v&&v.name||'').trim(); if(n) vends[n]=1; });                         // ①本体の外注先マスタ
+  cm.forEach(function(c){ var n=(typeof c==='string'?c:(c&&c.org||'')).trim(); if(n) custs[n]=1; });  // ①本体の得意先マスタ
+  rows.forEach(function(r){                                                                           // ②台帳で実際に使われている値も候補に
     var p=cleanProd(r.product); if(p) prods[p]=1;
     var v=(r.vendor||'').trim(); if(v && v!=='—') vends[v]=1;
     var c=(r.cust||'').trim(); if(c && c!=='—') custs[c]=1;
@@ -1177,6 +1209,7 @@ function buildMasters(){
   if(vl) vl.innerHTML=opt(vends);
   if(cl) cl.innerHTML=opt(custs);
 }
+
 function buildCustIndex(){
   _custIndex={};
   loadAll().forEach(function(r){
@@ -1796,7 +1829,7 @@ function autoMigrate(){
 buildYears(); buildCats(); setView('matrix'); autoMigrate();
 // 台帳の外注先を本体の外注先マスタへ反映(追加＋名称修正のみ・1回だけ)。移行の遅延ロード完了後に実行。
 setTimeout(function(){ try{ syncVendorMaster(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
-try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ buildYears(); buildCats(); render(); } }; } catch(e){}
+try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 </body>
 </html>
