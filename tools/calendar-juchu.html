@@ -489,6 +489,7 @@
       <div style="flex:2;min-width:180px"><label>得意先名</label><input id="qCust" autocomplete="off"></div>
       <div style="flex:0 0 78px"><label>敬称</label><select id="qHon"><option>様</option><option>御中</option></select></div>
       <div style="flex:1;min-width:120px"><label>日付</label><input id="qDate" type="date"></div>
+      <div style="flex:1;min-width:130px"><label>反映する年</label><select id="qYear" onchange="qYearChange(this.value)" title="この年の製品・数量・売価を明細に反映します"></select></div>
       <div style="flex:1;min-width:120px"><label>担当</label><select id="qStaff"><option>本多　亮</option><option>福永　建児</option></select></div>
     </div>
     <label style="margin-top:8px">明細（品名・数量・単位・単価）</label>
@@ -1504,27 +1505,42 @@ function loadQuoteLogo(cb){
 }
 var QUOTE_CO = { name:'トキワ印刷株式会社', addr:'〒432-8053\n静岡県浜松市中央区法枝町115\ntel:  053-441-2784\nfax: 053-442-1265' };
 function todayISO(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+var _qGi=null, _qByYear={};
 function openQuote(gi){
   var g=_mGroups[gi]; if(!g) return;
+  _qGi=gi;
   document.getElementById('qCust').value=g.cust||'';
   document.getElementById('qHon').value= (String(g.cust||'').indexOf('御中')>=0)?'御中':'様';
   document.getElementById('qDate').value=todayISO();
   document.getElementById('qNote').value='';
-  // 明細プリフィル: 製品が入っている最新年を選び、その年の全製品(複数行)をすべて反映する
+  // 製品が入っている年だけを候補にする
+  _qByYear={};
+  g.recs.forEach(function(r){ if(cleanProd(r.product)){ (_qByYear[r.year]=_qByYear[r.year]||[]).push(r); } });
+  var yrs=Object.keys(_qByYear).map(Number).sort(function(a,b){ return b-a; });   // 新しい年から
   var cur=curYear();
-  var byYear={};
-  g.recs.forEach(function(r){ if(cleanProd(r.product)){ (byYear[r.year]=byYear[r.year]||[]).push(r); } });
-  var yrs=Object.keys(byYear).map(Number).sort(function(a,b){ return b-a; });   // 新しい年から
-  var pick=(byYear[cur]?cur:(yrs.length?yrs[0]:null));
-  var items=(pick==null?[]:byYear[pick])
-    .sort(function(a,b){ return String(a.product||'').localeCompare(String(b.product||''),'ja'); })
+  var pick=(_qByYear[cur]?cur:(yrs.length?yrs[0]:null));
+  var sel=document.getElementById('qYear');
+  sel.innerHTML = yrs.length
+    ? yrs.map(function(y){ return '<option value="'+y+'"'+(y===pick?' selected':'')+'>'+y+'年（'+_qByYear[y].length+'品目）</option>'; }).join('')
+    : '<option value="">実績なし</option>';
+  qFillLines(pick);
+  loadQuoteLogo(function(){});   // 印刷/PDF用のロゴを先読み
+  document.getElementById('quoteModal').style.display='flex';
+}
+// 指定年の全製品(複数行)を明細に展開する
+function qFillLines(year){
+  var recs=(year==null||!_qByYear[year])?[]:_qByYear[year];
+  var items=recs.slice().sort(function(a,b){ return String(a.product||'').localeCompare(String(b.product||''),'ja'); })
     .map(function(r){ return { name:cleanProd(r.product), qty:(mQty(r)!==''?mQty(r):''), unit:r.unit||'冊', price:(mPrice(r)!==''?mPrice(r):'') }; });
   if(!items.length) items=[{name:'',qty:'',unit:'冊',price:''}];
   document.getElementById('qBody').innerHTML='';
   items.forEach(function(it){ qAddItem(it); });   // forEachの index が qAddItem に渡らないように包む
   qRecalc();
-  loadQuoteLogo(function(){});   // 印刷/PDF用のロゴを先読み
-  document.getElementById('quoteModal').style.display='flex';
+}
+function qYearChange(v){
+  var y=Number(v)||null;
+  if(y && _qByYear[y]) hubToast(y+'年の'+_qByYear[y].length+'品目を明細に反映しました');
+  qFillLines(y);
 }
 function qAddItem(it){
   it=it||{name:'',qty:'',unit:'冊',price:''};
