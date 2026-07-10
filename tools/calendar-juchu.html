@@ -1242,6 +1242,8 @@ function loadInfo(cb){
 function normVendor(s){ s=String(s==null?'':s).normalize('NFKC'); s=s.replace(/株式会社|有限会社|合資会社/g,'').replace(/[(](株|有|資)[)]/g,'').replace(/[\s　・.,，、]+/g,''); return s.trim(); }
 // 手動の得意先名 修正(受注登録/顧客リストで拾えない個別対応)
 var MANUAL_CUST={ '天王幼稚園':'天王こども園', 'I.W.ワークス':'株式会社I.W.Works', 'I.Wワークス':'株式会社I.W.Works' };
+// 顧客名セルに注記が混入している先: 先頭一致で正名に直し、残りは備考へ逃がす
+var MANUAL_CUST_RE=[ [/^迦葉/, '有限会社迦葉'] ];
 function normProd(p){ p=String(p==null?'':p).normalize('NFKC'); p=p.replace(/^20\d\d\s*年?カレンダー[_\s]*/,''); p=p.replace(/[\s　_\-・（）()【】.,，、]+/g,''); return p.toLowerCase(); }
 function loadRef2(cb){
   if(window.JU_REF2) return cb();
@@ -1555,6 +1557,15 @@ function applyLightRefine(){
     var ok=hubSave(function(db){
       (db[COLL]||[]).forEach(function(r){
         var ref=(r.ref==null?'':String(r.ref)).trim();
+        // 顧客名に注記が混入している先(例: 迦葉+注記)を先に正名化し、残りは備考へ逃がす
+        for(var mi=0; mi<MANUAL_CUST_RE.length; mi++){
+          var rx=MANUAL_CUST_RE[mi][0];
+          if(rx.test(String(r.cust||''))){
+            var rest=String(r.cust).replace(rx,'').trim();
+            if(rest && String(r.note||'').indexOf(rest)<0){ r.note=(r.note?r.note+' / ':'')+rest; }
+            r.cust=MANUAL_CUST_RE[mi][1]; changed=true; break;
+          }
+        }
         // 名称: refありは受注登録名、refなしはNAME2表記へ
         if(ref && ref2[ref] && ref2[ref][0]){ if(r.cust!==ref2[ref][0]){ r.cust=ref2[ref][0]; changed=true; } }
         else { var nm=name2[normCust(r.cust||'')]; if(nm && nm!==r.cust){ r.cust=nm; changed=true; } }
@@ -1589,7 +1600,7 @@ function applyLightRefine(){
         else { var i=seen[k], keep=dd[i]; if(keep._src!=='旧台帳移行' && r._src==='旧台帳移行'){ dd[i]=r; } changed=true; }   // 発注日/担当/備考を持つ旧台帳を優先
       });
       if(dd.length!==arr2.length) db[COLL]=dd;
-      var m=db._calMig||(db._calMig={}); m['CAL-HATCHU-1']=true; m['CAL-NAME-1']=true; m['CAL-INFO-1']=true; m['CAL-JU-1']=true; m['CAL-JU-2']=true; m['CAL-JU-3']=true; m['CAL-JU-4']=true;
+      var m=db._calMig||(db._calMig={}); m['CAL-HATCHU-1']=true; m['CAL-NAME-1']=true; m['CAL-INFO-1']=true; m['CAL-JU-1']=true; m['CAL-JU-2']=true; m['CAL-JU-3']=true; m['CAL-JU-4']=true; m['CAL-JU-5']=true;
     });
     if(ok && changed){ if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush().then(function(){ buildCats(); render(); hubToast('✅ 得意先・ユーザー・数量・売価・外注先などを反映しました'); }); }
   }); }); });
@@ -1607,7 +1618,7 @@ function autoMigrate(){
   // データが揃って処理済みなら、重い再投入は絶対にしない＝前年コピー等を守る。
   // 発注紐付け(外注先/仕入)だけ未適用なら、既存行に追記する軽い処理だけ行う(再投入なし)
   if(has2024 && hasHist && hasJuchu && !needsShift){
-    if(!marks['CAL-NAME-1'] || !marks['CAL-INFO-1'] || !marks['CAL-JU-1'] || !marks['CAL-JU-2'] || !marks['CAL-JU-3'] || !marks['CAL-JU-4']) applyLightRefine();
+    if(!marks['CAL-NAME-1'] || !marks['CAL-INFO-1'] || !marks['CAL-JU-1'] || !marks['CAL-JU-2'] || !marks['CAL-JU-3'] || !marks['CAL-JU-4'] || !marks['CAL-JU-5']) applyLightRefine();
     return;
   }
   showBusy('🔄 データを準備中…');
