@@ -33,6 +33,10 @@
   .mtag{ display:inline-block; font-size:9.5px; font-weight:700; background:#eef2f7; color:#475569; border:1px solid #dbe2ea; border-radius:4px; padding:0 5px; margin:0 3px 2px 0; white-space:nowrap; }
   .mtag.from{ background:#e8f0fe; color:#1b4fc0; border-color:#c3d5f7; }
   .mtxt{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.45; }
+  /* 列幅リサイズ（ヘッダー右端をドラッグ・ダブルクリックで初期化） */
+  #main-tbl{ table-layout:fixed; }
+  .rz{ position:absolute; top:0; right:-3px; width:8px; height:100%; cursor:col-resize; z-index:6; }
+  .rz:hover{ background:rgba(14,116,144,.35); }
   tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; vertical-align:top; white-space:normal; word-break:break-word; max-width:240px; }
   tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; white-space:nowrap; }
   tbody tr:nth-child(even){ background:#faf9f6 } tbody tr:hover{ background:#eef6fb }
@@ -134,7 +138,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v197</span>
+    <span class="mini" style="margin-left:auto">v198</span>
   </div>
   <h1 style="margin-top:0">案件管理（各社・相互送信）</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -160,7 +164,7 @@
     <span id="status" style="flex-basis:100%;font-size:11px;color:#64748b"></span>
   </div>
   <div id="kpis"></div>
-  <div class="tblwrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+  <div class="tblwrap"><table id="main-tbl"><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
 </div>
 <!-- 会社選択画面（トキワ管理者のみ・ログイン時の社名選択と同じイメージ） -->
 <div id="co-select-screen" style="display:none;position:fixed;inset:0;background:linear-gradient(135deg,#1a1a1a 0%,#2d2d2d 100%);z-index:80;align-items:center;justify-content:center">
@@ -507,6 +511,43 @@ function buildCustomerMaster(){
 // ── Excel風フィルタ状態 ──
 //   COLFILTER[k] = { q:'列内ワード', set:Set(選択値)|null }  SORTSTATE={k,dir} dir=1昇順/-1降順/0既定(新しい順)
 var COLFILTER={}, SORTSTATE={k:'',dir:0};
+// ── 列幅（ドラッグ変更・端末に記憶・ハンドルWクリックで初期化） ──
+var COLW=(function(){ try{ return JSON.parse(localStorage.getItem('ledger_colw')||'{}'); }catch(e){ return {}; } })();
+var COLW_DEF={ denpyo:92, customer:150, item:230, qty:60, unit:52, orderDate:94, hopeDate:94, _vendor:112, _arrival:104, deliveryDate:94, status:82, billMonth:94, unitSelf:82, amtSelf:96, unitTokiwa:82, amtTokiwa:96, profit:86, multiPack:94, multiDest:104, memo:250, _ops:158 };
+function colw(k){ return COLW[k]||COLW_DEF[k]||100; }
+function _applyColgroup_(){
+  var tbl=document.getElementById('main-tbl'); if(!tbl) return;
+  var old=tbl.querySelector('colgroup'); if(old) old.remove();
+  var cg='<colgroup>'+COLS.map(function(c){ return '<col data-k="'+c[0]+'" style="width:'+colw(c[0])+'px">'; }).join('')+'<col data-k="_ops" style="width:'+colw('_ops')+'px"></colgroup>';
+  tbl.insertAdjacentHTML('afterbegin',cg);
+  _updTblW_();
+}
+function _updTblW_(){
+  var tbl=document.getElementById('main-tbl'); if(!tbl) return;
+  var sum=colw('_ops'); COLS.forEach(function(c){ sum+=colw(c[0]); });
+  tbl.style.width=sum+'px';
+}
+var _rzK=null,_rzX=0,_rzW=0;
+document.addEventListener('mousedown',function(e){
+  var h=(e.target&&e.target.classList&&e.target.classList.contains('rz'))?e.target:null; if(!h) return;
+  _rzK=h.dataset.k; _rzX=e.clientX; _rzW=colw(_rzK); e.preventDefault(); document.body.style.cursor='col-resize';
+});
+document.addEventListener('mousemove',function(e){
+  if(!_rzK) return;
+  var w=Math.max(42,_rzW+(e.clientX-_rzX)); COLW[_rzK]=w;
+  var col=document.querySelector('#main-tbl col[data-k="'+_rzK+'"]'); if(col) col.style.width=w+'px';
+  _updTblW_();
+});
+document.addEventListener('mouseup',function(){
+  if(!_rzK) return; _rzK=null; document.body.style.cursor='';
+  try{ localStorage.setItem('ledger_colw',JSON.stringify(COLW)); }catch(e){}
+});
+document.addEventListener('dblclick',function(e){
+  if(!(e.target&&e.target.classList&&e.target.classList.contains('rz'))) return;
+  delete COLW[e.target.dataset.k];
+  try{ localStorage.setItem('ledger_colw',JSON.stringify(COLW)); }catch(e){}
+  _applyColgroup_();
+});
 function _cf_(k){ if(!COLFILTER[k]) COLFILTER[k]={q:'',set:null}; return COLFILTER[k]; }
 function _cfActive_(k){ var f=COLFILTER[k]; return !!(f&&((f.q&&f.q.trim())||f.set)); }
 function filtered(){
@@ -549,8 +590,8 @@ function render(){
   var h1='<tr>'+COLS.map(function(col){ var k=col[0];
     var on=_cfActive_(k)||SORTSTATE.k===k&&SORTSTATE.dir;
     var arrow=SORTSTATE.k===k?(SORTSTATE.dir===1?' ▲':SORTSTATE.dir===-1?' ▼':''):'';
-    return '<th style="white-space:nowrap">'+col[1]+arrow+' <span class="cfbtn'+(on?' on':'')+'" onclick="openColMenu(event,\''+k+'\')" title="絞り込み・並べ替え">▼</span></th>';
-  }).join('')+'<th style="white-space:nowrap">操作'+((Object.keys(COLFILTER).some(_cfActive_)||SORTSTATE.dir)?' <span class="cfbtn on" onclick="clearColFilters()" title="列フィルタ/並べ替えを全て解除">✕解除</span>':'')+'</th></tr>';
+    return '<th style="white-space:nowrap">'+col[1]+arrow+' <span class="cfbtn'+(on?' on':'')+'" onclick="openColMenu(event,\''+k+'\')" title="絞り込み・並べ替え">▼</span><span class="rz" data-k="'+k+'" title="ドラッグで列幅変更／ダブルクリックで初期化"></span></th>';
+  }).join('')+'<th style="white-space:nowrap">操作<span class="rz" data-k="_ops" title="ドラッグで列幅変更"></span>'+((Object.keys(COLFILTER).some(_cfActive_)||SORTSTATE.dir)?' <span class="cfbtn on" onclick="clearColFilters()" title="列フィルタ/並べ替えを全て解除">✕解除</span>':'')+'</th></tr>';
   document.getElementById('thead').innerHTML=h1;
   document.getElementById('tbody').innerHTML=shown.map(function(c){
     var red=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE'||c.multiDest||c.deliverTo);
@@ -566,6 +607,7 @@ function render(){
     }).join('');
     return '<tr class="'+(red?'rowred':'')+'">'+tds+'<td style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="リピート登録（この内容を引用して登録）" onclick="openForm(\''+c.id+'\',true)">🔁</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button></td></tr>';
   }).join('');
+  _applyColgroup_();
   renderKpis(V);
   var more=V.length>DISPLAY_CAP?('　（先頭'+DISPLAY_CAP+'件を表示。フィルタで絞込）'):'';
   document.getElementById('status').textContent=COMPANY+'：'+CASES.length+'件 / 絞込 '+V.length+'件'+more;
