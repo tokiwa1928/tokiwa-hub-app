@@ -7878,7 +7878,7 @@ function buildPanel(id,initData){
       <div style="display:flex;gap:4px"><input id="relay-${id}" list="cust-dl-${id}" placeholder="関連会社（グループ会社）。一般印刷会社が発注元なら発注元欄へ" onchange="updateDeliveryDefault(${id})" style="flex:1">
       <button type="button" onclick="autoFillChain(${id})" title="発注元がグループ会社のとき、上流の案件から経由(元請)・エンドユーザーを自動補完" style="font-size:10px;padding:2px 6px;white-space:nowrap;border:1px solid #0369a1;background:#e0f2fe;color:#0369a1;border-radius:5px;cursor:pointer">🔗自動</button></div></div>
     <div class="f"><label>エンドユーザー <span style="font-size:10px;color:#aaa">（最終客の会社）</span></label><input id="enduser-${id}" list="enduser-dl-${id}" placeholder="例: 伊勢原市役所" onchange="onEnduserChange(${id});updateDeliveryDefault(${id})"><datalist id="enduser-dl-${id}">${enduserOpts}</datalist></div>
-    <div class="f"><label>担当部署・窓口</label><input id="enduser-dept-${id}" placeholder="例: ○○課" onchange="updateDeliveryDefault(${id})"></div>
+    <div class="f"><label>担当部署・窓口</label><input id="enduser-dept-${id}" list="enddept-dl-${id}" placeholder="例: ○○課" onchange="updateDeliveryDefault(${id})"><datalist id="enddept-dl-${id}"></datalist></div>
     <div class="f"><label style="display:flex;align-items:center;gap:6px">先方担当者名 <span style="font-size:10px;color:#aaa">（案件に記録・次回から自動）</span><button type="button" onclick="_showTantoHandover_()" style="font-size:10px;padding:1px 8px;border:1px solid #0369a1;background:#e0f2fe;color:#0369a1;border-radius:5px;cursor:pointer" title="担当者の引き継ぎ（案件を選んで一括変更）">⇄ 引き継ぎ</button></label><input id="cust-tanto-${id}" placeholder="例: 佐藤 様" onchange="_tantoOnChange_(${id})"></div>
     <div class="f" style="grid-column:1/-1"><label>品名 <span style="font-size:10px;color:#aaa">（下の3項目から自動生成・直接編集も可）</span></label>
       <input id="prod-${id}" placeholder="品名（下の3項目から自動生成）" readonly style="background:#f1f5f9;color:#334155;cursor:not-allowed" title="品名は下の「品目・宛名・その他」から自動生成されます（直接編集不可）">
@@ -9583,6 +9583,7 @@ function onCustChange(id){
   if(typeof _toggleDueField_==='function') _toggleDueField_(id);
   if(!custVal) return;
   try{ _tantoApply_(id); }catch(e){}
+  try{ _fillDeptDatalist_(id, custVal); }catch(e){}
 
   // エンドユーザーdatalistをこの得意先のユーザーで更新
   const dl = document.getElementById(`enduser-dl-${id}`);
@@ -11896,7 +11897,7 @@ function renderMaster(id){
     const grouped = {};
     custData.forEach((r,i) => {
       const org = typeof r === 'string' ? r : (r.org || '');
-      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '', companyId: (r.companyId||'COMP002'), quoteUndated:!!r.quoteUndated, needsAck:!!r.needsAck, sendMethod: r.sendMethod||'' };
+      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '', companyId: (r.companyId||'COMP002'), quoteUndated:!!r.quoteUndated, needsAck:!!r.needsAck, sendMethod: r.sendMethod||'', depts: r.depts||'', oldNames: r.oldNames||'' };
       grouped[org].items.push({ ...r, _idx: DB.master.cust.indexOf(r) });
       if(r.type) grouped[org].type = r.type;
       if(r.orgEmail) grouped[org].email = r.orgEmail;
@@ -11904,6 +11905,8 @@ function renderMaster(id){
       if(r.quoteUndated) grouped[org].quoteUndated = true;
       if(r.needsAck) grouped[org].needsAck = true;
       if(r.sendMethod) grouped[org].sendMethod = r.sendMethod;
+      if(r.depts) grouped[org].depts = r.depts;
+      if(r.oldNames) grouped[org].oldNames = r.oldNames;
     });
 
     html += `<div style="font-size:11px;color:#888;margin-bottom:.5rem">
@@ -11932,6 +11935,7 @@ function renderMaster(id){
       html += `<div class="cust-card" data-org="${(org||'').replace(/"/g,'&quot;')}" style="border:1px solid #e0ddd6;border-radius:8px;margin-bottom:8px;overflow:hidden">
         <div style="background:#f9f9f7;padding:7px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <strong style="font-size:13px">${org || '（未設定）'}</strong>
+          <button class="btn" style="font-size:10px;padding:1px 8px" onclick="renameCustOrg('${org.replace(/'/g,"\\'")}')" title="社名変更（旧名称に自動記録・案件担当の紐づけも引き継ぎ）">✎ 社名変更</button>
           <select style="width:auto;font-size:10px;padding:2px 6px;border-radius:10px;border:1px solid ${tc};color:${tc};background:#fff" onchange="updateCustOrgType('${org.replace(/'/g,"\\'")}',this.value)">
             <option value="customer"${g.type==='customer'?' selected':''}>得意先</option>
             <option value="vendor"${g.type==='vendor'?' selected':''}>外注先</option>
@@ -11956,6 +11960,12 @@ function renderMaster(id){
             </select></label>
           <button class="add-btn" style="font-size:10px;padding:2px 8px;margin-left:auto" onclick="addCustUser('${org.replace(/'/g,"\\'")}')">＋ ユーザー追加</button>
           <button class="del-btn" onclick="if(confirm('「${org}」とその全ユーザーを削除？')){deleteCustOrg('${org.replace(/'/g,"\\'")}')}" style="font-size:14px">×</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:5px 12px;background:#fcfcfa;border-top:1px solid #eee">
+          <label style="font-size:10.5px;color:#475569;display:flex;align-items:center;gap:4px;flex:2;min-width:260px">🏛 課名リスト（読点「、」区切り・見積の担当部署の候補になります）
+            <input type="text" value="${(g.depts||'').replace(/"/g,'&quot;')}" placeholder="例: 総務課、秘書広報課、健康課" style="flex:1;font-size:11.5px;padding:3px 8px" onchange="updateCustOrgDepts('${org.replace(/'/g,"\\'")}',this.value)"></label>
+          <label style="font-size:10.5px;color:#475569;display:flex;align-items:center;gap:4px;flex:1;min-width:200px">📛 旧名称（検索でヒットします）
+            <input type="text" value="${(g.oldNames||'').replace(/"/g,'&quot;')}" placeholder="例: 旧○○株式会社" style="flex:1;font-size:11.5px;padding:3px 8px" onchange="updateCustOrgOldNames('${org.replace(/'/g,"\\'")}',this.value)"></label>
         </div>
         <table class="m-tbl cust-utbl" style="margin:0;border:none">
           <thead style="background:#fafaf8"><tr>
@@ -34958,6 +34968,42 @@ function addMR(id){
 }
 
 // 新規取引先を追加
+// 課名リスト・旧名称をorg（取引先）単位で保存（同orgの全レコードに持たせる）
+function _custOrgSet_(org, field, value){
+  (DB.master.cust||[]).forEach(function(r){ if(r && typeof r!=='string' && r.org===org){ r[field]=value; } });
+  saveDB(); try{ saveToCloud(); }catch(e){}
+}
+function updateCustOrgDepts(org, v){ _custOrgSet_(org, 'depts', (v||'').trim()); if(typeof _toastMsg==='function') _toastMsg('🏛 課名リストを保存しました'); }
+function updateCustOrgOldNames(org, v){ _custOrgSet_(org, 'oldNames', (v||'').trim()); if(typeof _toastMsg==='function') _toastMsg('📛 旧名称を保存しました'); }
+// 社名変更: 全レコードのorgを付け替え・旧名称に自動追記・案件担当マップのキーも移行（過去の見積書は変えない）
+function renameCustOrg(org){
+  var nn = prompt('新しい社名を入力してください。\n旧名称「' + org + '」は検索用に自動で残ります。', org);
+  if(!nn || !(nn=nn.trim()) || nn===org) return;
+  var n=0;
+  (DB.master.cust||[]).forEach(function(r){
+    if(r && typeof r!=='string' && r.org===org){
+      r.org=nn;
+      var olds=(r.oldNames||'').split('、').map(function(x){return x.trim();}).filter(Boolean);
+      if(olds.indexOf(org)<0) olds.push(org);
+      r.oldNames=olds.join('、');
+      n++;
+    }
+  });
+  // 案件担当マップ「得意先｜品名」のキーを新社名へ移行（引き継ぎ履歴ごと）
+  try{
+    var map=(DB.master&&DB.master.custTanto)||{};
+    Object.keys(map).forEach(function(k){
+      if(k.indexOf(org+'｜')===0){
+        var nk=nn+k.slice(org.length);
+        if(!map[nk]) map[nk]=map[k];
+        delete map[k];
+      }
+    });
+  }catch(e){}
+  saveDB(); try{ saveToCloud(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('✎ 「'+org+'」→「'+nn+'」に変更しました（'+n+'件・旧名称と案件担当も引き継ぎ）');
+  renderMaster('cust');
+}
 function addCustOrg(){
   const name = prompt('取引先名を入力してください:');
   if(!name) return;
@@ -36120,6 +36166,13 @@ function _updateEstDocKind_(id){
 }
 function _estDocKind_(id){ return document.querySelector('input[name="est-doc-kind-' + id + '"]:checked')?.value || 'final'; }
 
+// 得意先マスタの課名リスト → 見積の担当部署・窓口のdatalist候補に
+function _fillDeptDatalist_(id, orgName){
+  var dl=document.getElementById('enddept-dl-'+id); if(!dl) return;
+  var rec=(DB.master.cust||[]).find(function(c){ return c && typeof c!=='string' && c.org===orgName && c.depts; });
+  var depts=rec?String(rec.depts).split('、').map(function(x){return x.trim();}).filter(Boolean):[];
+  dl.innerHTML=depts.map(function(d){ return '<option value="'+d.replace(/"/g,'&quot;')+'">'; }).join('');
+}
 // ═══ 案件担当マップ: 得意先×品名 ごとに現担当を1人だけ持つ（正は常にここ・見積は自動転記） ═══
 function _tantoMap_(){ if(!DB.master) DB.master={}; if(!DB.master.custTanto||typeof DB.master.custTanto!=='object') DB.master.custTanto={}; return DB.master.custTanto; }
 function _tantoKey_(id){
