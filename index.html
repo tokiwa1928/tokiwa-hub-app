@@ -7879,7 +7879,7 @@ function buildPanel(id,initData){
       <button type="button" onclick="autoFillChain(${id})" title="発注元がグループ会社のとき、上流の案件から経由(元請)・エンドユーザーを自動補完" style="font-size:10px;padding:2px 6px;white-space:nowrap;border:1px solid #0369a1;background:#e0f2fe;color:#0369a1;border-radius:5px;cursor:pointer">🔗自動</button></div></div>
     <div class="f"><label>エンドユーザー <span style="font-size:10px;color:#aaa">（最終客の会社）</span></label><input id="enduser-${id}" list="enduser-dl-${id}" placeholder="例: 伊勢原市役所" onchange="onEnduserChange(${id});updateDeliveryDefault(${id})"><datalist id="enduser-dl-${id}">${enduserOpts}</datalist></div>
     <div class="f"><label>担当部署・窓口</label><input id="enduser-dept-${id}" placeholder="例: ○○課" onchange="updateDeliveryDefault(${id})"></div>
-    <div class="f"><label>先方担当者名 <span style="font-size:10px;color:#aaa">（自治体等・見積書に記載）</span></label><input id="cust-tanto-${id}" placeholder="例: 佐藤 様"></div>
+    <div class="f"><label style="display:flex;align-items:center;gap:6px">先方担当者名 <span style="font-size:10px;color:#aaa">（案件に記録・次回から自動）</span><button type="button" onclick="_showTantoHandover_()" style="font-size:10px;padding:1px 8px;border:1px solid #0369a1;background:#e0f2fe;color:#0369a1;border-radius:5px;cursor:pointer" title="担当者の引き継ぎ（案件を選んで一括変更）">⇄ 引き継ぎ</button></label><input id="cust-tanto-${id}" placeholder="例: 佐藤 様" onchange="_tantoOnChange_(${id})"></div>
     <div class="f" style="grid-column:1/-1"><label>品名 <span style="font-size:10px;color:#aaa">（下の3項目から自動生成・直接編集も可）</span></label>
       <input id="prod-${id}" placeholder="品名（下の3項目から自動生成）" readonly style="background:#f1f5f9;color:#334155;cursor:not-allowed" title="品名は下の「品目・宛名・その他」から自動生成されます（直接編集不可）">
       <div style="display:flex;gap:4px;margin-top:3px;flex-wrap:wrap">
@@ -9582,6 +9582,7 @@ function onCustChange(id){
   const custVal = document.getElementById(`cust-${id}`)?.value || '';
   if(typeof _toggleDueField_==='function') _toggleDueField_(id);
   if(!custVal) return;
+  try{ _tantoApply_(id); }catch(e){}
 
   // エンドユーザーdatalistをこの得意先のユーザーで更新
   const dl = document.getElementById(`enduser-dl-${id}`);
@@ -19199,6 +19200,7 @@ function _openProjInEstForm_(oi){
     setv('enduser-' + _tid, p.end_user || p.endUser || p.enduser);
     setv('enduser-dept-' + _tid, p.endUserDept);
     setv('cust-tanto-' + _tid, p.custTanto);
+    try{ var _ct=document.getElementById('cust-tanto-'+_tid); if(_ct) _ct.dataset.frommap='1'; _tantoApply_(_tid, true); }catch(e){}
     setv('deliv-target-' + _tid, p.delivTarget);
     setv('deliv-other-' + _tid, p.delivOther);
     setv('deliv-multi-list-' + _tid, p.delivList);
@@ -36117,6 +36119,122 @@ function _updateEstDocKind_(id){
   if(box) box.style.display = (k==='bid') ? 'block' : 'none';
 }
 function _estDocKind_(id){ return document.querySelector('input[name="est-doc-kind-' + id + '"]:checked')?.value || 'final'; }
+
+// ═══ 案件担当マップ: 得意先×品名 ごとに現担当を1人だけ持つ（正は常にここ・見積は自動転記） ═══
+function _tantoMap_(){ if(!DB.master) DB.master={}; if(!DB.master.custTanto||typeof DB.master.custTanto!=='object') DB.master.custTanto={}; return DB.master.custTanto; }
+function _tantoKey_(id){
+  var c=(document.getElementById('cust-'+id)?.value||'').trim();
+  var pr=(document.getElementById('prod-'+id)?.value||'').trim();
+  if(!c||!pr) return null;
+  return c+'｜'+pr;
+}
+function _tantoSave_(){ try{ saveDB(); }catch(e){} try{ saveToCloud(); }catch(e){} }
+// 案件の現担当を見積フォームへ自動転記（手入力済みの値は壊さない・force=リピート等でマップを正とする）
+function _tantoApply_(id, force){
+  var key=_tantoKey_(id); if(!key) return;
+  var e=_tantoMap_()[key]; if(!e||!e.tanto) return;
+  var el=document.getElementById('cust-tanto-'+id); if(!el) return;
+  if(force || !el.value || el.dataset.frommap==='1'){
+    el.value=e.tanto; el.dataset.frommap='1';
+  }
+  var dl=document.getElementById('enduser-dept-'+id);
+  if(dl && e.dept && (force ? !dl.value.trim() || dl.dataset.frommap==='1' : (!dl.value.trim()||dl.dataset.frommap==='1'))){
+    dl.value=e.dept; dl.dataset.frommap='1';
+  }
+}
+// 担当欄を書き換えたら: 未登録なら記録／登録済みと違えば「案件の担当も更新するか」確認（確実に上書き）
+function _tantoOnChange_(id){
+  var el=document.getElementById('cust-tanto-'+id); if(!el) return;
+  el.dataset.frommap='';
+  var v=(el.value||'').trim(); if(!v) return;
+  var key=_tantoKey_(id);
+  if(!key){ return; } // 得意先・品名が揃ってから記録される
+  var map=_tantoMap_(), e=map[key];
+  var dept=(document.getElementById('enduser-dept-'+id)?.value||'').trim();
+  var by=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'';
+  var now=new Date().toISOString();
+  if(!e){
+    map[key]={tanto:v, dept:dept, updatedAt:now, history:[{at:now, from:'', to:v, by:by}]};
+    _tantoSave_();
+    if(typeof _toastMsg==='function') _toastMsg('📌 この案件の担当として記録しました（次回から自動で入ります）');
+  } else if(e.tanto!==v){
+    var parts=key.split('｜');
+    if(confirm('この案件の担当を更新しますか？\n\n案件: '+parts[0]+' ／ '+parts[1]+'\n担当: '+e.tanto+' → '+v+'\n\nOK＝今後のリピート・見積はすべて「'+v+'」になります\nキャンセル＝この見積だけ「'+v+'」（案件の担当は変えない）')){
+      e.history=e.history||[]; e.history.push({at:now, from:e.tanto, to:v, by:by});
+      e.tanto=v; if(dept) e.dept=dept; e.updatedAt=now;
+      _tantoSave_();
+      if(typeof _toastMsg==='function') _toastMsg('⇄ 案件の担当を「'+v+'」に更新しました');
+    }
+  }
+}
+// ── 引き継ぎ画面: 担当者で絞る→チェックした案件だけ新担当へ一括付替（部分引き継ぎ）──
+function _showTantoHandover_(){
+  var old=document.getElementById('tanto-ho-overlay'); if(old) old.remove();
+  var map=_tantoMap_();
+  var names={}; Object.keys(map).forEach(function(k){ var t=map[k]&&map[k].tanto; if(t) names[t]=(names[t]||0)+1; });
+  var nameKeys=Object.keys(names).sort();
+  var ov=document.createElement('div');
+  ov.id='tanto-ho-overlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100000;overflow:auto;padding:4vh 12px';
+  ov.innerHTML='<div style="max-width:760px;margin:0 auto;background:#fff;border-radius:12px;padding:16px 18px">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><b style="font-size:15px">⇄ 担当の引き継ぎ</b>'
+    +'<span style="font-size:11px;color:#64748b">案件を選んで一部だけ引き継げます（残りは今の担当のまま）</span>'
+    +'<button class="btn" style="margin-left:auto;font-size:12px;padding:4px 12px" onclick="document.getElementById(\'tanto-ho-overlay\').remove()">✕ 閉じる</button></div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'
+    +'<span style="font-size:12px;color:#475569;font-weight:700">現担当</span>'
+    +'<select id="tanto-ho-from" style="font-size:13px" onchange="_tantoHoRender_()">'
+    +(nameKeys.length?nameKeys.map(function(n){ return '<option>'+n.replace(/</g,'&lt;')+'</option>'; }).join(''):'<option value="">（登録なし）</option>')
+    +'</select>'
+    +'<span id="tanto-ho-count" style="font-size:11px;color:#64748b"></span></div>'
+    +'<div id="tanto-ho-list" style="max-height:46vh;overflow:auto;border:1px solid #e2e8f0;border-radius:8px"></div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">'
+    +'<label style="font-size:12px"><input type="checkbox" onchange="document.querySelectorAll(\'#tanto-ho-list input[type=checkbox]\').forEach(function(c){c.checked=this.checked;},this)" onclick="var on=this.checked;document.querySelectorAll(\'#tanto-ho-list input\').forEach(function(c){c.checked=on;})"> 全選択</label>'
+    +'<span style="flex:1"></span>'
+    +'<span style="font-size:12px;color:#475569;font-weight:700">チェックした案件を</span>'
+    +'<input id="tanto-ho-to" placeholder="例: 鈴木 様" style="width:140px;font-size:13px">'
+    +'<button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-size:13px;font-weight:700;padding:6px 16px" onclick="_tantoHandoverApply_()">へ引き継ぐ</button>'
+    +'</div>'
+    +'<div style="font-size:10.5px;color:#94a3b8;margin-top:6px">引き継いだ瞬間から、その案件の次の見積・リピートには新しい担当だけが出ます。発行済みの見積書は変わりません。</div>'
+    +'</div>';
+  document.body.appendChild(ov);
+  _tantoHoRender_();
+}
+function _tantoHoRender_(){
+  var map=_tantoMap_();
+  var from=document.getElementById('tanto-ho-from')?.value||'';
+  var list=document.getElementById('tanto-ho-list'); if(!list) return;
+  var keys=Object.keys(map).filter(function(k){ return map[k]&&map[k].tanto===from; }).sort();
+  var cnt=document.getElementById('tanto-ho-count'); if(cnt) cnt.textContent='担当案件 '+keys.length+'件';
+  if(!keys.length){ list.innerHTML='<div style="padding:14px;color:#94a3b8;font-size:12px">この担当の案件はありません</div>'; return; }
+  list.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<tr style="background:#f8fafc"><th style="padding:5px;border-bottom:1px solid #e2e8f0;width:30px"></th><th style="padding:5px;border-bottom:1px solid #e2e8f0;text-align:left">得意先</th><th style="padding:5px;border-bottom:1px solid #e2e8f0;text-align:left">品名（案件）</th><th style="padding:5px;border-bottom:1px solid #e2e8f0;text-align:left;width:90px">課</th><th style="padding:5px;border-bottom:1px solid #e2e8f0;width:80px">更新日</th></tr>'
+    +keys.map(function(k){
+      var e=map[k], parts=k.split('｜');
+      var esc=function(x){ return String(x||'').replace(/</g,'&lt;'); };
+      return '<tr><td style="padding:5px;text-align:center;border-bottom:1px solid #f1f5f9"><input type="checkbox" class="tanto-ho-cb" data-key="'+esc(k).replace(/"/g,'&quot;')+'"></td>'
+        +'<td style="padding:5px;border-bottom:1px solid #f1f5f9">'+esc(parts[0])+'</td>'
+        +'<td style="padding:5px;border-bottom:1px solid #f1f5f9">'+esc(parts[1])+'</td>'
+        +'<td style="padding:5px;border-bottom:1px solid #f1f5f9">'+esc(e.dept)+'</td>'
+        +'<td style="padding:5px;text-align:center;border-bottom:1px solid #f1f5f9;color:#94a3b8">'+String(e.updatedAt||'').slice(0,10)+'</td></tr>';
+    }).join('')+'</table>';
+}
+function _tantoHandoverApply_(){
+  var to=(document.getElementById('tanto-ho-to')?.value||'').trim();
+  if(!to){ alert('引き継ぎ先の担当者名を入れてください'); return; }
+  var cbs=Array.prototype.slice.call(document.querySelectorAll('#tanto-ho-list .tanto-ho-cb:checked'));
+  if(!cbs.length){ alert('引き継ぐ案件にチェックを入れてください'); return; }
+  if(!confirm(cbs.length+'件の案件の担当を「'+to+'」に変更します。よろしいですか？')) return;
+  var map=_tantoMap_(); var by=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||''; var now=new Date().toISOString();
+  var n=0;
+  cbs.forEach(function(cb){
+    var k=cb.getAttribute('data-key'); var e=map[k]; if(!e) return;
+    e.history=e.history||[]; e.history.push({at:now, from:e.tanto, to:to, by:by});
+    e.tanto=to; e.updatedAt=now; n++;
+  });
+  _tantoSave_();
+  if(typeof _toastMsg==='function') _toastMsg('⇄ '+n+'件を「'+to+'」へ引き継ぎました');
+  _tantoHoRender_();
+}
 // ③リピート元リンクのバナーを描画 (複数履歴をリンクのチェーンで表示)
 function _renderRepeatSrcBanner_(id){
   var el = document.getElementById('repeat-src-banner-' + id); if(!el) return;
