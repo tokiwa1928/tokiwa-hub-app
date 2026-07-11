@@ -7880,7 +7880,7 @@ function buildPanel(id,initData){
     </div>
     <div class="f" id="valid-wrap-${id}"><label>有効期限</label><select id="valid-${id}"><option>発行日より1ヶ月</option><option>発行日より2ヶ月</option><option>発行日より3ヶ月</option></select></div>
     <div class="f" id="due-wrap-${id}" style="display:none"><label>納期 <span style="font-size:10px;color:#0369a1">（請書に記載・見積には出ません）</span></label><input id="due-${id}" type="text" placeholder="例: 受注後2週間 / 2026-07-31"></div>
-    <div class="f"><label>営業費率</label><select id="erate-${id}" onchange="calc(${id})"><option value="0.05">5%</option><option value="0.075">7.5%</option><option value="0.10" selected>10%</option><option value="0.125">12.5%</option><option value="0.15">15%</option><option value="0.20">20%</option></select></div>
+    <div class="f"><label>営業費率（%）</label><input id="erate-${id}" type="number" value="10" min="0" max="100" step="0.5" style="width:70px" oninput="calc(${id})"></div>
     <div class="f"><label>見積番号</label><input id="estno-${id}"></div>
   </div>
   <!-- 案件区分 -->
@@ -8058,7 +8058,7 @@ function buildPanel(id,initData){
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
       <div class="f" style="min-width:90px"><label>前回数量</label><input id="pv-qty-${id}" type="number" placeholder="例:500" data-step="qty" oninput="_prevCmpCalc_(${id})"></div>
       <div class="f" style="min-width:90px"><label>前回単価</label><input id="pv-unitp-${id}" type="number" step="0.01" placeholder="例:94" oninput="_prevCmpCalc_(${id})"></div>
-      <div class="f" style="min-width:95px"><label>前回原価率%（任意）</label><input id="pv-cr-${id}" type="number" placeholder="例:70" data-step="pct" oninput="_prevCmpCalc_(${id})"></div>
+      <div class="f" style="min-width:95px"><label>前回原価率%（任意）</label><input id="pv-cr-${id}" type="number" placeholder="例:70" min="0" max="100" oninput="_prevCmpCalc_(${id})"></div>
       <div class="f" style="min-width:200px"><label>数量カーブ（段階売価マスタ）</label><select id="pv-curve-${id}" style="font-size:11.5px" onchange="_prevCmpCalc_(${id})"><option value="">— カーブなし（単価据置で比較）—</option></select></div>
     </div>
     <div id="pv-out-${id}" style="margin-top:6px;font-size:12.5px"></div>
@@ -8696,15 +8696,15 @@ function _stepPopEnsure_(){
   return pop;
 }
 function _stepPopOpen_(el){
-  var kind=el.getAttribute('data-step'); if(!kind) return;
+  if(!el||el.getAttribute('data-step')==='off') return;
   var pop=_stepPopEnsure_();
-  pop._target=el; pop._kind=kind;
-  var steps=(kind==='pct')?[1,10]:[1,10,100,1000,10000,100000];
+  pop._target=el;
+  var steps=[1,10,100,1000,10000,100000];
   var btn=function(label,fn,color){ return '<button type="button" class="pill" style="min-width:54px;font-size:12px;padding:6px 6px;font-weight:700;'+(color?('color:'+color):'')+'" onclick="'+fn+'">'+label+'</button>'; };
   var minus=steps.slice().reverse().map(function(d){ return btn('−'+d,'_stepPopBump_(-'+d+')','#b91c1c'); }).join('');
   var plus=steps.map(function(d){ return btn('＋'+d,'_stepPopBump_('+d+')','#065f46'); }).join('');
   pop.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
-    +'<span style="font-size:11px;color:#64748b">'+(kind==='pct'?'％入力':'数量入力')+'</span>'
+    +'<span style="font-size:11px;color:#64748b">数値入力</span>'
     +'<b id="step-pop-val" style="font-size:15px">'+(el.value===''?'—':Number(el.value).toLocaleString())+'</b>'
     +'<span style="flex:1"></span>'
     +btn('0','_stepPopZero_()','')
@@ -8723,8 +8723,12 @@ function _stepPopOpen_(el){
 function _stepPopBump_(d){
   var pop=document.getElementById('step-pop'); var t=pop&&pop._target; if(!t) return;
   var v=(parseFloat(t.value)||0)+d;
-  if(v<0) v=0;
-  if(pop._kind==='pct'&&v>100) v=100;
+  v=Math.round(v*100)/100;
+  var mn=(t.min!==''&&t.min!=null)?parseFloat(t.min):0;   // 下限: min属性 or 0
+  var mx=(t.max!==''&&t.max!=null)?parseFloat(t.max):null; // 上限: max属性があれば
+  if(!isNaN(mn)&&v<mn) v=mn;
+  if(v<0&&(isNaN(mn)||mn>=0)) v=0;
+  if(mx!=null&&!isNaN(mx)&&v>mx) v=mx;
   t.value=v;
   try{ t.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
   var vd=document.getElementById('step-pop-val'); if(vd) vd.textContent=Number(v).toLocaleString();
@@ -8751,13 +8755,14 @@ function _stepPopZero_(){
   var vd=document.getElementById('step-pop-val'); if(vd) vd.textContent='0';
 }
 function _stepPopClose_(){ var pop=document.getElementById('step-pop'); if(pop){ pop.style.display='none'; pop._target=null; } }
+function _stepPopIsTarget_(t){
+  return t && t.tagName==='INPUT' && t.type==='number' && t.getAttribute('data-step')!=='off' && !t.disabled && !t.readOnly;
+}
 document.addEventListener('focusin',function(e){
-  var t=e.target;
-  if(t&&t.getAttribute&&t.getAttribute('data-step')) _stepPopOpen_(t);
+  if(_stepPopIsTarget_(e.target)) _stepPopOpen_(e.target);
 });
 document.addEventListener('click',function(e){
-  var t=e.target;
-  if(t&&t.getAttribute&&t.getAttribute('data-step')) _stepPopOpen_(t); // 既にフォーカス済みで再クリックした時も開く
+  if(_stepPopIsTarget_(e.target)) _stepPopOpen_(e.target); // 既にフォーカス済みで再クリックした時も開く
 });
 document.addEventListener('mousedown',function(e){
   var pop=document.getElementById('step-pop');
@@ -8796,7 +8801,7 @@ function addPrevCmp(id){
   div.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">'
     +'<div class="f" style="min-width:90px"><label>前回数量 ('+(k+1)+'件目)</label><input id="pv-qty-'+id+sfx+'" type="number" placeholder="例:500" data-step="qty" oninput="_prevCmpCalc_('+id+','+k+')"></div>'
     +'<div class="f" style="min-width:90px"><label>前回単価</label><input id="pv-unitp-'+id+sfx+'" type="number" step="0.01" placeholder="例:94" oninput="_prevCmpCalc_('+id+','+k+')"></div>'
-    +'<div class="f" style="min-width:95px"><label>前回原価率%（任意）</label><input id="pv-cr-'+id+sfx+'" type="number" placeholder="例:70" data-step="pct" oninput="_prevCmpCalc_('+id+','+k+')"></div>'
+    +'<div class="f" style="min-width:95px"><label>前回原価率%（任意）</label><input id="pv-cr-'+id+sfx+'" type="number" placeholder="例:70" min="0" max="100" oninput="_prevCmpCalc_('+id+','+k+')"></div>'
     +'<div class="f" style="min-width:200px"><label>数量カーブ（段階売価マスタ）</label><select id="pv-curve-'+id+sfx+'" style="font-size:11.5px" onchange="_prevCmpCalc_('+id+','+k+')"><option value="">— カーブなし（単価据置で比較）—</option></select></div>'
     +'<button type="button" class="btn" style="font-size:11px;padding:4px 10px;color:#b91c1c" onclick="document.getElementById(\'pv-row-'+id+sfx+'\').remove()" title="この比較行を削除">🗑</button>'
     +'</div>'
