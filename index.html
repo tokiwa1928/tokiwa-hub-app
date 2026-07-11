@@ -8237,6 +8237,7 @@ function buildPanel(id,initData){
 </div>`;
   document.getElementById('tab-panels').appendChild(div);
   try{ if(typeof _est3Init_==='function') _est3Init_(id); }catch(e){ console.warn('est3 init', e); }
+  try{ if(typeof _estOrgInit_==='function'){ _estOrgInit_(id); _eoRefresh_(id); } }catch(e){ console.warn('est org init', e); }
   CATS.forEach(c=>{
     const b=document.createElement('button');b.className='pill';b.textContent=c;
     b.onclick=()=>{const s=ts(id);s.cat=c;s.sub='';s.type=TYPE_MAP[c]||'other';document.querySelectorAll(`#cat-row-${id} .pill`).forEach(x=>x.classList.remove('sel'));b.classList.add('sel');buildSubRow(id,c);renderPast(id);buildFormArea(id,null);updateProdQuickFilter(id,c);if(typeof _setProdBaseFromCat_==='function')_setProdBaseFromCat_(id,c);};
@@ -8863,6 +8864,95 @@ function addPrevCmp(id){
   box.appendChild(div);
   _prevCmpPopulateOne_(document.getElementById('pv-curve-'+id+sfx));
 }
+// ═══ EST-ORG: 見積入力の情報整理（番号区分・任意ラベル・必須ハイライト・メーター・次に入力）═══
+function _estOrgInit_(id){
+  var form=document.getElementById('est3-form-'+id); if(!form||form._eoDone) return; form._eoDone=1;
+  // 1) セクション番号チップ＋「任意」ラベル
+  var OPT=/サイズ|発注形態|アナログ|前回比較|追加費用|梱包|納品指示/;
+  var n=0;
+  Array.prototype.slice.call(form.querySelectorAll('.sec')).forEach(function(sec){
+    var st=sec.querySelector('.st'); if(!st||st.querySelector('.eo-num')) return;
+    var t=st.textContent||'';
+    var chip=document.createElement('span');
+    if(OPT.test(t)){ chip.className='eo-num opt'; chip.textContent='任意'; }
+    else{ n++; chip.className='eo-num'; chip.textContent=('0'+n).slice(-2);
+      var bd=document.createElement('span'); bd.className='eo-badge'; bd.style.display='none';
+      st.appendChild(bd); sec._eoBadge=bd; }
+    st.insertBefore(chip, st.firstChild);
+  });
+  // 2) 上部バー（必須メーター＋次に入力）
+  var bar=document.createElement('div'); bar.className='eo-topbar'; bar.id='eo-bar-'+id;
+  bar.innerHTML='<b style="font-size:12.5px">必須入力 <span id="eo-cnt-'+id+'">0/0</span></b>'
+    +'<div style="flex:1;max-width:200px;height:6px;background:#f1f5f9;border-radius:3px;overflow:hidden"><div id="eo-meter-'+id+'" style="height:100%;width:0%;background:#1d9e75;transition:width .25s"></div></div>'
+    +'<button type="button" id="eo-next-'+id+'" class="btn" style="margin-left:auto;background:#1a1a1a;color:#fff;border-color:#1a1a1a;border-radius:16px;font-size:11.5px;padding:5px 14px;font-weight:700" onclick="_eoNext_('+id+')">▶ 次に入力</button>';
+  form.insertBefore(bar, form.firstChild);
+  // 3) ラベル内の長いグレー注記を「？」に収納（情報は失わずホバーで表示）
+  Array.prototype.slice.call(form.querySelectorAll('label > span')).forEach(function(sp){
+    var cs=sp.getAttribute('style')||'';
+    if(/font-size:\s*(9|9\.5|10|10\.5)px/.test(cs) && /#aaa|#94a3b8|#888/.test(cs) && (sp.textContent||'').replace(/\s/g,'').length>=8){
+      var q=document.createElement('span'); q.className='eo-hint'; q.textContent='？'; q.title=sp.textContent.trim();
+      sp.replaceWith(q);
+    }
+  });
+}
+// 必須項目の定義（後から増減しやすいよう一箇所に）
+function _eoFields_(id){
+  return [
+    {label:'得意先名', get:function(){ return (document.getElementById('cust-'+id)||{}).value||''; }, el:function(){ return document.getElementById('cust-'+id); }},
+    {label:'品名（品目を選択）', get:function(){ return (document.getElementById('prod-'+id)||{}).value||''; }, el:function(){ return document.getElementById('prod-'+id); }},
+    {label:'数量', get:function(){ var v=(typeof ts==='function'&&ts(id)&&ts(id).qtyPats&&ts(id).qtyPats[0])?ts(id).qtyPats[0].v:''; return (v&&Number(v)>0)?String(v):''; }, el:function(){ return document.getElementById('qty-'+id); }},
+    {label:'採用単価', get:function(){ var a=document.getElementById('adopted-'+id+'-0-0')||document.getElementById('adopted-'+id+'-0'); return (a&&parseFloat(a.value)>0)?a.value:''; }, el:function(){ return document.getElementById('adopted-'+id+'-0-0')||document.getElementById('adopted-'+id+'-0')||document.getElementById('form-area-'+id); }}
+  ];
+}
+function _eoRefresh_(id){
+  var form=document.getElementById('est3-form-'+id); if(!form||!form._eoDone) return;
+  var fs=_eoFields_(id), missing=[];
+  Array.prototype.slice.call(form.querySelectorAll('.eo-miss')).forEach(function(e){ e.classList.remove('eo-miss'); });
+  fs.forEach(function(f){
+    var ok=!!String(f.get()||'').trim();
+    if(!ok){ missing.push(f); var el=f.el(); if(el&&(el.tagName==='INPUT'||el.tagName==='SELECT')) el.classList.add('eo-miss'); }
+  });
+  var cnt=document.getElementById('eo-cnt-'+id); if(cnt) cnt.textContent=(fs.length-missing.length)+'/'+fs.length;
+  var m=document.getElementById('eo-meter-'+id); if(m) m.style.width=Math.round((fs.length-missing.length)/fs.length*100)+'%';
+  var nb=document.getElementById('eo-next-'+id);
+  if(nb){
+    if(missing.length){ nb.textContent='▶ 次に入力：'+missing[0].label; nb.style.background='#1a1a1a'; nb.style.borderColor='#1a1a1a'; }
+    else{ nb.textContent='✓ 必須はすべて入力済み'; nb.style.background='#16a34a'; nb.style.borderColor='#16a34a'; }
+  }
+  Array.prototype.slice.call(form.querySelectorAll('.sec')).forEach(function(sec){
+    if(!sec._eoBadge) return;
+    var inSec=function(f){ var el=f.el(); return el&&sec.contains(el); };
+    var total=fs.filter(inSec).length;
+    var bd=sec._eoBadge;
+    if(!total){ bd.style.display='none'; return; }
+    var mn=missing.filter(inSec).length;
+    bd.style.display='';
+    if(mn){ bd.className='eo-badge miss'; bd.textContent='● 必須 あと'+mn+'件'; }
+    else{ bd.className='eo-badge done'; bd.textContent='✓ 完了'; }
+  });
+}
+function _eoNext_(id){
+  var fs=_eoFields_(id);
+  for(var i=0;i<fs.length;i++){
+    if(!String(fs[i].get()||'').trim()){
+      var el=fs[i].el();
+      if(el){ el.scrollIntoView({block:'center',behavior:'smooth'}); try{ el.focus(); }catch(e){} }
+      return;
+    }
+  }
+  if(typeof _toastMsg==='function') _toastMsg('✓ 必須はすべて入力済みです');
+}
+// 入力のたびに必須バッジを更新（デバウンス）
+document.addEventListener('input', function(e){
+  var tp=e.target&&e.target.closest?e.target.closest('[id^="tp-"]'):null; if(!tp) return;
+  var id=tp.id.replace('tp-','');
+  clearTimeout(window._eoT); window._eoT=setTimeout(function(){ try{ _eoRefresh_(id); }catch(x){} }, 250);
+});
+document.addEventListener('change', function(e){
+  var tp=e.target&&e.target.closest?e.target.closest('[id^="tp-"]'):null; if(!tp) return;
+  var id=tp.id.replace('tp-','');
+  clearTimeout(window._eoT); window._eoT=setTimeout(function(){ try{ _eoRefresh_(id); }catch(x){} }, 250);
+});
 // 発注形態 (完全/部分外注/分離発注) の切替: 部分外注・分離なら各工程の外注バーを表示
 function onOrderFormChange(id){
   const v=document.getElementById(`order-form-${id}`)?.value||'complete';
@@ -48439,6 +48529,15 @@ function _custQuickFilter_(q){
 <style id="techc-global">
 /* フォームはツールページへ統合済み: ナビのフォームボタンは常時非表示（swPage('forms')自体は有効） */
 .tb-btn[data-page="forms"]{ display:none !important; }
+/* EST-ORG: 見積入力の区分整理・必須ハイライト（本多さん承認モック準拠） */
+.eo-num{display:inline-flex;align-items:center;justify-content:center;background:#1a1a1a;color:#fff;font-size:10px;font-weight:700;border-radius:4px;padding:2px 7px;margin-right:7px;letter-spacing:.05em;flex:0 0 auto}
+.eo-num.opt{background:#94a3b8}
+.eo-badge{font-size:10.5px;font-weight:700;border-radius:9px;padding:2px 10px;margin-left:8px}
+.eo-badge.miss{background:#faeeda;color:#854f0b}
+.eo-badge.done{background:#e1f5ee;color:#0f6e56}
+.eo-miss{border:1.5px solid #ef9f27 !important;background:#fdf6e8 !important}
+.eo-topbar{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #e0ddd6;border-radius:10px;padding:8px 12px;margin-bottom:10px}
+.eo-hint{cursor:help;color:#94a3b8;font-size:10px;border:1px solid #d6d3cb;border-radius:50%;width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;margin-left:4px;vertical-align:middle;font-weight:700}
   /* 見出しの統一（インライン指定のあるページはそのまま） */
   .page h2{ letter-spacing:.01em; }
   /* 入力ラベルの統一（小さく太く・estは既存の高密度設定を維持） */
