@@ -22377,9 +22377,16 @@ function openNittei(id){
     +   fld('担当','<input id="nt-owner" value="'+_formEsc_(v('owner',_formWho_()))+'" style="'+st+'">')
     + '</div>'
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 14px;margin-top:8px">'
+    +   fld('製番（案件と連動・入力すると保存時に工程管理へ予定日を反映）','<input id="nt-seiban" list="dl-nt-proj" value="'+_formEsc_(v('seiban'))+'" placeholder="例: AS-26299" onchange="_ntSeibanPick_()" style="'+st+'"><datalist id="dl-nt-proj">'+((DB.projects||[]).slice(-500).map(function(pj){ return '<option value="'+_formEsc_(pj.id)+'">'+_formEsc_((pj.cust||'')+' '+(pj.item||''))+'</option>'; }).join(''))+'</datalist>')
     +   fld('件名（案件名）','<input id="nt-subject" list="dl-mit-cust" value="'+_formEsc_(v('subject'))+'" placeholder="例 ○○会報 No.26" style="'+st+'">')
     +   fld('得意先','<input id="nt-cust" list="dl-mit-cust" value="'+_formEsc_(v('cust'))+'" style="'+st+'">')
     +   fld('納品予定日','<input type="date" id="nt-due" value="'+_formEsc_(v('due'))+'" oninput="if(typeof _ntCalGoto_===\'function\')_ntCalGoto_(this.value)" style="'+st+'">')
+    + '</div>'
+    + '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:7px 10px">'
+    +   '<b style="font-size:12.5px;color:#1e40af">🤖 過去の日程表から読み込み（AI）</b>'
+    +   '<input type="file" id="nt-scan" accept="image/*" multiple style="font-size:12px">'
+    +   '<button type="button" class="btn" style="font-size:12px;padding:4px 14px;background:#1e40af;color:#fff;border-color:#1e40af" onclick="_ntAiImport_()">読み込む</button>'
+    +   '<span id="nt-scan-st" style="font-size:11px;color:#64748b">紙・Excelの写真/スクショから工程と日付を下の表に入れます（ボタンを押した時だけAIを使用）</span>'
     + '</div>'
     + '<div style="margin-top:12px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:640px">'
     +   '<thead><tr style="background:#f1f5f9"><th style="padding:5px;text-align:left;width:170px">工程</th><th style="padding:5px;width:140px">予定日</th><th style="padding:5px;width:110px">担当</th><th style="padding:5px;text-align:left">備考</th><th style="width:48px"></th></tr></thead>'
@@ -22461,7 +22468,7 @@ function _ntCalPick_(ds){
 function _ntCollect_(){
   function g(id){ var e=document.getElementById(id); return e?e.value:''; }
   var rows=[]; document.querySelectorAll('#nt-body tr').forEach(function(tr){ var o={step:tr.querySelector('.nt-step').value, sched:tr.querySelector('.nt-sched').value, person:tr.querySelector('.nt-person').value, note:tr.querySelector('.nt-note').value}; if(o.step||o.sched||o.note) rows.push(o); });
-  return { co:g('nt-co'), date:g('nt-date'), owner:g('nt-owner'), subject:g('nt-subject'), cust:g('nt-cust'), due:g('nt-due'), rows:rows, memo:g('nt-memo') };
+  return { co:g('nt-co'), date:g('nt-date'), owner:g('nt-owner'), subject:g('nt-subject'), cust:g('nt-cust'), due:g('nt-due'), seiban:g('nt-seiban'), rows:rows, memo:g('nt-memo') };
 }
 function saveNittei(thenPrint){
   var data=_ntCollect_();
@@ -22471,9 +22478,107 @@ function saveNittei(thenPrint){
   var rec;
   if(id){ rec=L.find(function(x){return x.id===id;}); if(rec){ rec.data=data; rec.title=title; rec.updatedAt=now; } }
   if(!rec){ rec={ id:'frm_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), type:'nittei', title:title, data:data, createdAt:now, updatedAt:now, createdBy:_formWho_() }; L.push(rec); window._formEditId_=rec.id; }
+  // 製番リンク: 該当案件の工程管理(stepPlanned=予定日)へ反映
+  var _linked=0;
+  if(data.seiban){
+    var _pj=(DB.projects||[]).find(function(x){ return x && x.id===String(data.seiban).trim(); });
+    if(_pj){
+      _pj.stepPlanned=_pj.stepPlanned||{};
+      (data.rows||[]).forEach(function(rw){
+        if(!rw.sched) return;
+        var k=_ntStepKey_(rw.step);
+        if(k){ _pj.stepPlanned[k]=rw.sched; _linked++; }
+      });
+      if(data.due && !_pj.dueDate) _pj.dueDate=data.due;
+      _pj.nitteiFormId=rec.id;
+    }
+  }
   if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){}
-  if(typeof _toastMsg==='function')_toastMsg('💾 保存しました');
+  if(typeof _toastMsg==='function')_toastMsg('💾 保存しました'+(_linked?('　⏱ 工程管理へ予定日'+_linked+'件を反映（'+data.seiban+'）'):''));
   if(thenPrint) _printNittei_(rec); else renderFormsPage();
+}
+// 日程表の工程名 → 工程管理の列キー（対応しない工程は日程表のみに残る）
+function _ntStepKey_(name){
+  var n=String(name||'');
+  if(/用紙/.test(n)) return '用紙';
+  if(/版下|データ|デザイン|下版/.test(n)) return '版下';
+  if(/校了/.test(n)) return '校了';
+  if(/色/.test(n)) return '色合わせ';
+  if(/ミシン/.test(n)) return 'ミシン出し';
+  if(/印刷/.test(n)) return '印刷';
+  if(/加工|製本|断裁|箱詰|検品/.test(n)) return '加工';
+  if(/納品|発送/.test(n)) return '納品';
+  if(/受注|入稿/.test(n)) return '受注';
+  return null;
+}
+// 製番を選んだら件名・得意先・納期を案件から補完（空欄のみ）
+function _ntSeibanPick_(){
+  var idv=(document.getElementById('nt-seiban')||{}).value||'';
+  var pj=(DB.projects||[]).find(function(x){ return x && x.id===idv.trim(); });
+  if(!pj) return;
+  var setIf=function(id,val){ var el=document.getElementById(id); if(el&&!el.value&&val) el.value=val; };
+  setIf('nt-subject', pj.item);
+  setIf('nt-cust', pj.cust);
+  setIf('nt-due', pj.dueDate);
+  if(typeof _toastMsg==='function')_toastMsg('🔗 案件「'+(pj.item||pj.id)+'」とリンクしました');
+}
+// 🤖 過去の日程表(画像)をAIで読み取り→行に反映（手動ボタン時のみAI使用）
+async function _ntAiImport_(){
+  var st=document.getElementById('nt-scan-st');
+  var files=Array.prototype.slice.call((document.getElementById('nt-scan')||{}).files||[]);
+  if(!files.length){ if(st)st.textContent='ファイルを選択してください（画像・スクショ）'; return; }
+  try{
+    if(st)st.textContent='画像を準備中…';
+    var imgs=[];
+    for(var i=0;i<files.length&&i<6;i++){
+      var f=files[i];
+      if(!/^image\//.test(f.type)){ if(st)st.textContent='画像ファイルを選んでください（PDFはスクショにして）'; return; }
+      imgs.push(await _ntFileToCanvas_(f));
+    }
+    var yy=new Date().getFullYear();
+    var prompt='これは印刷会社の「進行日程表（スケジュール表）」の写真/スクショです。'
+      +'内容を読み取り、JSONオブジェクトだけを返してください（説明・コードフェンス不要）。'
+      +'形式: {"subject":"件名","cust":"得意先","due":"YYYY-MM-DD","rows":[{"step":"工程名","sched":"YYYY-MM-DD","person":"担当","note":"備考"}]}。'
+      +'年が書かれていない日付は'+yy+'年で補完。読めない項目は空文字。工程は上から順に全行。';
+    if(st)st.textContent='AIで読み取り中…';
+    var reply=await _ntAiVision_(prompt, imgs, 3000);
+    var m=reply.match(/\{[\s\S]*\}/);
+    var obj=JSON.parse(m?m[0]:reply);
+    var setIf=function(id,val){ var el=document.getElementById(id); if(el&&val&&!el.value) el.value=val; };
+    setIf('nt-subject', obj.subject); setIf('nt-cust', obj.cust); setIf('nt-due', obj.due);
+    var rows=(obj.rows||[]).filter(function(r){ return r&&(r.step||r.sched); });
+    if(rows.length){
+      var tb=document.getElementById('nt-body');
+      var keep=[]; document.querySelectorAll('#nt-body tr').forEach(function(tr){ var sv=tr.querySelector('.nt-sched').value, sp=tr.querySelector('.nt-step').value, nt=tr.querySelector('.nt-note').value; if(sv||nt) keep.push({step:sp,sched:sv,person:tr.querySelector('.nt-person').value,note:nt}); });
+      var all=keep.concat(rows);
+      tb.innerHTML=all.map(function(it){ return _ntRow_(it); }).join('');
+      if(typeof _ntRenderCal_==='function')_ntRenderCal_();
+    }
+    if(st)st.textContent='✅ '+rows.length+'工程を読み込みました（日付・担当をご確認ください）';
+  }catch(e){ if(st)st.textContent='読み取り失敗: '+(e.message||e); }
+}
+function _ntFileToCanvas_(file){
+  return new Promise(function(res,rej){
+    var img=new Image();
+    img.onload=function(){ var c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight; c.getContext('2d').drawImage(img,0,0); URL.revokeObjectURL(img.src); res(c); };
+    img.onerror=function(){ rej(new Error('画像を読めませんでした')); };
+    img.src=URL.createObjectURL(file);
+  });
+}
+// GASのclaudeVisionを直接呼ぶ（ツール共通_ai.jsと同じ仕組み・手動時のみ）
+async function _ntAiVision_(prompt, canvases, maxTokens){
+  var b64s=canvases.map(function(cv){
+    var maxDim=1600, sc=Math.min(1, maxDim/Math.max(cv.width,cv.height)), c2=cv;
+    if(sc<1){ c2=document.createElement('canvas'); c2.width=Math.round(cv.width*sc); c2.height=Math.round(cv.height*sc); c2.getContext('2d').drawImage(cv,0,0,c2.width,c2.height); }
+    return c2.toDataURL('image/jpeg',0.85).split(',')[1];
+  });
+  var url=new URL(CLOUD_CONFIG.GAS_URL||CLOUD_CONFIG.API_URL||'');
+  url.searchParams.set('action','claudeVision');
+  url.searchParams.set('apiKey', CLOUD_CONFIG.API_KEY||'mitsumori-2024');
+  var res=await fetch(url.toString(), { method:'POST', redirect:'follow', body: JSON.stringify({ prompt:prompt, images:b64s, maxTokens:maxTokens||3000, model:'claude-sonnet-5' }) });
+  var j=await res.json();
+  if(!j.success) throw new Error(j.error||('HTTP '+res.status));
+  return (j.reply||'').trim();
 }
 function _printNittei_(r){
   var d=r.data||{}; var p=MIT_CO[d.co]||MIT_CO.arteso; var e=_formEsc_;
@@ -48569,8 +48674,7 @@ function _custQuickFilter_(q){
 </style>
 <!-- ===== techC 全体適用レイヤー（見出し/入力の統一・和文のみ） TECHC-G ===== -->
 <style id="techc-global">
-/* フォームはツールページへ統合済み: ナビのフォームボタンは常時非表示（swPage('forms')自体は有効） */
-.tb-btn[data-page="forms"]{ display:none !important; }
+/* フォームはナビに復活（本多さん指示 2026-07-12）・ツール内のフォームセクションも併存 */
 /* EST-ORG: 見積入力の区分整理・必須ハイライト（本多さん承認モック準拠） */
 .eo-num{display:inline-flex;align-items:center;justify-content:center;background:#1a1a1a;color:#fff;font-size:10px;font-weight:700;border-radius:4px;padding:2px 7px;margin-right:7px;letter-spacing:.05em;flex:0 0 auto}
 .eo-num.opt{background:#94a3b8}
