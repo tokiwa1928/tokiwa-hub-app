@@ -1101,7 +1101,8 @@ function yearRow2(r, g){
   var editable=isCur||!!_editUnlocked[r.id];
   var delB='<button class="rowbtn del" onclick="delRow(\''+id+'\')" title="この行を削除">🗑</button>';
   var addB='<button class="rowbtn add" onclick="repeatRow(\''+id+'\')" title="この行を今日の年で追加（ユーザー〜数量＋納品方法/納品先/備考を引継ぎ・伝票番号なし）">＋追加</button>';
-  var actCell='<td class="act'+(editable?' curr':'')+'">'+(isCur?delB:(editable?(delB+'<button class="rowbtn ok" onclick="lockEdit(\''+id+'\')" title="編集を終了">✓</button>'):'<button class="rowbtn edit" onclick="unlockEdit(\''+id+'\')" title="この過去データを編集">✏編集</button>'))+addB+'</td>';
+  var hubB=isCur?('<button class="rowbtn" onclick="calToEst(\''+id+'\')" title="Hubで見積作成（内容を引き継いで見積画面を開く）">📄</button>'+(r.orderDate?'<button class="rowbtn ok" onclick="calToProject(\''+id+'\')" title="'+(r._hubProjId?'Hub案件を更新':'Hubの案件管理表へ受注登録')+'">'+(r._hubProjId?'🔁':'✅')+'</button>':'')):'';
+  var actCell='<td class="act'+(editable?' curr':'')+'">'+(isCur?delB:(editable?(delB+'<button class="rowbtn ok" onclick="lockEdit(\''+id+'\')" title="編集を終了">✓</button>'):'<button class="rowbtn edit" onclick="unlockEdit(\''+id+'\')" title="この過去データを編集">✏編集</button>'))+hubB+addB+'</td>';
   if(editable){
     return '<td class="d curr stcol">'+stBadge(r)+'</td><td class="ycol curr"><input class="gedit yedit" value="'+r.year+'" data-id="'+id+'" data-f="year" onchange="onEdit(this)">'+alert+'</td><td class="lead curr">'+inp('user','text')+'</td><td class="lprod curr">'+inp('product','text','prodMaster')+'</td><td class="curr">'+inp('denpyoNo','text')+'</td><td class="d curr"><select class="nsel" data-id="'+id+'" data-f="naire" onchange="onEdit(this)"><option value="">—</option><option'+(r.naire==='有'?' selected':'')+'>有</option><option'+(r.naire==='無'?' selected':'')+'>無</option></select></td><td class="lvendor curr">'+inp('vendor','text','vendorMaster')+'</td><td class="n curr">'+inp('orderQty','num')+'</td><td class="n curr">'+inp('orderPrice','num')+'</td><td class="n curr">'+pctSigned(price,prevP,pyl)+'</td><td class="n curr">'+(saAmt!==''?'¥'+fmt(saAmt):'<span class="dim">自動</span>')+'</td><td class="d curr xw"><select class="nsel" data-id="'+id+'" data-f="plateChg" onchange="onEdit(this)"><option value="">—</option><option'+(r.plateChg==='有'?' selected':'')+'>有</option><option'+(r.plateChg==='無'?' selected':'')+'>無</option></select></td><td class="n curr xw">'+inp('plateCost','num')+'</td><td class="n curr xw">'+inp('shipFee','num')+'</td><td class="n curr xw">'+inp('otherAmt','num')+'</td><td class="n curr">'+inp('cost','num')+costDiff+'</td><td class="n curr">'+(siAmt!==''?'¥'+fmt(siAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+crCell+'</td><td class="d curr">'+inp('telDate','date')+'</td><td class="d curr">'+inp('orderDate','date')+'</td><td class="d curr">'+inp('lostDate','date')+'</td><td class="d curr">'+inp('poDate','date')+'</td><td class="d curr">'+inp('poDue','date')+'</td><td class="d curr">'+inp('poConfirm','text')+'</td><td class="d curr">'+inp('inDate','date')+'</td><td class="d curr">'+inp('delivDate','date')+'</td><td class="d curr">'+inp('deliveryMethod','text')+'</td><td class="lead curr">'+inp('delivTo','text')+'</td><td class="lead curr">'+inp('note','text')+'</td>'+actCell;
   }
@@ -1199,7 +1200,78 @@ function curCell(g, r, gi, prevR, prevP, prevC){
     var pq=(prevR.orderQty!==''&&prevR.orderQty!=null)?prevR.orderQty:prevR.pyQty, pmp=mPrice(prevR);
     var pqp=(pmp!=='')?(fmt(pq)+(prevR.unit||'冊')+' × ¥'+fmt(pmp)):'';
     hist='<div class="phist">前年('+(prevR.year||'')+'): '+(pqp||'—')+(hd.length?'　'+hd.join('  '):'')+'</div>'; }
-  return chips+dates+nums+metrics+hist;
+  // Hub連携: 見積作成・受注登録
+  var hubact='<div class="frow" style="margin-top:5px;gap:6px;align-items:center">'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px" onclick="calToEst(\''+id+'\')">📄 Hubで見積作成</button>'
+    +(r.orderDate?('<button class="btn" style="font-size:11px;padding:3px 10px;background:#16a34a;color:#fff;border-color:#16a34a" onclick="calToProject(\''+id+'\')">'+(r._hubProjId?'🔁 Hub案件を更新':'✅ Hubへ受注登録')+'</button>'):'')
+    +(r._hubProjId?('<span style="font-size:10px;color:#16a34a;font-weight:700">Hub登録済 '+hubEsc(r._hubProjId)+'</span>'):'')
+    +'</div>';
+  return chips+dates+nums+metrics+hist+hubact;
+}
+// ═══ Hub連携: カレンダー台帳 → Hub見積 / Hub案件管理表 ═══
+function _calRow_(id){ return (loadAll()||[]).filter(function(x){ return x.id===id; })[0]; }
+// 見積作成: 行の内容をハンドオフしてHubの見積画面を開く（保存はHub側で）
+function calToEst(id){
+  var r=_calRow_(id); if(!r){ hubToast('行が見つかりません'); return; }
+  var payload={ type:'est', at:Date.now(), calId:r.id,
+    cust:r.cust||'', product:cleanProd(r.product)||'', unit:r.unit||'冊',
+    qty:(r.orderQty!==''&&r.orderQty!=null)?r.orderQty:(r.pyQty||''),
+    price:(r.orderPrice!==''&&r.orderPrice!=null)?r.orderPrice:(r.propPrice||''),
+    due:r.delivDate||'', denpyoNo:r.denpyoNo||'', user:r.user||'', vendor:r.vendor||'',
+    naire:r.naire||'', note:r.note||'', pyPrice:r.pyPrice||'', pyQty:r.pyQty||'' };
+  try{ localStorage.setItem('tokiwa_hub_handoff_v1', JSON.stringify(payload)); }catch(e){}
+  window.open('../index.html?handoff=cal','_blank');
+  hubToast('📄 Hubの見積作成を開きます…');
+}
+// 受注登録: 受注日の入った行をHubの案件管理表へ登録/更新（差異があれば確認）
+function calToProject(id){
+  var r=_calRow_(id); if(!r){ hubToast('行が見つかりません'); return; }
+  if(!r.orderDate){ hubToast('先に受注日を入れてください'); return; }
+  var qty=Number(r.orderQty)||0, price=Number(r.orderPrice)||0;
+  if(!qty||!price){ if(!confirm('数量または売価が未入力です。このままHubへ登録しますか？')) return; }
+  var plate=Number(r.plateCost)||0, ship=Number(r.shipFee)||0, other=Number(r.otherAmt)||0;
+  var exTax=Math.round(qty*price+plate+ship+other);
+  var db=hubLoad()||{}; var pid='CAL-'+r.id;
+  var prev=(db.projects||[]).filter(function(p){ return p&&p.id===pid; })[0];
+  // 差異チェック（再登録時: 前回登録との違い / 提案単価との違い）
+  var diffs=[];
+  if(prev){
+    if(Number(prev.qty)!==qty) diffs.push('・数量 '+fmt(prev.qty)+' → '+fmt(qty));
+    if(Number(prev.exTax)!==exTax) diffs.push('・金額 ¥'+fmt(prev.exTax)+' → ¥'+fmt(exTax));
+    if((prev.dueDate||'')!==(r.delivDate||'')) diffs.push('・納期 '+(prev.dueDate||'—')+' → '+(r.delivDate||'—'));
+  }
+  if(r.propPrice!==''&&r.propPrice!=null&&Number(r.propPrice)!==price) diffs.push('・提案(見積)単価 ¥'+fmt(r.propPrice)+' → 受注単価 ¥'+fmt(price));
+  var lines=['得意先: '+(r.cust||'—'),'品名: '+(cleanProd(r.product)||'—'),'数量: '+fmt(qty)+(r.unit||'冊')+' × ¥'+fmt(price),'金額(税抜): ¥'+fmt(exTax),'受注日: '+r.orderDate+(r.delivDate?'　納品予定: '+r.delivDate:'')];
+  var NL=String.fromCharCode(10);
+  var msg=(prev?('⚠ この行はHub登録済みです。案件を更新します。'+NL+NL):('Hubの案件管理表へ受注登録します。'+NL+NL))
+    +lines.join(NL)
+    +(diffs.length?(NL+NL+'【変更があります】'+NL+diffs.join(NL)+NL+NL+'※見積書を発行済みの場合は、Hub側の見積の改訂もお願いします。'):'');
+  if(!confirm(msg)) return;
+  var auth=hubAuth();
+  var proj=prev?JSON.parse(JSON.stringify(prev)):{};
+  proj.id=pid;
+  proj.companyId=proj.companyId||auth.companyId||'murayama';
+  proj.companyCode=proj.companyCode||auth.companyCode||'MU';
+  proj.orderDate=r.orderDate; proj.dueDate=r.delivDate||'';
+  proj.cust=r.cust||''; proj.item=cleanProd(r.product)||'カレンダー';
+  proj.spec=[(r.naire?'名入れ'+r.naire:''),(r.plateChg==='有'?'版変更あり':''),(r.vendor?'発注先:'+r.vendor:'')].filter(function(x){return x;}).join(' / ');
+  proj.qty=qty; proj.unit=r.unit||'冊'; proj.exTax=exTax; proj.grand=Math.round(exTax*1.1);
+  proj.status=proj.status||'データ作成中';
+  proj.assignee=proj.assignee||auth.userName||'';
+  proj.memo='カレンダー受注台帳より'+(r.denpyoNo?' 伝票'+r.denpyoNo:'')+(r.user?' ユーザー:'+r.user:'')+(r.note?' / '+r.note:'');
+  proj.estCost=(Number(r.cost)||0)*qty+plate+ship;
+  if(proj.exTax>0&&proj.estCost>0){ proj.grossProfit=proj.exTax-proj.estCost; proj.costRate=Math.round(proj.estCost/proj.exTax*100); }
+  proj.source='calendar'; proj.fromCalendarId=r.id;
+  if(!proj.createdAt) proj.createdAt=new Date().toISOString();
+  proj.updatedAt=new Date().toISOString();
+  var ok=hubSave(function(d){
+    if(!Array.isArray(d.projects)) d.projects=[];
+    var i=-1; for(var j=0;j<d.projects.length;j++){ if(d.projects[j]&&d.projects[j].id===pid){ i=j; break; } }
+    if(i>=0) d.projects[i]=proj; else d.projects.push(proj);
+    var row=(d.calendarOrders||[]).filter(function(x){ return x.id===id; })[0];
+    if(row){ row._hubProjId=pid; row._hubSentAt=new Date().toISOString(); }
+  });
+  if(ok){ hubToast(prev?('🔁 Hub案件を更新しました（'+pid+'）'):('✅ Hubの案件管理表に登録しました（'+pid+'）')); render(); }
 }
 function matrixAddCur(gi){
   var g=_mGroups[gi]; if(!g){ return; }
