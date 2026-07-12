@@ -171,6 +171,7 @@
       <select id="f-status" onchange="render()"><option value="">状況：すべて</option></select>
       <button class="btn sm" onclick="loadList(true)" title="最新に更新">🔄</button>
       <button class="btn sm" onclick="openArrival()" title="プリントパック/グラフィックの発送メールから到着予定日(発送翌日)を取込">📧 到着予定日取込</button>
+      <select id="view-sheet" onchange="openSheetViewer()" style="font-size:12px;max-width:220px" title="仕入・支払などの管理表をそのまま閲覧（読み取り専用）"><option value="">📊 仕入・支払を見る…</option></select>
     </div>
     <span id="status" style="flex-basis:100%;font-size:11px;color:#64748b"></span>
   </div>
@@ -1116,6 +1117,73 @@ async function loadDocHistory(denpyo){
       : '<span class="msub" style="color:#94a3b8">まだ出力履歴はありません</span>';
   }catch(e){ box.textContent='履歴取得失敗'; }
 }
+// ═══ 仕入・支払など任意シートの閲覧（旧ビューア統合・読み取り専用） ═══
+async function initSheetViews(){
+  try{
+    var r=await api('caseCompanies');
+    var list=(r.companies||[]).filter(function(c){ return c.cat==='仕入・支払'; });
+    var sel=document.getElementById('view-sheet'); if(!sel) return;
+    list.forEach(function(c){ sel.appendChild(new Option(c.name, c.key)); });
+    if(!list.length) sel.style.display='none';
+  }catch(e){}
+}
+var _svData_=null;
+async function openSheetViewer(){
+  var sel=document.getElementById('view-sheet'); var key=sel.value; if(!key) return;
+  sel.value='';
+  var ov=document.getElementById('sv-overlay');
+  if(!ov){
+    ov=document.createElement('div'); ov.id='sv-overlay';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99990;overflow:auto;padding:2vh 12px';
+    ov.innerHTML='<div style="max-width:1400px;margin:0 auto;background:#fff;border-radius:12px;padding:14px 16px;min-height:60vh">'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">'
+      +'<b id="sv-title" style="font-size:16px"></b>'
+      +'<span id="sv-count" style="font-size:12px;color:#64748b"></span>'
+      +'<input id="sv-q" placeholder="🔍 ワード検索（スペース区切りAND）" style="flex:1;min-width:200px;font-size:13px;padding:6px 10px;border:1px solid #c9c6bf;border-radius:6px" oninput="_svRender_()">'
+      +'<button class="btn sm" onclick="_svCsv_()">CSV</button>'
+      +'<button class="btn sm" onclick="document.getElementById(\'sv-overlay\').style.display=\'none\'">✕ 閉じる</button></div>'
+      +'<div style="overflow:auto;max-height:82vh;border:1px solid #e2e0d8;border-radius:8px"><table id="sv-tbl" style="border-collapse:separate;border-spacing:0;font-size:13px;min-width:100%"><thead id="sv-thead"></thead><tbody id="sv-tbody"></tbody></table></div></div>';
+    document.body.appendChild(ov);
+  }
+  ov.style.display='block';
+  document.getElementById('sv-title').textContent='読込中…';
+  document.getElementById('sv-thead').innerHTML=''; document.getElementById('sv-tbody').innerHTML=''; document.getElementById('sv-count').textContent='';
+  try{
+    var r=await api('caseLoad',{company:key});
+    if(!r.success) throw new Error(r.error||'読込失敗');
+    _svData_={header:r.header||[], rows:r.rows||[], name:r.company||''};
+    document.getElementById('sv-title').textContent='📊 '+_svData_.name;
+    document.getElementById('sv-q').value='';
+    _svRender_();
+  }catch(e){ document.getElementById('sv-title').textContent='読込失敗: '+(e.message||e); }
+}
+function _svRender_(){
+  if(!_svData_) return;
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var q=(document.getElementById('sv-q').value||'').toLowerCase().split(/\s+/).filter(Boolean);
+  var rows=_svData_.rows.filter(function(rw){
+    if(!q.length) return true;
+    var hay=rw.join(' ').toLowerCase();
+    return q.every(function(w){ return hay.indexOf(w)>=0; });
+  });
+  var TH='position:sticky;top:0;background:#211f1c;color:#efece4;padding:7px 9px;font-size:12px;white-space:nowrap;text-align:left;border-right:1px solid #3a3733';
+  document.getElementById('sv-thead').innerHTML='<tr>'+_svData_.header.map(function(h){ return '<th style="'+TH+'">'+esc(h)+'</th>'; }).join('')+'</tr>';
+  var cap=1000;
+  document.getElementById('sv-tbody').innerHTML=rows.slice(0,cap).map(function(rw){
+    return '<tr>'+rw.map(function(c){ var n=(typeof c==='number'); return '<td style="padding:6px 9px;border-bottom:1px solid #eee;border-right:1px solid #f3f1ec;'+(n?'text-align:right;font-family:monospace;':'')+'white-space:nowrap;max-width:340px;overflow:hidden;text-overflow:ellipsis">'+(n?Number(c).toLocaleString():esc(c))+'</td>'; }).join('')+'</tr>';
+  }).join('');
+  document.getElementById('sv-count').textContent='全'+_svData_.rows.length+'件 / 表示 '+Math.min(rows.length,cap)+'件'+(rows.length>cap?'（検索で絞ってください）':'');
+}
+function _svCsv_(){
+  if(!_svData_) return;
+  var esc=function(v){ v=String(v==null?'':v); return /[",\n]/.test(v)?('"'+v.replace(/"/g,'""')+'"'):v; };
+  var csv=[_svData_.header.map(esc).join(',')].concat(_svData_.rows.map(function(r){ return r.map(esc).join(','); })).join('\n');
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'}));
+  a.download=(_svData_.name||'表')+'_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+}
+initSheetViews();
 init();
 </script>
 </body>
