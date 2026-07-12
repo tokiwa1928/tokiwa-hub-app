@@ -135,6 +135,16 @@
       <div style="align-self:center;font-size:11px;color:var(--muted)">前月がマイナス（請求不要）の時だけ自動で入ります（手修正可）</div>
     </div>
     <div id="kuri-detail" style="font-size:11px;color:#1e40af;font-weight:700;margin-top:6px"></div>
+    <div style="margin-top:10px;border:1.5px solid #7dd3fc;border-radius:8px;padding:8px 10px;background:#f0f9ff">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <b style="font-size:12.5px;color:#0369a1">💹 売上益の自動計算・GEN照合</b>
+        <button class="btn sm p" onclick="uriageAutoCalc()">🔄 当月案件から自動計算</button>
+        <label style="font-size:11.5px;color:#475569;display:flex;align-items:center;gap:4px">GEN出力(CSV/Excel)で照合:
+          <input type="file" id="gen-file" accept=".csv,.xls,.xlsx" style="font-size:11px" onchange="genCompare()"></label>
+        <span id="uriage-st" style="font-size:11px;color:#64748b"></span>
+      </div>
+      <div id="uriage-panel" style="display:none;margin-top:8px;font-size:12.5px;background:#fff;border:1px solid #bae6fd;border-radius:7px;padding:8px 12px;line-height:1.9"></div>
+    </div>
   </div>
 
   <!-- 計算 -->
@@ -297,6 +307,101 @@ function load(){
 }
 function persist(){ try{ localStorage.setItem(LSKEY, JSON.stringify(DB)); }catch(e){ toast('保存失敗:'+e); } }
 
+// ═══ 売上益の自動計算(村山シート当月案件)＋GEN出力(CSV/Excel)との照合 ═══
+var SEISAN_GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
+var SEISAN_GAS_KEY='mitsumori-2024';
+var _uriageCalc_=null, _genTotal_=null;
+function _billMonthKey_(v){ var m=String(v==null?'':v).match(/(\d{4})\D{0,3}(\d{1,2})/); return m?(m[1]+'-'+('0'+m[2]).slice(-2)):''; }
+async function uriageAutoCalc(){
+  var st=document.getElementById('uriage-st');
+  st.textContent='村山の案件管理表を読込中…（数秒かかります）';
+  try{
+    var url=new URL(SEISAN_GAS_URL);
+    url.searchParams.set('action','sheetLedgerLoad'); url.searchParams.set('company','murayama'); url.searchParams.set('apiKey',SEISAN_GAS_KEY);
+    var res=await fetch(url.toString(),{redirect:'follow'});
+    var j=await res.json();
+    if(!j.success) throw new Error(j.error||'読込失敗');
+    var rows=j.records||j.rows||[]; var mk=key();
+    var hit=rows.filter(function(r){ return _billMonthKey_(r.billMonth)===mk; });
+    var sale=0, profit=0;
+    hit.forEach(function(r){ sale+=Number(r.amtSelf)||0; profit+=Number(r.profit)||0; });
+    _uriageCalc_={month:mk, count:hit.length, sale:Math.round(sale), profit:Math.round(profit)};
+    st.textContent='';
+    _uriageRender_();
+  }catch(e){ st.textContent='読込失敗: '+(e.message||e); }
+}
+function _uriageRender_(){
+  var pn=document.getElementById('uriage-panel'); if(!pn) return;
+  if(!_uriageCalc_){ pn.style.display='none'; return; }
+  var c=_uriageCalc_;
+  var h='<b>Hub（村山 案件管理表・請求月 '+c.month+'）:</b> '+c.count+'件　売上(金額自社) <b>¥'+c.sale.toLocaleString()+'</b>　利益 <b style="color:#0369a1">¥'+c.profit.toLocaleString()+'</b>';
+  if(_genTotal_!=null){
+    var d=c.sale-_genTotal_.total;
+    h+='<br><b>GEN出力:</b> '+_genTotal_.rows+'行　合計 <b>¥'+_genTotal_.total.toLocaleString()+'</b>（列: '+_genTotal_.col+'）';
+    h+='<br>差額（Hub売上 − GEN） <b style="color:'+(d===0?'#166534':'#b91c1c')+'">'+(d===0?'一致 ±0':((d>0?'+':'')+'¥'+d.toLocaleString()))+'</b>'+(d!==0?'　<span style="font-size:11px;color:#b91c1c">請求漏れ・二重・月ズレがないか確認してください</span>':'');
+  } else {
+    h+='<br><span style="font-size:11px;color:#64748b">GENのCSV/Excelを選ぶと売上合計を突き合わせます（照合せず決定も可）</span>';
+  }
+  h+='<div style="margin-top:6px"><button class="btn p" style="font-size:12.5px;font-weight:700" onclick="uriageDecide()">✅ 売上益 ¥'+c.profit.toLocaleString()+' で決定（欄に入れる）</button></div>';
+  pn.innerHTML=h; pn.style.display='block';
+}
+function uriageDecide(){
+  if(!_uriageCalc_) return;
+  var el=document.getElementById('uriage'); if(!el) return;
+  var wasLocked=(typeof EDITING!=='undefined'&&!EDITING);
+  if(wasLocked&&typeof setEdit==='function') setEdit(true);  // 施錠中なら編集モードにして入れる
+  el.value=Math.abs(_uriageCalc_.profit);
+  calc();
+  toast('💹 売上益 ¥'+Math.abs(_uriageCalc_.profit).toLocaleString()+' をセットしました（💾保存を忘れずに）');
+}
+async function genCompare(){
+  var st=document.getElementById('uriage-st');
+  var f=(document.getElementById('gen-file')||{}).files; f=f&&f[0]; if(!f) return;
+  try{
+    st.textContent='GENファイルを解析中…';
+    var rows;
+    if(/\.csv$/i.test(f.name)){
+      var buf=await f.arrayBuffer();
+      var txt;
+      try{ txt=new TextDecoder('shift-jis').decode(buf); }catch(e){ txt=new TextDecoder('utf-8').decode(buf); }
+      if(/�/.test(txt)) txt=new TextDecoder('utf-8').decode(buf);
+      rows=txt.split(/\r?\n/).map(function(l){ return l.split(','); });
+    } else {
+      if(typeof XLSX==='undefined'){
+        st.textContent='Excel読込ライブラリを取得中…';
+        await new Promise(function(ok,ng){ var sc=document.createElement('script'); sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload=ok; sc.onerror=ng; document.head.appendChild(sc); });
+      }
+      var wb=XLSX.read(await f.arrayBuffer(),{type:'array'});
+      rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true});
+    }
+    // 金額列の推定: ヘッダーに 金額/請求 を含む列 → 無ければ数値合計が最大の列
+    var toNum=function(v){ if(typeof v==='number') return v; var t=String(v==null?'':v).replace(/[¥,\s円]/g,''); return /^-?\d+(\.\d+)?$/.test(t)?parseFloat(t):null; };
+    var headIdx=-1, colIdx=-1, colName='';
+    for(var i=0;i<Math.min(rows.length,10);i++){
+      for(var cn=0; cn<(rows[i]||[]).length; cn++){
+        if(/金額|請求額|御請求/.test(String(rows[i][cn]||''))){ headIdx=i; colIdx=cn; colName=String(rows[i][cn]).trim(); break; }
+      }
+      if(colIdx>=0) break;
+    }
+    var total=0, count=0;
+    if(colIdx>=0){
+      for(var ri=headIdx+1; ri<rows.length; ri++){ var n=toNum((rows[ri]||[])[colIdx]); if(n!=null){ total+=n; count++; } }
+    } else {
+      var best={sum:0,col:-1,cnt:0};
+      var width=Math.max.apply(null, rows.slice(0,50).map(function(r){return (r||[]).length;}).concat([0]));
+      for(var cj=0; cj<width; cj++){
+        var sm=0, ct=0;
+        rows.forEach(function(r){ var n=toNum((r||[])[cj]); if(n!=null){ sm+=n; ct++; } });
+        if(Math.abs(sm)>Math.abs(best.sum)){ best={sum:sm,col:cj,cnt:ct}; }
+      }
+      total=best.sum; count=best.cnt; colName='自動判定 '+(best.col+1)+'列目';
+    }
+    _genTotal_={total:Math.round(total), rows:count, col:colName};
+    st.textContent='';
+    if(!_uriageCalc_){ st.textContent='GEN合計 ¥'+_genTotal_.total.toLocaleString()+'。「🔄 当月案件から自動計算」も押すと比較できます'; }
+    _uriageRender_();
+  }catch(e){ st.textContent='GEN解析失敗: '+(e.message||e); }
+}
 // ── 編集モード（誤操作防止: ✏編集を押すまで入力不可・💾保存で再施錠）──
 var EDITING=false;
 function toggleEdit(){ setEdit(!EDITING); }
