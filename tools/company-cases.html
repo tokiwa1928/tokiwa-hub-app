@@ -19,7 +19,8 @@
   .kpi{ background:#211f1c; color:#fff; border-radius:8px; padding:7px 13px; } .kpi .k{ font-size:10px; color:#bbb; } .kpi .v{ font-size:17px; font-weight:800; font-family:'Roboto Mono',monospace; }
   .tblwrap{ overflow:auto; max-height:74vh; border:1.5px solid var(--line); border-radius:10px; background:#fff; }
   table{ border-collapse:separate; border-spacing:0; width:100%; font-size:11.5px; }
-  thead th{ position:sticky; top:0; z-index:3; background:var(--hd); color:#fff; padding:6px 8px; white-space:nowrap; text-align:left; cursor:pointer; border-right:1px solid #444; }
+  thead th{ position:sticky; top:0; z-index:3; background:var(--hd); color:#fff; padding:6px 8px; white-space:normal; line-height:1.3; max-width:120px; min-width:64px; font-size:11.5px; text-align:left; cursor:pointer; border-right:1px solid #444; vertical-align:bottom; }
+  .clamp2{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; white-space:normal; max-width:280px; line-height:1.45; }
   thead th:hover{ background:#33302b; }
   tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; white-space:normal; word-break:break-word; overflow-wrap:anywhere; vertical-align:top; max-width:240px; }
   tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; white-space:nowrap; }
@@ -102,8 +103,22 @@ function findCol(re){ for(var i=0;i<DATA.header.length;i++){ if(re.test(DATA.hea
 // 請求月を「YYYY年M月」表示に。並び順維持用にキー「YYYY-MM」も用意
 function monthLabel(v){ var m=String(v==null?'':v).match(/(\d{4})[-\/年\.](\d{1,2})/); return m?(m[1]+'年'+parseInt(m[2],10)+'月'):String(v==null?'':v); }
 function monthKey(v){ var m=String(v==null?'':v).match(/(\d{4})[-\/年\.](\d{1,2})/); return m?(m[1]+'-'+('0'+m[2]).slice(-2)):String(v==null?'':v); }
+// 表示する列: 見出しが空で中身もほぼ空の列は隠す（例: 参考トキワ印刷と村山借入金の間の空列）
+function _visCols_(){
+  return DATA.header.map(function(h,i){
+    if(String(h||'').trim()!=='') return i;
+    var filled=0; DATA.rows.forEach(function(r){ if(String(r[i]==null?'':r[i]).trim()!=='') filled++; });
+    return (filled>DATA.rows.length*0.05)?i:-1;
+  }).filter(function(i){ return i>=0; });
+}
+// 日付っぽい値は年月日表記に（2026-06-30 → 2026年6月30日）
+function _jdate_(v){
+  var m=String(v==null?'':v).match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  return m?(m[1]+'年'+(+m[2])+'月'+(+m[3])+'日'):v;
+}
 function buildHead(){
-  var tr='<tr>'+DATA.header.map(function(h,i){ var ar=(sortCol===i?(sortDir>0?' ▲':' ▼'):''); return '<th onclick="sortBy('+i+')">'+esc(h)+ar+'</th>'; }).join('')+'</tr>';
+  var vis=_visCols_();
+  var tr='<tr>'+vis.map(function(i){ var h=DATA.header[i]; var ar=(sortCol===i?(sortDir>0?' ▲':' ▼'):''); return '<th onclick="sortBy('+i+')">'+esc(h)+ar+'</th>'; }).join('')+'</tr>';
   document.getElementById('thead').innerHTML=tr;
 }
 function buildFilters(){
@@ -161,8 +176,21 @@ function renderKpis(){
 function toggleDelivery(mode){ deliveryMode=(deliveryMode===mode?'':mode); applyFilter(); }
 function renderBody(){
   var rows=VIEW.slice(0,DISPLAY_CAP);
+  var vis=_visCols_();
   var html=rows.map(function(r){
-    return '<tr>'+DATA.header.map(function(h,i){ var v=r[i]; if(/請求月/.test(h)) v=monthLabel(v); var cls=(/金額|単価|数量|利益/.test(h)&&isNum(v))?' class="num'+((Number(String(v).replace(/,/g,''))<0)?' neg':'')+'"':(isNum(v)&&/^-?[\d,]+\.?\d*$/.test(String(v))?' class="num"':''); return '<td'+cls+'>'+esc(v)+'</td>'; }).join('')+'</tr>';
+    return '<tr>'+vis.map(function(i){
+      var h=DATA.header[i]; var v=r[i];
+      if(/請求月/.test(h)) v=monthLabel(v);
+      v=_jdate_(v);
+      var names=[];
+      if(/金額|単価|数量|利益|支払|過不足|売上/.test(h)&&isNum(v)){ names.push('num'); if(Number(String(v).replace(/,/g,''))<0) names.push('neg'); }
+      else if(isNum(v)&&/^-?[\d,]+\.?\d*$/.test(String(v))){ names.push('num'); }
+      var sv=String(v==null?'':v);
+      var long=sv.length>40||/備考/.test(String(h));
+      var attr=(names.length?(' class="'+names.join(' ')+'"'):'')+(long?(' title="'+esc(sv).replace(/"/g,'&quot;')+'"'):'');
+      var inner=long?('<span class="clamp2">'+esc(v)+'</span>'):esc(v);
+      return '<td'+attr+'>'+inner+'</td>';
+    }).join('')+'</tr>';
   }).join('');
   document.getElementById('tbody').innerHTML=html;
   var more=VIEW.length>DISPLAY_CAP?('（表示は先頭'+DISPLAY_CAP.toLocaleString()+'件。検索で絞ってください）'):'';
