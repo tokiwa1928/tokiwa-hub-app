@@ -25664,7 +25664,7 @@ function _renderRepeatList_(){
 
   // データ参照のため index を保持
   list.dataset.rows = JSON.stringify(rows.map(function(r){
-    return { id: r.id, cust: r.cust, item: r.item, spec: r.spec, qty: r.qty, unit: r.unit, exTax: r.exTax, memo: r.memo, _src: src };
+    return { id: r.id, cust: r.cust, item: r.item, spec: r.spec, qty: r.qty, unit: r.unit, exTax: r.exTax, memo: r.memo, repeatFrom: r.repeatFrom||'', repeatRefs: r.repeatRefs||[], repeatChanges: r.repeatChanges||[], _src: src };
   }));
 }
 
@@ -25708,6 +25708,7 @@ function repeatProject(src, idx){
 // MMMMMM-1: 種別選択を画面中央のポップアップで表示（下までスクロール不要）
 function _showRepeatChoiceInline_(r){
   var ex=document.getElementById('repeat-inline-choice'); if(ex) ex.remove();
+  window._repeatTrackMode_ = 'on';
   var qtyStr = (r.qty || r.qty===0) ? (r.qty + (r.unit||'部')) : '';
   var amtStr = (r.exTax || r.exTax===0) ? ('¥'+(parseInt(r.exTax)||0).toLocaleString()) : '';
   var ov=document.createElement('div');
@@ -25732,6 +25733,17 @@ function _showRepeatChoiceInline_(r){
           '<button onclick="_doRepeatCreate_(\'estimate\')" style="display:flex;flex-direction:column;gap:4px;align-items:center;text-align:center;padding:14px 12px;border:2px solid #a855f7;background:#fff;border-radius:10px;cursor:pointer;font-family:inherit" onmouseover="this.style.background=\'#faf5ff\'" onmouseout="this.style.background=\'#fff\'">' +
             '<span style="font-size:26px">📝</span><strong style="font-size:13px;color:#7c3aed">見積書として登録</strong><span style="font-size:10px;color:#64748b">見積中で受注前に確認</span>' +
           '</button>' +
+        '</div>' +
+        '<div style="margin-top:12px;border-top:1px dashed #a5f3fc;padding-top:10px">' +
+          '<div style="font-size:11.5px;font-weight:700;color:#0e7490;margin-bottom:6px">リピートの種類</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+            '<button type="button" id="rch-mode-on" onclick="_rchChoiceMode_(\'on\')" style="border:2px solid #dc2626;background:#fef2f2;border-radius:9px;padding:9px 10px;cursor:pointer;font-family:inherit;text-align:center">' +
+              '<strong style="font-size:12.5px;color:#b91c1c">🔁 同じ製品の再注文</strong><br><span style="font-size:10px;color:#64748b">変更点を赤マーク＋履歴に記録</span>' +
+            '</button>' +
+            '<button type="button" id="rch-mode-off" onclick="_rchChoiceMode_(\'off\')" style="border:2px solid #e2e8f0;background:#fff;border-radius:9px;padding:9px 10px;cursor:pointer;font-family:inherit;text-align:center">' +
+              '<strong style="font-size:12.5px;color:#475569">📑 別製品に流用</strong><br><span style="font-size:10px;color:#64748b">入力簡易化のため・記録なし</span>' +
+            '</button>' +
+          '</div>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -25781,12 +25793,16 @@ function _doRepeatCreate_(mode){
         var qn = parseInt(r.qty) || 0, ex = parseInt(r.exTax) || 0;
         st._repeatBaseUnitp = (qn > 0) ? Math.round(ex / qn * 100) / 100 : (r.unitp || null);
         st._repeatBaseUnit = r.unit || '枚';
+        st._rchMode = window._repeatTrackMode_ || 'on';   // 🖍 変更記録 on / 流用=off
+        st._rchPrevLog = (r.repeatChanges || []).slice(); // 前回リピート時の変更履歴
       } catch(e){}
       if(typeof onJobTypeChange === 'function') onJobTypeChange(_newTid);
       if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid);
       // 備考に引き継がれた過去の[リピート元]行を抽出してバナーに集約 (備考はきれいに)
       if(typeof _extractRepeatRefsFromMemo_ === 'function') _extractRepeatRefsFromMemo_(_newTid);
       if(typeof _renderRepeatSrcBanner_ === 'function') _renderRepeatSrcBanner_(_newTid);
+      // 🖍 プリフィル完了後にベースラインを取得して変更トラッキング開始
+      (function(tid){ setTimeout(function(){ try{ if(typeof _rchStart_==='function') _rchStart_(tid); }catch(e){} }, 700); })(_newTid);
       // 📊 前回比較パネルに前回の数量・単価をプリフィル
       try {
         var pvq = document.getElementById('pv-qty-' + _newTid), pvu = document.getElementById('pv-unitp-' + _newTid);
@@ -32773,6 +32789,11 @@ function applyIngestToEstimate(extracted){
     // 数量
     const qtyEl = document.getElementById(`qty-${activeTabId}`);
     if(qtyEl && extracted.qty){ qtyEl.value = extracted.qty; }
+    // 真値はqtyPats（calcがここから入力欄を再同期するため、入れないと数量が空に戻る）
+    if(extracted.qty && typeof ts === 'function'){
+      const stq = ts(activeTabId);
+      if(stq && stq.qtyPats && stq.qtyPats[0]) stq.qtyPats[0].v = parseInt(extracted.qty) || stq.qtyPats[0].v;
+    }
     // 計算実行
     if(typeof calc === 'function') calc(activeTabId);
     document.querySelector('.proof-modal')?.remove();
@@ -36628,6 +36649,155 @@ function _renderRepeatSrcBanner_(id){
     + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px"><span style="font-size:12px;color:#7c3aed;font-weight:700">リピート履歴:</span>' + links
     + '<span style="font-size:10px;color:#94a3b8;margin-left:4px">クリックで該当案件を開けます</span></div></div>';
 }
+// ═══ 🖍 RCH: リピート変更トラッキング（前回からの変更点を赤マーク＋変更履歴欄） ═══
+//   同じ製品の再注文=記録on / 別製品への流用(入力簡易化)=記録off。品名変更で流用切替を提案。
+var _rchTimer_ = {};
+function _rchCss_(){
+  if(document.getElementById('rch-style')) return;
+  var st=document.createElement('style'); st.id='rch-style';
+  st.textContent='.rch-chg{outline:2px solid #dc2626 !important;outline-offset:1px;background:#fef2f2 !important;border-radius:4px}';
+  document.head.appendChild(st);
+}
+function _rchLabel_(el){
+  try{
+    var lb = el.closest('label');
+    if(!lb){ var pp=el.parentElement; for(var i=0;i<3&&pp;i++){ var q=pp.querySelector('label'); if(q){ lb=q; break; } pp=pp.parentElement; } }
+    if(lb){
+      var t='';
+      lb.childNodes.forEach(function(n){
+        if(n.nodeType===3) t+=n.textContent;
+        else if(n.nodeType===1 && !/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(n.tagName) && !n.querySelector('input,select,textarea')) t+=n.textContent;
+      });
+      t=t.replace(/[？?].*$/,'').replace(/[*＊]/g,'').replace(/\s+/g,' ').trim();
+      if(t) return t.slice(0,20);
+    }
+  }catch(e){}
+  var key=String(el.id||'').replace(/-\d+$/,'');
+  var M={cust:'得意先',prod:'品名',qty:'数量',unit:'単位',estno:'見積番号',memo:'備考',enduser:'エンドユーザー',relay:'元請',trate:'目標原価率',erate:'営業費率',date:'日付'};
+  return M[key]||key;
+}
+function _rchVal_(el){
+  if(el.type==='checkbox') return el.checked?'✓':'';
+  return String(el.value==null?'':el.value);
+}
+function _rchSnap_(id){
+  var root=document.getElementById('tp-'+id); if(!root) return null;
+  var map={};
+  root.querySelectorAll('input[id$="-'+id+'"],select[id$="-'+id+'"],textarea[id$="-'+id+'"]').forEach(function(el){
+    if(/^(radio|button|file|hidden|submit|search)$/.test(el.type||'')) return;
+    if(/^(est3|rch|eo-)/.test(el.id)) return;
+    if(/^(pv-|pc-)/.test(el.id)) return;  // 前回比較の計算補助欄は対象外（保存されない計算用）
+    if(el.offsetParent===null) return;  // 非表示の旧欄・裏方欄は対象外（数量の二重検出防止）
+    map[el.id]={v:_rchVal_(el)};
+  });
+  // 数量欄はプリフィル直後は空のことがある → 真値(qtyPats)で補完
+  try{
+    var qk='qty-'+id, qs=(typeof ts==='function')?ts(id):null;
+    if(map[qk]!=null && map[qk].v==='' && qs && qs.qtyPats && qs.qtyPats[0] && qs.qtyPats[0].v!=null && qs.qtyPats[0].v!==''){
+      map[qk].v=String(qs.qtyPats[0].v);
+    }
+  }catch(e){}
+  return map;
+}
+function _rchStart_(id){
+  var s=(typeof ts==='function')?ts(id):null; if(!s) return;
+  if(!s._repeatFrom && !(s._repeatRefs||[]).length) return;  // リピート経路のみ対象
+  _rchCss_();
+  s._rchBase = _rchSnap_(id) || {};
+  if(!s._rchMode) s._rchMode='on';
+  s._rchLog = [];
+  _rchRefresh_(id);
+}
+function _rchRefresh_(id){
+  var s=(typeof ts==='function')?ts(id):null; if(!s||!s._rchBase) return;
+  var on = s._rchMode!=='off';
+  var chgs=[];
+  Object.keys(s._rchBase).forEach(function(key){
+    var el=document.getElementById(key); if(!el) return;
+    var oldV=s._rchBase[key].v, newV=_rchVal_(el);
+    var diff=false;
+    if(on){
+      var a=String(oldV).trim(), b=String(newV).trim();
+      if(a!==b){
+        var na=parseFloat(a.replace(/,/g,'')), nb=parseFloat(b.replace(/,/g,''));
+        diff = !(isFinite(na)&&isFinite(nb)&&na===nb&&/^[\d.,\s-]*$/.test(a)&&/^[\d.,\s-]*$/.test(b));
+      }
+    }
+    el.classList.toggle('rch-chg', diff);
+    if(diff) chgs.push({k:key, label:_rchLabel_(el), old:oldV, nw:newV});
+  });
+  s._rchLog = chgs;
+  _rchPanel_(id);
+}
+function _rchPanel_(id){
+  var s=(typeof ts==='function')?ts(id):null; if(!s||!s._rchBase) return;
+  var anchor=document.getElementById('repeat-src-banner-'+id); if(!anchor) return;
+  var pn=document.getElementById('rch-panel-'+id);
+  if(!pn){ pn=document.createElement('div'); pn.id='rch-panel-'+id; pn.style.cssText='margin-bottom:10px'; anchor.insertAdjacentElement('afterend', pn); }
+  var esc=function(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var fmt=function(v){ var t=String(v==null?'':v).trim(); return t===''?'<span style="color:#cbd5e1">（空欄）</span>':esc(t.length>30?t.slice(0,30)+'…':t); };
+  if(s._rchMode==='off'){
+    pn.innerHTML='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f8fafc;border:1.5px dashed #94a3b8;border-radius:9px;padding:8px 12px">'
+      +'<span style="font-size:13px;font-weight:800;color:#475569">📑 流用モード</span>'
+      +'<span style="font-size:11.5px;color:#64748b">別製品への流用（入力簡易化）のため変更点は記録しません</span>'
+      +'<button type="button" onclick="_rchToggle_('+id+',\'on\')" style="margin-left:auto;font-size:11px;border:1px solid #cbd5e1;background:#fff;color:#475569;border-radius:7px;padding:4px 10px;cursor:pointer">🔁 リピート記録に切替</button></div>';
+    return;
+  }
+  var chgs=s._rchLog||[];
+  var rows=chgs.map(function(c){
+    return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;border-bottom:1px dashed #fecaca;font-size:12.5px;flex-wrap:wrap">'
+      +'<span style="font-weight:700;color:#7f1d1d;min-width:110px">'+esc(c.label)+'</span>'
+      +'<span style="color:#94a3b8;text-decoration:line-through">'+fmt(c.old)+'</span>'
+      +'<span style="color:#94a3b8">→</span><b style="color:#dc2626">'+fmt(c.nw)+'</b></div>';
+  }).join('');
+  var prodChanged = chgs.some(function(c){ return /^prod-/.test(c.k); });
+  var hint = prodChanged
+    ? '<div style="margin-top:7px;font-size:11.5px;background:#fffbeb;border:1px solid #fcd34d;border-radius:7px;padding:6px 10px;color:#92400e">💡 品名が変わっています。別製品への流用（入力簡易化）なら '
+      +'<button type="button" onclick="_rchToggle_('+id+',\'off\')" style="font-size:11px;border:1px solid #d97706;background:#fff;color:#b45309;border-radius:6px;padding:2px 9px;cursor:pointer;font-weight:700">📑 流用モードに切替（記録なし）</button></div>'
+    : '';
+  var prev = (s._rchPrevLog||[]).length
+    ? '<details style="margin-top:7px"><summary style="font-size:11.5px;color:#64748b;cursor:pointer">📜 前回リピート時の変更履歴（'+s._rchPrevLog.length+'件）</summary><div style="margin-top:4px">'
+      + s._rchPrevLog.map(function(c){ return '<div style="font-size:11.5px;color:#64748b;padding:2px 0">'+esc(c.label)+'：'+fmt(c.old)+' → '+fmt(c.nw)+'</div>'; }).join('')
+      + '</div></details>'
+    : '';
+  pn.innerHTML='<div style="background:#fff;border:2px solid '+(chgs.length?'#fca5a5':'#e2e8f0')+';border-radius:10px;padding:9px 14px">'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+    +'<span style="font-size:13px;font-weight:800;color:'+(chgs.length?'#dc2626':'#475569')+'">🖍 前回からの変更点 '+chgs.length+'件</span>'
+    +(chgs.length?'':'<span style="font-size:11.5px;color:#94a3b8">変更した欄は赤くマークされ、ここに履歴が並びます</span>')
+    +'<button type="button" onclick="_rchToggle_('+id+',\'off\')" style="margin-left:auto;font-size:11px;border:1px solid #cbd5e1;background:#fff;color:#64748b;border-radius:7px;padding:3px 9px;cursor:pointer">📑 流用モード（記録なし）にする</button>'
+    +'</div>'
+    +(rows?('<div style="margin-top:6px">'+rows+'</div>'):'')
+    +hint+prev+'</div>';
+}
+function _rchToggle_(id,mode){
+  var s=(typeof ts==='function')?ts(id):null; if(!s) return;
+  s._rchMode=mode;
+  if(mode==='off'){
+    var root=document.getElementById('tp-'+id);
+    if(root) root.querySelectorAll('.rch-chg').forEach(function(el){ el.classList.remove('rch-chg'); });
+    s._rchLog=[];
+    _rchPanel_(id);
+  } else {
+    if(!s._rchBase) s._rchBase=_rchSnap_(id)||{};
+    _rchRefresh_(id);
+  }
+}
+function _rchChoiceMode_(m){
+  window._repeatTrackMode_=m;
+  var on=document.getElementById('rch-mode-on'), off=document.getElementById('rch-mode-off');
+  if(on){ on.style.borderColor=(m==='on')?'#dc2626':'#e2e8f0'; on.style.background=(m==='on')?'#fef2f2':'#fff'; }
+  if(off){ off.style.borderColor=(m==='off')?'#475569':'#e2e8f0'; off.style.background=(m==='off')?'#f1f5f9':'#fff'; }
+}
+function _rchOnEdit_(ev){
+  var t=ev.target; if(!t||!t.id||!t.closest) return;
+  var tp=t.closest('[id^="tp-"]'); if(!tp) return;
+  var id=parseInt(String(tp.id).slice(3),10); if(!isFinite(id)) return;
+  var s=(typeof ts==='function')?ts(id):null; if(!s||!s._rchBase||s._rchMode==='off') return;
+  clearTimeout(_rchTimer_[id]);
+  _rchTimer_[id]=setTimeout(function(){ try{ _rchRefresh_(id); }catch(e){} }, 350);
+}
+document.addEventListener('input', _rchOnEdit_);
+document.addEventListener('change', _rchOnEdit_);
 // 備考に溜まった「@単価/枚」「[リピート元: …]」「単価改定あり」を抜き出してバナーへ移す (備考はきれいに)
 function _extractRepeatRefsFromMemo_(id){
   var memoEl = document.getElementById('memo-' + id); if(!memoEl) return;
@@ -36963,6 +37133,8 @@ function saveEstimateAsQuote(tabId){
     estCost: estCost,
     repeatFrom: s._repeatFrom || '',
     repeatRefs: (s._repeatRefs || []).slice(),
+    repeatKind: (s._repeatFrom || (s._repeatRefs||[]).length) ? (s._rchMode==='off' ? 'reuse' : 'repeat') : '',
+    repeatChanges: (s._rchMode!=='off' && (s._rchLog||[]).length) ? s._rchLog.slice() : [],
     docKind: (typeof _estDocKind_ === 'function') ? _estDocKind_(tabId) : 'final',
     bidMayor: document.getElementById('bid-mayor-'+tabId)?.value||'',
     bidMember: document.getElementById('bid-member-'+tabId)?.value||'',
@@ -37053,6 +37225,8 @@ async function saveEstimateDraft(tid){
     qty: qty, unit: unit, exTax: exTax, estCost: estCost,
     repeatFrom: s._repeatFrom || '',
     repeatRefs: (s._repeatRefs || []).slice(),
+    repeatKind: (s._repeatFrom || (s._repeatRefs||[]).length) ? (s._rchMode==='off' ? 'reuse' : 'repeat') : '',
+    repeatChanges: (s._rchMode!=='off' && (s._rchLog||[]).length) ? s._rchLog.slice() : [],
     docKind: (typeof _estDocKind_ === 'function') ? _estDocKind_(tid) : 'final',
     bidMayor: document.getElementById('bid-mayor-'+tid)?.value||'',
     bidMember: document.getElementById('bid-member-'+tid)?.value||'',
@@ -37391,6 +37565,8 @@ function executeOrderConfirm(tabId){
       proj.repeatFrom = sTab._repeatFrom || '';
       proj.repeatRefs = (sTab._repeatRefs || []).slice();
       if(proj.repeatFrom && proj.repeatRefs.indexOf(proj.repeatFrom) < 0) proj.repeatRefs.push(proj.repeatFrom);
+      proj.repeatKind = (sTab._rchMode==='off') ? 'reuse' : 'repeat';
+      if(sTab._rchMode!=='off' && (sTab._rchLog||[]).length) proj.repeatChanges = sTab._rchLog.slice();
     }
     // 発注形態 (完全/部分外注/分離発注) + 工程別の外注先 → 製造指示書の工程欄に反映
     var of = sTab._orderForm || document.getElementById('order-form-' + tabId)?.value || 'complete';
