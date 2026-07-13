@@ -25664,7 +25664,7 @@ function _renderRepeatList_(){
 
   // データ参照のため index を保持
   list.dataset.rows = JSON.stringify(rows.map(function(r){
-    return { id: r.id, cust: r.cust, item: r.item, spec: r.spec, qty: r.qty, unit: r.unit, exTax: r.exTax, memo: r.memo, repeatFrom: r.repeatFrom||'', repeatRefs: r.repeatRefs||[], repeatChanges: r.repeatChanges||[], _src: src };
+    return { id: r.id, cust: r.cust, item: r.item, spec: r.spec, qty: r.qty, unit: r.unit, exTax: r.exTax, memo: r.memo, repeatFrom: r.repeatFrom||'', repeatRefs: r.repeatRefs||[], repeatChanges: r.repeatChanges||[], date: String(r.orderDate || r.date || r.createdAt || '').slice(0,10), _src: src };
   }));
 }
 
@@ -25795,6 +25795,7 @@ function _doRepeatCreate_(mode){
         st._repeatBaseUnit = r.unit || '枚';
         st._rchMode = window._repeatTrackMode_ || 'on';   // 🖍 変更記録 on / 流用=off
         st._rchPrevLog = (r.repeatChanges || []).slice(); // 前回リピート時の変更履歴
+        st._repeatFromDate = String(r.date || '').slice(0,10); // 元案件の日付（パネルに表示）
       } catch(e){}
       if(typeof onJobTypeChange === 'function') onJobTypeChange(_newTid);
       if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid);
@@ -36690,6 +36691,15 @@ function _rchDisp_(el){
   }
   return String(el.value==null?'':el.value);
 }
+// フォーム(tp)内で表示されているか（ページ自体が裏でもtp内のdisplayだけで判定）
+function _rchVisInForm_(el, root){
+  var n=el;
+  while(n && n!==root){
+    try{ if(getComputedStyle(n).display==='none') return false; }catch(e){ return false; }
+    n=n.parentElement;
+  }
+  return !!n;
+}
 function _rchSnap_(id){
   var root=document.getElementById('tp-'+id); if(!root) return null;
   var map={};
@@ -36697,7 +36707,7 @@ function _rchSnap_(id){
     if(/^(radio|button|file|hidden|submit|search)$/.test(el.type||'')) return;
     if(/^(est3|rch|eo-)/.test(el.id)) return;
     if(/^(pv-|pc-)/.test(el.id)) return;  // 前回比較の計算補助欄は対象外（保存されない計算用）
-    if(el.offsetParent===null) return;  // 非表示の旧欄・裏方欄は対象外（数量の二重検出防止）
+    if(!_rchVisInForm_(el, root)) return;  // フォーム内で非表示の旧欄・裏方欄は対象外（数量の二重検出防止）
     map[el.id]={v:_rchVal_(el), d:_rchDisp_(el)};
   });
   // 数量欄はプリフィル直後は空のことがある → 真値(qtyPats)で補完
@@ -36746,10 +36756,20 @@ function _rchPanel_(id){
   if(!pn){ pn=document.createElement('div'); pn.id='rch-panel-'+id; pn.style.cssText='margin-bottom:10px'; anchor.insertAdjacentElement('afterend', pn); }
   var esc=function(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
   var fmt=function(v){ var t=String(v==null?'':v).trim(); return t===''?'<span style="color:#cbd5e1">（空欄）</span>':esc(t.length>30?t.slice(0,30)+'…':t); };
+  // 📎 元案件のリンク＋日付
+  var srcLink='';
+  if(s._repeatFrom){
+    var sid=String(s._repeatFrom).replace(/[\\'"<>]/g,'');
+    var sdate=(s._repeatFromDate && typeof _ymdJP_==='function')?_ymdJP_(s._repeatFromDate):(s._repeatFromDate||'');
+    srcLink='<span style="font-size:11.5px;color:#475569">📎 元案件: '
+      +'<a href="#" onclick="event.preventDefault();_jumpToQuote_(\''+sid+'\')" style="color:#1d4ed8;font-weight:700;text-decoration:underline" title="クリックで元案件を開く">'+esc(sid)+'</a>'
+      +(sdate?('<span style="color:#94a3b8">（'+esc(sdate)+'）</span>'):'')+'</span>';
+  }
   if(s._rchMode==='off'){
     pn.innerHTML='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f8fafc;border:1.5px dashed #94a3b8;border-radius:9px;padding:8px 12px">'
       +'<span style="font-size:13px;font-weight:800;color:#475569">📑 流用モード</span>'
       +'<span style="font-size:11.5px;color:#64748b">別製品への流用（入力簡易化）のため変更点は記録しません</span>'
+      +srcLink
       +'<button type="button" onclick="_rchToggle_('+id+',\'on\')" style="margin-left:auto;font-size:11px;border:1px solid #cbd5e1;background:#fff;color:#475569;border-radius:7px;padding:4px 10px;cursor:pointer">🔁 リピート記録に切替</button></div>';
     return;
   }
@@ -36766,13 +36786,14 @@ function _rchPanel_(id){
       +'<button type="button" onclick="_rchToggle_('+id+',\'off\')" style="font-size:11px;border:1px solid #d97706;background:#fff;color:#b45309;border-radius:6px;padding:2px 9px;cursor:pointer;font-weight:700">📑 流用モードに切替（記録なし）</button></div>'
     : '';
   var prev = (s._rchPrevLog||[]).length
-    ? '<details style="margin-top:7px"><summary style="font-size:11.5px;color:#64748b;cursor:pointer">📜 前回リピート時の変更履歴（'+s._rchPrevLog.length+'件）</summary><div style="margin-top:4px">'
+    ? '<details style="margin-top:7px"><summary style="font-size:11.5px;color:#64748b;cursor:pointer">📜 前回リピート時の変更履歴（'+s._rchPrevLog.length+'件'+((s._repeatFromDate&&typeof _ymdJP_==='function')?('・'+_ymdJP_(s._repeatFromDate)):'')+'）</summary><div style="margin-top:4px">'
       + s._rchPrevLog.map(function(c){ return '<div style="font-size:11.5px;color:#64748b;padding:2px 0">'+esc(c.label)+'：'+fmt(c.old)+' → '+fmt(c.nw)+'</div>'; }).join('')
       + '</div></details>'
     : '';
   pn.innerHTML='<div style="background:#fff;border:2px solid '+(chgs.length?'#fca5a5':'#e2e8f0')+';border-radius:10px;padding:9px 14px">'
     +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
     +'<span style="font-size:13px;font-weight:800;color:'+(chgs.length?'#dc2626':'#475569')+'">🖍 前回からの変更点 '+chgs.length+'件</span>'
+    +srcLink
     +(chgs.length?'':'<span style="font-size:11.5px;color:#94a3b8">変更した欄は赤くマークされ、ここに履歴が並びます</span>')
     +'<button type="button" onclick="_rchToggle_('+id+',\'off\')" style="margin-left:auto;font-size:11px;border:1px solid #cbd5e1;background:#fff;color:#64748b;border-radius:7px;padding:3px 9px;cursor:pointer">📑 流用モード（記録なし）にする</button>'
     +'</div>'
