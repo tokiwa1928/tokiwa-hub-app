@@ -26088,6 +26088,7 @@ function _ordInOpen_(){
     +'<button onclick="document.getElementById(\'ordin-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 6px">×</button></div>'
     +'<div style="padding:12px 18px;overflow-y:auto;flex:1">'
     +'<div style="font-size:11.5px;color:#64748b;margin-bottom:6px">お客様からもらった注文内容（Excelの表をそのままコピー）を貼り付けてください。列は「得意先・品名・仕様・数量・単位・納期」を自動で見分けます（納期は 7/22 のような形でOK）。</div>'
+    +'<label style="font-size:11.5px;color:#334155;display:inline-flex;align-items:center;gap:5px;margin-bottom:4px"><input type="checkbox" id="ordin-hasuser" onchange="_ordInParse_()"> 貼り付けに<b>ユーザー列</b>がある（並び: 得意先 → ユーザー → 品名 → 仕様…）</label>'
     +'<textarea id="ordin-text" style="width:100%;height:110px;font-size:12.5px;font-family:monospace" placeholder="例:\n東海大相模\t名刺（沼澤隆史）\t4/0 レーザーエース9\t100\t枚\t7/22" oninput="_ordInParse_()"></textarea>'
     +'<div id="ordin-result" style="margin-top:10px"></div>'
     +'</div>'
@@ -26121,8 +26122,9 @@ function _ordInParse_(){
       if(!qty && /^[\d,]+$/.test(c) && parseInt(c.replace(/,/g,''))>0 && parseInt(c.replace(/,/g,''))<10000000){ qty=parseInt(c.replace(/,/g,'')); return; }
       rest.push(c);
     });
-    var cust=rest[0]||'', item=rest[1]||'', spec=rest.slice(2).join(' ');
-    var r={cust:cust, item:item, spec:spec, qty:qty, unit:unit||'枚', due:_ordInDate_(due), dueRaw:due, use:true};
+    var hasUser=!!document.getElementById('ordin-hasuser')?.checked;
+    var cust=rest[0]||'', user=hasUser?(rest[1]||''):'', item=rest[hasUser?2:1]||'', spec=rest.slice(hasUser?3:2).join(' ');
+    var r={cust:cust, user:user, item:item, spec:spec, qty:qty, unit:unit||'枚', due:_ordInDate_(due), dueRaw:due, use:true};
     r.cands=_ordInMatch_(r);
     r.sel=r.cands.length?0:-1;   // -1=新規
     r.unitp=r.cands.length?r.cands[0].unitp:0;
@@ -26132,11 +26134,13 @@ function _ordInParse_(){
 }
 function _ordInMatch_(row){
   var pool=(typeof _pastPool_==='function')?_pastPool_():[];
-  var nc=_ordInNorm_(row.cust), ni=_ordInNorm_(row.item);
-  if(!nc) return [];
+  var nc=_ordInNorm_(row.cust), ni=_ordInNorm_(row.item), nu=_ordInNorm_(row.user||'');
+  if(!nc&&!nu) return [];
   var hits=pool.filter(function(r){
-    var rc=_ordInNorm_(r.cust); if(!rc) return false;
-    return rc.indexOf(nc)>=0 || nc.indexOf(rc)>=0;
+    var rc=_ordInNorm_(r.cust), ru=_ordInNorm_(r.end_user||r.endUser||'');
+    var okC=nc&&rc&&(rc.indexOf(nc)>=0||nc.indexOf(rc)>=0);
+    var okU=nu&&(  (ru&&(ru.indexOf(nu)>=0||nu.indexOf(ru)>=0)) || (rc&&(rc.indexOf(nu)>=0||nu.indexOf(rc)>=0)) );
+    return okC||okU;
   }).map(function(r){
     var ri=_ordInNorm_(r.item||''), sc=0;
     if(ri&&ri===ni) sc=100;
@@ -26161,7 +26165,7 @@ function _ordInRender_(){
   if(!_ordInRows_.length){ box.innerHTML=''; return; }
   var esc=function(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); };
   var h='<table style="border-collapse:collapse;width:100%;font-size:12px">'
-    +'<tr>'+['✓','得意先','品名','仕様','数量','単位','納期','リピート照合','単価','金額'].map(function(t){return '<th style="background:#1a1a1a;color:#fff;padding:5px 8px;text-align:left;white-space:nowrap">'+t+'</th>';}).join('')+'</tr>';
+    +'<tr>'+['✓','得意先','ユーザー','品名','仕様','数量','単位','納期','リピート照合','単価','金額'].map(function(t){return '<th style="background:#1a1a1a;color:#fff;padding:5px 8px;text-align:left;white-space:nowrap">'+t+'</th>';}).join('')+'</tr>';
   _ordInRows_.forEach(function(r,i){
     var candOpts=r.cands.map(function(c,ci){
       return '<option value="'+ci+'"'+(r.sel===ci?' selected':'')+'>♻ '+esc(c.id)+' '+esc(String(c.item).slice(0,14))+'（前回'+c.qty.toLocaleString()+' @'+c.unitp+'）</option>';
@@ -26169,8 +26173,9 @@ function _ordInRender_(){
     var amt=Math.round((r.qty||0)*(r.unitp||0));
     h+='<tr style="border-bottom:1px solid #e2e8f0;background:'+(r.cands.length?'#f0fdf4':'#fffbeb')+'">'
       +'<td style="padding:4px 6px"><input type="checkbox" '+(r.use?'checked':'')+' onchange="_ordInRows_['+i+'].use=this.checked"></td>'
-      +'<td style="padding:4px 6px"><input value="'+esc(r.cust)+'" style="width:110px;font-size:12px" oninput="_ordInRows_['+i+'].cust=this.value"></td>'
-      +'<td style="padding:4px 6px"><input value="'+esc(r.item)+'" style="width:150px;font-size:12px" oninput="_ordInRows_['+i+'].item=this.value"></td>'
+      +'<td style="padding:4px 6px"><input value="'+esc(r.cust)+'" style="width:100px;font-size:12px" oninput="_ordInRows_['+i+'].cust=this.value"></td>'
+      +'<td style="padding:4px 6px"><input value="'+esc(r.user||'')+'" style="width:100px;font-size:12px" placeholder="任意" oninput="_ordInRows_['+i+'].user=this.value"></td>'
+      +'<td style="padding:4px 6px"><input value="'+esc(r.item)+'" style="width:140px;font-size:12px" oninput="_ordInRows_['+i+'].item=this.value"></td>'
       +'<td style="padding:4px 6px"><input value="'+esc(r.spec)+'" style="width:150px;font-size:12px" oninput="_ordInRows_['+i+'].spec=this.value"></td>'
       +'<td style="padding:4px 6px"><input type="number" data-step="off" value="'+(r.qty||'')+'" style="width:64px;font-size:12px;text-align:right" oninput="_ordInRows_['+i+'].qty=parseInt(this.value)||0;_ordInAmt_('+i+')"></td>'
       +'<td style="padding:4px 6px"><input value="'+esc(r.unit)+'" style="width:44px;font-size:12px" oninput="_ordInRows_['+i+'].unit=this.value"></td>'
@@ -26210,7 +26215,7 @@ function _ordInCsv_(){
   if(!rows.length){ alert('書き出す行がありません'); return; }
   var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
   var today=new Date().toISOString().slice(0,10).replace(/-/g,'/');
-  var head=['受注日','得意先','品名','仕様','数量','単位','納期','単価','金額','単価判定','リピート','前回品名','前回数量','前回単価','リピート元','変更点'];
+  var head=['受注日','得意先','ユーザー','品名','仕様','数量','単位','納期','単価','金額','単価判定','リピート','前回品名','前回数量','前回単価','リピート元','変更点'];
   var lines=[head.map(q).join(',')];
   rows.forEach(function(r){
     var prev=(r.sel>=0&&r.cands[r.sel])?r.cands[r.sel]:null;
@@ -26222,7 +26227,7 @@ function _ordInCsv_(){
     }
     // リピート=1ならFM側は「得意先+前回品名」で前回レコードを検索→複製→数量/納期/単価を上書き。0なら新規作成
     var upJudge = prev ? ((Number(r.unitp)||0)===(Number(prev.unitp)||0) ? '同じ' : ('変更 @'+prev.unitp+'→@'+r.unitp)) : '新規';
-    lines.push([today, r.cust, r.item, r.spec||'', r.qty||'', r.unit||'', (r.due||'').replace(/-/g,'/'), r.unitp||'', amt||'', upJudge,
+    lines.push([today, r.cust, r.user||'', r.item, r.spec||'', r.qty||'', r.unit||'', (r.due||'').replace(/-/g,'/'), r.unitp||'', amt||'', upJudge,
       prev?'1':'0', prev?(prev.item||''):'', prev?(prev.qty||''):'', prev?(prev.unitp||''):'', prev?prev.id:'', chg.join(' / ')].map(q).join(','));
   });
   var blob=new Blob([String.fromCharCode(0xFEFF)+lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'});
@@ -26262,7 +26267,7 @@ function _ordInSubmit_(){
       status:'データ作成中',
       assignee:currentAuth?.userName||'',
       memo:'[注文取込]'+(prev?(' リピート元: '+prev.id):''),
-      endUser:prevRec?(prevRec.endUser||prevRec.end_user||''):'',
+      endUser:r.user||(prevRec?(prevRec.endUser||prevRec.end_user||''):''),
       steps:{版下:'─',校了:'─',印刷:'─',加工:'─',納品:'─'},
       stepDates:{},
       createdAt:new Date().toISOString(),
