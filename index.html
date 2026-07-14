@@ -16249,16 +16249,13 @@ function _proofInitSplit_(){
 // ═══ PROOFBOARD-1: 校正BOX のステータス(ラベル) を自由に編集できる掲示板スタイル ═══
 // 既定ステータス (LINE WORKS 掲示板を踏襲。編集可能)
 const PROOF_STATUS_DEFAULT = [
-  { key:'s_media_hi', label:'メディア部作業待ち(優先度高)', color:'#fecaca' },
-  { key:'s_media',    label:'メディア部作業待ち',           color:'#fef3c7' },
-  { key:'s_dtp',      label:'外注DTP・デザイン会社作業待ち', color:'#fef9c3' },
-  { key:'s_req',      label:'校正依頼(メディア部→営業)',     color:'#dbeafe' },
-  { key:'s_cust',     label:'校正中(営業→お客様)',          color:'#e0e7ff' },
-  { key:'s_print',    label:'校正中(営業→提携印刷会社)',     color:'#f3e8ff' },
-  { key:'s_done',     label:'校了',                         color:'#dcfce7', done:true },
+  { key:'s_ask_wait', label:'校正依頼待ち', color:'#fecaca', wait:true },
+  { key:'s_wait',     label:'校正待ち',     color:'#fef3c7', wait:true },
+  { key:'s_proof',    label:'校正中',       color:'#dbeafe' },
+  { key:'s_done',     label:'校了',         color:'#dcfce7', done:true },
 ];
 // 旧ステータス(waiting/feedback/approved) → 新キーへの読み替え
-const PROOF_STATUS_LEGACY = { waiting:'s_media', feedback:'s_req', approved:'s_done' };
+const PROOF_STATUS_LEGACY = { waiting:'s_ask_wait', feedback:'s_proof', approved:'s_done', s_media_hi:'s_ask_wait', s_media:'s_ask_wait', s_dtp:'s_wait', s_req:'s_wait', s_cust:'s_proof', s_print:'s_proof' };
 function _proofStatuses_(){
   if(!Array.isArray(DB.proofStatuses) || !DB.proofStatuses.length){
     DB.proofStatuses = JSON.parse(JSON.stringify(PROOF_STATUS_DEFAULT));
@@ -16277,6 +16274,54 @@ function _proofStatusMeta_(key){
 }
 window._proofViewStatus_ = window._proofViewStatus_ || '';  // '' = すべて
 
+// 校正カードが無い案件を検出（作りもれ防止）。会社スコープを尊重。
+function _projectsWithoutProof_(){
+  var projs=(DB.projects||[]).filter(function(p){ return p && p.id; });
+  var myCo=(currentAuth&&currentAuth.loggedIn&&currentAuth.companyId)||null;
+  var isTk=(myCo==='COMP002');   // トキワ=全社閲覧
+  var proofPids={};
+  (DB.proofings||[]).forEach(function(x){ if(x&&x.projectId) proofPids[x.projectId]=1; });
+  return projs.filter(function(p){
+    if(proofPids[p.id]) return false;
+    // 完了/納品済/失注/キャンセルは対象外（今さら校正不要）
+    if(/完了|納品|失注|キャンセル/.test(String(p.status||''))) return false;
+    // 再版・データ支給で版下変更なしは校正不要（版下変更ありは対象）
+    if(/再版|データ支給/.test(String(p.item||'')+String(p.spec||'')) && !/版下変更|改版/.test(String(p.memo||''))) return false;
+    if(!isTk && myCo && p.companyId && p.companyId!==myCo) return false;
+    return true;
+  });
+}
+function _proofCatchupBanner_(){
+  var miss=_projectsWithoutProof_();
+  if(!miss.length) return '';
+  // 会社別内訳
+  var byco={};
+  miss.forEach(function(p){ var c=p.companyId||'—'; byco[c]=(byco[c]||0)+1; });
+  var CO=(typeof _CO_NAMES_!=='undefined')?_CO_NAMES_:null;
+  var chips=Object.keys(byco).map(function(c){
+    var nm=(CO&&CO[c])?CO[c]:(c==='COMP002'?'トキワ':c==='COMP005'?'アート・エス':c==='COMP004'?'北上':c);
+    return '<span style="background:#fff;border:1px solid #fca5a5;border-radius:6px;padding:1px 8px;font-size:11px;margin:2px">'+_escDiff(nm)+' '+byco[c]+'</span>';
+  }).join('');
+  return '<div style="background:#fef2f2;border:2px solid #f87171;border-radius:9px;padding:9px 13px;margin:6px 0">'
+    +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+    +'<b style="font-size:13px;color:#b91c1c">⚠ 校正BOXに未登録の案件 '+miss.length+'件</b>'
+    +'<span style="font-size:11px;color:#7f1d1d">（案件はあるのに校正カードが無い＝校正の管理から漏れています）</span>'
+    +'<button class="btn" style="margin-left:auto;background:#dc2626;border-color:#dc2626;color:#fff;font-weight:700;font-size:12px;padding:6px 16px" onclick="_proofCatchupCreate_()">＋ '+miss.length+'件をまとめて校正BOXに登録</button>'
+    +'</div>'
+    +(chips?('<div style="margin-top:6px">'+chips+'</div>'):'')
+    +'</div>';
+}
+function _proofCatchupCreate_(){
+  var miss=_projectsWithoutProof_();
+  if(!miss.length){ if(typeof _toastMsg==='function')_toastMsg('未登録の案件はありません'); return; }
+  if(!confirm(miss.length+'件を校正BOXに登録します。よろしいですか？\n（不要なカードは後で個別に削除できます）')) return;
+  var n=0;
+  miss.forEach(function(p){
+    if(typeof createProofingFromProject==='function'){ createProofingFromProject(p, false); n++; }
+  });
+  if(typeof _toastMsg==='function') _toastMsg('📸 '+n+'件を校正BOXに登録しました');
+  if(typeof renderProofingList==='function') renderProofingList();
+}
 function renderProofingList(){
   const container = document.getElementById('proofing-list');
   if(!container) return;
@@ -16427,7 +16472,8 @@ function renderProofingList(){
         + '</div>';
     }
   } catch(e){}
-  container.innerHTML = toggleHtml + returnsHtml + metricsHtml + bodyHtml;
+  var catchupHtml = (typeof _proofCatchupBanner_==='function') ? _proofCatchupBanner_() : '';
+  container.innerHTML = toggleHtml + catchupHtml + returnsHtml + metricsHtml + bodyHtml;
   if(typeof _updateAttentionBadge_ === 'function') try { _updateAttentionBadge_(); } catch(e){}
 }
 // 📥 戻り候補の検出: 連絡の件名に校正の製番(projectId)が含まれ、まだ取込/対象外でないもの
@@ -37314,6 +37360,25 @@ function _rchOnEdit_(ev){
 }
 document.addEventListener('input', _rchOnEdit_);
 document.addEventListener('change', _rchOnEdit_);
+
+// ═══ 校正ステータスを御社フロー(校正依頼待ち→校正待ち→校正中→校了)へ一回きり移行 ═══
+function _proofStatusMigrate2607_(){
+  try{
+    if(localStorage.getItem('tokiwa_mig_proofstatus_2607')==='1') return;
+    if(!DB) return;
+    var cur=DB.proofStatuses;
+    var OLDKEYS=['s_media_hi','s_media','s_dtp','s_req','s_cust','s_print','s_done'];
+    // 未設定 or 旧既定7段そのまま → 新4段に置換。ユーザーが編集済みなら触らない
+    var isOldDefault = Array.isArray(cur) && cur.length===7 && cur.every(function(x,i){ return x&&x.key===OLDKEYS[i]; });
+    if(!Array.isArray(cur) || !cur.length || isOldDefault){
+      DB.proofStatuses = JSON.parse(JSON.stringify(PROOF_STATUS_DEFAULT));
+      if(typeof saveDB==='function') saveDB();
+      if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+    }
+    localStorage.setItem('tokiwa_mig_proofstatus_2607','1');
+  }catch(e){ console.warn('proof status mig', e); }
+}
+setTimeout(_proofStatusMigrate2607_, 12000);
 
 // ═══ マスタ一回きりクリーンアップ(2026-07-14 本多さん指示・名前完全一致のみ・冪等) ═══
 function _masterCleanup2607_(){
