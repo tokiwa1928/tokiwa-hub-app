@@ -26176,13 +26176,14 @@ function _ordInRender_(){
       +'<td style="padding:4px 6px"><input value="'+esc(r.unit)+'" style="width:44px;font-size:12px" oninput="_ordInRows_['+i+'].unit=this.value"></td>'
       +'<td style="padding:4px 6px"><input type="date" value="'+esc(r.due)+'" style="font-size:11.5px" onchange="_ordInRows_['+i+'].due=this.value"></td>'
       +'<td style="padding:4px 6px"><select style="font-size:11px;max-width:230px" onchange="_ordInPick_('+i+',this.value)">'+candOpts+'</select></td>'
-      +'<td style="padding:4px 6px"><input type="number" data-step="off" step="0.01" value="'+(r.unitp||'')+'" style="width:70px;font-size:12px;text-align:right" oninput="_ordInRows_['+i+'].unitp=parseFloat(this.value)||0;_ordInAmt_('+i+')"></td>'
+      +'<td style="padding:4px 6px"><input id="ordin-up-'+i+'" type="number" data-step="off" step="0.01" value="'+(r.unitp||'')+'" style="width:70px;font-size:12px;text-align:right" oninput="_ordInRows_['+i+'].unitp=parseFloat(this.value)||0;_ordInAmt_('+i+')"><div id="ordin-upj-'+i+'" style="font-size:9.5px;white-space:nowrap"></div></td>'
       +'<td style="padding:4px 6px;text-align:right;font-weight:700" id="ordin-amt-'+i+'">'+(amt?('¥'+amt.toLocaleString()):'—')+'</td></tr>';
   });
   h+='</table>';
   var nRep=_ordInRows_.filter(function(r){return r.sel>=0;}).length;
   h+='<div style="font-size:11px;color:#64748b;margin-top:5px">'+_ordInRows_.length+'行を解析（♻リピート照合 '+nRep+'件・🆕新規 '+(_ordInRows_.length-nRep)+'件）。単価は前回実績から自動、編集できます。</div>';
   box.innerHTML=h;
+  _ordInRows_.forEach(function(_,i){ try{ _ordInAmt_(i); }catch(e){} });
 }
 function _ordInPick_(i,v){
   var r=_ordInRows_[i]; r.sel=parseInt(v);
@@ -26194,6 +26195,14 @@ function _ordInAmt_(i){
   var el=document.getElementById('ordin-amt-'+i);
   var amt=Math.round((r.qty||0)*(r.unitp||0));
   if(el) el.textContent=amt?('¥'+amt.toLocaleString()):'—';
+  // 単価が前回と同じ/異なるを明示（異なる=赤）
+  var prev=(r.sel>=0&&r.cands[r.sel])?r.cands[r.sel]:null;
+  var up=document.getElementById('ordin-up-'+i), j=document.getElementById('ordin-upj-'+i);
+  if(up&&j){
+    if(!prev){ j.textContent=''; up.style.background=''; up.style.borderColor=''; }
+    else if((Number(r.unitp)||0)===(Number(prev.unitp)||0)){ j.textContent='＝前回と同じ'; j.style.color='#166534'; up.style.background=''; up.style.borderColor=''; }
+    else { j.textContent='≠前回 @'+prev.unitp; j.style.color='#dc2626'; up.style.background='#fef2f2'; up.style.borderColor='#dc2626'; }
+  }
 }
 // 📥 FileMaker「レコードのインポート」用CSV（UTF-8 BOM・列順はFMのフィールド一覧確定後に調整）
 function _ordInCsv_(){
@@ -26201,7 +26210,7 @@ function _ordInCsv_(){
   if(!rows.length){ alert('書き出す行がありません'); return; }
   var q=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; };
   var today=new Date().toISOString().slice(0,10).replace(/-/g,'/');
-  var head=['受注日','得意先','品名','仕様','数量','単位','納期','単価','金額','リピート','前回品名','前回数量','前回単価','リピート元','変更点'];
+  var head=['受注日','得意先','品名','仕様','数量','単位','納期','単価','金額','単価判定','リピート','前回品名','前回数量','前回単価','リピート元','変更点'];
   var lines=[head.map(q).join(',')];
   rows.forEach(function(r){
     var prev=(r.sel>=0&&r.cands[r.sel])?r.cands[r.sel]:null;
@@ -26212,7 +26221,8 @@ function _ordInCsv_(){
       if(prev.unitp&&r.unitp&&prev.unitp!==r.unitp) chg.push('単価 @'+prev.unitp+'→@'+r.unitp);
     }
     // リピート=1ならFM側は「得意先+前回品名」で前回レコードを検索→複製→数量/納期/単価を上書き。0なら新規作成
-    lines.push([today, r.cust, r.item, r.spec||'', r.qty||'', r.unit||'', (r.due||'').replace(/-/g,'/'), r.unitp||'', amt||'',
+    var upJudge = prev ? ((Number(r.unitp)||0)===(Number(prev.unitp)||0) ? '同じ' : ('変更 @'+prev.unitp+'→@'+r.unitp)) : '新規';
+    lines.push([today, r.cust, r.item, r.spec||'', r.qty||'', r.unit||'', (r.due||'').replace(/-/g,'/'), r.unitp||'', amt||'', upJudge,
       prev?'1':'0', prev?(prev.item||''):'', prev?(prev.qty||''):'', prev?(prev.unitp||''):'', prev?prev.id:'', chg.join(' / ')].map(q).join(','));
   });
   var blob=new Blob([String.fromCharCode(0xFEFF)+lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'});
