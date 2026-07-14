@@ -1440,6 +1440,7 @@ setTimeout(_removeBootLoader_, 5000);
         <span style="font-size:10px;color:#64748b;font-weight:600;padding:0 4px">管理</span>
         <button class="btn" style="font-size:11px;padding:4px 8px" onclick="renderProjects()" title="一覧を再読み込み">🔄 更新</button>
         <button class="btn" style="background:#ede9fe;border-color:#c4b5fd;color:#5b21b6;font-size:11px;padding:4px 8px" onclick="showHistoryAnalyzeModal()" title="過去案件の AI 分析">📊 履歴分析</button>
+        <button class="btn" style="background:#7c3aed;border-color:#7c3aed;color:#fff;font-size:11px;padding:4px 8px;font-weight:700" onclick="_ordInOpen_()" title="お客様からもらった注文内容（Excelコピー・タブ区切り）を貼り付け→リピート照合→一括で受注案件に登録">📥 注文取込</button>
         <button class="btn" style="background:#0f766e;border-color:#0f766e;color:#fff;font-size:11px;padding:4px 8px;font-weight:700" onclick="document.getElementById('artes-proj-import-file').click()" title="各社の受注データを案件として取込（現在対応: アート・エス2026 JSON。他社形式は順次追加）">📥 受注取込</button>
         <input type="file" id="artes-proj-import-file" accept=".json" style="display:none" onchange="importArtesProjects(this)">
       </div>
@@ -26065,6 +26066,180 @@ function _qrReset_(orig){
   if(el){ el.value = orig; _qrRecalc_(); }
 }
 
+// ═══ 📥 ORDIN-1: 注文取込 — 貼り付け→解析→リピート照合→一括受注登録 ═══
+var _ordInRows_=[];
+function _ordInOpen_(){
+  var ex=document.getElementById('ordin-modal'); if(ex) ex.remove();
+  var ov=document.createElement('div');
+  ov.id='ordin-modal'; ov.className='proof-modal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+  ov.innerHTML='<div style="background:#fff;width:min(1100px,96vw);max-height:92vh;border-radius:12px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center">'
+    +'<strong style="font-size:15px">📥 注文取込（貼り付け → リピート照合 → 一括登録）</strong>'
+    +'<button onclick="document.getElementById(\'ordin-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 6px">×</button></div>'
+    +'<div style="padding:12px 18px;overflow-y:auto;flex:1">'
+    +'<div style="font-size:11.5px;color:#64748b;margin-bottom:6px">お客様からもらった注文内容（Excelの表をそのままコピー）を貼り付けてください。列は「得意先・品名・仕様・数量・単位・納期」を自動で見分けます（納期は 7/22 のような形でOK）。</div>'
+    +'<textarea id="ordin-text" style="width:100%;height:110px;font-size:12.5px;font-family:monospace" placeholder="例:\n東海大相模\t名刺（沼澤隆史）\t4/0 レーザーエース9\t100\t枚\t7/22" oninput="_ordInParse_()"></textarea>'
+    +'<div id="ordin-result" style="margin-top:10px"></div>'
+    +'</div>'
+    +'<div style="padding:10px 18px;border-top:1px solid #e2e8f0;display:flex;gap:10px;align-items:center">'
+    +'<span id="ordin-st" style="font-size:12px;color:#64748b"></span>'
+    +'<button class="btn" style="margin-left:auto;background:#16a34a;border-color:#16a34a;color:#fff;font-weight:800;font-size:13px;padding:8px 22px" onclick="_ordInSubmit_()">✅ 選択した行を受注案件として一括登録</button>'
+    +'</div></div>';
+  document.body.appendChild(ov);
+  document.getElementById('ordin-text').focus();
+}
+function _ordInDate_(t){
+  var m=String(t||'').match(/^(\d{1,2})[\/月](\d{1,2})日?$/); if(!m) return '';
+  var now=new Date(), y=now.getFullYear();
+  var d=new Date(y, +m[1]-1, +m[2]);
+  if(d.getTime() < now.getTime()-60*86400000) d=new Date(y+1, +m[1]-1, +m[2]);
+  return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+}
+function _ordInNorm_(t){ return String(t==null?'':t).replace(/[\s　]/g,''); }
+function _ordInParse_(){
+  var txt=document.getElementById('ordin-text')?.value||'';
+  var lines=txt.split(/\r?\n/).map(function(l){return l.replace(/\u00a0/g,' ');}).filter(function(l){return l.trim();});
+  var UNITS=['枚','冊','部','セット','束','箱','式','通','組'];
+  _ordInRows_=lines.map(function(line){
+    var cells=line.split('\t').map(function(c){return c.trim();}).filter(function(c){return c!=='';});
+    if(cells.length<2) return null;
+    var due='', qty=0, unit='', rest=[];
+    cells.forEach(function(c){
+      if(!due && /^\d{1,2}[\/月]\d{1,2}日?$/.test(c)){ due=c; return; }
+      if(!unit && UNITS.indexOf(c)>=0){ unit=c; return; }
+      if(!qty && /^[\d,]+$/.test(c) && parseInt(c.replace(/,/g,''))>0 && parseInt(c.replace(/,/g,''))<10000000){ qty=parseInt(c.replace(/,/g,'')); return; }
+      rest.push(c);
+    });
+    var cust=rest[0]||'', item=rest[1]||'', spec=rest.slice(2).join(' ');
+    var r={cust:cust, item:item, spec:spec, qty:qty, unit:unit||'枚', due:_ordInDate_(due), dueRaw:due, use:true};
+    r.cands=_ordInMatch_(r);
+    r.sel=r.cands.length?0:-1;   // -1=新規
+    r.unitp=r.cands.length?r.cands[0].unitp:0;
+    return r;
+  }).filter(Boolean);
+  _ordInRender_();
+}
+function _ordInMatch_(row){
+  var pool=(typeof _pastPool_==='function')?_pastPool_():[];
+  var nc=_ordInNorm_(row.cust), ni=_ordInNorm_(row.item);
+  if(!nc) return [];
+  var hits=pool.filter(function(r){
+    var rc=_ordInNorm_(r.cust); if(!rc) return false;
+    return rc.indexOf(nc)>=0 || nc.indexOf(rc)>=0;
+  }).map(function(r){
+    var ri=_ordInNorm_(r.item||''), sc=0;
+    if(ri&&ri===ni) sc=100;
+    else if(ri&&ni&&(ri.indexOf(ni)>=0||ni.indexOf(ri)>=0)) sc=70;
+    else {
+      var t1=ni.slice(0,2), sc2=0;
+      if(t1&&ri.indexOf(t1)>=0) sc2=30;
+      var sp=_ordInNorm_(row.spec), rs=_ordInNorm_(r.spec||'');
+      if(sp&&rs){ sp.split(/[\/・]/).forEach(function(tok){ if(tok&&tok.length>=2&&rs.indexOf(tok)>=0) sc2+=10; }); }
+      sc=sc2;
+    }
+    return {r:r, score:sc};
+  }).filter(function(x){ return x.score>=30; });
+  hits.sort(function(a,b){ return b.score-a.score || String(b.r.date||'').localeCompare(String(a.r.date||'')); });
+  return hits.slice(0,3).map(function(x){
+    var q=parseInt(x.r.qty)||0, ex=parseInt(x.r.exTax)||0;
+    return {id:x.r.id, item:x.r.item, spec:x.r.spec||'', qty:q, unitp:q>0?Math.round(ex/q*100)/100:0, date:String(x.r.date||'').slice(0,10), score:x.score};
+  });
+}
+function _ordInRender_(){
+  var box=document.getElementById('ordin-result'); if(!box) return;
+  if(!_ordInRows_.length){ box.innerHTML=''; return; }
+  var esc=function(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); };
+  var h='<table style="border-collapse:collapse;width:100%;font-size:12px">'
+    +'<tr>'+['✓','得意先','品名','仕様','数量','単位','納期','リピート照合','単価','金額'].map(function(t){return '<th style="background:#1a1a1a;color:#fff;padding:5px 8px;text-align:left;white-space:nowrap">'+t+'</th>';}).join('')+'</tr>';
+  _ordInRows_.forEach(function(r,i){
+    var candOpts=r.cands.map(function(c,ci){
+      return '<option value="'+ci+'"'+(r.sel===ci?' selected':'')+'>♻ '+esc(c.id)+' '+esc(String(c.item).slice(0,14))+'（前回'+c.qty.toLocaleString()+' @'+c.unitp+'）</option>';
+    }).join('')+'<option value="-1"'+(r.sel===-1?' selected':'')+'>🆕 新規（照合なし）</option>';
+    var amt=Math.round((r.qty||0)*(r.unitp||0));
+    h+='<tr style="border-bottom:1px solid #e2e8f0;background:'+(r.cands.length?'#f0fdf4':'#fffbeb')+'">'
+      +'<td style="padding:4px 6px"><input type="checkbox" '+(r.use?'checked':'')+' onchange="_ordInRows_['+i+'].use=this.checked"></td>'
+      +'<td style="padding:4px 6px"><input value="'+esc(r.cust)+'" style="width:110px;font-size:12px" oninput="_ordInRows_['+i+'].cust=this.value"></td>'
+      +'<td style="padding:4px 6px"><input value="'+esc(r.item)+'" style="width:150px;font-size:12px" oninput="_ordInRows_['+i+'].item=this.value"></td>'
+      +'<td style="padding:4px 6px"><input value="'+esc(r.spec)+'" style="width:150px;font-size:12px" oninput="_ordInRows_['+i+'].spec=this.value"></td>'
+      +'<td style="padding:4px 6px"><input type="number" data-step="off" value="'+(r.qty||'')+'" style="width:64px;font-size:12px;text-align:right" oninput="_ordInRows_['+i+'].qty=parseInt(this.value)||0;_ordInAmt_('+i+')"></td>'
+      +'<td style="padding:4px 6px"><input value="'+esc(r.unit)+'" style="width:44px;font-size:12px" oninput="_ordInRows_['+i+'].unit=this.value"></td>'
+      +'<td style="padding:4px 6px"><input type="date" value="'+esc(r.due)+'" style="font-size:11.5px" onchange="_ordInRows_['+i+'].due=this.value"></td>'
+      +'<td style="padding:4px 6px"><select style="font-size:11px;max-width:230px" onchange="_ordInPick_('+i+',this.value)">'+candOpts+'</select></td>'
+      +'<td style="padding:4px 6px"><input type="number" data-step="off" step="0.01" value="'+(r.unitp||'')+'" style="width:70px;font-size:12px;text-align:right" oninput="_ordInRows_['+i+'].unitp=parseFloat(this.value)||0;_ordInAmt_('+i+')"></td>'
+      +'<td style="padding:4px 6px;text-align:right;font-weight:700" id="ordin-amt-'+i+'">'+(amt?('¥'+amt.toLocaleString()):'—')+'</td></tr>';
+  });
+  h+='</table>';
+  var nRep=_ordInRows_.filter(function(r){return r.sel>=0;}).length;
+  h+='<div style="font-size:11px;color:#64748b;margin-top:5px">'+_ordInRows_.length+'行を解析（♻リピート照合 '+nRep+'件・🆕新規 '+(_ordInRows_.length-nRep)+'件）。単価は前回実績から自動、編集できます。</div>';
+  box.innerHTML=h;
+}
+function _ordInPick_(i,v){
+  var r=_ordInRows_[i]; r.sel=parseInt(v);
+  r.unitp=(r.sel>=0&&r.cands[r.sel])?r.cands[r.sel].unitp:0;
+  _ordInRender_();
+}
+function _ordInAmt_(i){
+  var r=_ordInRows_[i];
+  var el=document.getElementById('ordin-amt-'+i);
+  var amt=Math.round((r.qty||0)*(r.unitp||0));
+  if(el) el.textContent=amt?('¥'+amt.toLocaleString()):'—';
+}
+function _ordInSubmit_(){
+  var rows=_ordInRows_.filter(function(r){ return r.use&&r.cust&&r.item; });
+  if(!rows.length){ alert('登録する行がありません'); return; }
+  if(!confirm(rows.length+'件を受注案件として登録します。よろしいですか？')) return;
+  var made=[];
+  rows.forEach(function(r){
+    var prev=(r.sel>=0&&r.cands[r.sel])?r.cands[r.sel]:null;
+    var prevRec=prev?((DB.projects||[]).find(function(p){return p.id===prev.id;})||(DB.estimates||[]).find(function(e){return e.id===prev.id;})):null;
+    var exTax=Math.round((r.qty||0)*(r.unitp||0));
+    var newId=(typeof nextProjNo==='function')?nextProjNo():('PRJ'+Date.now()+Math.floor(Math.random()*100));
+    var changes=[];
+    if(prev){
+      if(prev.qty&&r.qty&&prev.qty!==r.qty) changes.push({k:'qty',label:'数量',old:String(prev.qty),nw:String(r.qty)});
+      if(prev.unitp&&r.unitp&&prev.unitp!==r.unitp) changes.push({k:'unitp',label:'単価',old:'@'+prev.unitp,nw:'@'+r.unitp});
+      if(prev.spec&&r.spec&&_ordInNorm_(prev.spec)!==_ordInNorm_(r.spec)) changes.push({k:'spec',label:'仕様',old:prev.spec,nw:r.spec});
+    }
+    var proj={
+      id:newId,
+      companyId:currentAuth?.companyId||'COMP002',
+      companyCode:(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'',
+      orderDate:new Date().toISOString().slice(0,10),
+      dueDate:r.due||'',
+      cust:r.cust, item:r.item,
+      spec:r.spec||(prevRec?prevRec.spec:'')||'',
+      qty:r.qty||0, unit:r.unit||'枚',
+      exTax:exTax, grand:Math.round(exTax*1.1),
+      status:'データ作成中',
+      assignee:currentAuth?.userName||'',
+      memo:'[注文取込]'+(prev?(' リピート元: '+prev.id):''),
+      endUser:prevRec?(prevRec.endUser||prevRec.end_user||''):'',
+      steps:{版下:'─',校了:'─',印刷:'─',加工:'─',納品:'─'},
+      stepDates:{},
+      createdAt:new Date().toISOString(),
+      source:'ordintake'
+    };
+    if(prev){
+      proj.repeatFrom=prev.id;
+      proj.fromRepeatProjectId=prev.id;
+      proj.repeatRefs=[prev.id];
+      proj.repeatKind='repeat';
+      if(changes.length) proj.repeatChanges=changes;   // 製造指示書の「⚠前回からの変更点」に出る
+      if(prevRec&&prevRec.repeatRefs&&prevRec.repeatRefs.length){ proj.repeatRefs=prevRec.repeatRefs.concat([prev.id]); }
+    }
+    if(!DB.projects) DB.projects=[];
+    DB.projects.push(proj);
+    made.push(newId);
+    if(typeof _addAuditLog_==='function') try{ _addAuditLog_('create','project:'+newId,'注文取込: '+r.cust+' '+r.item+(prev?(' (リピート元 '+prev.id+')'):' (新規)')); }catch(e){}
+  });
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  document.getElementById('ordin-modal')?.remove();
+  if(typeof renderProjects==='function') try{ renderProjects(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('📥 '+made.length+'件を受注案件に登録しました（'+made.join(', ')+'）');
+}
 function submitQuickRepeat(projId){
   var prev = (DB.projects || []).find(function(p){ return p.id === projId; });
   if(!prev){ alert('元の案件が見つかりません'); return; }
