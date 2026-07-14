@@ -3609,11 +3609,9 @@ let DB={
     ],
     data:[
       {n:"データ作成（新規）",p:5000,mc:5000,note:"新規"},
-      {n:"データ作成（改訂）",p:3000,mc:3000,note:"改訂"},
-      {n:"データ作成（再版）",p:1500,mc:1500,note:"再版"},
-      {n:"データ修正",p:2000,mc:2000,note:""},
-      {n:"スキャニング",p:1000,mc:1000,note:""},
-      {n:"トレース",p:3000,mc:3000,note:""},
+      {n:"データ作成（改版）",p:3000,mc:3000,note:"リピートで内容変更あり"},
+      {n:"再版/データ支給",p:1500,mc:1500,note:"リピート変更なし・支給データ"},
+      {n:"デザイン作成費",p:10000,mc:10000,note:"デザインから起こす場合"},
     ],
     bind:[
       {n:"無線綴じ",p:94,mc:5000,tiers:[{qty:100,p:120},{qty:300,p:100},{qty:500,p:94},{qty:1000,p:85}]},
@@ -6627,6 +6625,22 @@ function selPaperSearch(id){
   return `<button class="msel-btn" onclick="openMasterModal('paper',this,${id})">用紙選択</button>`;
 }
 // 用紙名のドロップダウン候補(datalist)を用紙マスタから生成（紙名＋紙サイズ＋キロ数）。自由入力も可
+// 用紙名を候補から選んだら単価(kg単価/全紙単価)をマスタから自動セット
+function _paperNamePick_(inp,id){
+  try{
+    var v=String(inp.value||'').trim(); if(!v) return;
+    var hit=((DB.master&&DB.master.paper)||[]).find(function(r){
+      if(!r||r.active===false) return false;
+      var label=[r.nm,r.sz,r.wt].filter(Boolean).join(' ');
+      return label===v||r.nm===v;
+    });
+    if(!hit) return;
+    var tr=inp.closest('tr'); if(!tr) return;
+    var up=tr.querySelector('[data-field=unitp]');
+    if(up&&hit.p!=null){ up.value=hit.p; up.style.background='#eff6ff'; up.title='用紙マスタ: '+[hit.nm,hit.sz,hit.wt].filter(Boolean).join(' '); }
+    if(typeof calc==='function') calc(id);
+  }catch(e){}
+}
 function _ensurePaperDatalist_(){
   var dl=document.getElementById('paper-master-dl');
   if(!dl){ dl=document.createElement('datalist'); dl.id='paper-master-dl'; document.body.appendChild(dl); }
@@ -6658,13 +6672,54 @@ function selBind(id){
 // DATASPEC-1: データ作成セクションの仕様バー（サイズ/面/ページ）＋DTP項目クイック追加
 function dataSpecBar(id){
   var sizes=['A4','A3','A5','B4','B5','B6','A6','はがき','名刺','長3','角2','その他'];
-  return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 9px;background:#faf5ff;border:1px solid #e9d5ff;border-radius:6px;font-size:11px">
+  var qbtn=function(key,label){ return '<button type="button" id="dtq-'+key+'-'+id+'" class="pill" style="font-size:11px;padding:3px 10px" onclick="_dtQuick_('+id+',\''+key+'\')">'+label+'</button>'; };
+  return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 9px;background:#faf5ff;border:1px solid #e9d5ff;border-radius:6px;font-size:11px;flex-wrap:wrap">
     <span style="font-weight:700;color:#6b21a8">🎨 データ作成 サイズ</span>
     <select id="dt-size-${id}" style="font-size:12px;padding:3px 8px" onchange="ts(${id})._dataSpec=Object.assign(ts(${id})._dataSpec||{},{size:this.value})">
       <option value="">─ サイズ選択 ─</option>
       ${sizes.map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join('')}
     </select>
+    <span style="font-weight:700;color:#6b21a8;margin-left:6px">区分</span>
+    ${qbtn('new','新規')}${qbtn('kaihan','改版')}${qbtn('saihan','再版/データ支給')}${qbtn('design','デザイン作成費')}
+    <span style="display:inline-flex;align-items:center;gap:3px">${qbtn('other','その他')}<input id="dt-other-${id}" placeholder="その他の内容" style="width:110px;font-size:11px" data-noclear></span>
+    <span id="dt-reco-${id}" style="font-size:10px;color:#7c3aed"></span>
   </div>`;
+}
+// 区分クイック: クリックでデータ作成行を追加（マスタ一致の単価を自動適用）
+var _DT_QUICK_={ new:'データ作成（新規）', kaihan:'データ作成（改版）', saihan:'再版/データ支給', design:'デザイン作成費', other:'' };
+function _dtQuick_(id,key){
+  var name=_DT_QUICK_[key];
+  if(key==='other'){
+    var v=(document.getElementById('dt-other-'+id)?.value||'').trim();
+    if(!v){ alert('「その他の内容」を入力してからボタンを押してください'); return; }
+    name='データ作成（'+v+'）';
+  }
+  addR('dt-'+id,'sim',id,selData,true);
+  var tb=document.getElementById('dt-'+id); if(!tb) return;
+  var tr=tb.querySelector('tr:last-child'); if(!tr) return;
+  var ni=tr.querySelector('input[type=text]'); if(ni) ni.value=name;
+  var m=((DB.master&&DB.master.data)||[]).find(function(r){ return r&&r.n===name; });
+  if(!m){ var DEF={new:5000,kaihan:3000,saihan:1500,design:10000}; if(DEF[key]!=null) m={p:DEF[key],mc:DEF[key]}; }
+  if(m){
+    var ins=tr.querySelectorAll('input[type=number]');
+    if(ins[0]&&m.p!=null) ins[0].value=m.p;
+    if(ins[1]&&m.mc!=null){ ins[1].value=m.mc; tr.dataset.mincharge=m.mc; }
+  }
+  if(typeof calc==='function') calc(id);
+}
+// 案件区分に応じた推奨区分を強調（新規=新規／リピート+変更あり=改版／リピート変更なし=再版）
+function _dtRecommend_(id){
+  var jt=document.getElementById('job-type-'+id)?.value||'new';
+  var sc=document.getElementById('spec-change-'+id)?.value||'no';
+  var pc=document.getElementById('plate-change-'+id)?.value||'no';
+  var reco=(jt==='new')?'new':((sc==='yes'||pc==='yes')?'kaihan':'saihan');
+  ['new','kaihan','saihan','design','other'].forEach(function(k){
+    var b=document.getElementById('dtq-'+k+'-'+id); if(!b) return;
+    if(k===reco){ b.style.border='2px solid #dc2626'; b.style.background='#fef2f2'; b.style.fontWeight='800'; }
+    else { b.style.border=''; b.style.background=''; b.style.fontWeight=''; }
+  });
+  var note=document.getElementById('dt-reco-'+id);
+  if(note) note.textContent='おすすめ: '+({new:'新規',kaihan:'改版',saihan:'再版/データ支給'})[reco];
 }
 function _addDataItem_(id,name){
   var sp=(ts(id)._dataSpec)||{}; var tag=[sp.size,sp.sides].filter(Boolean).join('/');
@@ -7213,7 +7268,7 @@ function rowPaperBook(id,d,partNames,cat='帳票'){
   return `<tr data-paper="1">
     <td>${partSel(pnames, d?.part||pnames[0]||'', id)}</td>
     <td>${selPaperSearch(id)}</td>
-    <td><input type="text" list="paper-master-dl" value="${d?.nm||d?.n||''}" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})"></td>
+    <td><input type="text" list="paper-master-dl" value="${d?.nm||d?.n||''}" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})" onchange="_paperNamePick_(this,${id})"></td>
     <td><input class="r" type="number" data-field="dai" value="${d?.dai||''}" placeholder="台数" step="1" oninput="calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
     <td>${finishSel(fin,id,cat)}</td>
     <td><input class="r" type="number" data-field="cut" value="${d?.ct||1}" placeholder="切" oninput="autoMenRow(this.closest('tr'),'');calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
@@ -7684,7 +7739,7 @@ function rowPrintBook(id,d){
 function rowSimple(id,d,selFn,noDai=false){
   const mc=d?.mc||'';
   if(noDai){
-    const dtHelp=(typeof selData!=='undefined'&&selFn===selData)?_dtHelpTd_(id):'';
+    const dtHelp=(typeof selData!=='undefined'&&selFn===selData)?_dtHelpTd_(id):((typeof selBind!=='undefined'&&selFn===selBind)?_bindTgtTd_(id):'');
     // 台数なし：単価のみで金額 = 単価（データ作成・製本加工）
     return `<tr${mc?' data-mincharge="'+mc+'"':''} data-nodai="1">
       <td>${selFn(id)}</td>
@@ -8040,7 +8095,7 @@ function buildPanel(id,initData){
     <div class="f">
       <label>規格・仕様（見積書記載用）</label>
       <textarea id="spec-${id}" rows="2" placeholder="例: A4, 無線綴じ, 上質90k, 片面墨刷" style="min-height:32px;overflow:hidden;resize:vertical"
-        oninput="this.dataset.autoGen='';_autoGrow_(this)" title="自動生成されます。手入力で編集すると以降は自動更新されません"></textarea>
+        oninput="this.dataset.userEdit='1';_autoGrow_(this)" title="自動生成されます。手入力で編集すると以降は自動更新されません"></textarea>
     </div>
     <div class="f">
       <label>備考・メモ</label>
@@ -9081,7 +9136,7 @@ const simpleProcessTH=`<thead><tr><th>マスター</th><th>工程名</th><th cla
 // 帳票用（減感有無追加）
 const formProcessTH=`<thead><tr><th>パーツ</th><th>マスター</th><th class="r">枚数</th><th class="r">台数</th><th style="min-width:60px">表</th><th style="min-width:60px">裏</th><th style="min-width:50px">減感</th><th class="r">単価</th><th class="r">金額</th><th></th></tr></thead>`;
 const plateTH=`<thead><tr><th>マスター</th><th>工程名</th><th class="r">台数</th><th class="r">単価</th><th class="r" title="最低保証料金" style="color:#78350f;min-width:60px">最低料金</th><th class="r">金額</th><th></th></tr></thead>`;
-const bindTH=`<thead><tr><th>マスター</th><th>工程名</th><th class="r">単価</th><th class="r" title="最低保証料金" style="color:#78350f;min-width:60px">最低料金</th><th class="r">金額</th><th></th></tr></thead>`;
+const bindTH=`<thead><tr><th>マスター</th><th>工程名</th><th class="r">単価</th><th class="r" title="最低保証料金" style="color:#78350f;min-width:60px">最低料金</th><th class="r">金額</th><th style="min-width:76px" title="穴あけ・ミシン・折り等パーツ毎の加工は対象を選択。全体に係る加工は「全体」のまま">対象</th><th></th></tr></thead>`;
 const dataTH=`<thead><tr><th>マスター</th><th>工程名</th><th class="r">金額</th><th class="r" title="最低保証料金" style="color:#78350f;min-width:60px">最低料金</th><th class="r">計</th><th style="min-width:170px" title="色と台数(ページ数)×単価。入力すると金額に自動計算">色・台数(P)×単価</th><th></th></tr></thead>`;
 
 // ─── 封筒フォーム ───
@@ -9266,7 +9321,7 @@ function addPaperRow(tbId, formType, id){
   } else {
     tr.innerHTML=`<td>${partSel(partNames,'',id)}</td>
       <td>${selPaperSearch(id)}</td>
-      <td><input type="text" list="paper-master-dl" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})"></td>
+      <td><input type="text" list="paper-master-dl" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})" onchange="_paperNamePick_(this,${id})"></td>
       <td><input class="r" type="number" data-field="dai" placeholder="台数" step="1" oninput="calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
       <td><select data-field="finish" style="font-size:11px;padding:2px 3px;width:100%" onchange="autoMenRow(this.closest('tr'),'');calcPaperRowAmt(this.closest('tr'));calc(${id})"><option value="">─</option>${finishSizeOpts(finishVal)}<option value="custom">手入力</option></select></td>
       <td><input class="r" type="number" data-field="cut" value="1" placeholder="切" oninput="autoMenRow(this.closest('tr'),'');calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
@@ -9290,7 +9345,7 @@ function addFormPaperRow(tbId, id){
   const tr=document.createElement('tr');tr.dataset.paper='1';
   tr.innerHTML=`<td>${partSel(FORM_PART_NAMES, nextPart, id)}</td>
     <td>${selPaperSearch(id)}</td>
-    <td><input type="text" list="paper-master-dl" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})"></td>
+    <td><input type="text" list="paper-master-dl" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})" onchange="_paperNamePick_(this,${id})"></td>
     <td><input class="r" type="number" data-field="dai" placeholder="台数" step="1" oninput="calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
     <td>${finishSel(finishVal, id, '帳票')}</td>
     <td><input class="r" type="number" data-field="cut" value="1" placeholder="切" oninput="autoMenRow(this.closest('tr'),'');calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
@@ -9371,7 +9426,7 @@ function addBookPaperRow(tbId, id){
   const tr=document.createElement('tr');tr.dataset.paper='1';
   tr.innerHTML=`<td>${partSel(BOOKLET_PART_NAMES, nextPart, id)}</td>
     <td>${selPaperSearch(id)}</td>
-    <td><input type="text" list="paper-master-dl" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})"></td>
+    <td><input type="text" list="paper-master-dl" placeholder="用紙名（選択 or 入力）" oninput="calc(${id})" onchange="_paperNamePick_(this,${id})"></td>
     <td><input class="r" type="number" data-field="dai" placeholder="台数" step="1" oninput="calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
     <td>${finishSel(finishVal, id, '冊子')}</td>
     <td><input class="r" type="number" data-field="cut" value="1" placeholder="切" oninput="autoMenRow(this.closest('tr'),'');calcPaperRowAmt(this.closest('tr'));calc(${id})"></td>
@@ -9449,7 +9504,7 @@ function addR(tbId,type,id,selFn,noDai=false){
     tr.innerHTML=`<td>${selPrint(id)}</td><td><input type="text" placeholder="工程名" oninput="onPNchk(this.closest('tr'),${id})"></td><td><input class="r" type="number" placeholder="枚数" oninput="calc(${id})"></td><td class="auto" style="font-size:11px;color:#aaa"></td><td>${IRO_SEL(id,'iro_omote')}</td><td>${IRO_SEL(id,'iro_ura','なし')}</td><td><input class="r" type="number" placeholder="単価" oninput="calc(${id})"></td><td class="amt"></td><td><input class="r" type="text" inputmode="numeric" data-field="men" placeholder="面付" style="width:48px" title="面付数。入力すると台数=枚数÷面付" oninput="calc(${id})"></td><td class="dx">${DEL(id)}</td>`;
   else
   if(noDai)
-      tr.innerHTML=`<td>${(selFn||selPlate)(id)}</td><td><input type="text" placeholder="工程・摘要" oninput="calc(${id})"></td><td><input class="r" type="number" placeholder="金額" oninput="calc(${id})"></td><td><input class="r" type="number" placeholder="最低料金" style="background:#fffbeb" data-field="mc" oninput="this.closest('tr').dataset.mincharge=this.value||0;calc(${id})"></td><td class="amt"></td>${tbId.indexOf('dt-')===0?_dtHelpTd_(id):''}<td class="dx">${DEL(id)}</td>`;
+      tr.innerHTML=`<td>${(selFn||selPlate)(id)}</td><td><input type="text" placeholder="工程・摘要" oninput="calc(${id})"></td><td><input class="r" type="number" placeholder="金額" oninput="calc(${id})"></td><td><input class="r" type="number" placeholder="最低料金" style="background:#fffbeb" data-field="mc" oninput="this.closest('tr').dataset.mincharge=this.value||0;calc(${id})"></td><td class="amt"></td>${tbId.indexOf('dt-')===0?_dtHelpTd_(id):(tbId.indexOf('bd-')===0?_bindTgtTd_(id):'')}<td class="dx">${DEL(id)}</td>`;
     else
       tr.innerHTML=`<td>${(selFn||selPlate)(id)}</td><td><input type="text" placeholder="工程・摘要" oninput="calc(${id})"></td><td><input class="r" type="number" placeholder="台数" step="0.5" oninput="calc(${id})"></td><td><input class="r" type="number" placeholder="単価" oninput="calc(${id})"></td><td class="amt"></td><td class="dx">${DEL(id)}</td>`;
   if(noDai) tr.dataset.nodai='1';
@@ -10574,7 +10629,8 @@ function updateSpecField(id){
   // 空欄、または前回の自動生成値と同じなら更新
   // specEl.dataset.auto に前回生成値を保持し、一致か空なら上書き
   const prev=specEl.dataset.autoGen||'';
-  if(!specEl.value||specEl.value===prev){
+  // 手入力(userEdit)した時だけロック。復元・プリフィル値は入力の変更に追従して常に更新する
+  if(!specEl.value||specEl.value===prev||specEl.dataset.userEdit!=='1'){
     specEl.value=full;
     specEl.dataset.autoGen=full;
   }
@@ -10602,6 +10658,7 @@ function onJobTypeChange(id){
     if(pcSel){ pcSel.disabled=false; pcSel.style.background=''; pcSel.style.color=''; }
   }
   updatePlateRowLabels(id);
+  try{ _dtRecommend_(id); }catch(e){}
   // ①チップ表示を新規/リピートに追従
   if(typeof _updateEntryKind_==='function') _updateEntryKind_(id);
   // 過去実績パネルの表示切替（リピートは非表示）
@@ -37213,15 +37270,32 @@ window.addEventListener('scroll',function(){ if(_ddlInput_&&_ddlBox_) _ddlRender
 
 // ═══ 用紙区分=不要 → 用紙タブ/パネルを隠す ═══
 function _paperModeVis_(id){
+  // 用紙情報は手配不要/支給でも記入が必要（本多さん指示）→ ブロックは常に表示し、注記バッジだけ切替
   var pm=document.getElementById('paper-mode-'+id); if(!pm) return;
-  var none=(pm.value==='none');
-  ['ct-p-','cp-p-'].forEach(function(pre){
-    var el=document.getElementById(pre+id);
-    if(el) el.style.display=none?'none':'';
-  });
+  ['ct-p-','cp-p-'].forEach(function(pre){ var el=document.getElementById(pre+id); if(el) el.style.display=''; });
+  var cp=document.getElementById('cp-p-'+id); if(!cp) return;
+  var note=document.getElementById('ppmode-note-'+id);
+  if(!note){ note=document.createElement('div'); note.id='ppmode-note-'+id; cp.insertBefore(note, cp.firstChild); }
+  if(pm.value==='none') note.innerHTML='<div style="font-size:11.5px;background:#fffbeb;border:1px solid #fcd34d;color:#92400e;border-radius:7px;padding:5px 10px;margin-bottom:6px">📄 用紙区分=<b>不要</b>: 手配はしませんが、用紙情報（銘柄・キロ数）は指示書用に記入してください</div>';
+  else if(pm.value==='supply') note.innerHTML='<div style="font-size:11.5px;background:#eff6ff;border:1px solid #93c5fd;color:#1d4ed8;border-radius:7px;padding:5px 10px;margin-bottom:6px">📄 用紙区分=<b>支給</b>: 用紙待ちで工程に反映。用紙情報は記入してください</div>';
+  else note.innerHTML='';
 }
 
 // ═══ データ作成行: 色(モノクロ/カラー)＋ページ(台)数×単価 → 金額に自動計算 ═══
+// 加工の対象（全体 or パーツ毎: 穴あけ・ミシン・折り等）→ 工程名に【表紙】等を自動付与
+function _bindTgtTd_(id){
+  return '<td><select data-field="btgt" style="font-size:11px;padding:2px 3px" title="パーツ毎の加工は対象を選択（工程名に自動で付きます）。全体加工はそのまま" onchange="_bindTgt_(this,'+id+')">'
+    +'<option value="">全体</option><option>表紙</option><option>本文</option><option>中紙</option><option>カバー</option><option>封筒</option><option>その他パーツ</option></select></td>';
+}
+function _bindTgt_(sel,id){
+  var tr=sel.closest('tr'); if(!tr) return;
+  var ni=tr.querySelector('input[type=text]');
+  if(ni){
+    var v=String(ni.value||'').replace(/^【[^】]*】/,'').trim();
+    ni.value=sel.value?('【'+sel.value+'】'+v):v;
+  }
+  if(typeof calc==='function') calc(id);
+}
 function _dtHelpTd_(id){
   return '<td style="white-space:nowrap">'
     +'<select data-field="dcol" style="font-size:11px;padding:2px 3px" title="モノクロ/カラー（工程名に自動で付きます）" onchange="_dtIro_(this,'+id+')">'
