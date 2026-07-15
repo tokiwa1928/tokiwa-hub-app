@@ -580,7 +580,7 @@ async function hubCloudPush(){
     projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
     intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
     outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
-    calendarOrders: db.calendarOrders||[], inquiries: db.inquiries||[],
+    calendarOrders: db.calendarOrders||[], calendarOrdersDeleted: (db.calendarOrdersDeleted||[]).slice(-2000), inquiries: db.inquiries||[],
     deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
     inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
     toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
@@ -624,7 +624,7 @@ function byManual(a,b){
   var ao=(a.order==null?1e9:a.order), bo=(b.order==null?1e9:b.order); return ao-bo;
 }
 
-function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
+function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; var tomb={}; (db.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; }); arr = arr.filter(function(r){ return !(r && tomb[r.id]); }); arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
 var BASE_YEAR = 2026;   // 今年（入力対象の基準年）
 function curYear(){ return BASE_YEAR; }   // 今年は固定(年度ドロップダウン廃止・表示年チェックで切替)
 function curCat(){ return document.getElementById('fCat').value || ''; }
@@ -1478,7 +1478,17 @@ function onEdit(elm){
 }
 function delRow(id){
   if(!confirm('この行を削除します。よろしいですか？')) return;
-  if(hubSave(function(db){ db[COLL] = (db[COLL]||[]).filter(function(x){ return x.id !== id; }); })){ hubToast('🗑 削除しました'); render(); }
+  if(hubSave(function(db){
+    db[COLL] = (db[COLL]||[]).filter(function(x){ return x.id !== id; });
+    // 墓石: 削除IDを記録。全社クラウドは丸ごと上書きのため、記録が無いと別端末の旧データで復活する
+    if(!Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted=[];
+    if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id);
+    if(db.calendarOrdersDeleted.length>2000) db.calendarOrdersDeleted=db.calendarOrdersDeleted.slice(-2000);
+  })){
+    if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
+    hubCloudPush();   // デバウンスを待たず即クラウドへ(他端末が旧行を押し戻す前に消す)
+    hubToast('🗑 削除しました'); render();
+  }
 }
 // 既存得意先の索引（社名→ 最新の担当者/区分・製品候補）
 var _custIndex={};
@@ -1573,6 +1583,18 @@ function fixCarryCust(){
 // 本体HUBの得意先マスタ(db.master.cust)の表記を正として、台帳の得意先名を合わせる
 // 過年度(2025年以前)の空欄日付を、同じ得意先・同年・複数製品の行どうしで補完する。
 // 例: 製品が2行に分かれ、片方だけに受注日/納品日が入っている → もう片方の空欄にも同じ日付を入れる。
+// 墓石掃除: 別端末やクラウド上書きで戻ってきた「削除済み」行を消す(毎起動)。
+function purgeTombstoned(){
+  var db=hubLoad(); if(!db || !Array.isArray(db.calendarOrdersDeleted) || !db.calendarOrdersDeleted.length) return;
+  var tomb={}; db.calendarOrdersDeleted.forEach(function(id){ tomb[id]=1; });
+  var arr=Array.isArray(db[COLL])?db[COLL]:[];
+  var back=arr.filter(function(r){ return r && tomb[r.id]; });
+  if(!back.length) return;
+  hubSave(function(d){ d[COLL]=(d[COLL]||[]).filter(function(r){ return !(r && tomb[r.id]); }); });
+  if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
+  hubCloudPush();   // 掃除結果を即クラウドへ(復活の連鎖を止める)
+  buildCats(); render();
+}
 function fixSharedDates(){
   var db=hubLoad(); if(!db || !Array.isArray(db[COLL])) return;
   var cur=curYear();
@@ -2488,7 +2510,7 @@ function dittoClean(){
   });
   if(ok && n){ render(); hubToast('🧹 「、」「〃」など同上記法 '+n+' 件を前行の値に置き換えました'); }
 }
-setTimeout(function(){ try{ dittoClean(); fixCarryCust(); fixSharedDates(); syncCustFromHub(); syncVendorMaster(); syncTelFax(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
+setTimeout(function(){ try{ dittoClean(); purgeTombstoned(); fixCarryCust(); fixSharedDates(); syncCustFromHub(); syncVendorMaster(); syncTelFax(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
 try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 </body>
