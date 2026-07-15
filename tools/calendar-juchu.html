@@ -1503,23 +1503,33 @@ function delRow(id){
   var sig=target?sigOf(target):'';
   var manual=!!(target&&target._manual);
   if(!confirm('この行を削除します。よろしいですか？')) return;
+  var removedIds=[];   // 実際に消した行のID(重複含む)を全て墓石にする
   if(hubSave(function(db){
     var arr=db[COLL]||[];
-    db[COLL]=arr.filter(function(x){ if(!x) return false; if(x.id===id) return false; if(!manual && sig && !x._manual && sigOf(x)===sig) return false; return true; });
+    var keep=[];
+    arr.forEach(function(x){
+      if(!x){ return; }
+      // 同一ID、または同一内容(重複)は手動/自動を問わず消す
+      var hit=(x.id===id) || (sig && sigOf(x)===sig);
+      if(hit){ if(x.id) removedIds.push(x.id); } else { keep.push(x); }
+    });
+    db[COLL]=keep;
     if(!Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted=[];
-    if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id);
-    if(db.calendarOrdersDeleted.length>2000) db.calendarOrdersDeleted=db.calendarOrdersDeleted.slice(-2000);
+    removedIds.forEach(function(rid){ if(db.calendarOrdersDeleted.indexOf(rid)<0) db.calendarOrdersDeleted.push(rid); });
+    if(db.calendarOrdersDeleted.length>4000) db.calendarOrdersDeleted=db.calendarOrdersDeleted.slice(-4000);
+    // 内容墓石は「自動生成された行」の再投入対策。手動追加行は同じ内容でも登録し直せるよう対象外。
     if(!manual && sig){
       if(!Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig=[];
       if(db.calendarOrdersDeletedSig.indexOf(sig)<0) db.calendarOrdersDeletedSig.push(sig);
       if(db.calendarOrdersDeletedSig.length>2000) db.calendarOrdersDeletedSig=db.calendarOrdersDeletedSig.slice(-2000);
     }
   })){
-    localTombAdd(id);
+    removedIds.forEach(function(rid){ localTombAdd(rid); });   // 消した全IDを端末ローカル墓石へ
     if(!manual && sig) localSigAdd(sig);
     if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
     hubCloudPush();
-    hubToast('🗑 削除しました'); render();
+    hubToast('🗑 削除しました'+(removedIds.length>1?('（重複'+removedIds.length+'件）'):''));
+    render();
   }
 }
 // 既存得意先の索引（社名→ 最新の担当者/区分・製品候補）
