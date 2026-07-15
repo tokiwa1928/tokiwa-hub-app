@@ -619,6 +619,37 @@ async function hubCloudPush(){
   } catch(e){ console.warn('[Tool] cloud push failed', e); return false; }
 }
 // セル編集など連発する保存はデバウンスして1回だけ送信。
+// 起動時にクラウド最新のカレンダーデータを取り込み、全PCの表示を一致させる。
+// ツールは従来「書くだけ」でPCごとにlocalStorageの古い値を表示していた(単価101/空欄の食い違い等)。
+async function hubCloudPull(){
+  try{
+    var auth=hubAuth();
+    if(!auth || !auth.loggedIn || !auth.companyId) return false;
+    var url=new URL(HUB_GAS_URL);
+    url.searchParams.set('action','syncAll');
+    url.searchParams.set('apiKey', HUB_API_KEY);
+    url.searchParams.set('companyId', auth.companyId);
+    var res=await fetch(url.toString(), { method:'GET', redirect:'follow' });
+    var r=await res.json();
+    var d=r && (r.data||r);
+    if(!d || !Array.isArray(d.calendarOrders)) return false;
+    var ok=hubSave(function(db){
+      // 墓石(端末ローカル ∪ DB ∪ クラウド)を先に統合
+      if(!Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted=[];
+      (d.calendarOrdersDeleted||[]).forEach(function(id){ if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id); });
+      localTomb().forEach(function(id){ if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id); });
+      if(!Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig=[];
+      (d.calendarOrdersDeletedSig||[]).forEach(function(x){ if(db.calendarOrdersDeletedSig.indexOf(x)<0) db.calendarOrdersDeletedSig.push(x); });
+      var tomb={}; db.calendarOrdersDeleted.forEach(function(id){ tomb[id]=1; });
+      // id単位マージ: クラウドを正にしつつ、ローカルだけの未同期行は残す。墓石は除外。
+      var byId={}, order=[];
+      (Array.isArray(db[COLL])?db[COLL]:[]).forEach(function(x){ if(x&&x.id){ if(!(x.id in byId)) order.push(x.id); byId[x.id]=x; } });
+      d.calendarOrders.forEach(function(x){ if(x&&x.id){ if(!(x.id in byId)) order.push(x.id); byId[x.id]=x; } });
+      db[COLL]=order.filter(function(id){ return !tomb[id]; }).map(function(id){ return byId[id]; });
+    });
+    return ok;
+  }catch(e){ console.warn('[Tool] cloud pull failed', e); return false; }
+}
 var _hubCloudTimer = null;
 function hubCloudPushSoon(){
   if(_hubCloudTimer) clearTimeout(_hubCloudTimer);
@@ -2537,7 +2568,13 @@ function autoMigrate(){
   }); }); }); }); });
 }
 // 起動
-buildYears(); buildCats(); setView('matrix'); autoMigrate();
+buildYears(); buildCats(); setView('matrix');
+// まずクラウド最新を取り込んで全PCを一致させ、その後に移行/自己修復を実行
+hubCloudPull().then(function(pulled){
+  if(pulled){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); }
+  try{ purgeTombstoned(); }catch(e){}
+  autoMigrate();
+});
 // 台帳の外注先を本体の外注先マスタへ反映(追加＋名称修正のみ・1回だけ)。移行の遅延ロード完了後に実行。
 // 同上記法（、/〃/上と同じ 等）を直前行の実値に解決（全端末で1回だけ・DBマーカー CAL-DITTO-1）
 function dittoClean(){
