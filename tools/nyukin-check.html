@@ -373,5 +373,76 @@ function hubRefreshNow(){
   location.reload();
 }
 </script>
+<!-- HUB共通: アプリ自動更新＋更新履歴（自動挿入 hubUpdateKit） -->
+<style>
+#hubLogBtn{position:fixed;right:16px;bottom:58px;z-index:99999;width:38px;height:38px;border-radius:50%;
+  border:1px solid #cbd5e1;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.18);cursor:pointer;font-size:17px;line-height:1;}
+#hubLogBtn:hover{background:#f1f5f9;}
+#hubLogPanel{position:fixed;right:16px;bottom:104px;z-index:99999;width:min(360px,calc(100vw - 32px));max-height:60vh;overflow:auto;
+  background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;display:none;font-size:12px;color:#0f172a;text-align:left;}
+#hubLogPanel h3{margin:0 0 8px;font-size:13px;}
+#hubLogPanel .d{font-weight:700;margin:10px 0 3px;color:#0369a1;}
+#hubLogPanel ul{margin:0 0 4px;padding-left:17px;}
+#hubLogPanel li{margin:2px 0;line-height:1.45;}
+#hubUpBanner{position:fixed;left:50%;transform:translateX(-50%);top:10px;z-index:100000;display:none;align-items:center;gap:10px;
+  background:#0f172a;color:#fff;padding:9px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:13px;}
+#hubUpBanner button{font-family:inherit;font-size:12px;font-weight:700;border-radius:7px;border:0;padding:5px 11px;cursor:pointer;background:#fde68a;color:#0f172a;}
+@media print{#hubLogBtn,#hubLogPanel,#hubUpBanner{display:none!important;}}
+</style>
+<button id="hubLogBtn" title="更新履歴を表示" onclick="hubToggleLog()">📋</button>
+<div id="hubLogPanel"></div>
+<div id="hubUpBanner"><span>🆕 新しい版があります（<b id="hubUpCnt">15</b>秒後に自動更新）</span><button onclick="hubDoUpdate()">今すぐ更新</button><button style="background:#334155;color:#fff" onclick="hubCancelUpdate()">後で</button></div>
+<script>
+(function(){
+  var BASE = location.pathname.indexOf('/tools/')>=0 ? '../' : './';
+  // ===== 更新履歴 =====
+  window.hubToggleLog=function(){
+    var p=document.getElementById('hubLogPanel');
+    if(p.style.display==='block'){ p.style.display='none'; return; }
+    p.style.display='block'; p.innerHTML='<h3>📋 更新履歴</h3>読み込み中…';
+    fetch(BASE+'changelog.json?ts='+Date.now(), {cache:'no-store'}).then(function(r){return r.json();}).then(function(list){
+      var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
+      p.innerHTML='<h3>📋 更新履歴</h3>'+list.map(function(e){
+        return '<div class="d">'+esc(e.date)+'</div><ul>'+e.items.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>';
+      }).join('');
+    }).catch(function(){ p.innerHTML='<h3>📋 更新履歴</h3>取得できませんでした'; });
+  };
+  // ===== アプリ本体の自動更新 =====
+  // service-worker.js の版番号を定期取得し、変わっていたら再読込して新しい版に切り替える。
+  var curVer=null, timer=null;
+  function fetchVer(){
+    return fetch(BASE+'service-worker.js?ts='+Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.text(); })
+      .then(function(t){ var m=t.match(/CACHE_VERSION\s*=\s*'([^']+)'/); return m?m[1]:null; })
+      .catch(function(){ return null; });
+  }
+  window.hubDoUpdate=function(){ try{ sessionStorage.setItem('hubJustUpdated','1'); }catch(e){} location.reload(); };
+  window.hubCancelUpdate=function(){ if(timer){ clearInterval(timer); timer=null; } var b=document.getElementById('hubUpBanner'); if(b) b.style.display='none'; };
+  function showBanner(){
+    var b=document.getElementById('hubUpBanner'); if(!b || b.style.display==='flex') return;
+    b.style.display='flex';
+    var n=15, c=document.getElementById('hubUpCnt'); c.textContent=n;
+    timer=setInterval(function(){
+      var ae=document.activeElement;
+      if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;   // 入力中はカウントを止める
+      n--; c.textContent=n;
+      if(n<=0){ clearInterval(timer); hubDoUpdate(); }
+    }, 1000);
+  }
+  function check(){
+    fetchVer().then(function(v){
+      if(!v) return;
+      if(curVer===null){ curVer=v; return; }
+      if(v===curVer) return;
+      // 新しい版を検知: 非表示タブは即時、表示中はバナー＋カウントダウンで自動更新
+      if(document.hidden){ hubDoUpdate(); } else { showBanner(); }
+    });
+  }
+  fetchVer().then(function(v){ curVer=v; });
+  setInterval(check, 180000);   // 3分ごとに版を確認
+  window.addEventListener('focus', check);
+  try{ if(sessionStorage.getItem('hubJustUpdated')){ sessionStorage.removeItem('hubJustUpdated'); } }catch(e){}
+})();
+</script>
 </body>
 </html>
