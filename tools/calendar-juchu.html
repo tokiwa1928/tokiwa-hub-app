@@ -1571,6 +1571,44 @@ function fixCarryCust(){
   if(fixed){ _masterDirty=true; hubToast('得意先の「〃」など'+fixed+'件を上の行の社名で補完しました'); buildCats(); render(); }
 }
 // 本体HUBの得意先マスタ(db.master.cust)の表記を正として、台帳の得意先名を合わせる
+// 過年度(2025年以前)の空欄日付を、同じ得意先・同年・複数製品の行どうしで補完する。
+// 例: 製品が2行に分かれ、片方だけに受注日/納品日が入っている → もう片方の空欄にも同じ日付を入れる。
+function fixSharedDates(){
+  var db=hubLoad(); if(!db || !Array.isArray(db[COLL])) return;
+  var cur=curYear();
+  var DF=['telDate','orderDate','lostDate','poDate','poDue','inDate','delivDate'];
+  var groups={};
+  db[COLL].forEach(function(r){
+    var y=Number(r.year)||0; if(y>=cur) return;                 // 過年度のみ
+    var c=String(r.cust||'').trim(); if(!c || SYM_CUST.test(c)) return;
+    var key=(r.category||'')+'|'+y+'|'+normCust(c);
+    (groups[key]=groups[key]||[]).push(r);
+  });
+  var plan={};   // id -> {field:value}
+  Object.keys(groups).forEach(function(k){
+    var rows=groups[k]; if(rows.length<2) return;               // 2行以上(複数製品)のみ
+    DF.forEach(function(f){
+      var vals={};
+      rows.forEach(function(r){ var v=String(r[f]||'').trim(); if(v) vals[v]=1; });
+      var ks=Object.keys(vals);
+      if(ks.length!==1) return;                                 // 0=どこにも無い / 2以上=食い違い → 触らない
+      var v=ks[0];
+      rows.forEach(function(r){
+        var ed=r._edited||{};
+        if(!String(r[f]||'').trim() && !ed[f]){ (plan[r.id]=plan[r.id]||{})[f]=v; }
+      });
+    });
+  });
+  var ids=Object.keys(plan); if(!ids.length) return;
+  var n=0;
+  hubSave(function(d){
+    (d[COLL]||[]).forEach(function(r){
+      var pf=plan[r.id]; if(!pf) return;
+      for(var f in pf){ if(!String(r[f]||'').trim()){ r[f]=pf[f]; n++; } }
+    });
+  });
+  if(n){ hubToast('過年度の空欄日付 '+n+'件を同じ得意先・同年の行から補完しました'); buildCats(); render(); }
+}
 function syncCustFromHub(){
   var db=hubLoad(); if(!db || !db.master || !Array.isArray(db.master.cust)) return;
   var map={}, dup={};
@@ -2450,7 +2488,7 @@ function dittoClean(){
   });
   if(ok && n){ render(); hubToast('🧹 「、」「〃」など同上記法 '+n+' 件を前行の値に置き換えました'); }
 }
-setTimeout(function(){ try{ dittoClean(); fixCarryCust(); syncCustFromHub(); syncVendorMaster(); syncTelFax(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
+setTimeout(function(){ try{ dittoClean(); fixCarryCust(); fixSharedDates(); syncCustFromHub(); syncVendorMaster(); syncTelFax(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
 try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 </body>
