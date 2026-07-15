@@ -2266,7 +2266,7 @@ setTimeout(_removeBootLoader_, 5000);
         <button class="btn" onclick="exportDeliveryExcel()">📊 Excel出力</button>
         <button class="btn" onclick="optimizeRoute()">🗺 経路最適化</button>
         <button class="btn" style="background:#dbeafe;border-color:#93c5fd" onclick="addAllToCalendar()">📅 一括カレンダー追加</button>
-        <button class="btn btn-p" onclick="showDeliverySlipInputModal()">📄 納品書（3連）</button>
+        <button class="btn btn-p" style="background:#7c3aed;border-color:#7c3aed" onclick="showMultiDocModal()">📄 まとめ納品書・請求書（複数案件）</button><button class="btn btn-p" onclick="showDeliverySlipInputModal()">📄 納品書（3連）</button>
         <button class="btn btn-p" onclick="showReceiptInputModal()">🧾 領収書</button>
         <button class="btn btn-p" style="background:#f59e0b;border-color:#f59e0b" onclick="showBoxLabelModal()">📦 箱ラベル</button>
       </div>
@@ -24946,6 +24946,153 @@ function _companyProfile_(id){
   var live = ((typeof DB!=='undefined'&&DB.companies)||[]).find(function(c){ return c.id===id; });
   var over = (typeof DB!=='undefined' && DB.conf && DB.conf.companyProfiles && DB.conf.companyProfiles[id]) || null;
   return Object.assign({}, base||{}, live||{}, over||{});
+}
+// ═══ MULTIDOC-1: 複数案件/複数明細をまとめて 納品書(3連)・請求書 を発行（発行会社別・インボイス番号・振込先込み）═══
+var _mdocLines_ = [];
+function showMultiDocModal(){
+  var ex=document.getElementById('multidoc-modal'); if(ex) ex.remove();
+  if(!_mdocLines_.length) _mdocLines_=[{ name:'', spec:'', up:'', qty:'', unit:'枚', projId:'' }];
+  var companies=(DB.companies||[]).slice();
+  if(!companies.length && typeof COMPANY_INIT!=='undefined') companies=COMPANY_INIT.slice();
+  var curCo=(currentAuth&&currentAuth.companyId)||'';
+  var ov=document.createElement('div');
+  ov.id='multidoc-modal'; ov.className='proof-modal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+  ov.innerHTML='<div style="background:#fff;width:min(1000px,97vw);max-height:93vh;border-radius:12px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center">'
+    +'<strong style="font-size:15px">📄 まとめ納品書・請求書（複数案件・複数明細）</strong>'
+    +'<button onclick="document.getElementById(\'multidoc-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    +'<div style="padding:12px 18px;overflow-y:auto;flex:1">'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">'
+    +'<div class="f"><label>発行会社（帳票の自社欄・インボイス番号・振込先）</label><select id="mdoc-issuer">'
+    + companies.map(function(c){ return '<option value="'+c.id+'"'+(c.id===curCo?' selected':'')+'>'+_escDiff(c.name||c.id)+'</option>'; }).join('')
+    +'</select><div id="mdoc-issuer-info" style="font-size:10px;color:#64748b;margin-top:3px"></div></div>'
+    +'<div class="f"><label>得意先名（〇〇 御中）</label><input id="mdoc-cust" list="cust-dl-multi" placeholder="株式会社〇〇"><datalist id="cust-dl-multi"></datalist></div>'
+    +'<div class="f"><label>発行日</label><input id="mdoc-date" type="date"></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;align-items:center;margin:4px 0"><b style="font-size:12px">明細</b>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_mdocAddLine_()">＋ 明細を追加</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#eff6ff;border-color:#93c5fd;color:#1d4ed8" onclick="_mdocPickCases_()">📁 案件から取込（複数選択）</button></div>'
+    +'<div id="mdoc-lines"></div>'
+    +'<div id="mdoc-total" style="text-align:right;font-size:13px;font-weight:700;margin-top:8px"></div>'
+    +'</div>'
+    +'<div style="padding:10px 18px;border-top:1px solid #e2e8f0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+    +'<span style="font-size:11px;color:#64748b">インボイス番号・振込先は「設定→帳票の会社情報」で会社ごとに登録した値が出ます</span>'
+    +'<button class="btn" style="margin-left:auto;font-size:12px;color:#166534;border-color:#86efac" onclick="_mdocRegisterCases_()" title="この明細を発行会社の案件として案件管理に登録">＋ 案件管理に登録</button>'
+    +'<button class="btn btn-p" style="font-size:13px;padding:8px 18px" onclick="_mdocIssue_(\'納品書\')">📄 納品書（3連）</button>'
+    +'<button class="btn btn-p" style="font-size:13px;padding:8px 18px;background:#0f766e;border-color:#0f766e" onclick="_mdocIssue_(\'請求書\')">🧾 請求書</button>'
+    +'</div></div>';
+  document.body.appendChild(ov);
+  var t=new Date();  // 今日をdateに（Date直値はスクリプト内で使えるがワークフロー外なのでOK）
+  var dEl=document.getElementById('mdoc-date'); if(dEl) dEl.value=t.getFullYear()+'-'+('0'+(t.getMonth()+1)).slice(-2)+'-'+('0'+t.getDate()).slice(-2);
+  // 得意先候補
+  try{ var dl=document.getElementById('cust-dl-multi'); if(dl){ var seen={}; dl.innerHTML=((DB.master&&DB.master.cust)||[]).map(function(c){ var o=c&&c.org; if(!o||seen[o])return''; seen[o]=1; return '<option value="'+_escDiff(o)+'">'; }).join(''); } }catch(e){}
+  document.getElementById('mdoc-issuer').addEventListener('change', _mdocIssuerInfo_);
+  _mdocIssuerInfo_(); _mdocRenderLines_();
+}
+function _mdocIssuerInfo_(){
+  var id=document.getElementById('mdoc-issuer')?.value;
+  var pr=(typeof _companyProfile_==='function')?_companyProfile_(id):{};
+  var el=document.getElementById('mdoc-issuer-info'); if(!el) return;
+  el.innerHTML = (pr.regNo?('登録番号 '+_escDiff(pr.regNo)):'<span style="color:#dc2626">⚠ インボイス登録番号 未設定</span>')
+    + (pr.banks&&pr.banks.length?(' / 振込先あり'):' / <span style="color:#b45309">振込先 未設定</span>');
+}
+function _mdocAddLine_(){ _mdocLines_.push({ name:'', spec:'', up:'', qty:'', unit:'枚', projId:'' }); _mdocRenderLines_(); }
+function _mdocRenderLines_(){
+  var box=document.getElementById('mdoc-lines'); if(!box) return;
+  var esc=_escDiff;
+  var h='<table style="width:100%;border-collapse:collapse;font-size:12px"><tr>'
+    +['品名・規格・図版','単価','数量','単位','金額(税抜)',''].map(function(t){return '<th style="background:#1a1a1a;color:#fff;padding:5px 6px;text-align:left;white-space:nowrap">'+t+'</th>';}).join('')+'</tr>';
+  var sub=0;
+  _mdocLines_.forEach(function(l,i){
+    var up=parseFloat(l.up)||0, qty=parseFloat(String(l.qty).replace(/,/g,''))||0, amt=Math.round(up*qty); sub+=amt;
+    h+='<tr style="border-bottom:1px solid #e2e8f0">'
+      +'<td style="padding:3px"><input value="'+esc(l.name)+'" placeholder="品名・規格" style="width:100%;font-size:12px" oninput="_mdocLines_['+i+'].name=this.value"></td>'
+      +'<td style="padding:3px"><input type="text" inputmode="decimal" value="'+(l.up===''?'':l.up)+'" style="width:70px;font-size:12px;text-align:right" oninput="_mdocLines_['+i+'].up=this.value;_mdocRenderTotal_()"></td>'
+      +'<td style="padding:3px"><input type="text" inputmode="numeric" value="'+(l.qty===''?'':l.qty)+'" style="width:70px;font-size:12px;text-align:right" oninput="_mdocLines_['+i+'].qty=this.value;_mdocRenderTotal_()"></td>'
+      +'<td style="padding:3px"><input value="'+esc(l.unit||'')+'" style="width:44px;font-size:12px" oninput="_mdocLines_['+i+'].unit=this.value"></td>'
+      +'<td style="padding:3px;text-align:right;font-weight:700" id="mdoc-amt-'+i+'">'+(amt?'¥'+amt.toLocaleString():'—')+'</td>'
+      +'<td style="padding:3px"><button class="btn" style="font-size:11px;padding:2px 7px;color:#b91c1c" onclick="_mdocLines_.splice('+i+',1);_mdocRenderLines_()">✕</button></td></tr>';
+  });
+  h+='</table>';
+  box.innerHTML=h;
+  _mdocRenderTotal_();
+}
+function _mdocRenderTotal_(){
+  var sub=0;
+  _mdocLines_.forEach(function(l,i){ var amt=Math.round((parseFloat(l.up)||0)*(parseFloat(String(l.qty).replace(/,/g,''))||0)); var el=document.getElementById('mdoc-amt-'+i); if(el) el.textContent=amt?'¥'+amt.toLocaleString():'—'; sub+=amt; });
+  var tax=Math.floor(sub*0.1);
+  var t=document.getElementById('mdoc-total'); if(t) t.innerHTML='小計(税抜) ¥'+sub.toLocaleString()+'　消費税(10%) ¥'+tax.toLocaleString()+'　<span style="font-size:15px">合計(税込) ¥'+(sub+tax).toLocaleString()+'</span>';
+}
+function _mdocPickCases_(){
+  var cust=(document.getElementById('mdoc-cust')?.value||'').trim();
+  var myCo=document.getElementById('mdoc-issuer')?.value;
+  var list=(DB.projects||[]).filter(function(p){
+    if(!p||!p.id) return false;
+    if(/完了|キャンセル|失注/.test(String(p.status||''))) return false;
+    if(myCo && p.companyId && p.companyId!==myCo) return false;
+    if(cust && String(p.cust||'').indexOf(cust)<0) return false;
+    return true;
+  }).slice(0,200);
+  if(!list.length){ alert('該当する案件がありません（得意先を入れると絞り込めます）'); return; }
+  var pick=window.prompt('取り込む案件番号をカンマ区切りで入力してください。\n候補:\n'+list.slice(0,40).map(function(p){return p.id+' '+p.cust+' '+(p.item||'').slice(0,14)+' '+(p.qty||'')+(p.unit||'')+' ¥'+(p.exTax||0);}).join('\n'));
+  if(pick==null) return;
+  var ids=pick.split(/[,、\s]+/).map(function(x){return x.trim();}).filter(Boolean);
+  var added=0;
+  ids.forEach(function(id){
+    var p=(DB.projects||[]).find(function(x){return x.id===id;}); if(!p) return;
+    var q=parseInt(p.qty)||0, ex=parseInt(p.exTax)||0;
+    _mdocLines_.push({ name:[p.item, p.spec].filter(Boolean).join('　'), spec:'', up:(q>0?Math.round(ex/q*100)/100:ex), qty:q, unit:p.unit||'枚', projId:p.id });
+    added++;
+    if(!document.getElementById('mdoc-cust').value && p.cust) document.getElementById('mdoc-cust').value=p.cust;
+  });
+  _mdocLines_=_mdocLines_.filter(function(l){ return l.name||l.up||l.qty; });
+  _mdocRenderLines_();
+  if(added && typeof _toastMsg==='function') _toastMsg('📁 '+added+'件を明細に取り込みました');
+}
+function _mdocEntries_(){
+  return _mdocLines_.filter(function(l){ return (l.name||'').trim() && (parseFloat(l.up)||0)>0 && (parseFloat(String(l.qty).replace(/,/g,''))||0)>0; })
+    .map(function(l){
+      var up=parseFloat(l.up)||0, qty=parseFloat(String(l.qty).replace(/,/g,''))||0;
+      return { project:{ id:l.projId||'', item:l.name, qty:qty, unit:l.unit||'枚', exTax:Math.round(up*qty) } };
+    });
+}
+function _mdocIssue_(docType){
+  var cust=(document.getElementById('mdoc-cust')?.value||'').trim();
+  if(!cust){ alert('得意先名を入れてください'); return; }
+  var entries=_mdocEntries_();
+  if(!entries.length){ alert('明細（品名・単価・数量）を入れてください'); return; }
+  var issuerId=document.getElementById('mdoc-issuer')?.value;
+  var date=document.getElementById('mdoc-date')?.value||'';
+  if(typeof _printDocument_==='function') _printDocument_(docType, cust, date, entries, { issuerId:issuerId });
+}
+function _mdocRegisterCases_(){
+  var cust=(document.getElementById('mdoc-cust')?.value||'').trim();
+  if(!cust){ alert('得意先名を入れてください'); return; }
+  var lines=_mdocLines_.filter(function(l){ return (l.name||'').trim() && (parseFloat(String(l.qty).replace(/,/g,''))||0)>0; });
+  if(!lines.length){ alert('登録する明細がありません'); return; }
+  var issuerId=document.getElementById('mdoc-issuer')?.value;
+  if(!confirm(lines.length+'件を案件管理に登録します（発行会社='+(cust)+'向け）。よろしいですか？')) return;
+  var date=document.getElementById('mdoc-date')?.value||new Date().toISOString().slice(0,10);
+  var n=0;
+  lines.forEach(function(l){
+    if(l.projId) return;  // 既に案件から取込んだ行は二重登録しない
+    var up=parseFloat(l.up)||0, qty=parseFloat(String(l.qty).replace(/,/g,''))||0, ex=Math.round(up*qty);
+    var id=(typeof nextProjNo==='function')?nextProjNo():('PRJ'+Date.now()+Math.floor(Math.random()*100));
+    var proj={ id:id, companyId:issuerId||(currentAuth&&currentAuth.companyId)||'COMP002',
+      companyCode:(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'',
+      orderDate:date, cust:cust, item:l.name, spec:'', qty:qty, unit:l.unit||'枚',
+      exTax:ex, grand:Math.round(ex*1.1), status:'データ作成中',
+      assignee:(currentAuth&&currentAuth.userName)||'', memo:'[まとめ発行から登録]',
+      steps:{版下:'─',校了:'─',印刷:'─',加工:'─',納品:'─'}, stepDates:{},
+      createdAt:new Date().toISOString(), source:'multidoc' };
+    (DB.projects=DB.projects||[]).push(proj); l.projId=id; n++;
+  });
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('📝 '+n+'件を案件管理に登録しました');
+  if(typeof renderProjects==='function') try{ renderProjects(); }catch(e){}
 }
 function _printDocument_(docType, cust, dateStr, entries, meta){
   meta = meta || {};
