@@ -689,29 +689,34 @@ async function hubCloudPull(){
     var r=await res.json();
     var d=r && (r.data||r);
     if(!d || !Array.isArray(d.calendarOrders)) return false;
-    var ok=hubSave(function(db){
-      // 墓石(端末ローカル ∪ DB ∪ クラウド)を先に統合
-      if(!Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted=[];
-      (d.calendarOrdersDeleted||[]).forEach(function(id){ if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id); });
-      localTomb().forEach(function(id){ if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id); });
-      if(!Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig=[];
-      (d.calendarOrdersDeletedSig||[]).forEach(function(x){ if(db.calendarOrdersDeletedSig.indexOf(x)<0) db.calendarOrdersDeletedSig.push(x); });
-      var tomb={}; db.calendarOrdersDeleted.forEach(function(id){ tomb[id]=1; });
-      // id単位マージ: クラウドを正にしつつ、ローカルだけの未同期行は残す。墓石は除外。
-      // レコードごとに更新時刻の新しい方を採用(先祖返り防止)。内容墓石も除外。
-      var sigp={}; (db.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
-      (d.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
-      localSig().forEach(function(x){ sigp[x]=1; });
-      db[COLL]=mergeCalById(db[COLL]||[], d.calendarOrders||[], tomb, sigp);
-      db.calendarOrdersDeletedSig=Object.keys(sigp).slice(-2000);
-    });
-    return ok;
+    var db=hubLoad(); if(!db) return false;
+    // 墓石(端末ローカル ∪ DB ∪ クラウド)を統合
+    var tomb={}, sigp={};
+    (db.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
+    (d.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
+    localTomb().forEach(function(id){ tomb[id]=1; });
+    (db.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
+    (d.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
+    localSig().forEach(function(x){ sigp[x]=1; });
+    // レコードごとに更新時刻の新しい方を採用(先祖返り防止)。墓石は除外。
+    var before=(db[COLL]||[]).map(function(r){ return r.id+':'+(r._updatedAt||''); }).join(',');
+    var merged=mergeCalById(db[COLL]||[], d.calendarOrders||[], tomb, sigp);
+    var after=merged.map(function(r){ return r.id+':'+(r._updatedAt||''); }).join(',');
+    // 変更が無ければ何もしない(ポーリングでの無駄書き込み/送信を避ける)
+    if(after===before) return false;
+    // pushを誘発しない直接書き込み(クラウド由来なので再送不要)
+    db[COLL]=merged;
+    db.calendarOrdersDeleted=Object.keys(tomb).slice(-4000);
+    db.calendarOrdersDeletedSig=Object.keys(sigp).slice(-2000);
+    try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){}
+    _hubCacheClear(); _masterDirty=true;
+    return true;   // 変更あり=呼び出し側で再描画
   }catch(e){ console.warn('[Tool] cloud pull failed', e); return false; }
 }
 var _hubCloudTimer = null;
 function hubCloudPushSoon(){
   if(_hubCloudTimer) clearTimeout(_hubCloudTimer);
-  _hubCloudTimer = setTimeout(function(){ _hubCloudTimer=null; hubCloudPush(); }, 1500);
+  _hubCloudTimer = setTimeout(function(){ _hubCloudTimer=null; hubCloudPush(); }, 700);
 }
 function hubAppend(key, record){ return hubSave(function(db){ if(!Array.isArray(db[key])) db[key] = []; db[key].push(record); }); }
 function hubEsc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -2695,6 +2700,26 @@ try { window.addEventListener('storage', function(e){
     buildYears(); buildCats(); render();
   }
 }); } catch(e){}
+// リアルタイム同期: 一定間隔でクラウド最新を取り込み、変更があれば画面を更新する。
+// これで各PCが古い画面のまま作業し続けるのを防ぐ(編集中・非表示タブ・入力フォーカス中はスキップ)。
+function _hubCanAutoSync(){
+  if(document.hidden) return false;
+  var ae=document.activeElement;
+  if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return false;   // 入力中は邪魔しない
+  if(document.getElementById('quoteModal') && document.getElementById('quoteModal').style.display==='flex') return false;
+  var auth=hubAuth(); return !!(auth && auth.loggedIn && auth.companyId);
+}
+var _hubAutoBusy=false;
+function hubAutoSync(){
+  if(_hubAutoBusy || !_hubCanAutoSync()) return;
+  _hubAutoBusy=true;
+  Promise.resolve(hubCloudPull()).then(function(changed){
+    if(changed){ try{ buildYears(); buildCats(); render(); }catch(e){} }
+  }).catch(function(){}).then(function(){ _hubAutoBusy=false; });
+}
+setInterval(hubAutoSync, 20000);   // 20秒ごとに最新を取り込む
+window.addEventListener('focus', hubAutoSync);   // タブに戻ったら即取り込む
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) hubAutoSync(); });
 try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ _hubCacheClear(); _masterDirty=true; try{ purgeTombstoned(); }catch(_e){} buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 <!-- HUB共通: 最新データに更新するフローティングボタン（自動挿入） -->
