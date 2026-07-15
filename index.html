@@ -2266,7 +2266,7 @@ setTimeout(_removeBootLoader_, 5000);
         <button class="btn" onclick="exportDeliveryExcel()">📊 Excel出力</button>
         <button class="btn" onclick="optimizeRoute()">🗺 経路最適化</button>
         <button class="btn" style="background:#dbeafe;border-color:#93c5fd" onclick="addAllToCalendar()">📅 一括カレンダー追加</button>
-        <button class="btn btn-p" style="background:#7c3aed;border-color:#7c3aed" onclick="showMultiDocModal()">📄 まとめ納品書・請求書（複数案件）</button><button class="btn btn-p" onclick="showDeliverySlipInputModal()">📄 納品書（3連）</button>
+        <button class="btn btn-p" style="background:#7c3aed;border-color:#7c3aed" onclick="showMultiDocModal()">📄 まとめ納品書・請求書（複数案件）</button><button class="btn btn-p" style="background:#0f766e;border-color:#0f766e" onclick="showDocLedger()">📒 取引台帳（納品・請求・入金）</button><button class="btn btn-p" onclick="showDeliverySlipInputModal()">📄 納品書（3連）</button>
         <button class="btn btn-p" onclick="showReceiptInputModal()">🧾 領収書</button>
         <button class="btn btn-p" style="background:#f59e0b;border-color:#f59e0b" onclick="showBoxLabelModal()">📦 箱ラベル</button>
       </div>
@@ -3683,6 +3683,8 @@ let DB={
   reminderHistory: [],
   // 校正データ
   proofings: [],
+  // 取引台帳(暫定): まとめ発行の納品/請求/入金ステータス（本格運用まで）
+  docIssues: [],
   // LINE WORKS Drive連携設定
   lwDriveConfig: {
     enabled: false,
@@ -24978,7 +24980,7 @@ function showMultiDocModal(){
     +'<div id="mdoc-total" style="text-align:right;font-size:13px;font-weight:700;margin-top:8px"></div>'
     +'</div>'
     +'<div style="padding:10px 18px;border-top:1px solid #e2e8f0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
-    +'<span style="font-size:11px;color:#64748b">インボイス番号・振込先は「設定→帳票の会社情報」で会社ごとに登録した値が出ます</span>'
+    +'<span style="font-size:11px;color:#64748b">インボイス番号・振込先は「設定→帳票の会社情報」で会社ごとに登録した値が出ます</span>'+'<button class="btn" style="font-size:12px;color:#0f766e;border-color:#5eead4" onclick="showDocLedger()">📒 取引台帳</button>'
     +'<button class="btn" style="margin-left:auto;font-size:12px;color:#166534;border-color:#86efac" onclick="_mdocRegisterCases_()" title="この明細を発行会社の案件として案件管理に登録">＋ 案件管理に登録</button>'
     +'<button class="btn btn-p" style="font-size:13px;padding:8px 18px" onclick="_mdocIssue_(\'納品書\')">📄 納品書（3連）</button>'
     +'<button class="btn btn-p" style="font-size:13px;padding:8px 18px;background:#0f766e;border-color:#0f766e" onclick="_mdocIssue_(\'請求書\')">🧾 請求書</button>'
@@ -25066,6 +25068,111 @@ function _mdocIssue_(docType){
   var issuerId=document.getElementById('mdoc-issuer')?.value;
   var date=document.getElementById('mdoc-date')?.value||'';
   if(typeof _printDocument_==='function') _printDocument_(docType, cust, date, entries, { issuerId:issuerId });
+  // 取引台帳へ記録（納品書→納品済 / 請求書→請求済）
+  try{ _docLedgerUpsert_(issuerId, cust, date, entries, docType); }catch(e){}
+}
+// ═══ DOCLEDGER-1: 取引台帳（納品・請求・入金の暫定管理）═══
+function _docLedgerKey_(issuerId, cust, entries){
+  var amt=entries.reduce(function(a,e){ return a+(e.project&&e.project.exTax||0); },0);
+  var names=entries.map(function(e){ return (e.project&&e.project.item||'').slice(0,8); }).join('|');
+  return [issuerId,cust,amt,names].join('¦');
+}
+function _docLedgerUpsert_(issuerId, cust, date, entries, docType){
+  DB.docIssues=DB.docIssues||[];
+  var key=_docLedgerKey_(issuerId,cust,entries);
+  var sub=entries.reduce(function(a,e){ return a+(e.project&&e.project.exTax||0); },0);
+  var rec=DB.docIssues.find(function(r){ return r&&r.key===key&&!r.paid; });
+  if(!rec){
+    rec={ id:'DOC-'+Date.now()+'-'+Math.floor(Math.random()*1000), key:key, issuerId:issuerId, cust:cust,
+      date:date, itemsText:entries.map(function(e){ return e.project&&e.project.item||''; }).filter(Boolean).join(' / '),
+      subtotal:sub, tax:Math.floor(sub*0.1), total:sub+Math.floor(sub*0.1),
+      delivered:false, deliveredAt:'', billed:false, billedAt:'', paid:false, paidAt:'', payMethod:'',
+      createdAt:new Date().toISOString() };
+    DB.docIssues.push(rec);
+  }
+  var today=date||new Date().toISOString().slice(0,10);
+  if(docType==='納品書'){ rec.delivered=true; if(!rec.deliveredAt) rec.deliveredAt=today; }
+  if(docType==='請求書'){ rec.billed=true; if(!rec.billedAt) rec.billedAt=today; }
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('📒 取引台帳に記録しました（'+docType+'）');
+}
+function showDocLedger(){
+  var ex=document.getElementById('docledger-modal'); if(ex) ex.remove();
+  var ov=document.createElement('div'); ov.id='docledger-modal'; ov.className='proof-modal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+  ov.innerHTML='<div style="background:#fff;width:min(1100px,97vw);max-height:93vh;border-radius:12px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#0f766e;color:#fff;display:flex;justify-content:space-between;align-items:center">'
+    +'<strong style="font-size:15px">📒 取引台帳（納品・請求・入金／暫定運用）</strong>'
+    +'<button onclick="document.getElementById(\'docledger-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    +'<div style="padding:8px 18px;border-bottom:1px solid #e2e8f0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +'<input id="docl-q" placeholder="🔍 得意先・品名で絞り込み" style="font-size:12px;padding:5px 10px;min-width:200px" oninput="_docLedgerRender_()">'
+    +'<label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="docl-unpaid" onchange="_docLedgerRender_()"> 未入金のみ</label>'
+    +'<span id="docl-sum" style="margin-left:auto;font-size:12px;font-weight:700"></span></div>'
+    +'<div id="docl-body" style="padding:10px 18px;overflow-y:auto;flex:1"></div></div>';
+  document.body.appendChild(ov);
+  _docLedgerRender_();
+}
+function _docLedgerRender_(){
+  var box=document.getElementById('docl-body'); if(!box) return;
+  var q=(document.getElementById('docl-q')?.value||'').trim();
+  var unpaidOnly=!!document.getElementById('docl-unpaid')?.checked;
+  var myCo=(currentAuth&&currentAuth.companyId)||null; var isTk=(myCo==='COMP002');
+  var esc=_escDiff;
+  var rows=(DB.docIssues||[]).filter(function(r){
+    if(!r) return false;
+    if(!isTk && myCo && r.issuerId && r.issuerId!==myCo) return false;
+    if(unpaidOnly && r.paid) return false;
+    if(q && (String(r.cust||'')+String(r.itemsText||'')).indexOf(q)<0) return false;
+    return true;
+  }).sort(function(a,b){ return String(b.date||'').localeCompare(String(a.date||'')); });
+  if(!rows.length){ box.innerHTML='<div style="text-align:center;color:#94a3b8;padding:2rem;font-size:12px">記録がありません（まとめ発行で納品書・請求書を出すと自動で台帳に載ります）</div>'; document.getElementById('docl-sum').textContent=''; return; }
+  var chip=function(on,label,onclick,color){ return '<button onclick="'+onclick+'" style="font-size:11px;padding:3px 10px;border-radius:12px;border:1.5px solid '+(on?color:'#cbd5e1')+';background:'+(on?color:'#fff')+';color:'+(on?'#fff':'#94a3b8')+';font-weight:700;cursor:pointer">'+(on?'✓ ':'')+label+'</button>'; };
+  var METHODS=['','現金','振込','手形','相殺','口座振替','クレジット','その他'];
+  var h='<table style="width:100%;border-collapse:collapse;font-size:12px"><tr>'
+    +['発行日','得意先','品名','税込金額','納品','請求','入金','入金方法','入金日',''].map(function(t){return '<th style="background:#1a1a1a;color:#fff;padding:5px 7px;text-align:left;white-space:nowrap">'+t+'</th>';}).join('')+'</tr>';
+  var tot=0, unpaidTot=0;
+  rows.forEach(function(r){
+    tot+=r.total||0; if(!r.paid) unpaidTot+=r.total||0;
+    h+='<tr style="border-bottom:1px solid #e2e8f0;background:'+(r.paid?'#f0fdf4':'#fff')+'">'
+      +'<td style="padding:4px 7px;white-space:nowrap">'+esc((r.date||'').replace(/-/g,'/'))+'</td>'
+      +'<td style="padding:4px 7px">'+esc(r.cust||'')+'</td>'
+      +'<td style="padding:4px 7px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(r.itemsText||'')+'">'+esc(r.itemsText||'')+'</td>'
+      +'<td style="padding:4px 7px;text-align:right;font-weight:700">¥'+(r.total||0).toLocaleString()+'</td>'
+      +'<td style="padding:4px 7px">'+chip(r.delivered,'納品済',"_docLedgerToggle_('"+r.id+"','delivered')",'#0369a1')+'</td>'
+      +'<td style="padding:4px 7px">'+chip(r.billed,'請求済',"_docLedgerToggle_('"+r.id+"','billed')",'#7c3aed')+'</td>'
+      +'<td style="padding:4px 7px">'+chip(r.paid,'入金済',"_docLedgerToggle_('"+r.id+"','paid')",'#16a34a')+'</td>'
+      +'<td style="padding:4px 7px"><select onchange="_docLedgerSet_(\''+r.id+'\',\'payMethod\',this.value)" style="font-size:11px">'+METHODS.map(function(m){return '<option'+(r.payMethod===m?' selected':'')+'>'+m+'</option>';}).join('')+'</select></td>'
+      +'<td style="padding:4px 7px"><input type="date" value="'+esc(r.paidAt||'')+'" style="font-size:11px" onchange="_docLedgerSet_(\''+r.id+'\',\'paidAt\',this.value)"></td>'
+      +'<td style="padding:4px 7px"><button onclick="if(confirm(\'この記録を削除しますか?\')){_docLedgerDel_(\''+r.id+'\')}" style="font-size:11px;color:#b91c1c;border:none;background:none;cursor:pointer">✕</button></td></tr>';
+  });
+  h+='</table>';
+  box.innerHTML=h;
+  document.getElementById('docl-sum').innerHTML='合計 ¥'+tot.toLocaleString()+'　<span style="color:#b91c1c">未入金 ¥'+unpaidTot.toLocaleString()+'</span>';
+}
+function _docLedgerToggle_(id,field){
+  var r=(DB.docIssues||[]).find(function(x){return x&&x.id===id;}); if(!r) return;
+  r[field]=!r[field];
+  var today=new Date().toISOString().slice(0,10);
+  if(field==='delivered'&&r.delivered&&!r.deliveredAt) r.deliveredAt=today;
+  if(field==='billed'&&r.billed&&!r.billedAt) r.billedAt=today;
+  if(field==='paid'){ if(r.paid&&!r.paidAt) r.paidAt=today; if(!r.paid) r.paidAt=''; }
+  _docLedgerSave_(); _docLedgerRender_();
+}
+function _docLedgerSet_(id,field,val){
+  var r=(DB.docIssues||[]).find(function(x){return x&&x.id===id;}); if(!r) return;
+  r[field]=val;
+  if(field==='paidAt'&&val&&!r.paid){ r.paid=true; }
+  _docLedgerSave_(); _docLedgerRender_();
+}
+function _docLedgerDel_(id){
+  DB.docIssues=(DB.docIssues||[]).filter(function(x){ return x&&x.id!==id; });
+  _docLedgerSave_(); _docLedgerRender_();
+}
+function _docLedgerSave_(){
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
 }
 function _mdocRegisterCases_(){
   var cust=(document.getElementById('mdoc-cust')?.value||'').trim();
