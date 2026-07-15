@@ -5,8 +5,8 @@
 // - キャッシュ名の version を上げると自動で旧キャッシュを掃除
 // ============================================================
 
-const CACHE_VERSION = 'tokiwa-hub-v309';
-const RUNTIME_CACHE = 'tokiwa-hub-runtime-v308';
+const CACHE_VERSION = 'tokiwa-hub-v310';
+const RUNTIME_CACHE = 'tokiwa-hub-runtime-v309';
 
 // 起動時に最低限プリキャッシュするアセット (任意で増やせる)
 const PRECACHE_URLS = [
