@@ -4284,7 +4284,13 @@ async function loadFromCloud() {
 
   // アート・エス案件管理（専用台帳）
   if (result.data.artesoCases) {
-    DB.artesoCases = result.data.artesoCases;
+    // レコードごとに更新時刻の新しい方を採用(丸ごと上書きだと他端末の新しい変更が先祖返りするため)
+    var _acTs=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var _acById={}, _acOrder=[];
+    var _acTake=function(r){ if(!r||!r.id) return; if(!(r.id in _acById)){ _acOrder.push(r.id); _acById[r.id]=r; } else if(_acTs(r)>_acTs(_acById[r.id])){ _acById[r.id]=r; } };
+    (Array.isArray(DB.artesoCases)?DB.artesoCases:[]).forEach(_acTake);
+    result.data.artesoCases.forEach(_acTake);
+    DB.artesoCases = _acOrder.map(function(id){ return _acById[id]; });
   }
 
   // カレンダー受注台帳（年度更新式・全カテゴリ）
@@ -4452,6 +4458,24 @@ async function loadFromCloud() {
 
   return true;
 }
+
+// 定期自動同期: 60秒ごと＋タブ復帰時にクラウド最新を取り込む(古い画面のまま保存して
+// 他端末の新しい変更を上書きしないための鮮度維持)。入力中・非表示タブ・未ログイン時はスキップ。
+var _hubMainAutoBusy=false;
+function hubMainAutoSync(){
+  try{
+    if(_hubMainAutoBusy || document.hidden) return;
+    if(!window._cloudHydrated_) return;
+    if(!(typeof currentAuth!=='undefined' && currentAuth && currentAuth.companyId)) return;
+    var ae=document.activeElement;
+    if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;
+    _hubMainAutoBusy=true;
+    Promise.resolve(loadFromCloud()).catch(function(){}).then(function(){ _hubMainAutoBusy=false; });
+  }catch(e){ _hubMainAutoBusy=false; }
+}
+setInterval(hubMainAutoSync, 60000);
+window.addEventListener('focus', hubMainAutoSync);
+
 
 // ─────────────────────────────────────────────────────
 // 🔔 ブラウザ通知 (Notification API + Service Worker)
