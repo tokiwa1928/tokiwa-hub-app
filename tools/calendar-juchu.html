@@ -528,6 +528,17 @@
 var HUB_DBKEY = 'murayama_v15';
 var HUB_AUTHKEY = 'murayama_auth';
 var HUB_TOOL_ID = 'calendar-juchu';
+// 端末ローカルの削除記録。本体DB(murayama_v15)とは別キーなので、本体アプリがDBを
+// クラウドから丸ごと書き戻しても消えない → この端末では削除行が二度と表示されない。
+var CAL_TOMB_KEY = 'caljuchu_deleted_v1';
+function localTomb(){ try{ return JSON.parse(localStorage.getItem(CAL_TOMB_KEY))||[]; }catch(e){ return []; } }
+function localTombAdd(id){ try{ var a=localTomb(); if(a.indexOf(id)<0){ a.push(id); if(a.length>5000) a=a.slice(-5000); localStorage.setItem(CAL_TOMB_KEY, JSON.stringify(a)); } }catch(e){} }
+// DB内の墓石と端末ローカル墓石の和集合
+function allTomb(db){
+  var m={}; localTomb().forEach(function(id){ m[id]=1; });
+  if(db && Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted.forEach(function(id){ m[id]=1; });
+  return m;
+}
 // 本体(index.html)の CLOUD_CONFIG と同じ値。ツール単独でも全社クラウド(GAS)へ直接保存するために使う。
 var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
 var HUB_API_KEY = 'mitsumori-2024';
@@ -624,7 +635,7 @@ function byManual(a,b){
   var ao=(a.order==null?1e9:a.order), bo=(b.order==null?1e9:b.order); return ao-bo;
 }
 
-function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; var tomb={}; (db.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; }); arr = arr.filter(function(r){ return !(r && tomb[r.id]); }); arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
+function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; var tomb=allTomb(db); arr = arr.filter(function(r){ return !(r && tomb[r.id]); }); arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
 var BASE_YEAR = 2026;   // 今年（入力対象の基準年）
 function curYear(){ return BASE_YEAR; }   // 今年は固定(年度ドロップダウン廃止・表示年チェックで切替)
 function curCat(){ return document.getElementById('fCat').value || ''; }
@@ -1485,6 +1496,7 @@ function delRow(id){
     if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id);
     if(db.calendarOrdersDeleted.length>2000) db.calendarOrdersDeleted=db.calendarOrdersDeleted.slice(-2000);
   })){
+    localTombAdd(id);   // 本体アプリの書き戻しでも消えない端末ローカル墓石
     if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
     hubCloudPush();   // デバウンスを待たず即クラウドへ(他端末が旧行を押し戻す前に消す)
     hubToast('🗑 削除しました'); render();
@@ -1585,12 +1597,18 @@ function fixCarryCust(){
 // 例: 製品が2行に分かれ、片方だけに受注日/納品日が入っている → もう片方の空欄にも同じ日付を入れる。
 // 墓石掃除: 別端末やクラウド上書きで戻ってきた「削除済み」行を消す(毎起動)。
 function purgeTombstoned(){
-  var db=hubLoad(); if(!db || !Array.isArray(db.calendarOrdersDeleted) || !db.calendarOrdersDeleted.length) return;
-  var tomb={}; db.calendarOrdersDeleted.forEach(function(id){ tomb[id]=1; });
+  var db=hubLoad(); if(!db) return;
+  var tomb=allTomb(db); if(!Object.keys(tomb).length) return;
   var arr=Array.isArray(db[COLL])?db[COLL]:[];
   var back=arr.filter(function(r){ return r && tomb[r.id]; });
   if(!back.length) return;
-  hubSave(function(d){ d[COLL]=(d[COLL]||[]).filter(function(r){ return !(r && tomb[r.id]); }); });
+  hubSave(function(d){
+    d[COLL]=(d[COLL]||[]).filter(function(r){ return !(r && tomb[r.id]); });
+    // DB側の墓石にも端末ローカル分を反映(クラウドへ伝播)
+    if(!Array.isArray(d.calendarOrdersDeleted)) d.calendarOrdersDeleted=[];
+    Object.keys(tomb).forEach(function(id){ if(d.calendarOrdersDeleted.indexOf(id)<0) d.calendarOrdersDeleted.push(id); });
+    if(d.calendarOrdersDeleted.length>2000) d.calendarOrdersDeleted=d.calendarOrdersDeleted.slice(-2000);
+  });
   if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
   hubCloudPush();   // 掃除結果を即クラウドへ(復活の連鎖を止める)
   buildCats(); render();
@@ -2511,7 +2529,16 @@ function dittoClean(){
   if(ok && n){ render(); hubToast('🧹 「、」「〃」など同上記法 '+n+' 件を前行の値に置き換えました'); }
 }
 setTimeout(function(){ try{ dittoClean(); purgeTombstoned(); fixCarryCust(); fixSharedDates(); syncCustFromHub(); syncVendorMaster(); syncTelFax(); buildMasters(); }catch(e){ console.warn(e); } }, 2000);
-try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); render(); } }; } catch(e){}
+// 本体アプリ等が別ページで localStorage の本体DBを書き戻したら(クラウド反映)、
+// この端末でも削除済み行を即除外し直す。storageイベントは他ページの変更で発火する。
+try { window.addEventListener('storage', function(e){
+  if(e.key===HUB_DBKEY || e.key===null){
+    _hubCacheClear(); _masterDirty=true;
+    try{ purgeTombstoned(); }catch(_e){}
+    buildYears(); buildCats(); render();
+  }
+}); } catch(e){}
+try { var bc=new BroadcastChannel('tokiwa-hub-tools'); bc.onmessage=function(e){ if(e.data&&e.data.type==='db-updated'&&e.data.tool!==HUB_TOOL_ID){ _hubCacheClear(); _masterDirty=true; try{ purgeTombstoned(); }catch(_e){} buildYears(); buildCats(); render(); } }; } catch(e){}
 </script>
 </body>
 </html>
