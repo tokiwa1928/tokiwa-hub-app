@@ -592,23 +592,79 @@ function hubSave(mutator){
 }
 // ツール単独で全社クラウド(GAS saveAll)へ即保存。本体経由・BroadcastChannel依存をやめ、強制リロードで消えるのを防ぐ。
 // 注: 本体 saveToCloud と同じく localStorage の全DBを送る（=本体と同一の保存モデル）。
+// カレンダー明細を「レコードごとに更新時刻(_updatedAt)が新しい方を採用」してマージする。
+// 全体を丸ごと上書きすると、古いデータを持つ端末の保存で他端末の新しい変更が先祖返りするため。
+function _tsval(r){ var t=r&&r._updatedAt; if(!t) return 0; var n=Date.parse(t); return isNaN(n)?0:n; }
+function mergeCalById(localArr, cloudArr, tomb, sig){
+  var byId={}, order=[];
+  function take(r){ if(!r||!r.id) return; if(!(r.id in byId)){ order.push(r.id); byId[r.id]=r; return; }
+    // 既にある側と比べ、_updatedAtが新しい方を残す(同点はcloud優先=後勝ちにしないため既存維持)
+    if(_tsval(r) > _tsval(byId[r.id])) byId[r.id]=r; }
+  (Array.isArray(cloudArr)?cloudArr:[]).forEach(take);   // 先にクラウド
+  (Array.isArray(localArr)?localArr:[]).forEach(take);   // ローカルで新しければ上書き
+  return order.filter(function(id){
+    var r=byId[id];
+    if(tomb && tomb[id]) return false;
+    if(sig && r && !r._manual && sig[sigOf(r)]) return false;
+    return true;
+  }).map(function(id){ return byId[id]; });
+}
 async function hubCloudPush(){
   var db = hubLoad(), auth = hubAuth();
   if(!db) return false;
   if(!auth || !auth.loggedIn || !auth.companyId) return false;   // 未ログインはローカルのみ
-  var data = {
-    master: db.master, config: db.conf,
-    projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
-    intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
-    outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
-    calendarOrders: db.calendarOrders||[], calendarOrdersDeleted: (db.calendarOrdersDeleted||[]).slice(-2000), calendarOrdersDeletedSig: (db.calendarOrdersDeletedSig||[]).slice(-2000), inquiries: db.inquiries||[],
-    deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
-    inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
-    toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
-    bookmarkCategories: db.bookmarkCategories||[], leadTimeMaster: db.leadTimeMaster||{},
-    bookmarksDeleted: (db.bookmarksDeleted||[]).slice(-500),
-    bookmarkCategoriesDeleted: (db.bookmarkCategoriesDeleted||[]).slice(-200)
-  };
+  // 先にクラウド最新を取得し、①他コレクションはクラウドの最新をそのまま使う(この端末の古い値で
+  // 上書きしない) ②カレンダー明細はレコードごとに新しい方を採用してマージ。これで先祖返りを防ぐ。
+  var cloud=null;
+  try{
+    var gurl=new URL(HUB_GAS_URL);
+    gurl.searchParams.set('action','syncAll'); gurl.searchParams.set('apiKey', HUB_API_KEY); gurl.searchParams.set('companyId', auth.companyId);
+    var gres=await fetch(gurl.toString(), { method:'GET', redirect:'follow' });
+    var gj=await gres.json(); cloud=gj && (gj.data||gj);
+  }catch(e){ cloud=null; }
+
+  var tomb={}, sig={};
+  (db.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
+  localTomb().forEach(function(id){ tomb[id]=1; });
+  (db.calendarOrdersDeletedSig||[]).forEach(function(x){ sig[x]=1; });
+  localSig().forEach(function(x){ sig[x]=1; });
+
+  var data;
+  if(cloud && typeof cloud==='object'){
+    (cloud.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
+    (cloud.calendarOrdersDeletedSig||[]).forEach(function(x){ sig[x]=1; });
+    var mergedCal=mergeCalById(db[COLL]||[], cloud.calendarOrders||[], tomb, sig);
+    // マージ結果をローカルにも反映(他端末の新しい変更を取り込む)。※push誘発を避けるため直接書込。
+    try{
+      var _ld=hubLoad();
+      if(_ld){ _ld[COLL]=mergedCal; _ld.calendarOrdersDeleted=Object.keys(tomb).slice(-4000); _ld.calendarOrdersDeletedSig=Object.keys(sig).slice(-2000);
+        localStorage.setItem(HUB_DBKEY, JSON.stringify(_ld)); _hubCacheClear(); _masterDirty=true;
+        // 画面にも反映(入力欄の位置は保つため、フォーカス中の入力があるときは描画を控える)
+        try{ if(!document.activeElement || ['INPUT','TEXTAREA','SELECT'].indexOf(document.activeElement.tagName)<0){ buildCats(); render(); } }catch(_e){}
+      }
+    }catch(e){}
+    // 送信データ: カレンダー系以外はクラウドの最新を使う(この端末の古い値で他機能を巻き戻さない)
+    data = Object.assign({}, cloud);
+    data.calendarOrders = mergedCal;
+    data.calendarOrdersDeleted = Object.keys(tomb).slice(-4000);
+    data.calendarOrdersDeletedSig = Object.keys(sig).slice(-2000);
+  } else {
+    // クラウド取得に失敗: 従来どおりローカル全体を送る(消失防止・最善努力)
+    data = {
+      master: db.master, config: db.conf,
+      projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
+      intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
+      outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
+      calendarOrders: mergeCalById(db[COLL]||[], [], tomb, sig),
+      calendarOrdersDeleted: Object.keys(tomb).slice(-4000), calendarOrdersDeletedSig: Object.keys(sig).slice(-2000),
+      deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
+      inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
+      toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
+      bookmarkCategories: db.bookmarkCategories||[], leadTimeMaster: db.leadTimeMaster||{},
+      bookmarksDeleted: (db.bookmarksDeleted||[]).slice(-500),
+      bookmarkCategoriesDeleted: (db.bookmarkCategoriesDeleted||[]).slice(-200)
+    };
+  }
   try {
     var url = new URL(HUB_GAS_URL);
     url.searchParams.set('action','saveAll');
@@ -642,10 +698,12 @@ async function hubCloudPull(){
       (d.calendarOrdersDeletedSig||[]).forEach(function(x){ if(db.calendarOrdersDeletedSig.indexOf(x)<0) db.calendarOrdersDeletedSig.push(x); });
       var tomb={}; db.calendarOrdersDeleted.forEach(function(id){ tomb[id]=1; });
       // id単位マージ: クラウドを正にしつつ、ローカルだけの未同期行は残す。墓石は除外。
-      var byId={}, order=[];
-      (Array.isArray(db[COLL])?db[COLL]:[]).forEach(function(x){ if(x&&x.id){ if(!(x.id in byId)) order.push(x.id); byId[x.id]=x; } });
-      d.calendarOrders.forEach(function(x){ if(x&&x.id){ if(!(x.id in byId)) order.push(x.id); byId[x.id]=x; } });
-      db[COLL]=order.filter(function(id){ return !tomb[id]; }).map(function(id){ return byId[id]; });
+      // レコードごとに更新時刻の新しい方を採用(先祖返り防止)。内容墓石も除外。
+      var sigp={}; (db.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
+      (d.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
+      localSig().forEach(function(x){ sigp[x]=1; });
+      db[COLL]=mergeCalById(db[COLL]||[], d.calendarOrders||[], tomb, sigp);
+      db.calendarOrdersDeletedSig=Object.keys(sigp).slice(-2000);
     });
     return ok;
   }catch(e){ console.warn('[Tool] cloud pull failed', e); return false; }
@@ -1527,7 +1585,7 @@ function autoGrowTA(){
 function editGroup(gi, field, val){
   var g=_mGroups[gi]; if(!g) return;
   var ids={}; g.recs.forEach(function(r){ ids[r.id]=1; });
-  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; if(!r._edited) r._edited={}; r._edited[field]=1; } }); })){ buildCats(); render(); }
+  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; if(!r._edited) r._edited={}; r._edited[field]=1; r._updatedAt=new Date().toISOString(); } }); })){ buildCats(); render(); }
 }
 // 変更すると他のセル・集計・グループ分けに波及する項目(=全体の再描画が要る)
 var _RERENDER_FIELDS={ cust:1, year:1, product:1, orderQty:1, orderPrice:1, cost:1, purAmt:1, status:1 };
