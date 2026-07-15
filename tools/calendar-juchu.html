@@ -530,7 +530,17 @@ var HUB_AUTHKEY = 'murayama_auth';
 var HUB_TOOL_ID = 'calendar-juchu';
 // 端末ローカルの削除記録。本体DB(murayama_v15)とは別キーなので、本体アプリがDBを
 // クラウドから丸ごと書き戻しても消えない → この端末では削除行が二度と表示されない。
-var CAL_TOMB_KEY = 'caljuchu_deleted_v1';
+var CAL_TOMB_KEY = 'caljuchu_deleted_v1';       // 削除ID
+var CAL_SIG_KEY  = 'caljuchu_deleted_sig_v1';   // 削除した行の内容シグネチャ(再投入で別IDになっても消えるように)
+// 行の内容シグネチャ。再投入・重複でIDが違っても同じ内容なら一致する。
+function sigOf(r){
+  if(!r) return '';
+  return [r.category||'', r.year||'', normCust(r.cust||''), normProd(r.product||''),
+          String(r.denpyoNo||''), String(r.orderQty||''), String(r.orderPrice||'')].join('|');
+}
+function localSig(){ try{ return JSON.parse(localStorage.getItem(CAL_SIG_KEY))||[]; }catch(e){ return []; } }
+function localSigAdd(sig){ try{ var a=localSig(); if(sig && a.indexOf(sig)<0){ a.push(sig); if(a.length>5000) a=a.slice(-5000); localStorage.setItem(CAL_SIG_KEY, JSON.stringify(a)); } }catch(e){} }
+function allSig(db){ var m={}; localSig().forEach(function(x){ m[x]=1; }); if(db && Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig.forEach(function(x){ m[x]=1; }); return m; }
 function localTomb(){ try{ return JSON.parse(localStorage.getItem(CAL_TOMB_KEY))||[]; }catch(e){ return []; } }
 function localTombAdd(id){ try{ var a=localTomb(); if(a.indexOf(id)<0){ a.push(id); if(a.length>5000) a=a.slice(-5000); localStorage.setItem(CAL_TOMB_KEY, JSON.stringify(a)); } }catch(e){} }
 // DB内の墓石と端末ローカル墓石の和集合
@@ -591,7 +601,7 @@ async function hubCloudPush(){
     projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
     intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
     outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
-    calendarOrders: db.calendarOrders||[], calendarOrdersDeleted: (db.calendarOrdersDeleted||[]).slice(-2000), inquiries: db.inquiries||[],
+    calendarOrders: db.calendarOrders||[], calendarOrdersDeleted: (db.calendarOrdersDeleted||[]).slice(-2000), calendarOrdersDeletedSig: (db.calendarOrdersDeletedSig||[]).slice(-2000), inquiries: db.inquiries||[],
     deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
     inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
     toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
@@ -635,7 +645,7 @@ function byManual(a,b){
   var ao=(a.order==null?1e9:a.order), bo=(b.order==null?1e9:b.order); return ao-bo;
 }
 
-function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; var tomb=allTomb(db); arr = arr.filter(function(r){ return !(r && tomb[r.id]); }); arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
+function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; var tomb=allTomb(db), sig=allSig(db); arr = arr.filter(function(r){ if(!r) return false; if(tomb[r.id]) return false; if(!r._manual && sig[sigOf(r)]) return false; return true; }); arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
 var BASE_YEAR = 2026;   // 今年（入力対象の基準年）
 function curYear(){ return BASE_YEAR; }   // 今年は固定(年度ドロップダウン廃止・表示年チェックで切替)
 function curCat(){ return document.getElementById('fCat').value || ''; }
@@ -1488,17 +1498,27 @@ function onEdit(elm){
   }
 }
 function delRow(id){
+  var db0=hubLoad();
+  var target=((db0&&db0[COLL])||[]).filter(function(x){ return x.id===id; })[0];
+  var sig=target?sigOf(target):'';
+  var manual=!!(target&&target._manual);
   if(!confirm('この行を削除します。よろしいですか？')) return;
   if(hubSave(function(db){
-    db[COLL] = (db[COLL]||[]).filter(function(x){ return x.id !== id; });
-    // 墓石: 削除IDを記録。全社クラウドは丸ごと上書きのため、記録が無いと別端末の旧データで復活する
+    var arr=db[COLL]||[];
+    db[COLL]=arr.filter(function(x){ if(!x) return false; if(x.id===id) return false; if(!manual && sig && !x._manual && sigOf(x)===sig) return false; return true; });
     if(!Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted=[];
     if(db.calendarOrdersDeleted.indexOf(id)<0) db.calendarOrdersDeleted.push(id);
     if(db.calendarOrdersDeleted.length>2000) db.calendarOrdersDeleted=db.calendarOrdersDeleted.slice(-2000);
+    if(!manual && sig){
+      if(!Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig=[];
+      if(db.calendarOrdersDeletedSig.indexOf(sig)<0) db.calendarOrdersDeletedSig.push(sig);
+      if(db.calendarOrdersDeletedSig.length>2000) db.calendarOrdersDeletedSig=db.calendarOrdersDeletedSig.slice(-2000);
+    }
   })){
-    localTombAdd(id);   // 本体アプリの書き戻しでも消えない端末ローカル墓石
+    localTombAdd(id);
+    if(!manual && sig) localSigAdd(sig);
     if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
-    hubCloudPush();   // デバウンスを待たず即クラウドへ(他端末が旧行を押し戻す前に消す)
+    hubCloudPush();
     hubToast('🗑 削除しました'); render();
   }
 }
@@ -1598,19 +1618,22 @@ function fixCarryCust(){
 // 墓石掃除: 別端末やクラウド上書きで戻ってきた「削除済み」行を消す(毎起動)。
 function purgeTombstoned(){
   var db=hubLoad(); if(!db) return;
-  var tomb=allTomb(db); if(!Object.keys(tomb).length) return;
+  var tomb=allTomb(db), sig=allSig(db);
+  if(!Object.keys(tomb).length && !Object.keys(sig).length) return;
   var arr=Array.isArray(db[COLL])?db[COLL]:[];
-  var back=arr.filter(function(r){ return r && tomb[r.id]; });
+  var back=arr.filter(function(r){ return r && (tomb[r.id] || (!r._manual && sig[sigOf(r)])); });
   if(!back.length) return;
   hubSave(function(d){
-    d[COLL]=(d[COLL]||[]).filter(function(r){ return !(r && tomb[r.id]); });
-    // DB側の墓石にも端末ローカル分を反映(クラウドへ伝播)
+    d[COLL]=(d[COLL]||[]).filter(function(r){ if(!r) return false; if(tomb[r.id]) return false; if(!r._manual && sig[sigOf(r)]) return false; return true; });
     if(!Array.isArray(d.calendarOrdersDeleted)) d.calendarOrdersDeleted=[];
     Object.keys(tomb).forEach(function(id){ if(d.calendarOrdersDeleted.indexOf(id)<0) d.calendarOrdersDeleted.push(id); });
     if(d.calendarOrdersDeleted.length>2000) d.calendarOrdersDeleted=d.calendarOrdersDeleted.slice(-2000);
+    if(!Array.isArray(d.calendarOrdersDeletedSig)) d.calendarOrdersDeletedSig=[];
+    Object.keys(sig).forEach(function(x){ if(d.calendarOrdersDeletedSig.indexOf(x)<0) d.calendarOrdersDeletedSig.push(x); });
+    if(d.calendarOrdersDeletedSig.length>2000) d.calendarOrdersDeletedSig=d.calendarOrdersDeletedSig.slice(-2000);
   });
   if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; }
-  hubCloudPush();   // 掃除結果を即クラウドへ(復活の連鎖を止める)
+  hubCloudPush();
   buildCats(); render();
 }
 function fixSharedDates(){
