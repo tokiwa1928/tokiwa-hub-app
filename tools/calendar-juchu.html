@@ -753,6 +753,7 @@ function setView(m){
 function setSort(k){ if(sortKey===k){ sortDir=-sortDir; } else { sortKey=k; sortDir=1; } render(); }
 
 function render(){
+  if(_uiRestored) saveUiState();   // 検索・フィルタ・表示年を端末に保存(更新後も復元)
   // 集計（年度＋カテゴリのベースで）
   var base = baseRows();
   var done = base.filter(function(r){ return r.status==='受注'||r.status==='発注済'||r.status==='納品済'; });
@@ -832,6 +833,33 @@ function cleanProd(p){ return String(p||'').replace(/^20\d\d年カレンダー[_
 function parseCust(s){ s=String(s||'').replace(/[　\s]+/g,' ').trim(); var contact=''; var m=s.match(/(?:担当\s*)?([^\s]+?)(様|さま|さん)$/); if(m){ contact=m[1]+m[2]; s=s.slice(0,m.index).replace(/担当\s*$/,'').trim(); } return { company:s, contact:contact }; }
 // ===== エクセル風オートフィルタ: 全列 =====
 // 列ごとに「その列以外のフィルタを適用した結果」から選択肢を作る(絞るほど候補が減るカスケード方式)
+var CAL_UI_KEY='caljuchu_ui_v1';   // 検索・フィルタ・表示年の状態(端末ローカル・更新後も維持)
+var _uiRestored=false;
+function saveUiState(){
+  try{
+    var st={
+      q:(document.getElementById('q')||{}).value||'',
+      cat:(document.getElementById('fCat')||{}).value||'',
+      follow:(document.getElementById('fFollow')||{}).value||'',
+      filters:_filters, words:(typeof _wordFilters!=='undefined'?_wordFilters:{}),
+      yearShow:yearShow, view:viewMode
+    };
+    localStorage.setItem(CAL_UI_KEY, JSON.stringify(st));
+  }catch(e){}
+}
+function restoreUiState(){
+  try{
+    var st=JSON.parse(localStorage.getItem(CAL_UI_KEY)); if(!st) return;
+    if(typeof st.filters==='object' && st.filters) _filters=st.filters;
+    if(typeof _wordFilters!=='undefined' && typeof st.words==='object' && st.words) _wordFilters=st.words;
+    if(st.yearShow && typeof st.yearShow==='object') yearShow=st.yearShow;
+    var q=document.getElementById('q'); if(q) q.value=st.q||'';
+    var c=document.getElementById('fCat'); if(c && st.cat!=null) c.value=st.cat;
+    var f=document.getElementById('fFollow'); if(f && st.follow!=null) f.value=st.follow;
+    if(st.view) viewMode=st.view;
+  }catch(e){}
+}
+
 var _filters={};   // field -> 選択値(文字列)。空文字/未設定なら絞らない
 var _wordFilters={}; // field -> フリーワード(含む一致)。selectの「🔍ワードで絞る…」から設定
 // 列定義: [フィールド名, 見出し, 値の取り方] ※前年比は他行との比較で決まるためフィルタ対象外
@@ -2568,7 +2596,8 @@ function autoMigrate(){
   }); }); }); }); });
 }
 // 起動
-buildYears(); buildCats(); setView('matrix');
+restoreUiState(); buildYears(); buildCats(); setView(viewMode||'matrix');
+_uiRestored=true;
 // まずクラウド最新を取り込んで全PCを一致させ、その後に移行/自己修復を実行
 hubCloudPull().then(function(pulled){
   if(pulled){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); }
