@@ -1413,6 +1413,7 @@ setTimeout(_removeBootLoader_, 5000);
         <option value="見積中">見積中</option>
         <option value="提出済">提出済</option>
         <option value="保留">保留</option>
+        <option value="失注">失注</option>
       </select>
       <select id="est-source-f" style="font-size:12px;padding:4px 8px" onchange="renderEstimates()">
         <option value="">すべての発生源</option>
@@ -19446,6 +19447,7 @@ function renderEstimates(){
   // 案件化されたものは除外
   var rows = periodFilteredEsts.filter(function(e){
     if(e.linkedProjectId) return false;
+    if(e.status === '失注' && statusFilter !== '失注') return false;  // 失注は既定で隠す（フィルタで表示）
     // フィルタ
     if(q){
       var hay = ((e.cust||'') + ' ' + (e.item||'') + ' ' + (e.spec||'') + ' ' + (e.id||'')).toLowerCase();
@@ -19474,9 +19476,11 @@ function renderEstimates(){
   var showLimit = _getShowCount_('estimates-list-container', PAGE_LIMITS.estimates);
   var displayRows = rows.slice(0, showLimit);
 
+  var _lostCount = (allEsts||[]).filter(function(x){ return x.status==='失注' && !x.linkedProjectId; }).length;
+  var _lostChip = _lostCount ? ('　<span style="color:#b91c1c;cursor:pointer;text-decoration:underline" onclick="_toggleLostFilter_()" title="失注の表示切替">❌ 失注 ' + _lostCount + '件</span>') : '';
   var html =
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:12px;color:#555">' +
-    '<span><strong>' + totalCount + '件</strong> 中 ' + displayRows.length + ' 件表示 (未受注)</span>' +
+    '<span><strong>' + totalCount + '件</strong> 中 ' + displayRows.length + ' 件表示 (未受注)' + _lostChip + '</span>' +
     '<span>🤖 AI抽出: ' + rows.filter(function(r){return r.aiAutoCreated}).length + '件</span>' +
     '</div>';
   html += '<table style="width:100%;font-size:13px;border-collapse:collapse">';
@@ -19508,7 +19512,8 @@ function renderEstimates(){
     } else {
       srcBadge = '<span style="color:#888;font-size:11px">手動</span>';
     }
-    var statusColor = e.status === '提出済' ? '#16a34a' : (e.status === 'お客様確認中' ? '#0891b2' : (e.status === '保留' ? '#f59e0b' : '#6b7280'));
+    var statusColor = e.status === '失注' ? '#b91c1c' : (e.status === '提出済' ? '#16a34a' : (e.status === 'お客様確認中' ? '#0891b2' : (e.status === '保留' ? '#f59e0b' : '#6b7280')));
+    var _isLost = (e.status === '失注');
 
     // 🆕 過去参考セル
     var historyCell = '';
@@ -19558,15 +19563,21 @@ function renderEstimates(){
       '<td style="padding:8px 10px;text-align:right;font-family:monospace">' + priceDisplay + '</td>' +
       '<td style="padding:8px 10px">' + historyCell + '</td>' +
       '<td style="padding:8px 10px">' + srcBadge + '</td>' +
-      '<td style="padding:8px 10px"><span style="color:' + statusColor + ';font-weight:600">' + (e.status||'見積中') + '</span></td>' +
+      '<td style="padding:8px 10px"><span style="color:' + statusColor + ';font-weight:600">' + (e.status||'見積中') + '</span>' + ((_isLost && e.lostReason)?('<div style="font-size:10px;color:#b91c1c;margin-top:2px">理由: ' + _escDiff(e.lostReason) + '</div>'):'') + '</td>' +
       '<td style="padding:8px 10px;text-align:center;white-space:nowrap">' +
-        '<button class="btn" style="padding:4px 8px;font-size:11px" onclick="editEstimateInTab(\'' + e.id + '\')" title="見積タブで編集">📝 編集</button> ' +
-        (e.status === '提出済' || e.status === 'お客様確認中'
-          ? '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa" onclick="revertEstimateToActive(\'' + e.id + '\')" title="見積中に戻す">↩ 見積中</button> '
-          : '<button class="btn" style="padding:4px 8px;font-size:11px;background:#0891b2;color:#fff" onclick="markEstimateAsSubmitted(\'' + e.id + '\')" title="提出済にする">📤 提出済</button> '
-          + '<button class="btn" style="padding:4px 8px;font-size:11px;background:#06b6d4;color:#fff" onclick="markEstimateAsAwaitingCustomer(\'' + e.id + '\')" title="提出してお客様回答待ち">⏳ お客様確認中</button> ') +
-        '<button class="btn" style="padding:4px 8px;font-size:11px;background:#16a34a;color:#fff" onclick="confirmEstimateAsProject(\'' + e.id + '\')" title="受注案件として確定して案件化">✅ 受注案件として確定</button> ' +
-        '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fee;color:#dc2626" onclick="deleteEstimate(\'' + e.id + '\')" title="削除">🗑️</button>' +
+        ( _isLost
+          ? '<button class="btn" style="padding:4px 8px;font-size:11px" onclick="editEstimateInTab(\'' + e.id + '\')" title="内容を見る">👁 内容</button> '
+            + '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa" onclick="revertEstimateToActive(\'' + e.id + '\')" title="失注を取り消して見積中に戻す">↩ 見積中に戻す</button> '
+            + '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fee;color:#dc2626" onclick="deleteEstimate(\'' + e.id + '\')" title="削除">🗑️</button>'
+          : '<button class="btn" style="padding:4px 8px;font-size:11px" onclick="editEstimateInTab(\'' + e.id + '\')" title="見積タブで編集">📝 編集</button> '
+            + (e.status === '提出済' || e.status === 'お客様確認中'
+              ? '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa" onclick="revertEstimateToActive(\'' + e.id + '\')" title="見積中に戻す">↩ 見積中</button> '
+              : '<button class="btn" style="padding:4px 8px;font-size:11px;background:#0891b2;color:#fff" onclick="markEstimateAsSubmitted(\'' + e.id + '\')" title="提出済にする">📤 提出済</button> '
+              + '<button class="btn" style="padding:4px 8px;font-size:11px;background:#06b6d4;color:#fff" onclick="markEstimateAsAwaitingCustomer(\'' + e.id + '\')" title="提出してお客様回答待ち">⏳ お客様確認中</button> ')
+            + '<button class="btn" style="padding:4px 8px;font-size:11px;background:#16a34a;color:#fff" onclick="confirmEstimateAsProject(\'' + e.id + '\')" title="受注案件として確定して案件化">✅ 受注案件として確定</button> '
+            + '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca" onclick="markEstimateLost(\'' + e.id + '\')" title="失注として記録（理由を残す）">❌ 失注</button> '
+            + '<button class="btn" style="padding:4px 8px;font-size:11px;background:#fee;color:#dc2626" onclick="deleteEstimate(\'' + e.id + '\')" title="削除">🗑️</button>'
+        ) +
       '</td>' +
       '</tr>';
 
@@ -20130,6 +20141,29 @@ function revertEstimateToActive(estId){
   if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
   if(typeof renderEstimates === 'function') renderEstimates();
   if(typeof renderInquiryList === 'function') renderInquiryList();
+}
+
+// ❌ 失注として記録（理由を残して分析用に保持・削除しない）
+function markEstimateLost(estId){
+  var est = (DB.estimates || []).find(function(e){ return e.id === estId; });
+  if(!est){ alert('見積が見つかりません'); return; }
+  if(est.linkedProjectId){ alert('既に受注案件として確定済みのため失注にできません'); return; }
+  var reason = prompt('失注の理由を入力してください（例: 価格 / 納期 / 他社決定 / 見送り / 連絡なし など）', est.lostReason || '');
+  if(reason === null) return;   // キャンセル
+  est.status = '失注';
+  est.lostReason = (reason||'').trim();
+  est.lostAt = new Date().toISOString();
+  est.lostBy = (typeof currentAuth!=='undefined' && currentAuth) ? (currentAuth.userName||'') : '';
+  if(typeof _addAuditLog_ === 'function') _addAuditLog_('update', 'estimate:' + est.id, '見積を失注に（理由: ' + est.lostReason + '）');
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  if(typeof _toastMsg === 'function') _toastMsg('❌ 失注として記録しました（見積は分析用に保持）');
+  if(typeof renderEstimates === 'function') renderEstimates();
+}
+function _toggleLostFilter_(){
+  var sel = document.getElementById('est-status-f');
+  if(sel){ sel.value = (sel.value === '失注' ? '' : '失注'); }
+  if(typeof renderEstimates === 'function') renderEstimates();
 }
 
 // 見積管理タブに移動
