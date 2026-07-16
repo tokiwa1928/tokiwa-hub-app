@@ -26539,6 +26539,95 @@ function _qrReset_(orig){
   if(el){ el.value = orig; _qrRecalc_(); }
 }
 
+// ═══ 🪪 MEISHI-BATCH-1: 名刺まとめ入力（共通仕様1回＋氏名リスト→全員分を個別行に展開）═══
+function showMeishiBatch(){
+  var d=(typeof _meishiData_==='function')?_meishiData_():{papers:[{name:'標準',m1:16}]};
+  var ex=document.getElementById('meishi-batch-modal'); if(ex) ex.remove();
+  var ov=document.createElement('div'); ov.id='meishi-batch-modal'; ov.className='proof-modal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000001;display:flex;align-items:center;justify-content:center;padding:1rem';
+  ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+  var paperOpts=(d.papers||[]).map(function(p,i){ return '<option value="'+i+'">'+_escDiff(p.name||('用紙'+(i+1)))+'</option>'; }).join('');
+  ov.innerHTML='<div style="background:#fff;width:min(760px,96vw);max-height:92vh;border-radius:12px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#0369a1;color:#fff;display:flex;justify-content:space-between;align-items:center">'
+    +'<strong style="font-size:15px">🪪 名刺まとめ入力</strong>'
+    +'<button onclick="document.getElementById(\'meishi-batch-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    +'<div style="padding:14px 18px;overflow-y:auto;flex:1">'
+    +'<div style="font-size:11.5px;color:#64748b;margin-bottom:10px">共通仕様を1回だけ設定し、下に<b>氏名を1行ずつ</b>貼り付け（役職はカンマ区切り可）。<b>1人＝1件</b>の名刺として展開し、単価は名刺価格表から自動。次回バラバラの受注も個別リピートで拾えます。</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-bottom:10px">'
+    +'<div class="f" style="grid-column:span 3"><label>得意先</label><input id="mb-cust" list="cust-dl-mb" placeholder="○○株式会社"><datalist id="cust-dl-mb"></datalist></div>'
+    +'<div class="f"><label>用紙</label><select id="mb-paper" onchange="_mbCalc_()">'+paperOpts+'</select></div>'
+    +'<div class="f"><label>色</label><select id="mb-color" onchange="_mbCalc_()"><option value="mono">モノクロ</option><option value="color">カラー</option></select></div>'
+    +'<div class="f"><label>面</label><select id="mb-men" onchange="_mbCalc_()"><option value="s">片面</option><option value="d">両面</option></select></div>'
+    +'<div class="f"><label>数量(1人あたり)</label><input id="mb-qty" type="number" value="100" onchange="_mbCalc_()"></div>'
+    +'<div class="f"><label>区分</label><select id="mb-kubun" onchange="_mbCalc_()"><option>新規</option><option>改版</option><option>再版</option><option>デザイン</option></select></div>'
+    +'<div class="f"><label>納期</label><input id="mb-due" type="text" placeholder="例: 7/25"></div>'
+    +'</div>'
+    +'<div id="mb-price" style="font-size:12px;color:#0369a1;background:#f0f9ff;border:1px solid #bae6fd;border-radius:7px;padding:6px 10px;margin-bottom:8px"></div>'
+    +'<label style="font-size:11.5px;font-weight:700">氏名リスト（1行1名・「氏名,役職」も可）</label>'
+    +'<textarea id="mb-names" style="width:100%;height:150px;font-size:13px;font-family:monospace;margin-top:4px" placeholder="沼澤隆史\n水落健太\n武井健\n森 公法,部長" oninput="_mbCount_()"></textarea>'
+    +'<div id="mb-count" style="font-size:11.5px;color:#64748b;margin-top:4px"></div>'
+    +'</div>'
+    +'<div style="padding:10px 18px;border-top:1px solid #e2e8f0;display:flex;gap:10px;align-items:center">'
+    +'<span style="font-size:11px;color:#94a3b8">展開先は注文取込。照合・登録・FM取込CSVがそのまま使えます</span>'
+    +'<button class="btn btn-p" style="margin-left:auto;font-size:13px;padding:8px 20px;background:#0369a1;border-color:#0369a1" onclick="_mbExpand_()">→ 注文取込に展開</button>'
+    +'</div></div>';
+  document.body.appendChild(ov);
+  try{ var dl=document.getElementById('cust-dl-mb'); if(dl){ var seen={}; dl.innerHTML=((DB.master&&DB.master.cust)||[]).map(function(c){ var o=c&&c.org; if(!o||seen[o])return''; seen[o]=1; return '<option value="'+_escDiff(o)+'">'; }).join(''); } }catch(e){}
+  _mbCalc_(); _mbCount_();
+}
+function _mbSpec_(){
+  var g=function(id){ return document.getElementById(id); };
+  var pi=parseInt(g('mb-paper')?g('mb-paper').value:'0')||0;
+  var color=g('mb-color')?g('mb-color').value:'mono';
+  var men=g('mb-men')?g('mb-men').value:'s';
+  var qty=parseInt(g('mb-qty')?g('mb-qty').value:'100')||100;
+  var kubun=g('mb-kubun')?g('mb-kubun').value:'新規';
+  return {pi:pi,color:color,men:men,qty:qty,kubun:kubun};
+}
+function _mbCalc_(){
+  var box=document.getElementById('mb-price'); if(!box) return;
+  var sp=_mbSpec_();
+  var r=(typeof _meishiCalc_==='function')?_meishiCalc_(sp.pi, sp.color, sp.men, sp.qty, sp.kubun):{unit:0,total:0};
+  var pname=(_meishiData_().papers[sp.pi]||{}).name||'';
+  box.innerHTML='仕様: '+_escDiff(pname)+'・'+(sp.color==='color'?'カラー':'モノクロ')+'・'+(sp.men==='d'?'両面':'片面')+'・'+sp.qty+'枚・'+sp.kubun
+    +'　→ 標準単価 <b>@¥'+r.unit+'</b>（1人あたり ¥'+r.total.toLocaleString()+'）<span style="color:#94a3b8;font-size:10.5px">※価格表より</span>';
+}
+function _mbNames_(){
+  return (document.getElementById('mb-names')?.value||'').split(/\r?\n/).map(function(l){ return l.trim(); }).filter(Boolean);
+}
+function _mbCount_(){
+  var el=document.getElementById('mb-count'); if(el) el.textContent=_mbNames_().length+'名 → '+_mbNames_().length+'件の名刺に展開されます';
+}
+function _mbExpand_(){
+  var cust=(document.getElementById('mb-cust')?.value||'').trim();
+  if(!cust){ alert('得意先を入れてください'); return; }
+  var names=_mbNames_();
+  if(!names.length){ alert('氏名を1名以上入れてください'); return; }
+  var sp=_mbSpec_();
+  var pname=(_meishiData_().papers[sp.pi]||{}).name||'';
+  var due=(document.getElementById('mb-due')?.value||'').trim();
+  var specTxt=[pname,(sp.color==='color'?'カラー':'モノクロ'),(sp.men==='d'?'両面':'片面'),sp.kubun].filter(Boolean).join(' ');
+  var r=(typeof _meishiCalc_==='function')?_meishiCalc_(sp.pi, sp.color, sp.men, sp.qty, sp.kubun):{unit:0};
+  // 得意先 	 品名(名刺（氏名）) 	 仕様 	 数量 	 枚 	 納期
+  var lines=names.map(function(nm){
+    var person=nm.split(/[,、]/)[0].trim();
+    var title=(nm.split(/[,、]/)[1]||'').trim();
+    var pn='名刺（'+person+(title?('　'+title):'')+'）';
+    return [cust, pn, specTxt, sp.qty, '枚', due].join('\t');
+  });
+  document.getElementById('meishi-batch-modal')?.remove();
+  if(!document.getElementById('ordin-modal')) _ordInOpen_();
+  var hu=document.getElementById('ordin-hasuser'); if(hu) hu.checked=false;
+  var ta=document.getElementById('ordin-text'); if(ta) ta.value=lines.join('\n');
+  _ordInParse_();
+  // 新規（照合なし）行に価格表の標準単価を入れる
+  setTimeout(function(){
+    (_ordInRows_||[]).forEach(function(row){ if((!row.cands||!row.cands.length) && (!row.unitp||row.unitp===0)) row.unitp=r.unit; });
+    _ordInRenderTotalSafe_();
+  }, 200);
+  if(typeof _toastMsg==='function') _toastMsg('🪪 '+names.length+'名を注文取込に展開しました（単価@¥'+r.unit+'）');
+}
+function _ordInRenderTotalSafe_(){ try{ if(typeof _ordInRender_==='function') _ordInRender_(); }catch(e){} }
 // ═══ 📥 ORDIN-1: 注文取込 — 貼り付け→解析→リピート照合→一括受注登録 ═══
 var _ordInRows_=[];
 // ═══ MEISHI-PRICE-1: 名刺 価格表（コストテーブル）═══
@@ -26660,6 +26749,7 @@ function _ordInOpen_(){
     +'<button onclick="document.getElementById(\'ordin-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer;line-height:1;padding:0 6px">×</button></div>'
     +'<div style="padding:12px 18px;overflow-y:auto;flex:1">'
     +'<div style="font-size:11.5px;color:#64748b;margin-bottom:6px">お客様からもらった注文内容（Excelの表をそのままコピー）を貼り付けてください。列は「得意先・品名・仕様・数量・単位・納期」を自動で見分けます（納期は 7/22 のような形でOK）。</div>'
+    +'<div style="margin-bottom:6px"><button class="btn" style="font-size:11.5px;padding:4px 12px;background:#e6f2fb;border-color:#7dd3fc;color:#0369a1;font-weight:700" onclick="showMeishiBatch()">🪪 名刺まとめ入力（共通仕様＋氏名リスト）</button> <span style="font-size:10.5px;color:#94a3b8">複数名の名刺を1人=1件で一気に展開</span></div>'
     +'<label style="font-size:11.5px;color:#334155;display:inline-flex;align-items:center;gap:5px;margin-bottom:4px"><input type="checkbox" id="ordin-hasuser" onchange="_ordInParse_()"> 貼り付けに<b>ユーザー列</b>がある（並び: 得意先 → ユーザー → 品名 → 仕様…）</label>'
     +'<textarea id="ordin-text" style="width:100%;height:110px;font-size:12.5px;font-family:monospace" placeholder="例:\n東海大相模\t名刺（沼澤隆史）\t4/0 レーザーエース9\t100\t枚\t7/22" oninput="_ordInParse_()"></textarea>'
     +'<div id="ordin-result" style="margin-top:10px"></div>'
