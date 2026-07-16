@@ -3685,6 +3685,8 @@ let DB={
   proofings: [],
   // 取引台帳(暫定): まとめ発行の納品/請求/入金ステータス（本格運用まで）
   docIssues: [],
+  // 名刺 価格表（コストテーブル）: 印刷代=用紙×色×面 / データ作成費=区分×面
+  priceMeishi: null,
   // LINE WORKS Drive連携設定
   lwDriveConfig: {
     enabled: false,
@@ -21605,6 +21607,9 @@ var TOOLS_REGISTRY = [
   { href: 'tools/company-cases.html', icon: '💰', name: '支払管理表（仕入・支払）',
     desc: '仕入管理（北上→トキワ）・支払管理表・村山印刷 支払管理表をそのまま閲覧・検索・CSV。元データはGoogleシート（GAS経由で常に最新・読み取り専用）。',
     status: '運用中', tag: '経理', cat: '経理', companies: [] },
+  { href: 'index.html?tool=meishiprice', icon: '🪪', name: '名刺 価格表（コストテーブル）',
+    desc: '名刺の標準価格を「印刷代（用紙×色×面）＋データ作成費（新規/改版/再版/デザイン×片面/両面）」で定義。リピート時の値上げ未反映の基準（コスト下限）になる。',
+    status: '運用中', tag: '営業', cat: '営業', companies: [] },
   { href: 'index.html?tool=ordintake', icon: '📥', name: '注文取込',
     desc: 'お客様の注文内容（Excelコピー/タブ区切り）を貼り付け→得意先/品名/仕様/数量/納期を自動解析→過去案件とリピート照合→一括で受注案件に登録。変更点は製造指示書の注意に印字。',
     status: '運用中', tag: '営業', cat: '営業', companies: [] },
@@ -22266,6 +22271,11 @@ function _applyDeepLink_(){
     if(sp.get('handoff')==='cal'){ _applyCalHandoff_(); return; }
     if(f){ var fb=document.querySelector('.tb-btn[data-page="forms"]'); if(typeof swPage==='function') swPage('forms',fb); setTimeout(function(){ if(typeof openForm==='function') openForm(f); }, 300); return; }
     if(p){ var b=document.querySelector('.tb-btn[data-page="'+p+'"]'); if(typeof swPage==='function') swPage(p,b); }
+    if(sp.get('tool')==='meishiprice'){
+      var pb0=document.querySelector('.tb-btn[data-page="master"]')||document.querySelector('.tb-btn[data-page="home"]');
+      if(typeof swPage==='function') swPage(pb0?pb0.getAttribute('data-page'):'home',pb0);
+      setTimeout(function(){ try{ showMeishiPriceTable(); }catch(e){} }, 500);
+    }
     if(sp.get('tool')==='ordintake'){
       // 📥 注文取込ツール: 案件ページを背景に開いてモーダル表示
       var pb=document.querySelector('.tb-btn[data-page="project"]');
@@ -26531,6 +26541,113 @@ function _qrReset_(orig){
 
 // ═══ 📥 ORDIN-1: 注文取込 — 貼り付け→解析→リピート照合→一括受注登録 ═══
 var _ordInRows_=[];
+// ═══ MEISHI-PRICE-1: 名刺 価格表（コストテーブル）═══
+var _MEISHI_KUBUN = ['新規','改版','再版','デザイン'];
+function _meishiData_(){
+  if(!DB.priceMeishi){
+    DB.priceMeishi = {
+      papers: [{ name:'標準（モノクロ片面基準）', m1:16, m2:'', c1:'', c2:'' }],   // 単価/枚: モノクロ片面/両面, カラー片面/両面
+      data: { '新規':{s:'',d:''}, '改版':{s:'',d:''}, '再版':{s:0,d:0}, 'デザイン':{s:'',d:''} }, // 定額: 片面s/両面d
+      targetRate: 60,   // 目標原価率%（下限=売価×率 の考え方の基準・任意）
+      updatedAt: ''
+    };
+  }
+  return DB.priceMeishi;
+}
+function showMeishiPriceTable(){
+  var d=_meishiData_();
+  var ex=document.getElementById('meishi-price-modal'); if(ex) ex.remove();
+  var ov=document.createElement('div'); ov.id='meishi-price-modal'; ov.className='proof-modal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+  ov.innerHTML='<div style="background:#fff;width:min(920px,97vw);max-height:93vh;border-radius:12px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#0369a1;color:#fff;display:flex;justify-content:space-between;align-items:center">'
+    +'<strong style="font-size:15px">🪪 名刺 価格表（コストテーブル）</strong>'
+    +'<button onclick="document.getElementById(\'meishi-price-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    +'<div style="padding:14px 18px;overflow-y:auto;flex:1">'
+    +'<div style="font-size:12px;color:#64748b;margin-bottom:10px">名刺の標準価格 ＝ <b>印刷代（用紙×色×面×数量）</b> ＋ <b>データ作成費（区分×面）</b>。ここで決めた値が「コスト下限」の基準になり、リピート時の値上げ未反映チェックに使われます。</div>'
+    +'<div style="display:flex;align-items:center;gap:8px;margin:6px 0 4px"><b style="font-size:13px">① 印刷代（用紙 × 色・面／単価は1枚あたり）</b>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_meishiAddPaper_()">＋ 用紙を追加</button></div>'
+    +'<div id="meishi-print" style="overflow-x:auto"></div>'
+    +'<div style="margin:14px 0 4px"><b style="font-size:13px">② データ作成費（区分 × 面／1件あたりの定額）</b></div>'
+    +'<div id="meishi-data" style="overflow-x:auto"></div>'
+    +'<div style="margin:16px 0 4px"><b style="font-size:13px">③ 価格プレビュー</b></div>'
+    +'<div id="meishi-prev" style="background:#f0f9ff;border:1px solid #7dd3fc;border-radius:9px;padding:12px 14px"></div>'
+    +'</div>'
+    +'<div style="padding:10px 18px;border-top:1px solid #e2e8f0;display:flex;gap:10px;align-items:center">'
+    +'<span id="meishi-st" style="font-size:12px;color:#166534"></span>'
+    +'<button class="btn btn-p" style="margin-left:auto;font-size:13px;padding:8px 20px;background:#0369a1;border-color:#0369a1" onclick="_meishiSave_()">💾 保存</button>'
+    +'</div></div>';
+  document.body.appendChild(ov);
+  _meishiRenderPrint_(); _meishiRenderData_(); _meishiRenderPrev_();
+}
+function _meishiRenderPrint_(){
+  var d=_meishiData_(); var box=document.getElementById('meishi-print'); if(!box) return;
+  var esc=_escDiff;
+  var h='<table style="border-collapse:collapse;font-size:12.5px;min-width:560px"><tr>'
+    +['用紙','モノクロ片面','モノクロ両面','カラー片面','カラー両面',''].map(function(t){return '<th style="background:#1a1a1a;color:#fff;padding:6px 9px;text-align:left;white-space:nowrap">'+t+'</th>';}).join('')+'</tr>';
+  d.papers.forEach(function(p,i){
+    var cell=function(k){ return '<td style="padding:3px 5px"><input value="'+(p[k]===''||p[k]==null?'':p[k])+'" type="text" inputmode="decimal" placeholder="@" style="width:66px;font-size:12px;text-align:right" oninput="DB.priceMeishi.papers['+i+'].'+k+'=this.value;_meishiRenderPrev_()"></td>'; };
+    h+='<tr style="border-bottom:1px solid #e2e8f0">'
+      +'<td style="padding:3px 5px"><input value="'+esc(p.name||'')+'" style="width:180px;font-size:12px" oninput="DB.priceMeishi.papers['+i+'].name=this.value;_meishiRenderPrev_()"></td>'
+      +cell('m1')+cell('m2')+cell('c1')+cell('c2')
+      +'<td style="padding:3px 5px"><button class="btn" style="font-size:11px;color:#b91c1c;border:none;background:none;cursor:pointer" onclick="DB.priceMeishi.papers.splice('+i+',1);_meishiRenderPrint_();_meishiRenderPrev_()">✕</button></td></tr>';
+  });
+  h+='</table>';
+  box.innerHTML=h;
+}
+function _meishiRenderData_(){
+  var d=_meishiData_(); var box=document.getElementById('meishi-data'); if(!box) return;
+  var h='<table style="border-collapse:collapse;font-size:12.5px;min-width:360px"><tr>'
+    +['区分','片面','両面'].map(function(t){return '<th style="background:#1a1a1a;color:#fff;padding:6px 12px;text-align:left">'+t+'</th>';}).join('')+'</tr>';
+  _MEISHI_KUBUN.forEach(function(kb){
+    if(!d.data[kb]) d.data[kb]={s:'',d:''};
+    var cell=function(f){ return '<td style="padding:3px 6px"><input value="'+(d.data[kb][f]===''||d.data[kb][f]==null?'':d.data[kb][f])+'" type="text" inputmode="numeric" placeholder="円" style="width:80px;font-size:12px;text-align:right" oninput="DB.priceMeishi.data[\''+kb+'\'].'+f+'=this.value;_meishiRenderPrev_()"></td>'; };
+    h+='<tr style="border-bottom:1px solid #e2e8f0"><td style="padding:4px 12px;font-weight:700">'+kb+(kb==='デザイン'?'<span style="font-size:10px;color:#7c3aed"> ※デザイン性が強い場合</span>':'')+(kb==='再版'?'<span style="font-size:10px;color:#94a3b8"> ※データ作成なし=0</span>':'')+'</td>'+cell('s')+cell('d')+'</tr>';
+  });
+  h+='</table>';
+  box.innerHTML=h;
+}
+function _meishiCalc_(paperIdx, color, men, qty, kubun){
+  var d=_meishiData_(); var p=d.papers[paperIdx]||{};
+  var key=(color==='color')?(men==='d'?'c2':'c1'):(men==='d'?'m2':'m1');
+  var punit=parseFloat(p[key])||0;
+  var q=parseInt(qty)||0;
+  var printAmt=Math.round(punit*q);
+  var df=(d.data[kubun]||{});
+  var dataFee=parseFloat(men==='d'?df.d:df.s)||0;
+  var total=printAmt+dataFee;
+  var unit=q>0?Math.round(total/q*100)/100:0;
+  return {punit:punit, printAmt:printAmt, dataFee:dataFee, total:total, unit:unit};
+}
+function _meishiRenderPrev_(){
+  var d=_meishiData_(); var box=document.getElementById('meishi-prev'); if(!box) return;
+  var opt=function(id,arr,cur){ return '<select id="'+id+'" onchange="_meishiRenderPrev_()" style="font-size:12px;padding:3px 6px">'+arr.map(function(a){return '<option value="'+a[0]+'"'+(String(cur)===String(a[0])?' selected':'')+'>'+a[1]+'</option>';}).join('')+'</select>'; };
+  var g=function(id){ return document.getElementById(id); };
+  var pv=g('mp-paper')?g('mp-paper').value:'0';
+  var cv=g('mp-color')?g('mp-color').value:'mono';
+  var mv=g('mp-men')?g('mp-men').value:'s';
+  var qv=g('mp-qty')?g('mp-qty').value:'100';
+  var kv=g('mp-kubun')?g('mp-kubun').value:'新規';
+  var r=_meishiCalc_(parseInt(pv)||0, cv, mv, qv, kv);
+  box.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'
+    +opt('mp-paper', d.papers.map(function(p,i){return [i, (p.name||'用紙'+(i+1))];}), pv)
+    +opt('mp-color', [['mono','モノクロ'],['color','カラー']], cv)
+    +opt('mp-men', [['s','片面'],['d','両面']], mv)
+    +'<input id="mp-qty" type="number" value="'+qv+'" style="width:70px;font-size:12px" oninput="_meishiRenderPrev_()"><span style="font-size:12px">枚</span>'
+    +opt('mp-kubun', _MEISHI_KUBUN.map(function(k){return [k,k];}), kv)
+    +'</div>'
+    +'<div style="font-size:13px;line-height:1.9">印刷代 @'+r.punit+'×'+(parseInt(qv)||0)+' ＝ <b>¥'+r.printAmt.toLocaleString()+'</b>　＋　データ作成費（'+kv+'・'+(mv==='d'?'両面':'片面')+'） <b>¥'+r.dataFee.toLocaleString()+'</b>'
+    +'<br><span style="font-size:15px">標準価格 <b>¥'+r.total.toLocaleString()+'</b>　／　標準単価 <b style="color:#0369a1">@¥'+r.unit+'</b></span>'
+    +' <span style="font-size:11px;color:#64748b">＝ この値がコスト下限。リピートで前回単価がこれを下回れば ⚠値上げ未反映</span></div>';
+}
+function _meishiAddPaper_(){ _meishiData_().papers.push({name:'', m1:'', m2:'', c1:'', c2:''}); _meishiRenderPrint_(); }
+function _meishiSave_(){
+  _meishiData_().updatedAt=new Date().toISOString();
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  var st=document.getElementById('meishi-st'); if(st){ st.textContent='✓ 保存しました（全社で共有・リピート照合の基準になります）'; setTimeout(function(){ st.textContent=''; },4000); }
+}
 function _ordInOpen_(){
   var ex=document.getElementById('ordin-modal'); if(ex) ex.remove();
   var ov=document.createElement('div');
