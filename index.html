@@ -8359,6 +8359,10 @@ function buildPanel(id,initData){
       </div>
       <div id="saved-patterns-${id}" style="margin-top:.75rem"></div>
     </div>
+    <div style="margin-top:.75rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn" style="font-size:12px;padding:6px 14px;background:#f5f3ff;border-color:#c4b5fd;color:#6d28d9;font-weight:700" onclick="showSpecQtyMatrix(${id})" title="同じ得意先・品名の別案（仕様違い・数量違い）を1画面で比較して採用案を選ぶ">📊 仕様×数量 比較マトリクス</button>
+      <span style="font-size:10.5px;color:#7c3aed">別案（仕様違い・数量違い）を並べて比較 → 採用案を選択</span>
+    </div>
     <div style="border-top:1px solid #93c5fd;margin-top:.75rem;padding-top:.75rem;display:flex;gap:8px;flex-wrap:wrap" id="est-save-row-${id}">
       <button id="save-quote-btn-${id}" class="btn" style="flex:1;min-width:200px;background:#0891b2;color:#fff;border-color:#0891b2;font-weight:700" onclick="saveEstimateAsQuote(${id})" title="見積中として保存。案件管理の「🔵見積中」に表示され、後で受注/失注を選べます">🔵 見積書として保存 (案件管理へ)</button>
       <button id="save-order-btn-${id}" class="btn btn-p" style="flex:1;min-width:200px;background:#065f46;border-color:#065f46" onclick="openOrderConfirmModal(${id})">🟢 受注案件として登録 → 発注</button>
@@ -37389,6 +37393,141 @@ function getOutsourceToGroupCompanies(tabId){
 // ═══════════════════ 見積パターン管理 ════════════════════
 
 // 見積パターンを保存
+// ═══ 📊 SQM-1: 仕様×数量 比較マトリクス（別案タブ＋保存パターンをピボット・原価コア非改変）═══
+function _sqmNum_(el){ return el ? (parseInt(String(el.textContent||el.value||'').replace(/[^0-9.]/g,''))||0) : 0; }
+// 現在の得意先+品名に紐づく比較セルを収集（開いているタブ=ライブ優先、保存パターン=補完）
+function _sqmCollect_(cust, item){
+  var cells = [];
+  var seen = {};
+  // (a) 開いている別案タブ（同一 得意先+品名）
+  try{
+    (tabs||[]).forEach(function(t){
+      var c=(document.getElementById('cust-'+t.id)||{}).value||'';
+      var it=(document.getElementById('prod-'+t.id)||{}).value||'';
+      if(c!==cust || it!==item) return;
+      var st=ts(t.id);
+      var q=(st.qtyPats&&st.qtyPats[0])?(parseInt(st.qtyPats[0].v)||0):0;
+      var sp=((document.getElementById('spec-'+t.id)||{}).value||'').trim();
+      var adEl=document.getElementById('adopted-'+t.id+'-0-0')||document.getElementById('adopted-'+t.id+'-0');
+      var up=adEl?(parseFloat(adEl.value)||0):0;
+      var grand=_sqmNum_(document.getElementById('g-grand-'+t.id));
+      var ex=Math.round(q*up);
+      if(!q && !up && !grand) return;
+      var key=(sp||'(仕様未設定)')+'|'+q;
+      seen[key]=1;
+      cells.push({spec:sp||'(仕様未設定)', qty:q, unit:((document.getElementById('unit-'+t.id)||{}).value||'枚'),
+        unitPrice:up, exTax:ex, cost:grand, costRate: ex>0?(grand/ex*100):0, gross: ex-grand,
+        src:'tab', tabId:t.id, label:(t.label||('見積'+t.id)), adopted: !!st._sqmAdopted});
+    });
+  }catch(e){}
+  // (b) 保存済みパターン（同一 得意先+品名・ライブに無い spec|qty のみ）
+  try{
+    (DB.quotations||[]).filter(function(qn){ return qn.cust===cust && qn.item===item; }).forEach(function(qn){
+      var sp=(qn.spec||qn.patternName||'(仕様未設定)').trim();
+      var q=parseInt(qn.qty)||0;
+      var key=sp+'|'+q;
+      if(seen[key]) return;
+      seen[key]=1;
+      var ex=parseInt(qn.exTax)||0, cost=parseInt(qn.costTotal)||0;
+      cells.push({spec:sp, qty:q, unit:qn.unit||'枚', unitPrice:parseFloat(qn.unitPrice)||0,
+        exTax:ex, cost:cost, costRate: parseFloat(qn.costRate)|| (ex>0?(cost/ex*100):0), gross: (qn.grossProfit!=null?qn.grossProfit:(ex-cost)),
+        src:'saved', qid:qn.id, patternName:qn.patternName||'', status:qn.status, adopted: qn.status==='adopted'});
+    });
+  }catch(e){}
+  return cells;
+}
+function showSpecQtyMatrix(tabId){
+  var cust=((document.getElementById('cust-'+tabId)||{}).value||'').trim();
+  var item=((document.getElementById('prod-'+tabId)||{}).value||'').trim();
+  var target=parseFloat((document.getElementById('trate-'+tabId)||{}).value)|| (window._SQM_DEFAULT_RATE_||75);
+  if(!cust || !item){ alert('先に得意先と品名を入力してください（比較は同じ得意先・品名の別案を集めます）'); return; }
+  var ex=document.getElementById('sqm-modal'); if(ex) ex.remove();
+  var ov=document.createElement('div'); ov.id='sqm-modal'; ov.className='proof-modal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000002;display:flex;align-items:center;justify-content:center;padding:1rem';
+  ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+  ov.innerHTML='<div style="background:#fff;width:min(920px,97vw);max-height:92vh;border-radius:12px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#6d28d9;color:#fff;display:flex;justify-content:space-between;align-items:center">'
+    +'<strong style="font-size:15px">📊 仕様×数量 比較マトリクス</strong>'
+    +'<button onclick="document.getElementById(\'sqm-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    +'<div style="padding:8px 18px;background:#f5f3ff;border-bottom:1px solid #ede9fe;font-size:12px;color:#5b21b6;display:flex;gap:14px;flex-wrap:wrap;align-items:center">'
+    +'<span><b>'+_escDiff(cust)+'</b> ／ '+_escDiff(item)+'</span>'
+    +'<span style="color:#7c3aed">目標原価率 '+target.toFixed(0)+'%（緑=目標以内・黄=+8%以内・赤=超過）</span>'
+    +'</div>'
+    +'<div id="sqm-body" style="padding:14px 18px;overflow:auto;flex:1"></div>'
+    +'<div style="padding:10px 18px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8">別案が足りない時は「入力」タブ下の <b>📋 数量違いで複製 / 仕様違いで複製</b> で作成 → 各タブで単価が出たらこの表に反映されます。</div>'
+    +'</div>';
+  document.body.appendChild(ov);
+  _sqmRender_(tabId, cust, item, target);
+}
+function _sqmRender_(tabId, cust, item, target){
+  var body=document.getElementById('sqm-body'); if(!body) return;
+  var cells=_sqmCollect_(cust, item);
+  if(cells.length<2){
+    body.innerHTML='<div style="padding:26px 8px;text-align:center;color:#64748b">'
+      +'<div style="font-size:40px;margin-bottom:8px">📋</div>'
+      +'<div style="font-weight:700;margin-bottom:4px">比較できる別案がまだありません（現在 '+cells.length+' 件）</div>'
+      +'<div style="font-size:12px">同じ得意先・品名で <b>数量違い / 仕様違い</b> の見積を複製すると、ここに仕様×数量で並びます。</div></div>';
+    return;
+  }
+  // 行=仕様、列=数量
+  var specs=[], qtys=[];
+  cells.forEach(function(c){ if(specs.indexOf(c.spec)<0) specs.push(c.spec); if(qtys.indexOf(c.qty)<0) qtys.push(c.qty); });
+  qtys.sort(function(a,b){ return a-b; });
+  var map={};
+  cells.forEach(function(c){ map[c.spec+'|'+c.qty]=c; });
+  function rateColor(cr){ if(!cr) return {bg:'#f8fafc',fg:'#64748b'}; if(cr<=target) return {bg:'#dcfce7',fg:'#15803d'}; if(cr<=target+8) return {bg:'#fef9c3',fg:'#92400e'}; return {bg:'#fee2e2',fg:'#b91c1c'}; }
+  var h='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:'+(140+qtys.length*130)+'px">';
+  h+='<thead><tr><th style="position:sticky;left:0;background:#f1f5f9;padding:8px 10px;text-align:left;border:1px solid #e2e8f0;min-width:140px">仕様 ＼ 数量</th>';
+  qtys.forEach(function(q){ h+='<th style="background:#ede9fe;color:#5b21b6;padding:8px 10px;border:1px solid #e2e8f0;text-align:center;min-width:120px">'+q.toLocaleString()+'</th>'; });
+  h+='</tr></thead><tbody>';
+  specs.forEach(function(sp){
+    h+='<tr><td style="position:sticky;left:0;background:#fff;padding:8px 10px;border:1px solid #e2e8f0;font-weight:600;color:#334155">'+_escDiff(sp)+'</td>';
+    qtys.forEach(function(q){
+      var c=map[sp+'|'+q];
+      if(!c){ h+='<td style="padding:8px 10px;border:1px solid #e2e8f0;text-align:center;color:#cbd5e1">—</td>'; return; }
+      var col=rateColor(c.costRate);
+      var grossRate=c.exTax>0?(c.gross/c.exTax*100):0;
+      var act = (c.src==='tab')
+        ? '<button class="btn" style="font-size:10px;padding:2px 8px;margin-top:5px;background:#ede9fe;border-color:#c4b5fd;color:#6d28d9" onclick="_sqmOpen_('+c.tabId+')">この案を開く</button>'
+        : '<button class="btn" style="font-size:10px;padding:2px 8px;margin-top:5px;background:#ede9fe;border-color:#c4b5fd;color:#6d28d9" onclick="_sqmAdoptSaved_(\''+c.qid+'\')">採用にする</button>';
+      h+='<td style="padding:7px 9px;border:1px solid #e2e8f0;background:'+col.bg+';vertical-align:top'+(c.adopted?';outline:2px solid #16a34a;outline-offset:-2px':'')+'">'
+        +'<div style="font-weight:800;font-size:14px;color:#0f172a">@'+(c.unitPrice? c.unitPrice.toLocaleString(undefined,{maximumFractionDigits:2}) : '—')+'</div>'
+        +'<div style="color:#334155">'+(c.exTax? '¥'+c.exTax.toLocaleString() : '—')+'</div>'
+        +'<div style="font-size:10.5px;color:'+col.fg+';font-weight:700;margin-top:2px">原価率 '+(c.costRate? c.costRate.toFixed(0)+'%':'—')+'</div>'
+        +'<div style="font-size:10.5px;color:#0f766e">粗利 '+(c.gross? '¥'+Math.round(c.gross).toLocaleString():'—')+(grossRate?(' ('+grossRate.toFixed(0)+'%)'):'')+'</div>'
+        +(c.adopted?'<div style="font-size:9.5px;color:#16a34a;font-weight:800;margin-top:3px">✅ 採用</div>':'')
+        +act
+        +'</td>';
+    });
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+  // 最安・最良粗利のヒント
+  var best=cells.slice().filter(function(c){return c.unitPrice>0;});
+  if(best.length){
+    var byGross=best.slice().sort(function(a,b){ return b.gross-a.gross; })[0];
+    h+='<div style="margin-top:12px;font-size:11.5px;color:#64748b">💡 粗利最大: <b>'+_escDiff(byGross.spec)+' × '+byGross.qty.toLocaleString()+'</b>（粗利 ¥'+Math.round(byGross.gross).toLocaleString()+' / 原価率 '+byGross.costRate.toFixed(0)+'%）</div>';
+  }
+  body.innerHTML=h;
+}
+function _sqmOpen_(tabId){
+  document.getElementById('sqm-modal')?.remove();
+  try{ if(typeof switchTab==='function') switchTab(tabId); }catch(e){}
+  try{ var st=ts(tabId); (tabs||[]).forEach(function(t){ var c=(document.getElementById('cust-'+t.id)||{}).value; }); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('この案を開きました。ここから見積書/受注へ進めます');
+}
+function _sqmAdoptSaved_(qid){
+  var qn=(DB.quotations||[]).find(function(x){ return x.id===qid; }); if(!qn) return;
+  (DB.quotations||[]).forEach(function(x){ if(x.cust===qn.cust && x.item===qn.item && x.spec===qn.spec && x.qty===qn.qty) x.status='adopted'; });
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('✅ 採用としてマークしました');
+  // 再描画
+  var cust=qn.cust, item=qn.item;
+  var t=(tabs&&tabs[0])?tabs[0].id:null;
+  var target=window._SQM_DEFAULT_RATE_||75;
+  _sqmRender_(t, cust, item, target);
+}
 function saveQuotationPattern(tabId){
   const patternName = document.getElementById(`pattern-name-${tabId}`)?.value;
   if(!patternName){
