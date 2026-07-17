@@ -193,7 +193,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v206</span>
+    <span class="mini" style="margin-left:auto">v207</span>
   </div>
   <h1 style="margin-top:0">案件管理表</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -295,6 +295,7 @@
           <div class="s4"><label>案件名</label><input id="f-item" placeholder="品名・仕様など"></div>
           <div><label>数量</label><input id="f-qty" type="number" oninput="calcAmt()"></div>
           <div><label>単位</label><input id="f-unit" placeholder="枚 / 冊 / 式"></div>
+          <div><label>受注数量 <span style="font-size:9px;color:#94a3b8">帳票用・製造数と違う時のみ</span></label><input id="f-orderQty" type="number" placeholder="通常は空欄"></div>
         </div>
       </div>
 
@@ -357,7 +358,7 @@ var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nn
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
-var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
+var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderQty','受注数(帳票)'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
 // 自社金額列を持つ会社（金額未入力の赤表示対象）
 var SELF_AMT_KEYS={murayama:1,nakao:1,yamauchi:1,tsushima:1};
 // 請求月は「YYYY年M月」表示（並び順は年月キーで正しく）
@@ -414,6 +415,7 @@ function getColVal(c,k){
   if(k==='_vendor') return _vendVal_(c);
   if(k==='_arrival') return _arrVal_(c);
   if(k==='_docout') return _docoutVal_(c);
+  if(k==='orderQty') return _orderQtyTag_(c.memo);
   if(k==='billMonth') return monthLabel(c.billMonth);
   var v=c[k]; return (v==null?'':v);
 }
@@ -584,7 +586,7 @@ function buildCustomerMaster(){
 var COLFILTER={}, SORTSTATE={k:'',dir:0};
 // ── 列幅（ドラッグ変更・端末に記憶・ハンドルWクリックで初期化） ──
 var COLW=(function(){ try{ return JSON.parse(localStorage.getItem('ledger_colw')||'{}'); }catch(e){ return {}; } })();
-var COLW_DEF={ denpyo:92, customer:150, item:230, qty:60, unit:52, orderDate:94, hopeDate:94, _vendor:112, _arrival:104, deliveryDate:94, status:82, billMonth:94, _docout:110, unitSelf:82, amtSelf:96, unitTokiwa:82, amtTokiwa:96, profit:86, multiPack:94, multiDest:104, memo:250, _ops:158 };
+var COLW_DEF={ denpyo:92, customer:150, item:230, qty:60, unit:52, orderQty:96, orderDate:94, hopeDate:94, _vendor:112, _arrival:104, deliveryDate:94, status:82, billMonth:94, _docout:110, unitSelf:82, amtSelf:96, unitTokiwa:82, amtTokiwa:96, profit:86, multiPack:94, multiDest:104, memo:250, _ops:158 };
 function colw(k){ return COLW[k]||COLW_DEF[k]||100; }
 function _applyColgroup_(){
   var tbl=document.getElementById('main-tbl'); if(!tbl) return;
@@ -787,7 +789,8 @@ function openForm(id, asCopy){
   document.getElementById('f-id').value=editing?editing.id:'';
   ['denpyo','customer','item','qty','unit','orderDate','hopeDate','deliveryDate','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','memo','billMonth'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=g(f); });
   document.getElementById('f-status2').value=g('status');
-  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
+  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
+  var _oqEl=document.getElementById('f-orderQty'); if(_oqEl) _oqEl.value=_orderQtyTag_(src&&src.memo);
   document.getElementById('f-multiPack').checked=(src&&(src.multiPack===true||src.multiPack==='true'||src.multiPack==='TRUE'));
   document.getElementById('f-multiDest').checked=!!(src&&src.multiDest);
   document.getElementById('f-linked').value=(editing?g('_linkedArrival'):'');
@@ -882,8 +885,9 @@ async function saveCase(){
     billMonth:document.getElementById('f-billMonth').value };
   // 複数梱包・納品先はシートに専用列が無いため備考に畳んで保存（情報を失わない・重複防止）
   var mp=document.getElementById('f-multiPack').checked, md=document.getElementById('f-multiDest').checked;
-  var memo=(document.getElementById('f-memo').value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
-  var pre=''; if(mp) pre+='【複数梱包】'; if(md) pre+='【複数納品先】';
+  var memo=(document.getElementById('f-memo').value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
+  var oq=(document.getElementById('f-orderQty').value||'').trim().replace(/,/g,'');
+  var pre=''; if(oq) pre+='【受注数:'+oq+'】'; if(mp) pre+='【複数梱包】'; if(md) pre+='【複数納品先】';
   c.memo=(pre?pre+' ':'')+memo;
   // 対象会社キー（編集時は元レコードの会社、新規時は選択中の会社）
   var key = (editing && editing._key) ? editing._key : NAMEKEY[COMPANY];
@@ -1231,7 +1235,19 @@ function openDocsList(list){
   document.getElementById('doc-modal').style.display='flex';
 }
 function closeDocs(){ document.getElementById('doc-modal').style.display='none'; }
-function _docAmt_(c){ var a=toNum(c.amtSelf)||toNum(c.amtTokiwa)||0; if(!a){ var u=toNum(c.unitSelf)||toNum(c.unitTokiwa)||0, q=toNum(c.qty)||0; a=u*q; } return a; }
+// 受注数量(中尾)を備考タグ【受注数:N】から取得。無ければ通常の数量(製造/トキワ)。
+function _orderQtyTag_(memo){ var m=String(memo==null?'':memo).match(/【受注数[:：]\s*([0-9,]+)】/); return m?m[1].replace(/,/g,''):''; }
+function _docQty_(c){ var oq=_orderQtyTag_(c&&c.memo); return (oq!=='')?oq:((c&&c.qty!=null)?c.qty:''); }
+function _qtyDisp_(c){ var q=_docQty_(c); var n=Number(String(q).replace(/,/g,'')); return (q!==''&&!isNaN(n))?n.toLocaleString():String(q||''); }
+// 帳票金額: 受注数量が指定されていれば 単価×受注数量(＝相手＝中尾の売上)。無ければ従来。
+function _docAmt_(c){
+  var oq=_orderQtyTag_(c&&c.memo);
+  var u=toNum(c.unitSelf)||toNum(c.unitTokiwa)||0;
+  if(oq!==''){ return u? Math.round(u*toNum(oq)) : (toNum(c.amtSelf)||toNum(c.amtTokiwa)||0); }
+  var a=toNum(c.amtSelf)||toNum(c.amtTokiwa)||0;
+  if(!a){ a=u*(toNum(c.qty)||0); }
+  return a;
+}
 function _docUnit_(c){ return toNum(c.unitSelf)||toNum(c.unitTokiwa)||''; }
 function _kanjiYen_(n){ return '金 '+ (Math.round(n)||0).toLocaleString() +' 円 也'; }
 function _panel3_(title, c, co, iss, isReceipt){
@@ -1241,7 +1257,7 @@ function _panel3_(title, c, co, iss, isReceipt){
     +'<div class="phead"><div class="pto"><b>'+esc2(c.customer||'')+'</b>　御中<div class="pmeta">伝票番号：'+esc2(c.denpyo||'')+(c.deliveryDate?'　／　納品日：'+esc2(c.deliveryDate):'')+'</div></div>'
       +'<div class="pfrom">発行日 '+esc2(iss)+'<br><b>'+esc2(co.name)+'</b>'+(co.tel?'<br>TEL '+esc2(co.tel):'')+(co.regno?'<br>登録番号 '+esc2(co.regno):'')+'</div></div>'
     +'<table class="ptbl"><tr><th>品名・摘要</th><th style="width:56px">数量</th><th style="width:44px">単位</th><th style="width:84px">単価</th><th style="width:96px">金額</th></tr>'
-      +'<tr><td>'+esc2(c.item||'')+'</td><td class="c">'+esc2(c.qty||'')+'</td><td class="c">'+esc2(c.unit||'')+'</td><td class="r">'+(unit?'¥'+Math.round(unit).toLocaleString():'')+'</td><td class="r">¥'+Math.round(amt).toLocaleString()+'</td></tr>'
+      +'<tr><td>'+esc2(c.item||'')+'</td><td class="c">'+esc2(_docQty_(c)||'')+'</td><td class="c">'+esc2(c.unit||'')+'</td><td class="r">'+(unit?'¥'+Math.round(unit).toLocaleString():'')+'</td><td class="r">¥'+Math.round(amt).toLocaleString()+'</td></tr>'
       +'<tr><td colspan="3"></td><td class="r">税込計</td><td class="r"><b>¥'+inc.toLocaleString()+'</b></td></tr></table>'
     +(isReceipt?'<div class="prcv">上記正に受領しました。　受領日 ＿＿＿＿＿＿＿　受領印<span class="pseal"></span></div>':'')
     +'</div>';
@@ -1267,8 +1283,8 @@ function _ns4Rows_(list, esc2, pad){
   for(i=0;i<list.length;i++){
     var x=list[i], amt=Math.round(_docAmt_(x)), unit=_docUnit_(x);
     var nm=(list.length>1&&x.denpyo?(x.denpyo+'　'):'')+(x.item||'');
-    var q=Number(String(x.qty==null?'':x.qty).replace(/,/g,''));
-    h+='<tr><td class="c">'+(i+1)+'</td><td>'+esc2(nm)+'</td><td class="r">'+(unit?_ns4Fmt_(unit):'')+'</td><td class="r">'+(q?q.toLocaleString():esc2(x.qty||''))+'</td><td class="r">'+(amt?amt.toLocaleString():'')+'</td></tr>';
+    var q=Number(String(_docQty_(x)).replace(/,/g,''));
+    h+='<tr><td class="c">'+(i+1)+'</td><td>'+esc2(nm)+'</td><td class="r">'+(unit?_ns4Fmt_(unit):'')+'</td><td class="r">'+(q?q.toLocaleString():esc2(_docQty_(x)||''))+'</td><td class="r">'+(amt?amt.toLocaleString():'')+'</td></tr>';
   }
   for(;i<(pad||0);i++){ h+='<tr><td class="c">&nbsp;</td><td></td><td></td><td></td><td></td></tr>'; }
   return h;
@@ -1339,7 +1355,7 @@ function _nkSheet_(title, c, co, iss){
     if(x){
       var amt=_docAmt_(x), unit=_docUnit_(x);
       var nm=(list.length>1 && x.denpyo ? (x.denpyo+'　') : '')+(x.item||'');
-      rows+='<tr><td>'+esc2(nm)+'</td><td class="c">'+esc2(x.qty||'')+'</td><td class="c">'+esc2(x.unit||'')+'</td><td class="r">'+(unit?Math.round(unit).toLocaleString():'')+'</td><td class="r">'+(amt?Math.round(amt).toLocaleString():'')+'</td></tr>';
+      rows+='<tr><td>'+esc2(nm)+'</td><td class="c">'+_qtyDisp_(x)+'</td><td class="c">'+esc2(x.unit||'')+'</td><td class="r">'+(unit?Math.round(unit).toLocaleString():'')+'</td><td class="r">'+(amt?Math.round(amt).toLocaleString():'')+'</td></tr>';
     } else {
       rows+='<tr><td></td><td></td><td></td><td></td><td></td></tr>';
     }
@@ -1411,7 +1427,7 @@ function genDoc(type){
     +'<div style="margin-top:10px;font-size:12px">伝票番号：'+esc2(_denTxt)+'</div></div>'
     +'<div class="dfrom"><div style="margin-bottom:6px">発行日：'+esc2(iss)+'</div>'+fromLines+'</div></div>';
   var itemRows=list.map(function(x){ var xa=_docAmt_(x), xu=_docUnit_(x);
-    return '<tr><td>'+esc2(x.item||'')+'</td><td class="c">'+esc2(x.qty||'')+'</td><td class="c">'+esc2(x.unit||'')+'</td><td class="r">'+(xu?'¥'+Math.round(xu).toLocaleString():'')+'</td><td class="r">¥'+Math.round(xa).toLocaleString()+'</td></tr>'; }).join('');
+    return '<tr><td>'+esc2(x.item||'')+'</td><td class="c">'+_qtyDisp_(x)+'</td><td class="c">'+esc2(x.unit||'')+'</td><td class="r">'+(xu?'¥'+Math.round(xu).toLocaleString():'')+'</td><td class="r">¥'+Math.round(xa).toLocaleString()+'</td></tr>'; }).join('');
   var itemTable='<table><thead><tr><th>品名・摘要</th><th class="c" style="width:70px">数量</th><th class="c" style="width:56px">単位</th><th class="r" style="width:100px">単価</th><th class="r" style="width:120px">金額</th></tr></thead><tbody>'+itemRows
     +'<tr><td colspan="4" class="r">小計</td><td class="r">¥'+Math.round(amt).toLocaleString()+'</td></tr>'
     +'<tr><td colspan="4" class="r">消費税(10%)</td><td class="r">¥'+tax.toLocaleString()+'</td></tr>'
