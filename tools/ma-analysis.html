@@ -74,9 +74,10 @@
   <div class="tabs">
     <button class="tab on" data-tab="analyze" onclick="swTab('analyze')">📊 個別分析</button>
     <button class="tab" data-tab="rank" onclick="swTab('rank')">🏆 比較ランキング</button>
+    <button class="tab" data-tab="model" onclick="swTab('model')">🏢 統合モデル</button>
     <button class="tab" data-tab="help" onclick="swTab('help')">❔ 算定方法</button>
     <span style="margin-left:auto"></span>
-    <select id="grp-filter" onchange="renderList();renderRank()" style="width:auto;font-size:12px">
+    <select id="grp-filter" onchange="renderList();renderRank();renderModel()" style="width:auto;font-size:12px">
       <option value="">📁 全案件</option>
       <option>トキワ印刷案件</option>
       <option>北上プリント案件</option>
@@ -110,6 +111,22 @@
     </div>
   </div>
 
+  <div id="tab-model" style="display:none">
+    <div class="card">
+      <div class="st">統合モデル（案件を選んで自社と連結）</div>
+      <div class="note" style="margin-bottom:8px">取得側（自社）に、下でチェックした買収候補を足し込んだ<b>統合後のグループ像</b>。上の📁で案件枠（トキワ／北上）を切り替えると取得側も切り替わります。売上・修正営業利益・シナジー・取得価格を合算し、グループの回収年数・利回りを出します。</div>
+      <div id="model-base"></div>
+    </div>
+    <div class="card">
+      <div class="st">連結する候補</div>
+      <div id="model-picks"></div>
+    </div>
+    <div class="card">
+      <div class="st">統合後のグループ像</div>
+      <div id="model-out"></div>
+    </div>
+  </div>
+
   <div id="tab-help" style="display:none">
     <div class="card note" style="line-height:1.9">
       <div class="st">算定方法（中小企業M&Aの実務ベース）</div>
@@ -125,7 +142,7 @@
     </div>
   </div>
 </div>
-<span class="vbadge">v3</span>
+<span class="vbadge">v4</span>
 
 <script>
 var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
@@ -135,8 +152,10 @@ if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudf
 var KEY='ma_analysis_v1';
 var DB={ targets:[] };
 var SEL=null;
+function defBases(){ return { 'トキワ印刷案件':{name:'トキワ印刷（取得側）',sales:'',adjOp:'',cash:'',na:''}, '北上プリント案件':{name:'北上プリント（取得側）',sales:'',adjOp:'',cash:'',na:''} }; }
 function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }catch(e){} if(!DB.targets) DB.targets=[];
-  DB.targets.forEach(function(t){ if(!t.dealGroup) t.dealGroup='トキワ印刷案件'; }); }
+  if(!DB.bases) DB.bases=defBases();
+  DB.targets.forEach(function(t){ if(!t.dealGroup) t.dealGroup='トキワ印刷案件'; if(!Array.isArray(t.dd)) t.dd=[]; if(t.includeInModel===undefined) t.includeInModel=true; }); }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){} }
 function uid(){ return 't'+Date.now()+Math.floor(Math.random()*1000); }
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -153,8 +172,25 @@ function newTarget(){
     adjExecComp:'', adjOther:'',
     ebitdaMult:4, goodwillYears:2, priceChosen:'',
     synSales:'', synCost:'', synInsource:'', synSGA:'', insourceRate:'', insourceMargin:'',
-    scores:{}, conditions:'', memo:'' };
+    scores:{}, conditions:'', memo:'', dd:[], includeInModel:true };
 }
+var STD_DD=[
+  '直近の試算表・月次推移（季節変動の確認）',
+  '役員報酬の内訳・引継ぎ後に削減できる額',
+  '雑収入・営業外損益の中身と継続性',
+  '借入金の残高・金利・返済予定・個人保証の有無',
+  '役員借入金の処理（債務免除／引継ぎ／相殺）',
+  '主要取引先の売上構成・与信・継続性（官公庁比率）',
+  '従業員の年齢構成・キーマン・退職リスク・継続雇用の意思',
+  '設備の年式・リース残・今後の修繕/更新予定',
+  '外注先の内訳と自社で内製化できる範囲',
+  '簿外債務・係争・未払残業・保証債務の有無',
+  '不動産・賃貸借契約（名義・期間・原状回復）',
+  '許認可・入札参加資格の承継可否',
+  '株主構成・名義株・分散の有無',
+  '知的財産・フォント/ソフトのライセンス承継'
+];
+var DD_ST=['未確認','確認中','OK','懸念'];
 function addTarget(){ var t=newTarget(); DB.targets.push(t); SEL=t.id; save(); renderList(); renderDetail(); }
 function delTarget(id){ if(!confirm('この候補を削除しますか？')) return; DB.targets=DB.targets.filter(function(t){return t.id!==id;}); if(SEL===id) SEL=(DB.targets[0]||{}).id||null; save(); renderList(); renderDetail(); renderRank(); }
 function selTarget(id){ SEL=id; renderList(); renderDetail(); }
@@ -282,10 +318,35 @@ function renderDetail(){
 
     +'<div class="card"><div class="st">08 譲渡条件・メモ</div>'
     +'<label>譲渡条件</label><textarea rows="2" oninput="set(\''+id+'\',\'conditions\',this.value)" placeholder="例: 従業員継続雇用・社名継続・引継ぎ期間">'+esc(t.conditions||'')+'</textarea>'
-    +'<label style="margin-top:8px">分析メモ</label><textarea rows="5" oninput="set(\''+id+'\',\'memo\',this.value)" placeholder="所感・リスク・交渉メモなど">'+esc(t.memo||'')+'</textarea></div>';
+    +'<label style="margin-top:8px">分析メモ</label><textarea rows="5" oninput="set(\''+id+'\',\'memo\',this.value)" placeholder="所感・リスク・交渉メモなど">'+esc(t.memo||'')+'</textarea></div>'
+
+    +'<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="st" style="border:none;margin:0;padding:0">09 質問事項・DD確認事項</div>'
+    +'<div style="display:flex;gap:6px"><button class="btn" onclick="addDdStd(\''+id+'\')">＋ 標準質問を追加</button><button class="btn" onclick="addDd(\''+id+'\')">＋ 空欄で追加</button></div></div>'
+    +'<div class="note" style="margin:6px 0">先方・FA・会計士に確認する項目。ステータスをクリックで 未確認→確認中→OK→懸念 と切替。回答は右にメモ。</div>'
+    +'<div id="ddbox-'+id+'"></div></div>';
 
   renderDetailValsOnly();
+  _ddRender_(t);
 }
+function _ddRender_(t){
+  var box=document.getElementById('ddbox-'+t.id); if(!box) return;
+  var dd=t.dd||[];
+  if(!dd.length){ box.innerHTML='<div class="note">「＋ 標準質問を追加」で印刷会社M&Aの基本チェックが入ります。</div>'; return; }
+  var stc={ '未確認':'#94a3b8','確認中':'#2563eb','OK':'#0f766e','懸念':'#b91c1c' };
+  box.innerHTML=dd.map(function(d,i){ var st=d.st||'未確認';
+    return '<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:5px">'
+      +'<button onclick="cycleDd(\''+t.id+'\','+i+')" style="flex:0 0 58px;font-size:10.5px;font-weight:700;color:#fff;background:'+stc[st]+';border:none;border-radius:5px;padding:5px 4px;cursor:pointer">'+st+'</button>'
+      +'<textarea rows="1" oninput="setDd(\''+t.id+'\','+i+',\'q\',this.value)" style="flex:2;min-height:30px" placeholder="質問・確認事項">'+esc(d.q||'')+'</textarea>'
+      +'<textarea rows="1" oninput="setDd(\''+t.id+'\','+i+',\'note\',this.value)" style="flex:2;min-height:30px" placeholder="回答・メモ">'+esc(d.note||'')+'</textarea>'
+      +'<button class="btn dan" onclick="delDd(\''+t.id+'\','+i+')" style="flex:0 0 auto;padding:5px 8px">×</button></div>';
+  }).join('');
+}
+function _tById_(id){ return DB.targets.find(function(x){return x.id===id;}); }
+function addDd(id){ var t=_tById_(id); if(!t) return; t.dd=t.dd||[]; t.dd.push({q:'',st:'',note:''}); save(); renderDetail(); }
+function addDdStd(id){ var t=_tById_(id); if(!t) return; t.dd=t.dd||[]; var have={}; t.dd.forEach(function(d){have[d.q]=1;}); STD_DD.forEach(function(q){ if(!have[q]) t.dd.push({q:q,st:'',note:''}); }); save(); renderDetail(); }
+function setDd(id,i,f,v){ var t=_tById_(id); if(!t||!t.dd[i]) return; t.dd[i][f]=v; save(); }
+function cycleDd(id,i){ var t=_tById_(id); if(!t||!t.dd[i]) return; var cur=DD_ST.indexOf(t.dd[i].st||'未確認'); t.dd[i].st=DD_ST[(cur+1)%DD_ST.length]; save(); _ddRender_(t); }
+function delDd(id,i){ var t=_tById_(id); if(!t) return; t.dd.splice(i,1); save(); renderDetail(); }
 function renderDetailValsOnly(){
   var t=DB.targets.find(function(x){return x.id===SEL;}); if(!t) return;
   var c=calc(t);
@@ -355,10 +416,74 @@ function renderRank(){
   }
 }
 
+// ── 🏢 統合モデル（案件を正として自社に連結）──
+function _modelGrp_(){ var g=document.getElementById('grp-filter').value; return g || 'トキワ印刷案件'; }
+function setBase(grp,f,v){ if(!DB.bases) DB.bases=defBases(); if(!DB.bases[grp]) DB.bases[grp]={}; DB.bases[grp][f]=v; save(); renderModelOut(); }
+function toggleModel(id,on){ var t=_tById_(id); if(!t) return; t.includeInModel=!!on; save(); renderModelOut(); }
+function renderModel(){
+  var grp=_modelGrp_(); var b=(DB.bases&&DB.bases[grp])||{};
+  var bb=document.getElementById('model-base');
+  if(bb){ bb.innerHTML='<div class="note" style="margin-bottom:6px">取得側＝<b>'+esc(grp)+'</b>（自社の直近実績を万円で。空欄可）</div>'
+    +'<div class="grid">'
+    +'<div style="grid-column:span 2"><label>取得側 会社名</label><input value="'+esc(b.name||'')+'" oninput="setBase(\''+esc(grp)+'\',\'name\',this.value)"></div>'
+    +'<div><label>売上高</label><input type="number" step="any" value="'+esc(b.sales==null?'':b.sales)+'" oninput="setBase(\''+esc(grp)+'\',\'sales\',this.value)"></div>'
+    +'<div><label>修正営業利益</label><input type="number" step="any" value="'+esc(b.adjOp==null?'':b.adjOp)+'" oninput="setBase(\''+esc(grp)+'\',\'adjOp\',this.value)"></div>'
+    +'<div><label>現預金</label><input type="number" step="any" value="'+esc(b.cash==null?'':b.cash)+'" oninput="setBase(\''+esc(grp)+'\',\'cash\',this.value)"></div>'
+    +'<div><label>時価純資産</label><input type="number" step="any" value="'+esc(b.na==null?'':b.na)+'" oninput="setBase(\''+esc(grp)+'\',\'na\',this.value)"></div>'
+    +'</div>';
+  }
+  renderModelOut();
+}
+function _modelTargets_(){ var g=document.getElementById('grp-filter').value; return DB.targets.filter(function(t){ return !g || t.dealGroup===g; }); }
+function renderModelOut(){
+  var pk=document.getElementById('model-picks');
+  var list=_modelTargets_();
+  if(pk){
+    if(!list.length){ pk.innerHTML='<div class="note">この案件枠に候補がありません。</div>'; }
+    else pk.innerHTML=list.map(function(t){ var c=calc(t);
+      return '<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;border-bottom:1px solid #efece6;cursor:pointer">'
+        +'<input type="checkbox" '+(t.includeInModel?'checked':'')+' onchange="toggleModel(\''+t.id+'\',this.checked)" style="width:auto">'
+        +'<span style="flex:1;font-weight:700;font-size:12px">'+esc(t.name||'(無名)')+'</span>'
+        +'<span class="note" style="font-size:11px">売上'+oku(t.sales)+' ／ 修正営利'+oku(c.adjOp)+' ／ ｼﾅｼﾞｰ'+oku(c.syn)+' ／ 取得'+oku(c.price)+'</span></label>';
+    }).join('');
+  }
+  var out=document.getElementById('model-out'); if(!out) return;
+  var grp=_modelGrp_(); var b=(DB.bases&&DB.bases[grp])||{};
+  var sel=list.filter(function(t){ return t.includeInModel; });
+  var baseSales=+b.sales||0, baseAdj=+b.adjOp||0, baseNA=+b.na||0, baseCash=+b.cash||0;
+  var sumSales=baseSales, sumAdj=baseAdj, sumSyn=0, totalPrice=0, sumNA=baseNA, sumNetDebt=-baseCash;
+  var rows='';
+  rows+='<tr><td><b>'+esc(b.name||'取得側')+'</b>（自社）</td><td class="n">'+oku(baseSales)+'</td><td class="n">'+oku(baseAdj)+'</td><td class="n">—</td><td class="n">—</td></tr>';
+  sel.forEach(function(t){ var c=calc(t);
+    sumSales+=(+t.sales||0); sumAdj+=c.adjOp; sumSyn+=c.syn; totalPrice+=c.price; sumNA+=(+t.netAssets||0); sumNetDebt+=c.netDebt;
+    rows+='<tr><td>'+esc(t.name||'(無名)')+'</td><td class="n">'+oku(t.sales)+'</td><td class="n">'+oku(c.adjOp)+'</td><td class="n">'+oku(c.syn)+'</td><td class="n">'+oku(c.price)+'</td></tr>';
+  });
+  var postOp=sumAdj+sumSyn;
+  var payback= postOp>0 ? totalPrice/postOp : 0;
+  var roic= totalPrice>0 ? postOp/totalPrice*100 : 0;
+  var opMargin= sumSales>0 ? postOp/sumSales*100 : 0;
+  var pk2= payback<=0?{c:'',t:'—'}: payback<=3?{c:'good',t:payback.toFixed(1)+'年'}: payback<=6?{c:'warn',t:payback.toFixed(1)+'年'}:{c:'bad',t:payback.toFixed(1)+'年'};
+  out.innerHTML=
+    '<div style="overflow:auto;margin-bottom:10px"><table><thead><tr><th>構成</th><th class="n">売上</th><th class="n">修正営利</th><th class="n">ｼﾅｼﾞｰ</th><th class="n">取得価格</th></tr></thead><tbody>'+rows
+    +'<tr style="border-top:2px solid #333;font-weight:800"><td>統合後 合計（'+(sel.length)+'社連結）</td><td class="n">'+oku(sumSales)+'</td><td class="n">'+oku(sumAdj)+'</td><td class="n">'+oku(sumSyn)+'</td><td class="n">'+oku(totalPrice)+'</td></tr>'
+    +'</tbody></table></div>'
+    +'<div class="metrics">'
+    +'<div class="m"><div class="k">統合後 売上規模</div><div class="v">'+oku(sumSales)+'</div><div class="u">'+(sel.length+1)+'社合算</div></div>'
+    +'<div class="m good"><div class="k">統合後 利益</div><div class="v">'+oku(postOp)+'</div><div class="u">修正'+oku(sumAdj)+'＋ｼﾅｼﾞｰ'+oku(sumSyn)+'</div></div>'
+    +'<div class="m"><div class="k">利益率</div><div class="v">'+(opMargin?opMargin.toFixed(1):'—')+'</div><div class="u">%（統合後利益/売上）</div></div>'
+    +'<div class="m"><div class="k">総取得価格</div><div class="v">'+oku(totalPrice)+'</div><div class="u">のれん込み</div></div>'
+    +'<div class="m '+pk2.c+'"><div class="k">グループ回収年数</div><div class="v">'+pk2.t+'</div><div class="u">総取得/統合後利益</div></div>'
+    +'<div class="m"><div class="k">投資利回り</div><div class="v">'+(roic?roic.toFixed(1):'—')+'</div><div class="u">%</div></div>'
+    +'<div class="m"><div class="k">統合後 純資産</div><div class="v">'+oku(sumNA)+'</div><div class="u">取得側＋連結</div></div>'
+    +'<div class="m'+(sumNetDebt<=0?' good':'')+'"><div class="k">統合後 ネット負債</div><div class="v">'+oku(sumNetDebt)+'</div><div class="u">借入等−現預金</div></div>'
+    +'</div>'
+    +(sel.length?'':'<div class="note" style="margin-top:8px">上で連結する候補にチェックを入れてください。</div>');
+}
 function swTab(name){
-  ['analyze','rank','help'].forEach(function(x){ document.getElementById('tab-'+x).style.display=(x===name?'':'none'); });
+  ['analyze','rank','model','help'].forEach(function(x){ document.getElementById('tab-'+x).style.display=(x===name?'':'none'); });
   document.querySelectorAll('.tab').forEach(function(b){ b.classList.toggle('on', b.dataset.tab===name); });
   if(name==='rank') renderRank();
+  if(name==='model') renderModel();
 }
 
 // ── JSON 書出/取込（PC間移動・私からの分析データ受け渡し用）──
@@ -375,6 +500,7 @@ function importJson(inp){
       var d=JSON.parse(fr.result);
       var arr=Array.isArray(d)?d:(d.targets||[]);
       if(!arr.length){ alert('候補データがありません'); return; }
+      if(d.bases){ DB.bases=Object.assign(DB.bases||defBases(), d.bases); }
       var byName={}; DB.targets.forEach(function(t,i){ byName[t.name]=i; });
       var add=0,upd=0;
       arr.forEach(function(t){ if(!t||!t.name) return; if(!t.id) t.id=uid();
