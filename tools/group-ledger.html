@@ -193,7 +193,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v203</span>
+    <span class="mini" style="margin-left:auto">v204</span>
   </div>
   <h1 style="margin-top:0">案件管理表</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -207,7 +207,7 @@
     <div class="tbsep"></div>
     <div class="tbgrp">
       <button class="btn xl dark" onclick="openForm()">＋ 新規追加</button>
-      <button class="btn xl" onclick="openReuse()" title="過去案件から引用して追加（リピート）。トキワは他社案件の流用も可（伝票番号でリンク）">🔁 リピート追加</button>
+      <button class="btn xl" id="btn-upd-multi" onclick="openUpdateSel()" title="チェックした案件の 状況・納品日・請求月 などをまとめて更新" style="display:none">✏ 選択を更新 (<span id="sel-cnt-u">0</span>)</button>
       <button class="btn xl" id="btn-rep-multi" onclick="openRepeatSel()" title="チェックした案件の内容を引き継いで、新しい伝票番号で今日の受注として一括追加" style="display:none">🔁 選択をリピート登録 (<span id="sel-cnt-r">0</span>)</button>
       <button class="btn xl" id="btn-del-multi" onclick="delSelected()" title="チェックした案件をシートから削除" style="display:none;color:#c0261c;border-color:#e3a69f">🗑 選択を削除 (<span id="sel-cnt-d">0</span>)</button>
       <button class="btn xl" id="btn-docs-multi" onclick="openDocsSel()" title="チェックした複数案件を1枚の帳票にまとめて発行（納品書・請求書・見積書・領収書）" style="display:none">🧾 選択して帳票 (<span id="sel-cnt">0</span>)</button>
@@ -247,6 +247,10 @@
         <button class="btn" onclick="genDoc('見積書')">📝 見積書</button>
         <button class="btn" onclick="genDoc('領収書')">🧾 領収書</button>
         <button class="btn p" id="doc-print-btn" onclick="printDoc()" style="margin-left:auto;display:none">🖨 印刷（発行を記録）</button>
+      </div>
+      <div id="doc-attach-box" style="display:none;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 10px;margin-bottom:10px">
+        <label style="font-weight:700;font-size:12px;color:#b91c1c;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="doc-attach-on" checked style="width:auto"> 📎 送り先・梱包内訳を別紙として添付（複数納品先・複数梱包の案件があります）</label>
+        <textarea id="doc-attach-text" rows="5" style="width:100%;margin-top:6px;font-size:12px" placeholder="送り先ごとの部数・箱数・入数などを記入"></textarea>
       </div>
       <details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:12px;color:var(--accent);font-weight:700">🏢 会社情報（帳票用・この会社の枠を編集／保存）</summary>
         <div class="grid" id="co-info-grid" style="padding:10px 0"></div>
@@ -349,7 +353,7 @@ var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nn
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
-var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
+var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['qty','数量'],['unit','単位'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
 // 自社金額列を持つ会社（金額未入力の赤表示対象）
 var SELF_AMT_KEYS={murayama:1,nakao:1,yamauchi:1,tsushima:1};
 // 請求月は「YYYY年M月」表示（並び順は年月キーで正しく）
@@ -405,6 +409,7 @@ function getColVal(c,k){
   if(k==='multiDest') return c.multiDest?'⚠ 複数納品先':'';
   if(k==='_vendor') return _vendVal_(c);
   if(k==='_arrival') return _arrVal_(c);
+  if(k==='_docout') return _docoutVal_(c);
   if(k==='billMonth') return monthLabel(c.billMonth);
   var v=c[k]; return (v==null?'':v);
 }
@@ -548,6 +553,7 @@ function _applyCompany_(){
 async function loadList(force){
   if(!COMPANY) return; // 会社未選択（トキワの選択画面待ち）
   if(ARRIVALS===null){ ARRIVALS=[]; loadArrivals(); } // 到着予定日メール台帳を背景で読込(初回のみ)
+  if(DOCLOGS===null){ DOCLOGS=[]; loadDocLogs(); } // 帳票出力日(DocLog)も背景で読込(初回のみ)
   if(!IS_TK && LINKS_BY_DEN===null){ LINKS_BY_DEN={}; loadLinkMap(); } // 関連会社: 他社リンク到着予定日(社名は伏せる)
   // 1) メモリ→セッションの順でまず即描画（stale-while-revalidate）
   if(!ALLCASES){ var cc=_sessionCache_(); if(cc){ ALLCASES=cc.c; _ALL_TS=cc.t; } }
@@ -574,7 +580,7 @@ function buildCustomerMaster(){
 var COLFILTER={}, SORTSTATE={k:'',dir:0};
 // ── 列幅（ドラッグ変更・端末に記憶・ハンドルWクリックで初期化） ──
 var COLW=(function(){ try{ return JSON.parse(localStorage.getItem('ledger_colw')||'{}'); }catch(e){ return {}; } })();
-var COLW_DEF={ denpyo:92, customer:150, item:230, qty:60, unit:52, orderDate:94, hopeDate:94, _vendor:112, _arrival:104, deliveryDate:94, status:82, billMonth:94, unitSelf:82, amtSelf:96, unitTokiwa:82, amtTokiwa:96, profit:86, multiPack:94, multiDest:104, memo:250, _ops:158 };
+var COLW_DEF={ denpyo:92, customer:150, item:230, qty:60, unit:52, orderDate:94, hopeDate:94, _vendor:112, _arrival:104, deliveryDate:94, status:82, billMonth:94, _docout:110, unitSelf:82, amtSelf:96, unitTokiwa:82, amtTokiwa:96, profit:86, multiPack:94, multiDest:104, memo:250, _ops:158 };
 function colw(k){ return COLW[k]||COLW_DEF[k]||100; }
 function _applyColgroup_(){
   var tbl=document.getElementById('main-tbl'); if(!tbl) return;
@@ -999,6 +1005,21 @@ async function applyArrivals(){
   await loadList(true);
 }
 // ── 一覧の希望納期セルに📧（メール原文の確認導線） ──
+// ── 帳票の出力日（DocLog）: 伝票番号ごとの最新出力を一覧に表示 ──
+var DOCLOGS=null, DOCLOG_BY_DEN={};
+async function loadDocLogs(){
+  try{ var r=await api('docLogList',{});
+    if(r&&r.success){ DOCLOGS=r.logs||[]; DOCLOG_BY_DEN={};
+      DOCLOGS.forEach(function(g){ if(g.denpyo && !DOCLOG_BY_DEN[g.denpyo]) DOCLOG_BY_DEN[g.denpyo]=g; });
+      if(DOCLOGS.length) render();
+    } else { DOCLOGS=[]; }
+  }catch(e){ DOCLOGS=[]; }
+}
+function _docoutVal_(c){
+  var g=c&&c.denpyo&&DOCLOG_BY_DEN[c.denpyo]; if(!g) return '';
+  var d=g.issueDate||String(g.ts||'').slice(0,10);
+  return d?(d+'　'+String(g.docType||'')):'';
+}
 var ARRIVALS=null, ARR_BY_DEN={};
 async function loadArrivals(){
   try{ var r=await api('arrivalList',{});
@@ -1034,10 +1055,56 @@ var SEL=new Set();
 function selChg(ck){ if(ck.checked) SEL.add(ck.dataset.id); else SEL.delete(ck.dataset.id); _selUi_(); }
 function selAllVisible(on){ document.querySelectorAll('#tbody .selck').forEach(function(ck){ ck.checked=on; if(on) SEL.add(ck.dataset.id); else SEL.delete(ck.dataset.id); }); _selUi_(); }
 function _selUi_(){ var n=SEL.size;
-  [['btn-docs-multi','sel-cnt'],['btn-del-multi','sel-cnt-d'],['btn-rep-multi','sel-cnt-r']].forEach(function(pp){
+  [['btn-docs-multi','sel-cnt'],['btn-del-multi','sel-cnt-d'],['btn-rep-multi','sel-cnt-r'],['btn-upd-multi','sel-cnt-u']].forEach(function(pp){
     var b=document.getElementById(pp[0]); if(b) b.style.display=n?'':'none';
     var sc=document.getElementById(pp[1]); if(sc) sc.textContent=n;
   });
+}
+// ── 選択→一括更新（入力した項目だけを選択案件すべてに反映）──
+function openUpdateSel(){
+  var list=(CASES||[]).filter(function(c){ return SEL.has(c.id) && c._row; });
+  if(!list.length){ alert('更新する案件を左端のチェックで選択してください'); return; }
+  var back=document.getElementById('updsel-modal'); if(back) back.remove();
+  var sts={}; (CASES||[]).forEach(function(c){ if(c.status) sts[c.status]=1; });
+  var dl=Object.keys(sts).map(function(x){ return '<option value="'+esc(x)+'">'; }).join('');
+  var m=document.createElement('div'); m.id='updsel-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:2rem;z-index:70;overflow:auto';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;width:min(520px,94vw)">'
+    +'<div style="padding:12px 16px;background:#0e7490;color:#fff;border-radius:10px 10px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center"><span>✏ 選択を一括更新（'+list.length+'件）</span><span style="cursor:pointer;font-size:18px" onclick="document.getElementById(\'updsel-modal\').remove()">×</span></div>'
+    +'<div style="padding:14px 16px">'
+    +'<div style="font-size:12px;color:#475569;margin-bottom:10px"><b>入力した項目だけ</b>を選択した全案件に反映します。空欄の項目は変更しません。</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+    +'<div><label style="font-size:11px;font-weight:700">状況</label><input id="upd-status" list="upd-status-dl" placeholder="例: 納品済" style="width:100%"><datalist id="upd-status-dl">'+dl+'</datalist></div>'
+    +'<div><label style="font-size:11px;font-weight:700">請求月</label><input id="upd-billMonth" placeholder="例: 2026-07-01" style="width:100%"></div>'
+    +'<div><label style="font-size:11px;font-weight:700">受注日</label><input id="upd-orderDate" type="date" style="width:100%"></div>'
+    +'<div><label style="font-size:11px;font-weight:700">希望納期</label><input id="upd-hopeDate" type="date" style="width:100%"></div>'
+    +'<div><label style="font-size:11px;font-weight:700">納品日</label><input id="upd-deliveryDate" type="date" style="width:100%"></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end"><button class="btn" onclick="document.getElementById(\'updsel-modal\').remove()">キャンセル</button><button class="btn p" onclick="doUpdateSel()">✏ 一括更新</button></div>'
+    +'</div></div>';
+  document.body.appendChild(m);
+  window._updSelList_=list;
+}
+async function doUpdateSel(){
+  var list=window._updSelList_||[];
+  var patch={};
+  [['upd-status','status'],['upd-billMonth','billMonth'],['upd-orderDate','orderDate'],['upd-hopeDate','hopeDate'],['upd-deliveryDate','deliveryDate']].forEach(function(pp){
+    var el=document.getElementById(pp[0]); var v=el?el.value.trim():'';
+    if(v) patch[pp[1]]=v;
+  });
+  if(!Object.keys(patch).length){ alert('更新する項目を1つ以上入力してください'); return; }
+  var ok=0, ng=0, firstErr='';
+  for(var i=0;i<list.length;i++){
+    var c=list[i];
+    try{
+      var r=await api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:patch});
+      if(r&&r.success) ok++; else { ng++; if(!firstErr) firstErr=(r&&r.error)||''; }
+    }catch(e){ ng++; if(!firstErr) firstErr=e.message; }
+  }
+  var mm=document.getElementById('updsel-modal'); if(mm) mm.remove();
+  SEL.clear(); _selUi_();
+  await loadList(true);
+  alert('✏ 更新 '+ok+' 件'+(ng?('／失敗 '+ng+' 件\n'+firstErr+'\n（行がずれた可能性。再読込後にやり直してください）'):''));
 }
 // ── 選択→複数削除（行番号の大きい順に削除して行ズレを防ぐ）──
 async function delSelected(){
@@ -1130,6 +1197,29 @@ function openDocsList(list){
   g.innerHTML='<div class="full msub" style="font-size:11px;color:#64748b">'+(CO_NAMES[key]||c.company)+' の帳票用情報（空欄は後で入力可・端末に保存）</div>'
     +CO_FIELDS.map(function(f){ var v=_docState_.co[f[0]]||''; return '<div'+((f[0]==='addr'||f[0]==='bank')?' class="full"':'')+'><label>'+f[1]+'</label><input id="coi-'+f[0]+'" value="'+String(v).replace(/"/g,'&quot;')+'"></div>'; }).join('')
     +'<div class="full"><button class="btn sm p" onclick="saveCoInfo(\''+key+'\')">この会社の情報を保存</button></div>';
+  // 複数納品先・複数梱包 → 別紙添付欄をプリフィル
+  try{
+    var attBox=document.getElementById('doc-attach-box');
+    var flagged=list.filter(function(x){ return x.multiDest || x.deliverTo || (x.multiPack===true||x.multiPack==='true'||x.multiPack==='TRUE') || /【複数梱包】|【複数納品先】|【納品先:/.test(String(x.memo||'')); });
+    if(attBox){
+      if(flagged.length){
+        var txt=flagged.map(function(x){
+          var memo=String(x.memo||'');
+          var dest=x.deliverTo||''; var mm2=memo.match(/【納品先:([^】]*)】/); if(!dest&&mm2) dest=mm2[1];
+          var ls=['■ '+(x.denpyo||'')+'　'+(x.item||'')];
+          if(dest) ls.push('　納品先: '+dest);
+          if(x.multiDest||memo.indexOf('【複数納品先】')>=0) ls.push('　複数納品先: あり（送り先ごとの内訳を記入）');
+          if(x.multiPack===true||x.multiPack==='true'||x.multiPack==='TRUE'||memo.indexOf('【複数梱包】')>=0) ls.push('　複数梱包: あり（箱数・入数を記入）');
+          var clean=memo.replace(/【複数梱包】|【複数納品先】/g,'').replace(/【納品先:[^】]*】/g,'').replace(/【着日[^】]*】/g,'').trim();
+          if(clean) ls.push('　備考: '+clean);
+          return ls.join('\n');
+        }).join('\n\n');
+        document.getElementById('doc-attach-text').value=txt;
+        document.getElementById('doc-attach-on').checked=true;
+        attBox.style.display='';
+      } else { attBox.style.display='none'; document.getElementById('doc-attach-text').value=''; }
+    }
+  }catch(e){}
   document.getElementById('doc-preview').innerHTML='<div class="msub" style="padding:24px;color:#94a3b8">上の帳票ボタンを選んでください</div>';
   document.getElementById('doc-print-btn').style.display='none';
   loadDocHistory(c.denpyo);
@@ -1149,6 +1239,20 @@ function _panel3_(title, c, co, iss, isReceipt){
       +'<tr><td>'+esc2(c.item||'')+'</td><td class="c">'+esc2(c.qty||'')+'</td><td class="c">'+esc2(c.unit||'')+'</td><td class="r">'+(unit?'¥'+Math.round(unit).toLocaleString():'')+'</td><td class="r">¥'+Math.round(amt).toLocaleString()+'</td></tr>'
       +'<tr><td colspan="3"></td><td class="r">税込計</td><td class="r"><b>¥'+inc.toLocaleString()+'</b></td></tr></table>'
     +(isReceipt?'<div class="prcv">上記正に受領しました。　受領日 ＿＿＿＿＿＿＿　受領印<span class="pseal"></span></div>':'')
+    +'</div>';
+}
+// ── 別紙: 送り先・梱包内訳（複数納品先/複数梱包の案件で帳票に添付）──
+function _attachHtml_(){
+  var box=document.getElementById('doc-attach-box');
+  if(!box||box.style.display==='none') return '';
+  var on=document.getElementById('doc-attach-on'); if(!on||!on.checked) return '';
+  var t=(document.getElementById('doc-attach-text').value||'').trim(); if(!t) return '';
+  var c=_docState_.c||{};
+  var esc2=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  return '<div style="page-break-before:always;padding:14mm 16mm;font-family:\'Yu Gothic\',\'Hiragino Kaku Gothic ProN\',\'Meiryo\',sans-serif;color:#111;box-sizing:border-box;background:#fff">'
+    +'<div style="text-align:center;font-size:14pt;font-weight:800;letter-spacing:.6em;text-indent:.6em;border-bottom:2px solid #111;padding-bottom:2mm;margin-bottom:5mm">送り先・梱包内訳（別紙）</div>'
+    +'<div style="font-size:10pt;margin-bottom:4mm;display:flex;justify-content:space-between"><span><b>'+esc2(c.customer||'')+'</b>　御中</span><span>発行日：'+esc2(_docState_.issueDate||'')+'</span></div>'
+    +'<div style="font-size:10.5pt;line-height:1.9;white-space:pre-wrap;border:1px solid #333;border-radius:2mm;padding:5mm 6mm;min-height:110mm">'+esc2(t)+'</div>'
     +'</div>';
 }
 // ── 一式（縦・ゴシック）: 2026-07-09 作成の納品書一式PDF様式を再現 ──
@@ -1254,7 +1358,7 @@ function genDoc(type){
   // 一式 = 縦ゴシック様式（納品書控/納品書/受領書 ＋ 改ページ請求書）
   if(type==='一式'){
     _docState_.land=false; _docState_.raw=true;
-    _docState_.html=_ns4Set_(list, co, iss);
+    _docState_.html=_ns4Set_(list, co, iss)+_attachHtml_();
     document.getElementById('doc-preview').innerHTML='<div style="transform:scale(.55);transform-origin:top center">'+_docState_.html+'</div>';
     document.getElementById('doc-print-btn').style.display='';
     return;
@@ -1265,6 +1369,7 @@ function genDoc(type){
     _docState_.html=(type==='納品書3連')
       ? _nkSheet_('納　品　書（控）',list,co,iss)+_nkSheet_('納　品　書',list,co,iss)+_nkSheet_('受　領　書',list,co,iss)
       : _nkSheet_(type==='納品書'?'納　品　書':type==='請求書'?'請　求　書':type==='見積書'?'御　見　積　書':'受　領　書',list,co,iss);
+    _docState_.html+=_attachHtml_();
     document.getElementById('doc-preview').innerHTML='<div style="transform:scale(.5);transform-origin:top left;width:200%">'+_docState_.html+'</div>';
     document.getElementById('doc-print-btn').style.display='';
     return;
@@ -1308,7 +1413,7 @@ function genDoc(type){
   } else { // 納品書
     body=itemTable+'<div class="note" style="margin-top:12px">上記の通り納品いたします。</div>';
   }
-  _docState_.html='<div class="dtitle">'+type+'</div>'+head+body;
+  _docState_.html='<div class="dtitle">'+type+'</div>'+head+body+_attachHtml_();
   document.getElementById('doc-preview').innerHTML='<div class="dsheet" style="transform:scale(.62);transform-origin:top center;box-shadow:0 2px 12px rgba(0,0,0,.15)">'+_docState_.html+'</div>';
   document.getElementById('doc-print-btn').style.display='';
 }
@@ -1325,7 +1430,7 @@ function printDoc(){
   var _plist=(_docState_.list&&_docState_.list.length)?_docState_.list:[_docState_.c];
   Promise.all(_plist.map(function(x){
     return api('docLogAdd',{},{ denpyo:x.denpyo, company:CO_NAMES[_docState_.key]||x.company, docType:_docState_.type, issueDate:_docState_.issueDate, customer:x.customer, amount:_docAmt_(x), by:(MY_CODE||'hub') });
-  })).then(function(){ loadDocHistory(_plist[0].denpyo); });
+  })).then(function(){ loadDocHistory(_plist[0].denpyo); DOCLOGS=null; loadDocLogs(); });
 }
 async function loadDocHistory(denpyo){
   var box=document.getElementById('doc-history'); if(!box) return; box.textContent='読込中…';
