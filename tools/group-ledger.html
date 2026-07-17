@@ -193,7 +193,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v210</span>
+    <span class="mini" style="margin-left:auto">v211</span>
   </div>
   <h1 style="margin-top:0">案件管理表</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -1392,7 +1392,7 @@ function genDoc(type){
     _docState_.html=_ns4Set_(list, co, iss)+_attachHtml_();
     document.getElementById('doc-preview').innerHTML='<div style="transform:scale(.55);transform-origin:top center">'+_docState_.html+'</div>';
     document.getElementById('doc-print-btn').style.display='none';
-    if(_ipb) _ipb.style.display='inline-flex'; _applyPrintLabels_();
+    if(_ipb) _ipb.style.display='inline-flex'; _applyPrintLabels_(); _agentPing().then(_applyPrintLabels_);
     return;
   }
   if(_ipb) _ipb.style.display='none';
@@ -1456,20 +1456,60 @@ function _applyPrintLabels_(){
   if(IS_TK){
     if(t){ t.textContent='🖨 ①納品書3連 → EV50'; t.title='納品書3連＋別紙を1ジョブで印刷。印刷ダイアログでプリンタ＝EP-50V(EV50)を選択（モノクロは既定設定済）'; }
     if(v){ v.textContent='🖨 ②請求書 → bizhub C227 (トレイ1)'; v.title='請求書のみ別ジョブ。印刷ダイアログでプリンタ＝「bizhub C227 (トレイ1)」を選ぶだけ（モノクロ・トレイ1・片面は設定済）'; }
-    if(h){ h.textContent='トキワ印刷：①はEV50、②は「bizhub C227 (トレイ1)」を選択（各ダイアログでプリンタを選ぶだけ）'; }
+    if(h){ h.textContent = _agentOk ? '🟢 無音印刷ON：①→EV50 ／ ②→bizhub C227 (トレイ1) に自動で出ます（ダイアログなし）' : 'トキワ印刷：①はEV50、②は「bizhub C227 (トレイ1)」を選択（各ダイアログでプリンタを選ぶだけ）'; }
   } else {
     if(t){ t.textContent='🖨 ①納品書3連を印刷'; t.title='納品書3連＋別紙を1ジョブで印刷'; }
     if(v){ v.textContent='🖨 ②請求書を印刷'; v.title='請求書のみ別ジョブで印刷'; }
-    if(h){ h.textContent='①と②は別プリンタに送れます（各ダイアログでプリンタを選択）'; }
+    if(h){ h.textContent = _agentOk ? '🟢 無音印刷ON：設定したプリンタへ自動で出ます（ダイアログなし）' : '①と②は別プリンタに送れます（各ダイアログでプリンタを選択）'; }
   }
 }
+// ── ローカル印刷エージェント連携（無音印刷。無ければ従来ダイアログ印刷に自動フォールバック）──
+var AGENT_URL='http://127.0.0.1:17650';
+var _agentOk=false, _agentMap=null;
+function _agentPing(){
+  return fetch(AGENT_URL+'/ping',{method:'GET'}).then(function(r){return r.json();}).then(function(j){
+    _agentOk=!!(j&&j.ok); _agentMap=(j&&j.map)||null; return _agentOk;
+  }).catch(function(){ _agentOk=false; return false; });
+}
+function _agentHtml_(bodyHtml, land){
+  var styles=''; document.querySelectorAll('style').forEach(function(s){ styles+=s.textContent+'\n'; });
+  styles+='\n@page{size:A4 '+(land?'landscape':'portrait')+';margin:0} html,body{margin:0;padding:0}';
+  return '<!doctype html><html><head><meta charset="utf-8"><style>'+styles+'</style></head><body>'+bodyHtml+'</body></html>';
+}
+function _agentPrint(which, bodyHtml, land){
+  return fetch(AGENT_URL+'/print',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({which:which, html:_agentHtml_(bodyHtml, land)})}).then(function(r){return r.json();}).then(function(j){
+    if(!j||!j.ok) throw new Error((j&&j.error)||'agent error'); return j;
+  });
+}
+function _pmsg_(t){
+  var e=document.getElementById('pmsg'); if(!e){ e=document.createElement('div'); e.id='pmsg'; e.style.cssText='position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#0f172a;color:#fff;padding:9px 18px;border-radius:8px;font-size:13px;z-index:100000;box-shadow:0 6px 20px rgba(0,0,0,.3)'; document.body.appendChild(e); }
+  e.textContent=t; e.style.display=''; clearTimeout(e._t); e._t=setTimeout(function(){ e.style.display='none'; }, 3500);
+}
 function printDoc(part){
-  var _html=_docState_.html, _logType=_docState_.type;
+  var _html=_docState_.html, _logType=_docState_.type, _which=null;
   if(part && _docState_.parts && _docState_.parts[part]){
     _html=_docState_.parts[part];
     _logType=(part==='trio')?'納品書3連':'請求書';
+    _which=part;
   }
   if(!_html) return;
+  var body=_docState_.land?_html:(_docState_.raw?_html:('<div class="dsheet">'+_html+'</div>'));
+  // ①②かつエージェント稼働中 → 無音印刷（ダイアログを開かない＝Chromeの最後のプリンタを汚さない）
+  if(_which && _agentOk){
+    _pmsg_('🖨 '+(_which==='trio'?'納品書3連':'請求書')+' を送信中…');
+    _agentPrint(_which, body, _docState_.land).then(function(j){
+      _pmsg_('✅ '+(_which==='trio'?'納品書3連':'請求書')+' → '+(j.printer||'')+' に無音印刷しました');
+      _logPrint_(_logType);
+    }).catch(function(e){
+      _pmsg_('エージェント印刷に失敗→ダイアログで印刷します');
+      _dialogPrint_(_html); _logPrint_(_logType);
+    });
+    return;
+  }
+  _dialogPrint_(_html); _logPrint_(_logType);
+}
+function _dialogPrint_(_html){
   // 納品書系(中尾様式)=A4横 / 請求書・領収書=A4縦（@pageを動的に切替）
   var os=document.getElementById('doc-orient'); if(!os){ os=document.createElement('style'); os.id='doc-orient'; document.head.appendChild(os); }
   os.textContent='@media print{ @page{ size:A4 '+(_docState_.land?'landscape':'portrait')+'; margin:0; } }';
@@ -1477,7 +1517,8 @@ function printDoc(part){
   document.body.classList.add('printing-doc');
   window.print();
   document.body.classList.remove('printing-doc');
-  // 発行を記録（複数選択時は案件ごとに記録）
+}
+function _logPrint_(_logType){
   var _plist=(_docState_.list&&_docState_.list.length)?_docState_.list:[_docState_.c];
   Promise.all(_plist.map(function(x){
     return api('docLogAdd',{},{ denpyo:x.denpyo, company:CO_NAMES[_docState_.key]||x.company, docType:_logType, issueDate:_docState_.issueDate, customer:x.customer, amount:_docAmt_(x), by:(MY_CODE||'hub') });
