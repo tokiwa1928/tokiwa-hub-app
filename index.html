@@ -27051,6 +27051,51 @@ function _meishiSave_(){
   if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
   var st=document.getElementById('meishi-st'); if(st){ st.textContent='✓ 保存しました（全社で共有・リピート照合の基準になります）'; setTimeout(function(){ st.textContent=''; },4000); }
 }
+// 📷 ORDIN-SCAN: 発注書スキャン/サンプル写真 → claudeVisionで明細抽出 → 既存の解析・リピート照合へ
+async function _ordInScan_(files){
+  if(!files || !files.length) return;
+  var st=document.getElementById('ordin-scan-st');
+  var say=function(t){ if(st) st.textContent=t; };
+  try{
+    say('📷 読み込み中…');
+    var images=[];
+    for(var i=0; i<files.length && images.length<8; i++){
+      var f=files[i];
+      if(/\.pdf$/i.test(f.name||'')){
+        var lib=await _kpLoadPdfjs_();
+        var buf=await f.arrayBuffer();
+        var doc=await lib.getDocument({data:buf}).promise;
+        for(var p=1; p<=Math.min(doc.numPages,4) && images.length<8; p++){
+          var pg=await doc.getPage(p); var vp=pg.getViewport({scale:2});
+          var cv=document.createElement('canvas'); cv.width=vp.width; cv.height=vp.height;
+          await pg.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+          images.push(cv.toDataURL('image/jpeg',0.85).split(',')[1]);
+        }
+      } else {
+        images.push(await new Promise(function(res,rej){
+          var fr=new FileReader();
+          fr.onload=function(){ res(String(fr.result).split(',')[1]); };
+          fr.onerror=function(){ rej(new Error('画像の読み込みに失敗')); };
+          fr.readAsDataURL(f);
+        }));
+      }
+    }
+    if(!images.length){ say(''); return; }
+    say('🤖 AIが明細を読み取り中…');
+    var prompt='これは印刷会社への発注書・注文書・サンプル指示のスキャンです。注文明細を読み取り、1行=1明細のタブ区切りテキストだけを出力してください。'
+      +'列の並び: 得意先名\t ユーザー名(エンドユーザー・無ければ空)\t 品名\t 仕様(色数/用紙/サイズ/加工など読める範囲)\t 数量(数字のみ)\t 単位(枚/部/冊など)\t 納期(7/22のような形式・不明なら空)。'
+      +'ヘッダー行・説明文・コードブロック記号は出力しない。読み取れない列は空のままタブは維持する。「別注」「前回同様」などの記載もそのまま仕様欄に残す。';
+    var r=await callCloudAPI('claudeVision', {}, { prompt: prompt, images: images, maxTokens: 2000, model: 'claude-sonnet-5' });
+    var text=(r && (r.reply || r.text)) || '';
+    text=String(text).replace(/```[a-z]*\n?|```/g,'').trim();
+    if(!text){ alert('明細を読み取れませんでした。写りの良い写真/スキャンでもう一度お試しください'); say(''); return; }
+    var ta=document.getElementById('ordin-text');
+    if(ta){ ta.value=(ta.value.trim()? ta.value.trim()+'\n' : '')+text; }
+    var cb=document.getElementById('ordin-hasuser'); if(cb) cb.checked=true;   // AI出力はユーザー列込みの並び
+    if(typeof _ordInParse_==='function') _ordInParse_();
+    say('✅ 読取完了 — 下の一覧で🔁リピート候補を確認してください');
+  }catch(e){ alert('スキャン読取に失敗しました: '+e.message); say(''); }
+}
 function _ordInOpen_(){
   var ex=document.getElementById('ordin-modal'); if(ex) ex.remove();
   var ov=document.createElement('div');
@@ -27064,6 +27109,10 @@ function _ordInOpen_(){
     +'<div style="padding:12px 18px;overflow-y:auto;flex:1">'
     +'<div style="font-size:11.5px;color:#64748b;margin-bottom:6px">お客様からもらった注文内容（Excelの表をそのままコピー）を貼り付けてください。列は「得意先・品名・仕様・数量・単位・納期」を自動で見分けます（納期は 7/22 のような形でOK）。</div>'
     +'<div style="margin-bottom:6px"><button class="btn" style="font-size:11.5px;padding:4px 12px;background:#e6f2fb;border-color:#7dd3fc;color:#0369a1;font-weight:700" onclick="showMeishiBatch()">🪪 名刺まとめ入力（共通仕様＋氏名リスト）</button> <span style="font-size:10.5px;color:#94a3b8">複数名の名刺を1人=1件で一気に展開</span></div>'
+    +'<div style="margin-bottom:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +'<button class="btn" style="font-size:11.5px;padding:5px 14px;background:#faf5ff;border-color:#c4b5fd;color:#6d28d9;font-weight:700" onclick="document.getElementById(\'ordin-scan-file\').click()" title="先方の発注書・注文書・サンプル指示のスキャンPDFや写真をAIが読み取り、下の欄に明細として展開→そのままリピート照合">📷 発注書スキャン/写真から取込（AI読取）</button>'
+    +'<input type="file" id="ordin-scan-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple style="display:none" onchange="_ordInScan_(this.files);this.value=\'\'">'
+    +'<span id="ordin-scan-st" style="font-size:11px;color:#6d28d9;font-weight:700"></span></div>'
     +'<label style="font-size:11.5px;color:#334155;display:inline-flex;align-items:center;gap:5px;margin-bottom:4px"><input type="checkbox" id="ordin-hasuser" onchange="_ordInParse_()"> 貼り付けに<b>ユーザー列</b>がある（並び: 得意先 → ユーザー → 品名 → 仕様…）</label>'
     +'<textarea id="ordin-text" style="width:100%;height:110px;font-size:12.5px;font-family:monospace" placeholder="例:\n東海大相模\t名刺（沼澤隆史）\t4/0 レーザーエース9\t100\t枚\t7/22" oninput="_ordInParse_()"></textarea>'
     +'<div id="ordin-result" style="margin-top:10px"></div>'
