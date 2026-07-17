@@ -193,7 +193,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v202</span>
+    <span class="mini" style="margin-left:auto">v203</span>
   </div>
   <h1 style="margin-top:0">案件管理表</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -208,6 +208,8 @@
     <div class="tbgrp">
       <button class="btn xl dark" onclick="openForm()">＋ 新規追加</button>
       <button class="btn xl" onclick="openReuse()" title="過去案件から引用して追加（リピート）。トキワは他社案件の流用も可（伝票番号でリンク）">🔁 リピート追加</button>
+      <button class="btn xl" id="btn-rep-multi" onclick="openRepeatSel()" title="チェックした案件の内容を引き継いで、新しい伝票番号で今日の受注として一括追加" style="display:none">🔁 選択をリピート登録 (<span id="sel-cnt-r">0</span>)</button>
+      <button class="btn xl" id="btn-del-multi" onclick="delSelected()" title="チェックした案件をシートから削除" style="display:none;color:#c0261c;border-color:#e3a69f">🗑 選択を削除 (<span id="sel-cnt-d">0</span>)</button>
       <button class="btn xl" id="btn-docs-multi" onclick="openDocsSel()" title="チェックした複数案件を1枚の帳票にまとめて発行（納品書・請求書・見積書・領収書）" style="display:none">🧾 選択して帳票 (<span id="sel-cnt">0</span>)</button>
     </div>
     <div class="tbsep"></div>
@@ -1031,7 +1033,81 @@ var _docState_={c:null, key:'', type:'', co:null, html:'', issueDate:''};
 var SEL=new Set();
 function selChg(ck){ if(ck.checked) SEL.add(ck.dataset.id); else SEL.delete(ck.dataset.id); _selUi_(); }
 function selAllVisible(on){ document.querySelectorAll('#tbody .selck').forEach(function(ck){ ck.checked=on; if(on) SEL.add(ck.dataset.id); else SEL.delete(ck.dataset.id); }); _selUi_(); }
-function _selUi_(){ var b=document.getElementById('btn-docs-multi'); if(b) b.style.display=SEL.size?'':'none'; var sc=document.getElementById('sel-cnt'); if(sc) sc.textContent=SEL.size; }
+function _selUi_(){ var n=SEL.size;
+  [['btn-docs-multi','sel-cnt'],['btn-del-multi','sel-cnt-d'],['btn-rep-multi','sel-cnt-r']].forEach(function(pp){
+    var b=document.getElementById(pp[0]); if(b) b.style.display=n?'':'none';
+    var sc=document.getElementById(pp[1]); if(sc) sc.textContent=n;
+  });
+}
+// ── 選択→複数削除（行番号の大きい順に削除して行ズレを防ぐ）──
+async function delSelected(){
+  var list=(CASES||[]).filter(function(c){ return SEL.has(c.id) && c._row; });
+  if(!list.length){ alert('削除する案件を左端のチェックで選択してください'); return; }
+  var names=list.slice(0,8).map(function(c){ return (c.denpyo||'(伝票なし)')+'　'+(c.item||'').slice(0,16); }).join('\n');
+  if(!confirm('選択した '+list.length+' 件をシートから削除します。よろしいですか？\n\n'+names+(list.length>8?('\n…他 '+(list.length-8)+' 件'):''))) return;
+  list.sort(function(a,b){ return (b._row||0)-(a._row||0); });
+  var ok=0, ng=0, firstErr='';
+  for(var i=0;i<list.length;i++){
+    var c=list[i];
+    try{
+      var r=await api('sheetLedgerDelete',{company:c._key,row:c._row,denpyo:c.denpyo},{});
+      if(r&&r.success) ok++; else { ng++; if(!firstErr) firstErr=(r&&r.error)||''; }
+    }catch(e){ ng++; if(!firstErr) firstErr=e.message; }
+  }
+  SEL.clear(); _selUi_();
+  await loadList(true);
+  alert('🗑 削除 '+ok+' 件'+(ng?('／失敗 '+ng+' 件\n'+firstErr+'\n（行がずれた可能性。再読込後にやり直してください）'):''));
+}
+// ── 選択→リピート一括登録（新しい伝票番号を入れて今日の受注として追加）──
+var _repSelList_=[];
+function openRepeatSel(){
+  var list=(CASES||[]).filter(function(c){ return SEL.has(c.id); });
+  if(!list.length){ alert('リピート登録する案件を左端のチェックで選択してください'); return; }
+  _repSelList_=list;
+  var back=document.getElementById('repsel-modal'); if(back) back.remove();
+  var today=ymd(new Date());
+  var rows=list.map(function(c,i){
+    return '<tr style="border-bottom:1px solid #eee"><td style="padding:4px 6px"><input class="repsel-den" data-i="'+i+'" placeholder="新しい伝票番号" style="width:130px"></td>'
+      +'<td style="padding:4px 6px;font-size:11px;color:#64748b;font-family:monospace">'+esc(c.denpyo||'')+'</td>'
+      +'<td style="padding:4px 6px">'+esc(c.customer||'')+'</td>'
+      +'<td style="padding:4px 6px">'+esc((c.item||'').slice(0,28))+'</td>'
+      +'<td style="padding:4px 6px;text-align:right;white-space:nowrap">'+esc(String(c.qty||''))+esc(c.unit||'')+'</td></tr>';
+  }).join('');
+  var m=document.createElement('div'); m.id='repsel-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:2rem;z-index:70;overflow:auto';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;width:min(780px,94vw)">'
+    +'<div style="padding:12px 16px;background:#1e40af;color:#fff;border-radius:10px 10px 0 0;font-weight:700;display:flex;justify-content:space-between;align-items:center"><span>🔁 選択をリピート登録（'+list.length+'件）</span><span style="cursor:pointer;font-size:18px" onclick="document.getElementById(\'repsel-modal\').remove()">×</span></div>'
+    +'<div style="padding:12px 16px">'
+    +'<div style="font-size:12px;color:#475569;margin-bottom:8px">内容を引き継いで <b>受注日 '+today+'</b> の新しい行として追加します。<b>新しい伝票番号</b>（トキワ採番）を入れてください。<b>空欄の行は登録しません</b>。納期・納品日・請求月・到着予定は引き継ぎません。</div>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="background:#f1f5f9"><th style="padding:5px 6px;text-align:left">新伝票番号</th><th style="padding:5px 6px;text-align:left">元伝票</th><th style="padding:5px 6px;text-align:left">顧客</th><th style="padding:5px 6px;text-align:left">案件</th><th style="padding:5px 6px;text-align:right">数量</th></tr>'+rows+'</table>'
+    +'<div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end"><button class="btn" onclick="document.getElementById(\'repsel-modal\').remove()">キャンセル</button><button class="btn p" onclick="doRepeatSel()">🔁 一括登録</button></div>'
+    +'</div></div>';
+  document.body.appendChild(m);
+  var f=m.querySelector('.repsel-den'); if(f) f.focus();
+}
+async function doRepeatSel(){
+  var list=_repSelList_||[];
+  var dens=Array.prototype.map.call(document.querySelectorAll('.repsel-den'),function(inp){ return inp.value.trim(); });
+  var jobs=[];
+  list.forEach(function(c,i){ if(dens[i]) jobs.push({c:c, den:dens[i]}); });
+  if(!jobs.length){ alert('新しい伝票番号を1件以上入れてください（空欄の行は登録されません）'); return; }
+  var today=ymd(new Date());
+  var ok=0, ng=0, firstErr='';
+  for(var i=0;i<jobs.length;i++){
+    var c=jobs[i].c;
+    var memo=String(c.memo||'').replace(/【着日[^】]*】/g,'').trim();
+    var payload={ denpyo:jobs[i].den, customer:c.customer||'', item:c.item||'', qty:c.qty||'', unit:c.unit||'',
+      orderDate:today, unitSelf:c.unitSelf||'', amtSelf:c.amtSelf||'', unitTokiwa:c.unitTokiwa||'', amtTokiwa:c.amtTokiwa||'', profit:c.profit||'', memo:memo };
+    try{
+      var r=await api('sheetLedgerAppend',{},{company:(c._key||NAMEKEY[COMPANY]), case:payload});
+      if(r&&r.success) ok++; else { ng++; if(!firstErr) firstErr=(r&&r.error)||''; }
+    }catch(e){ ng++; if(!firstErr) firstErr=e.message; }
+  }
+  var mm=document.getElementById('repsel-modal'); if(mm) mm.remove();
+  SEL.clear(); _selUi_();
+  await loadList(true);
+  alert('🔁 リピート登録 '+ok+' 件'+(ng?('／失敗 '+ng+' 件\n'+firstErr):''));
+}
 function openDocsSel(){
   var list=(CASES||[]).filter(function(c){ return SEL.has(c.id); });
   if(!list.length){ alert('左端のチェックボックスで案件を選択してください'); return; }
