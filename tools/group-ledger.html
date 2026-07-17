@@ -193,7 +193,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v204</span>
+    <span class="mini" style="margin-left:auto">v205</span>
   </div>
   <h1 style="margin-top:0">案件管理表</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -247,6 +247,10 @@
         <button class="btn" onclick="genDoc('見積書')">📝 見積書</button>
         <button class="btn" onclick="genDoc('領収書')">🧾 領収書</button>
         <button class="btn p" id="doc-print-btn" onclick="printDoc()" style="margin-left:auto;display:none">🖨 印刷（発行を記録）</button>
+        <span id="isshiki-print-btns" style="margin-left:auto;display:none;gap:6px;flex-wrap:wrap">
+          <button class="btn p" onclick="printDoc('trio')" title="1枚目の納品書(控)/納品書/受領書だけを1ジョブで印刷。ダイアログでE50・モノクロを選択">🖨 ①納品書3連 → E50（モノクロ）</button>
+          <button class="btn p" style="background:#0e7490;border-color:#0e7490" onclick="printDoc('inv')" title="請求書だけを別ジョブで印刷。ダイアログでトレイ1・モノクロを選択">🖨 ②請求書 → トレイ1（モノクロ）</button>
+        </span>
       </div>
       <div id="doc-attach-box" style="display:none;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 10px;margin-bottom:10px">
         <label style="font-weight:700;font-size:12px;color:#b91c1c;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="doc-attach-on" checked style="width:auto"> 📎 送り先・梱包内訳を別紙として添付（複数納品先・複数梱包の案件があります）</label>
@@ -1222,6 +1226,7 @@ function openDocsList(list){
   }catch(e){}
   document.getElementById('doc-preview').innerHTML='<div class="msub" style="padding:24px;color:#94a3b8">上の帳票ボタンを選んでください</div>';
   document.getElementById('doc-print-btn').style.display='none';
+  var _ipb0=document.getElementById('isshiki-print-btns'); if(_ipb0) _ipb0.style.display='none';
   loadDocHistory(c.denpyo);
   document.getElementById('doc-modal').style.display='flex';
 }
@@ -1298,13 +1303,22 @@ function _ns4Panel_(title, sub, list, co, iss, opt){
 }
 function _ns4Set_(list, co, iss){
   var trio = list.length<=6 ? ' trio' : '';
+  var invPanel=_ns4Panel_('請　求　書','',list,co,iss,{rule:true,lead:'下記の通りご請求申し上げます。',grand:'ご請求金額',pad:5,note:'※単価は消費税抜きの単価です。消費税は10%で計算しております。',bank:(co.bank||'')});
+  _docState_.parts={
+    trio: '<div class="ns4'+trio+'">'
+      +_ns4Panel_('納　品　書','控',list,co,iss,{})
+      +_ns4Panel_('納　品　書','',list,co,iss,{})
+      +_ns4Panel_('受　領　書','',list,co,iss,{receipt:true})
+      +'</div>'+_attachHtml_(),
+    inv: '<div class="ns4">'+invPanel+'</div>'
+  };
   return '<div class="ns4'+trio+'">'
     +_ns4Panel_('納　品　書','控',list,co,iss,{})
     +_ns4Panel_('納　品　書','',list,co,iss,{})
     +_ns4Panel_('受　領　書','',list,co,iss,{receipt:true})
     +'</div>'
     +'<div class="ns4 pbreak">'
-    +_ns4Panel_('請　求　書','',list,co,iss,{rule:true,lead:'下記の通りご請求申し上げます。',grand:'ご請求金額',pad:5,note:'※単価は消費税抜きの単価です。消費税は10%で計算しております。',bank:(co.bank||'')})
+    +invPanel
     +'</div>';
 }
 // 中尾印刷で作った伝票様式（村田材木店複写伝票参考）: A4横1票・明朝・中央タイトル二重下線
@@ -1354,15 +1368,18 @@ function genDoc(type){
   var c=_docState_.c, co=_docState_.co, iss=_docState_.issueDate; if(!c) return;
   var list=(_docState_.list&&_docState_.list.length)?_docState_.list:[c];
   _docState_.type=type;
-  _docState_.raw=false;
-  // 一式 = 縦ゴシック様式（納品書控/納品書/受領書 ＋ 改ページ請求書）
+  _docState_.raw=false; _docState_.parts=null;
+  var _ipb=document.getElementById('isshiki-print-btns');
+  // 一式 = 縦ゴシック様式（納品書控/納品書/受領書 ＋ 改ページ請求書）→ ①②の別ジョブ印刷
   if(type==='一式'){
     _docState_.land=false; _docState_.raw=true;
     _docState_.html=_ns4Set_(list, co, iss)+_attachHtml_();
     document.getElementById('doc-preview').innerHTML='<div style="transform:scale(.55);transform-origin:top center">'+_docState_.html+'</div>';
-    document.getElementById('doc-print-btn').style.display='';
+    document.getElementById('doc-print-btn').style.display='none';
+    if(_ipb) _ipb.style.display='inline-flex';
     return;
   }
+  if(_ipb) _ipb.style.display='none';
   // 納品書・受領書・3連・請求書・見積書 = 中尾様式（A4横）
   if(type==='納品書'||type==='受領書'||type==='納品書3連'||type==='請求書'||type==='見積書'){
     _docState_.land=true;
@@ -1417,19 +1434,24 @@ function genDoc(type){
   document.getElementById('doc-preview').innerHTML='<div class="dsheet" style="transform:scale(.62);transform-origin:top center;box-shadow:0 2px 12px rgba(0,0,0,.15)">'+_docState_.html+'</div>';
   document.getElementById('doc-print-btn').style.display='';
 }
-function printDoc(){
-  if(!_docState_.html) return;
+function printDoc(part){
+  var _html=_docState_.html, _logType=_docState_.type;
+  if(part && _docState_.parts && _docState_.parts[part]){
+    _html=_docState_.parts[part];
+    _logType=(part==='trio')?'納品書3連':'請求書';
+  }
+  if(!_html) return;
   // 納品書系(中尾様式)=A4横 / 請求書・領収書=A4縦（@pageを動的に切替）
   var os=document.getElementById('doc-orient'); if(!os){ os=document.createElement('style'); os.id='doc-orient'; document.head.appendChild(os); }
   os.textContent='@media print{ @page{ size:A4 '+(_docState_.land?'landscape':'portrait')+'; margin:0; } }';
-  document.getElementById('doc-print').innerHTML=_docState_.land?_docState_.html:(_docState_.raw?_docState_.html:('<div class="dsheet">'+_docState_.html+'</div>'));
+  document.getElementById('doc-print').innerHTML=_docState_.land?_html:(_docState_.raw?_html:('<div class="dsheet">'+_html+'</div>'));
   document.body.classList.add('printing-doc');
   window.print();
   document.body.classList.remove('printing-doc');
   // 発行を記録（複数選択時は案件ごとに記録）
   var _plist=(_docState_.list&&_docState_.list.length)?_docState_.list:[_docState_.c];
   Promise.all(_plist.map(function(x){
-    return api('docLogAdd',{},{ denpyo:x.denpyo, company:CO_NAMES[_docState_.key]||x.company, docType:_docState_.type, issueDate:_docState_.issueDate, customer:x.customer, amount:_docAmt_(x), by:(MY_CODE||'hub') });
+    return api('docLogAdd',{},{ denpyo:x.denpyo, company:CO_NAMES[_docState_.key]||x.company, docType:_logType, issueDate:_docState_.issueDate, customer:x.customer, amount:_docAmt_(x), by:(MY_CODE||'hub') });
   })).then(function(){ loadDocHistory(_plist[0].denpyo); DOCLOGS=null; loadDocLogs(); });
 }
 async function loadDocHistory(denpyo){
