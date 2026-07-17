@@ -24154,7 +24154,7 @@ function renderInvoices(){
       {h:'納期',cell:function(v){var it=(v.items||[]); var pid=v.projectId||(it[0]&&it[0].projectId)||''; var m=_ledgerProjMeta_(pid); return (m&&m.due)?m.due:'-';}},
       {h:'税込',align:'right',cell:function(v){return '<b style="font-family:monospace">¥'+((v.total||0)).toLocaleString()+'</b>';}},
       {h:'支払期限',cell:function(v){return v.dueDate||'-';}},
-      {h:'状況',cell:function(v){var m={draft:'下書き',sent:'送付済',paid:'入金済',overdue:'期限超過'};var c=v.status==='paid'?'#16a34a':v.status==='overdue'?'#dc2626':'#6b7280';return '<span style="color:'+c+';font-weight:700">'+(m[v.status]||v.status||'')+'</span>';}}
+      {h:'状況',cell:function(v){var m={draft:'下書き',sent:'送付済',paid:'入金済',partial:'一部入金',overdue:'期限超過'};var c=v.status==='paid'?'#16a34a':v.status==='partial'?'#d97706':v.status==='overdue'?'#dc2626':'#6b7280';var rem=(v.status==='partial')?(((+v.total||0)-(+v.paidTotal||0))):0;return '<span style="color:'+c+';font-weight:700">'+(m[v.status]||v.status||'')+'</span>'+(rem>0?'<div style="font-size:10px;color:#b45309">残 ¥'+rem.toLocaleString()+'</div>':'');}}
     ],
     actions:function(v){ return '<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();printInvoice(\''+v.id+'\')">🖨</button> <button class="btn" style="padding:3px 7px;font-size:11px;background:#16a34a;color:#fff" onclick="event.stopPropagation();markInvoicePaid(\''+v.id+'\')">✅</button> <button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deleteInvoice(\''+v.id+'\')">🗑</button>'; },
     detail:function(v){
@@ -24555,19 +24555,32 @@ function matchPaymentToInvoice(payId){
   });
   if(!candidates.length){ alert('該当する未入金請求書がありません'); return; }
   var promptText = '消込先の請求書を選んでください:\n\n' + candidates.map(function(v, i){
-    return (i+1) + ') ' + v.id + ' ¥' + v.total.toLocaleString() + ' (期限: ' + (v.dueDate||'未設定') + ')';
+    var rem = (+v.total||0) - (+v.paidTotal||0);
+    return (i+1) + ') ' + v.id + ' ¥' + v.total.toLocaleString() + ((+v.paidTotal||0) ? '（入金済¥' + (+v.paidTotal).toLocaleString() + '・残¥' + rem.toLocaleString() + '）' : '') + ' (期限: ' + (v.dueDate||'未設定') + ')';
   }).join('\n');
   var idx = parseInt(prompt(promptText, '1')) - 1;
   if(isNaN(idx) || !candidates[idx]) return;
   var inv = candidates[idx];
+  // 💴 部分入金対応: 充当額を確認（全額払えない場合は一部だけ充当し「一部入金」に）
+  var already = +inv.paidTotal || 0;
+  var remain = (+inv.total||0) - already;
+  var defAmt = Math.min(+pay.amount || remain, remain);
+  var amtStr = prompt('この請求書に充当する入金額（円）\n請求額 ¥' + (+inv.total||0).toLocaleString() + ' ／ 入金済 ¥' + already.toLocaleString() + ' ／ 残 ¥' + remain.toLocaleString() + '\n※一部だけの入金なら、その金額に直してOK', String(defAmt));
+  if(amtStr === null) return;
+  var amt = parseInt(String(amtStr).replace(/[,¥\s円]/g,''), 10);
+  if(!(amt > 0)){ alert('金額が不正です'); return; }
   pay.matchedInvoiceId = inv.id;
   pay.matchedAt = new Date().toISOString();
-  inv.status = 'paid';
-  inv.paidAt = new Date().toISOString();
+  pay.appliedAmount = amt;
+  inv.paidTotal = already + amt;
   inv.matchedPaymentId = pay.id;
+  if(inv.paidTotal >= (+inv.total||0)){ inv.status = 'paid'; inv.paidAt = new Date().toISOString(); }
+  else { inv.status = 'partial'; }
   if(typeof saveDB === 'function') saveDB();
   renderPayments();
-  alert('✅ 消込完了: ' + inv.id);
+  alert(inv.status === 'paid'
+    ? '✅ 全額消込完了: ' + inv.id
+    : '💴 一部入金を記録: ' + inv.id + '\n累計 ¥' + inv.paidTotal.toLocaleString() + ' ／ 残 ¥' + (((+inv.total||0) - inv.paidTotal)).toLocaleString() + '\n（次の入金でまた消込できます）');
 }
 
 // 仕入発注
