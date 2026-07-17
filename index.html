@@ -26548,12 +26548,15 @@ function _doRepeatCreate_(mode){
         st._rchMode = window._repeatTrackMode_ || 'on';   // 🖍 変更記録 on / 流用=off
         st._rchPrevLog = (r.repeatChanges || []).slice(); // 前回リピート時の変更履歴
         st._repeatFromDate = String(r.date || '').slice(0,10); // 元案件の日付（パネルに表示）
+        st._verdictSrc = { cust: r.cust || '', item: r.item || '', date: String(r.date || '').slice(0,10) }; // 見積要否判定の材料
       } catch(e){}
       if(typeof onJobTypeChange === 'function') onJobTypeChange(_newTid);
       if(typeof _updateEntryKind_ === 'function') _updateEntryKind_(_newTid);
       // 備考に引き継がれた過去の[リピート元]行を抽出してバナーに集約 (備考はきれいに)
       if(typeof _extractRepeatRefsFromMemo_ === 'function') _extractRepeatRefsFromMemo_(_newTid);
       if(typeof _renderRepeatSrcBanner_ === 'function') _renderRepeatSrcBanner_(_newTid);
+      // 🧭 見積要否 自動判定（最終見積 × 原価改定 × 直近受注）— 案件を正とするモデル
+      if(typeof _renderQuoteVerdict_ === 'function') _renderQuoteVerdict_(_newTid);
       // 🖍 プリフィル完了後にベースラインを取得して変更トラッキング開始
       (function(tid){ setTimeout(function(){ try{ if(typeof _rchStart_==='function') _rchStart_(tid); }catch(e){} }, 700); })(_newTid);
       // 📊 前回比較パネルに前回の数量・単価をプリフィル
@@ -37984,6 +37987,47 @@ function _tantoHandoverApply_(){
   _tantoHoRender_();
 }
 // ③リピート元リンクのバナーを描画 (複数履歴をリンクのチェーンで表示)
+// 🧭 見積要否 自動判定: 最終見積(docSubmissions) × 原価改定(costRevisions) × 直近受注 から
+//    「再提出不要／再見積推奨」を返す（案件を正とするモデル: 見積書は案件の発行物）
+function _quoteVerdict_(cust, item, lastOrderDate){
+  var norm = function(s){ return String(s||'').replace(/[\s　]/g,''); };
+  var it = norm(item);
+  var lastQuote = null, bestScore = 0;
+  (DB.docSubmissions||[]).forEach(function(d){
+    if(!/見積/.test(d.docType||'') || (d.cust||'') !== (cust||'')) return;
+    var hitItem = it && (d.items||[]).some(function(x){ var nx=norm(x); return nx && (nx.indexOf(it)>=0 || it.indexOf(nx)>=0); });
+    var score = hitItem ? 2 : 1;
+    if(score > bestScore || (score === bestScore && String(d.issuedAt||'') > String((lastQuote||{}).issuedAt||''))){ lastQuote = d; bestScore = score; }
+  });
+  var lag = null;
+  if(lastOrderDate){
+    var revs = (DB.costRevisions||[]).filter(function(rv){
+      var d = (rv.date||'').slice(0,10);
+      return d && d > lastOrderDate && parseFloat(rv.newUnit) > parseFloat(rv.oldUnit);
+    });
+    if(revs.length){
+      revs.sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+      lag = { since:(revs[0].date||'').slice(0,10), items:revs.map(function(rv){ return rv.category + (rv.name?':'+rv.name:''); }).slice(0,4), count:revs.length };
+    }
+  }
+  var months = lastOrderDate ? Math.round((Date.now() - new Date(lastOrderDate).getTime()) / 2629800000) : null;
+  var qref = lastQuote ? ('最終見積 ' + (lastQuote.id||'') + '（' + String(lastQuote.issuedAt||'').slice(0,10) + '）') : '見積書の発行記録なし';
+  if(lag) return { cls:'re', title:'⚠ 再見積 推奨', detail:'直近受注（' + lastOrderDate + '）の後に原価改定: ' + lag.items.join('・') + '（' + lag.since + '〜）。' + qref + ' → 現行コストで再提出をおすすめします。' };
+  if(months != null && months <= 18) return { cls:'ok', title:'✅ 見積書: 再提出 不要', detail: qref + '・直近受注 ' + lastOrderDate + ' が成立済み・その後の原価改定なし → いま出し直す必要はありません。' };
+  return { cls:'re', title:'⚠ 再見積 検討', detail:'直近の取引が' + (months != null ? months + 'ヶ月前' : '不明') + '・' + qref + ' → 現在のコストで価格の見直しをご検討ください。' };
+}
+function _renderQuoteVerdict_(id){
+  var st = (typeof ts === 'function') ? ts(id) : null; if(!st || !st._verdictSrc) return;
+  var host = document.getElementById('repeat-src-banner-' + id); if(!host) return;
+  var vid = 'quote-verdict-' + id, el = document.getElementById(vid);
+  if(!el){ el = document.createElement('div'); el.id = vid; host.parentNode.insertBefore(el, host.nextSibling); }
+  var v = _quoteVerdict_(st._verdictSrc.cust, st._verdictSrc.item, st._verdictSrc.date);
+  var c = v.cls === 'ok' ? { bg:'#e7f4ec', bd:'#86efac', fg:'#15803d' } : { bg:'#fef8ec', bd:'#fcd34d', fg:'#b45309' };
+  el.innerHTML = '<div style="margin:8px 0 0;background:' + c.bg + ';border:1.5px solid ' + c.bd + ';border-radius:10px;padding:9px 14px">'
+    + '<div style="font-weight:800;font-size:12.5px;color:' + c.fg + '">' + v.title
+    + '<span style="margin-left:9px;font-size:9.5px;font-weight:700;color:#94a3b8;letter-spacing:.1em">見積要否 自動判定</span></div>'
+    + '<div style="font-size:11px;color:#475569;margin-top:3px;line-height:1.55">' + v.detail + '</div></div>';
+}
 function _renderRepeatSrcBanner_(id){
   var el = document.getElementById('repeat-src-banner-' + id); if(!el) return;
   var s = (typeof ts === 'function') ? ts(id) : null; if(!s){ el.style.display='none'; return; }

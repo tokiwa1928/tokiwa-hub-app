@@ -52,6 +52,17 @@
   tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; white-space:nowrap; }
   tbody tr:nth-child(even){ background:#faf9f6 } tbody tr:hover{ background:#eef6fb }
   .rowred td{ color:var(--red); font-weight:700; }
+  /* 左固定(チェック〜製造数量)・右固定(操作): 横スクロールしても残る */
+  #main-tbl td.stk{ position:sticky; z-index:2; background:#fff; }
+  #main-tbl thead th.stk{ z-index:5; }
+  #main-tbl tbody tr:nth-child(even) td.stk{ background:#faf9f6; }
+  #main-tbl tbody tr:hover td.stk{ background:#eef6fb; }
+  #main-tbl .stk-end{ box-shadow:inset -3px 0 0 rgba(15,23,42,.28); }
+  #main-tbl td.stkR, #main-tbl thead th.stkR{ position:sticky; right:0; }
+  #main-tbl td.stkR{ z-index:2; background:#fff; box-shadow:inset 3px 0 0 rgba(15,23,42,.28); }
+  #main-tbl thead th.stkR{ z-index:5; box-shadow:inset 3px 0 0 rgba(255,255,255,.25); }
+  #main-tbl tbody tr:nth-child(even) td.stkR{ background:#faf9f6; }
+  #main-tbl tbody tr:hover td.stkR{ background:#eef6fb; }
   .flag{ color:var(--red); font-weight:800; }
   #status{ font-size:11px; color:var(--muted) }
   .modal{ position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:flex-start; justify-content:center; padding:2rem; overflow:auto; z-index:50 }
@@ -193,7 +204,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v215</span>
+    <span class="mini" style="margin-left:auto">v216</span>
   </div>
   <h1 style="margin-top:0">案件管理表</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -593,6 +604,17 @@ var COLFILTER={}, SORTSTATE={k:'',dir:0};
 var COLW=(function(){ try{ return JSON.parse(localStorage.getItem('ledger_colw')||'{}'); }catch(e){ return {}; } })();
 var COLW_DEF={ denpyo:92, customer:150, item:230, qty:84, unit:52, orderQty:90, orderDate:94, hopeDate:94, _vendor:112, _arrival:104, deliveryDate:94, status:82, billMonth:94, _docout:110, unitSelf:82, amtSelf:96, unitTokiwa:82, amtTokiwa:96, profit:86, multiPack:94, multiDest:104, memo:250, _ops:158 };
 function colw(k){ return COLW[k]||COLW_DEF[k]||100; }
+// 左固定列: チェック〜製造数量（数量まで）。右固定=操作列。列幅変更に追従してleftを再計算
+var STKL={denpyo:1,customer:1,item:1,orderQty:1,unit:1,qty:1};
+var STK_LAST='qty';
+function _stickyVars_(){
+  var st=document.getElementById('stk-style');
+  if(!st){ st=document.createElement('style'); st.id='stk-style'; document.head.appendChild(st); }
+  var left=0, css='#main-tbl .stk-_sel{left:0}'; left+=28;
+  for(var i=0;i<COLS.length;i++){ var k=COLS[i][0]; if(!STKL[k]) break;
+    css+='#main-tbl .stk-'+k+'{left:'+left+'px}'; left+=colw(k); }
+  st.textContent=css;
+}
 function _applyColgroup_(){
   var tbl=document.getElementById('main-tbl'); if(!tbl) return;
   var old=tbl.querySelector('colgroup'); if(old) old.remove();
@@ -604,6 +626,7 @@ function _updTblW_(){
   var tbl=document.getElementById('main-tbl'); if(!tbl) return;
   var sum=colw('_ops')+28; COLS.forEach(function(c){ sum+=colw(c[0]); });
   tbl.style.width=sum+'px';
+  _stickyVars_();
   _syncTopScroll_();
 }
 // 上部の横スクロールバー（カレンダー受注台帳と同じ方式・本体と相互同期）
@@ -680,16 +703,17 @@ function render(){
   var V=_sortV_(filtered());
   var shown=V.slice(0,DISPLAY_CAP);
   // ヘッダー2段: ①ラベル＋▼(値選択/並べ替え) ②列内ワード検索
-  var h1='<tr><th style="width:28px;text-align:center"><input type="checkbox" id="sel-all" onchange="selAllVisible(this.checked)" title="表示中を全選択（まとめ帳票用）"></th>'+COLS.map(function(col){ var k=col[0];
+  var h1='<tr><th class="stk stk-_sel" style="width:28px;text-align:center"><input type="checkbox" id="sel-all" onchange="selAllVisible(this.checked)" title="表示中を全選択（まとめ帳票用）"></th>'+COLS.map(function(col){ var k=col[0];
     var on=_cfActive_(k)||SORTSTATE.k===k&&SORTSTATE.dir;
     var arrow=SORTSTATE.k===k?(SORTSTATE.dir===1?' ▲':SORTSTATE.dir===-1?' ▼':''):'';
-    return '<th style="white-space:nowrap">'+col[1]+arrow+' <span class="cfbtn'+(on?' on':'')+'" onclick="openColMenu(event,\''+k+'\')" title="絞り込み・並べ替え">▼</span><span class="rz" data-k="'+k+'" title="ドラッグで列幅変更／ダブルクリックで初期化"></span></th>';
-  }).join('')+'<th style="white-space:nowrap">操作<span class="rz" data-k="_ops" title="ドラッグで列幅変更"></span>'+((Object.keys(COLFILTER).some(_cfActive_)||SORTSTATE.dir)?' <span class="cfbtn on" onclick="clearColFilters()" title="列フィルタ/並べ替えを全て解除">✕解除</span>':'')+'</th></tr>';
+    return '<th style="white-space:nowrap"'+(STKL[k]?' class="stk stk-'+k+(k===STK_LAST?' stk-end':'')+'"':'')+'>'+col[1]+arrow+' <span class="cfbtn'+(on?' on':'')+'" onclick="openColMenu(event,\''+k+'\')" title="絞り込み・並べ替え">▼</span><span class="rz" data-k="'+k+'" title="ドラッグで列幅変更／ダブルクリックで初期化"></span></th>';
+  }).join('')+'<th class="stkR" style="white-space:nowrap">操作<span class="rz" data-k="_ops" title="ドラッグで列幅変更"></span>'+((Object.keys(COLFILTER).some(_cfActive_)||SORTSTATE.dir)?' <span class="cfbtn on" onclick="clearColFilters()" title="列フィルタ/並べ替えを全て解除">✕解除</span>':'')+'</th></tr>';
   document.getElementById('thead').innerHTML=h1;
   document.getElementById('tbody').innerHTML=shown.map(function(c){
     var red=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE'||c.multiDest||c.deliverTo);
     var tds=COLS.map(function(col){ var k=col[0], v=getColVal(c,k);
       var cls=(/金額|単価|利益/.test(col[1])&&v!=='')?' class="num"':'';
+      if(STKL[k]) cls=' class="stk stk-'+k+(k===STK_LAST?' stk-end':'')+'"';   // 左固定列
       var cell=esc(v);
       // 金額未入力(空/0)は赤セル：金額(トキワ)=全社、金額(自社)=自社金額列を持つ会社のみ
       if((k==='amtTokiwa' || (k==='amtSelf' && SELF_AMT_KEYS[c._key])) && !(toNum(v)>0)){ cls=' class="num" style="background:#fde8e4"'; cell=''; }
@@ -698,8 +722,8 @@ function render(){
       else if(k==='_arrival' && v){ cell='<span style="color:#0e7490">'+esc(v)+'</span>'; }
       return '<td'+cls+'>'+cell+'</td>';
     }).join('');
-    var selTd='<td style="text-align:center"><input type="checkbox" class="selck" data-id="'+c.id+'"'+(SEL.has(c.id)?' checked':'')+' onchange="selChg(this)"></td>';
-    return '<tr class="'+(red?'rowred':'')+'">'+selTd+tds+'<td style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="リピート登録（この内容を引用して登録）" onclick="openForm(\''+c.id+'\',true)">🔁</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・見積書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button></td></tr>';
+    var selTd='<td class="stk stk-_sel" style="text-align:center"><input type="checkbox" class="selck" data-id="'+c.id+'"'+(SEL.has(c.id)?' checked':'')+' onchange="selChg(this)"></td>';
+    return '<tr class="'+(red?'rowred':'')+'">'+selTd+tds+'<td class="stkR" style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="リピート登録（この内容を引用して登録）" onclick="openForm(\''+c.id+'\',true)">🔁</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・見積書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button></td></tr>';
   }).join('');
   _applyColgroup_();
   renderKpis(V);
