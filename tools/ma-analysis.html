@@ -89,19 +89,25 @@
   </div>
 
   <div id="tab-analyze">
-    <div class="row2">
-      <div>
-        <div class="card" style="padding:12px">
-          <div class="st">候補企業</div>
-          <input id="tsearch" placeholder="🔍 会社名・業種・所在地・メモで検索" oninput="renderList()" style="width:100%;font-size:12px;padding:6px 8px;margin-bottom:8px;box-sizing:border-box">
-          <div id="tlist" class="tlist"></div>
-          <button class="btn dark" style="width:100%;margin-top:8px" onclick="addTarget()">＋ 候補を追加（手入力）</button>
-          <div id="scan-drop" style="margin-top:8px" onclick="document.getElementById('scan-file').click()">📷 <b>スキャンから作成</b><br>決算書・案件概要書の PDF/画像 をAIが読み取り自動入力<span id="scan-status" style="display:block;color:var(--accent);font-weight:700"></span></div>
+    <!-- 一覧ビュー（案件管理表ふう・まずここが出る） -->
+    <div id="ma-listview">
+      <div class="card" style="padding:12px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <input id="tsearch" placeholder="🔍 会社名・業種・所在地・メモで検索" oninput="renderMaList()" style="flex:1;min-width:220px;font-size:12px;padding:6px 8px;box-sizing:border-box">
+          <button class="btn dark" onclick="addTarget()">＋ 候補を追加</button>
+          <button class="btn" onclick="document.getElementById('scan-file').click()">📷 スキャンから作成</button>
           <input type="file" id="scan-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple style="display:none" onchange="scanCreate(this.files)">
+          <span id="scan-status" style="font-size:11px;color:var(--accent);font-weight:700"></span>
         </div>
+        <div style="overflow-x:auto"><table id="ma-list-tbl" style="width:100%;border-collapse:collapse;font-size:12px"></table></div>
       </div>
+    </div>
+    <!-- 詳細ビュー（会社名クリックで開く） -->
+    <div id="ma-detailview" style="display:none">
+      <button class="btn" style="margin-bottom:8px" onclick="maShowList()">← 一覧に戻る</button>
       <div id="detail"></div>
     </div>
+    <div id="tlist" style="display:none"></div>
   </div>
 
   <div id="tab-rank" style="display:none">
@@ -147,7 +153,7 @@
     </div>
   </div>
 </div>
-<span class="vbadge">v17</span>
+<span class="vbadge">v18</span>
 
 <script>
 var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
@@ -160,7 +166,7 @@ var SEL=null;
 function defBases(){ return { 'トキワ印刷案件':{name:'トキワ印刷（取得側）',sales:'',adjOp:'',cash:'',na:''}, '北上プリント案件':{name:'北上プリント（取得側）',sales:'',adjOp:'',cash:'',na:''} }; }
 function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }catch(e){} if(!DB.targets) DB.targets=[];
   if(!DB.bases) DB.bases=defBases();
-  DB.targets.forEach(function(t){ if(!t.dealGroup) t.dealGroup='トキワ印刷案件'; if(!Array.isArray(t.dd)) t.dd=[]; if(t.includeInModel===undefined) t.includeInModel=true;
+  DB.targets.forEach(function(t){ if(!t.dealGroup) t.dealGroup='トキワ印刷案件'; if(!Array.isArray(t.dd)) t.dd=[]; if(t.includeInModel===undefined) t.includeInModel=true; if(!t.stage) t.stage='面談前'; if(t.stageComment==null) t.stageComment='';
     // 旧3期入力(y1〜y3)→複数年配列(years)へ移行
     if(!Array.isArray(t.years)){ t.years=[];
       [['y1L','y1S','y1O'],['y2L','y2S','y2O'],['y3L','y3S','y3O']].forEach(function(k){
@@ -196,7 +202,7 @@ function newTarget(){
     adjExecComp:'', adjOther:'',
     ebitdaMult:4, goodwillYears:2, priceChosen:'',
     synSales:'', synCost:'', synInsource:'', synSGA:'', insourceRate:'', insourceMargin:'',
-    scores:{}, conditions:'', memo:'', dd:[], includeInModel:true };
+    scores:{}, conditions:'', memo:'', dd:[], includeInModel:true, stage:'面談前', stageComment:'' };
 }
 // 標準質問の初期セット（カテゴリ付き）。実際の正は DB.stdDD（⚙で管理・追加/編集/削除可）
 var STD_DD_INIT=[
@@ -219,8 +225,45 @@ var DD_CATS=['財務','取引先','人事','設備','事業','法務','その他
 var DD_CAT_COLOR={ '財務':'#0369a1','取引先':'#b45309','人事':'#7c3aed','設備':'#475569','事業':'#15803d','法務':'#b91c1c','その他':'#64748b' };
 function stdDD(){ if(!Array.isArray(DB.stdDD)||!DB.stdDD.length){ DB.stdDD=JSON.parse(JSON.stringify(STD_DD_INIT)); } return DB.stdDD; }
 var DD_ST=['未確認','確認中','OK','懸念'];
-function addTarget(){ var t=newTarget(); DB.targets.push(t); SEL=t.id; save(); renderList(); renderDetail(); }
-function delTarget(id){ if(!confirm('この候補を削除しますか？')) return; DB.targets=DB.targets.filter(function(t){return t.id!==id;}); if(SEL===id) SEL=(DB.targets[0]||{}).id||null; save(); renderList(); renderDetail(); renderRank(); }
+// 交渉ステータス（案件管理表ふうのステージ）
+var STAGES=['面談前','ウェブ面談','対面面談','基本合意','合意','破談'];
+var STAGE_COLOR={'面談前':'#64748b','ウェブ面談':'#0891b2','対面面談':'#2563eb','基本合意':'#7c3aed','合意':'#15803d','破談':'#b91c1c'};
+function addTarget(){ var t=newTarget(); DB.targets.push(t); SEL=t.id; save(); maShowDetail(); }
+// 一覧⇔詳細の切替
+function maShowList(){ var l=document.getElementById('ma-listview'), d=document.getElementById('ma-detailview'); if(l)l.style.display=''; if(d)d.style.display='none'; renderMaList(); }
+function maShowDetail(){ var l=document.getElementById('ma-listview'), d=document.getElementById('ma-detailview'); if(l)l.style.display='none'; if(d)d.style.display=''; renderList(); renderDetail(); }
+// 一覧のステータス/コメント編集（一覧に留まったまま更新）
+function setStageList(id,v){ var t=_tById_(id); if(!t) return; t.stage=v; save(); renderMaList(); }
+function setStageComment(id,v){ var t=_tById_(id); if(!t) return; t.stageComment=v; save(); }
+// 一覧テーブル描画（案件管理表ふう）
+function renderMaList(){
+  var tb=document.getElementById('ma-list-tbl'); if(!tb) return;
+  var list=_listFiltered_();
+  var q=((document.getElementById('tsearch')||{}).value||'').trim();
+  var h='<thead><tr style="background:#211f1c;color:#fff">'
+    +['会社名','枠','ステータス','メモ（状況）','希望価格','想定価格','回収','★','懸念'].map(function(t){return '<th style="padding:6px 8px;text-align:left;white-space:nowrap;font-size:11px">'+t+'</th>';}).join('')+'</tr></thead><tbody>';
+  if(!list.length){ tb.innerHTML=h+'<tr><td colspan="9" style="padding:20px;text-align:center;color:#94a3b8">'+(q?'「'+esc(q)+'」に一致する候補がありません':'候補がありません。「＋候補を追加」または「📷スキャンから作成」で登録してください')+'</td></tr></tbody>'; return; }
+  list.forEach(function(t){ var c=calc(t);
+    var g=t.dealGroup==='北上プリント案件'?'<span class="gsel kt">北上</span>':'<span class="gsel tk">トキワ</span>';
+    var stg=t.stage||'面談前'; var sc=STAGE_COLOR[stg]||'#64748b';
+    var ng=(t.dd||[]).filter(function(d){return d.st==='懸念';}).length;
+    var stSel='<select onchange="setStageList(\''+t.id+'\',this.value)" onclick="event.stopPropagation()" style="font-size:11px;font-weight:800;color:#fff;background:'+sc+';border:1px solid '+sc+';border-radius:6px;padding:3px 6px;text-align-last:center">'+STAGES.map(function(s){return '<option style="color:#111;background:#fff"'+(stg===s?' selected':'')+'>'+s+'</option>';}).join('')+'</select>';
+    h+='<tr style="border-bottom:1px solid #e2e0da;cursor:pointer" onclick="selTargetOpen(\''+t.id+'\')" onmouseover="this.style.background=\'#eff6ff\'" onmouseout="this.style.background=\'\'">'
+      +'<td style="padding:6px 8px;font-weight:700;color:#1e40af;white-space:nowrap">'+esc(t.name||'(無名)')+'</td>'
+      +'<td style="padding:6px 8px">'+g+'</td>'
+      +'<td style="padding:6px 8px">'+stSel+'</td>'
+      +'<td style="padding:4px 8px"><input value="'+esc(t.stageComment||'')+'" onclick="event.stopPropagation()" oninput="setStageComment(\''+t.id+'\',this.value)" placeholder="次アクション・所感" style="width:220px;font-size:11px;padding:3px 6px"></td>'
+      +'<td style="padding:6px 8px;text-align:right;font-family:monospace;white-space:nowrap">'+(c.ask?oku(c.ask):'—')+'</td>'
+      +'<td style="padding:6px 8px;text-align:right;font-family:monospace;white-space:nowrap">'+oku(c.price)+'</td>'
+      +'<td style="padding:6px 8px;text-align:right;white-space:nowrap">'+(c.payback?c.payback.toFixed(1)+'年':'—')+'</td>'
+      +'<td style="padding:6px 8px;text-align:right">'+scoreAvg(t).toFixed(1)+'</td>'
+      +'<td style="padding:6px 8px;text-align:right">'+(ng?('<span style="color:#b91c1c;font-weight:800">'+ng+'</span>'):'—')+'</td>'
+      +'</tr>';
+  });
+  tb.innerHTML=h+'</tbody>';
+}
+function selTargetOpen(id){ SEL=id; maShowDetail(); }
+function delTarget(id){ if(!confirm('この候補を削除しますか？')) return; DB.targets=DB.targets.filter(function(t){return t.id!==id;}); if(SEL===id) SEL=(DB.targets[0]||{}).id||null; save(); renderRank(); maShowList(); }
 function selTarget(id){ SEL=id; renderList(); renderDetail(); }
 
 function calc(t){
@@ -291,7 +334,12 @@ function renderDetail(){
   if(!t){ box.innerHTML='<div class="card note">左で候補を選ぶか、追加してください。</div>'; return; }
   var id=t.id;
   box.innerHTML=
-    '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="st" style="border:none;margin:0;padding:0">01 基本情報</div><button class="btn dan" onclick="delTarget(\''+id+'\')">🗑 削除</button></div>'
+    '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="st" style="border:none;margin:0;padding:0">01 基本情報</div><button class="btn dan" onclick="delTarget(\''+id+'\')">🗑 削除</button></div>'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px">'
+    +'<span style="font-size:11px;font-weight:700;color:#475569">交渉ステータス</span>'
+    +'<select onchange="set(\''+id+'\',\'stage\',this.value)" style="width:auto;font-size:12px;font-weight:800;color:#fff;background:'+(STAGE_COLOR[t.stage||'面談前']||'#64748b')+';border:none;border-radius:6px;padding:4px 8px;text-align-last:center">'+STAGES.map(function(s){return '<option style="color:#111;background:#fff"'+((t.stage||'面談前')===s?' selected':'')+'>'+s+'</option>';}).join('')+'</select>'
+    +'<input value="'+esc(t.stageComment||'')+'" oninput="set(\''+id+'\',\'stageComment\',this.value)" placeholder="次アクション・所感（面談メモ等）" style="flex:1;min-width:200px;font-size:12px;padding:5px 8px">'
+    +'</div>'
     +'<div class="grid" style="margin-top:8px">'
     +'<div style="grid-column:span 2"><label>会社名</label>'+inp(id,'name',t.name)+'</div>'
     +'<div><label>案件枠</label><select onchange="set(\''+id+'\',\'dealGroup\',this.value)"><option'+(t.dealGroup!=='北上プリント案件'?' selected':'')+'>トキワ印刷案件</option><option'+(t.dealGroup==='北上プリント案件'?' selected':'')+'>北上プリント案件</option></select></div>'
@@ -629,6 +677,7 @@ function swTab(name){
   document.querySelectorAll('.tab').forEach(function(b){ b.classList.toggle('on', b.dataset.tab===name); });
   if(name==='rank') renderRank();
   if(name==='model') renderModel();
+  if(name==='analyze') renderMaList();
 }
 
 // ── JSON 書出/取込（PC間移動・私からの分析データ受け渡し用）──
@@ -650,7 +699,7 @@ function printReport(kind){
   var c=calc(t);
   var head='<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:12px">'
     +'<div><div style="font-size:20px;font-weight:800">'+esc(t.name||'(無名)')+'</div><div style="font-size:11px;color:#555">'+esc(t.dealGroup||'')+'　'+esc(t.biz||'')+'　'+esc(t.location||'')+'</div></div>'
-    +'<div style="text-align:right;font-size:10px;color:#555">M&A分析（'+(kind==='dd'?'質問事項・DD確認':'財務・評価')+'）<br>出力: '+new Date().toLocaleDateString('ja-JP')+'</div></div>';
+    +'<div style="text-align:right;font-size:10px;color:#555">M&A分析（'+(kind==='dd'?'質問事項・DD確認':'財務・評価')+'）<br>ステータス: <b>'+esc(t.stage||'面談前')+'</b>'+(t.stageComment?'（'+esc(t.stageComment)+'）':'')+'<br>出力: '+new Date().toLocaleDateString('ja-JP')+'</div></div>';
   var body='';
   if(kind==='fin'){
     // ① 評価サマリ
@@ -777,7 +826,7 @@ async function scanCreate(fl){
     if(d.execComp!=null && t.adjExecComp==='') t.adjExecComp=d.execComp;  // 既定=役員報酬全額削減で修正
     t.name=d.name||('スキャン取込 '+new Date().toLocaleDateString('ja-JP'));
     DB.targets.push(t); SEL=t.id; save();
-    renderList(); renderDetail();
+    maShowDetail();
     st.textContent='✅ 作成しました（内容を確認・修正してください）';
     setTimeout(function(){ st.textContent=''; },6000);
   }catch(e){ st.textContent='❌ '+e.message; }
@@ -785,7 +834,9 @@ async function scanCreate(fl){
 }
 
 load();
-if(!DB.targets.length){ addTarget(); } else { SEL=DB.targets[0].id; renderList(); renderDetail(); }
+// まず一覧を表示（案件管理表ふう）。候補が無ければ空の一覧＋追加ボタン
+if(DB.targets.length){ SEL=DB.targets[0].id; }
+renderMaList(); renderRank(); renderModel();
 </script>
 </body>
 </html>
