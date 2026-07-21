@@ -256,7 +256,7 @@ function renderMaList(){
       +'<td style="padding:6px 8px;text-align:right;font-family:monospace;white-space:nowrap">'+(c.ask?oku(c.ask):'—')+'</td>'
       +'<td style="padding:6px 8px;text-align:right;font-family:monospace;white-space:nowrap">'+oku(c.price)+'</td>'
       +'<td style="padding:6px 8px;text-align:right;white-space:nowrap">'+(c.payback?c.payback.toFixed(1)+'年':'—')+'</td>'
-      +'<td style="padding:6px 8px;text-align:right">'+scoreAvg(t).toFixed(1)+'</td>'
+      +'<td style="padding:6px 8px;text-align:right" title="'+(scoreVal(t).auto?'財務から自動算出（定性スコアを付けると手動値に切替）':'定性スコアの平均')+'">'+scoreVal(t).v.toFixed(1)+(scoreVal(t).auto?'<span style="color:#94a3b8">*</span>':'')+'</td>'
       +'<td style="padding:6px 8px;text-align:right">'+(ng?('<span style="color:#b91c1c;font-weight:800">'+ng+'</span>'):'—')+'</td>'
       +'</tr>';
   });
@@ -299,6 +299,18 @@ function calc(t){
     opMargin:(+t.sales>0? op/(+t.sales)*100 : 0)};
 }
 function scoreAvg(t){ var sum=0,n=0; SCORE_KEYS.forEach(function(k){ var v=+((t.scores||{})[k[0]])||0; if(v){sum+=v;n++;} }); return n? sum/n : 0; }
+// 定性スコア未設定でも財務から自動で総合ポイント(1〜5)を付ける
+function _autoScore_(t){
+  var c=calc(t); var s=2.5;
+  if(c.adjOp>0) s+=1.2; else if(c.adjOp>-100) s+=0.3; else s-=0.6;   // 修正営業利益
+  if(c.payback>0){ if(c.payback<=3) s+=1; else if(c.payback<=6) s+=0.4; else s-=0.3; }
+  if(c.netDebt<=0) s+=0.8; else if(c.netDebt>2000) s-=0.6;            // 財務の重さ
+  var ops=(t.years||[]).map(function(y){ return parseFloat(y.op); }).filter(function(v){ return !isNaN(v); });
+  if(ops.length>=2){ if(ops[ops.length-1]>ops[0]) s+=0.5; else s-=0.3; }  // 傾向
+  return Math.max(1, Math.min(5, Math.round(s*10)/10));
+}
+// 表示用: 手動スコアがあればそれ、無ければ自動。auto=trueで印
+function scoreVal(t){ var m=scoreAvg(t); return m>0? {v:m,auto:false} : {v:_autoScore_(t),auto:true}; }
 
 function set(id,f,v){ var t=DB.targets.find(function(x){return x.id===id;}); if(!t) return; if(f.indexOf('score.')===0){ t.scores=t.scores||{}; t.scores[f.slice(6)]=v; } else { t[f]=v; } save(); if(f==='name'||f==='dealGroup'||f.indexOf('score.')===0) renderList(); renderDetailValsOnly(); }
 function inp(id,f,v,opt){ opt=opt||{}; return '<input '+(opt.num?'type="number" step="any"':'')+' value="'+esc(v==null?'':v)+'" '+(opt.ph?('placeholder="'+esc(opt.ph)+'"'):'')+' oninput="set(\''+id+'\',\''+f+'\',this.value)">'; }
@@ -324,7 +336,7 @@ function renderList(){
   if(!list.length){ box.innerHTML='<div class="note">'+(q?'「'+esc(q)+'」に一致する候補がありません。':'候補がありません。追加するかスキャンから作成。')+'</div>'; return; }
   box.innerHTML=list.map(function(t){ var c=calc(t);
     var g=t.dealGroup==='北上プリント案件'?'<span class="gsel kt">北上</span>':'<span class="gsel tk">トキワ</span>';
-    return '<div class="ti'+(t.id===SEL?' on':'')+'" onclick="selTarget(\''+t.id+'\')">'+g+'<span class="nm">'+esc(t.name||'(無名)')+'</span><span class="pr">'+oku(c.price)+' ／ '+(c.payback?c.payback.toFixed(1)+'年':'—')+' ／ ★'+scoreAvg(t).toFixed(1)+'</span></div>';
+    return '<div class="ti'+(t.id===SEL?' on':'')+'" onclick="selTarget(\''+t.id+'\')">'+g+'<span class="nm">'+esc(t.name||'(無名)')+'</span><span class="pr">'+oku(c.price)+' ／ '+(c.payback?c.payback.toFixed(1)+'年':'—')+' ／ ★'+scoreVal(t).v.toFixed(1)+(scoreVal(t).auto?'*':'')+'</span></div>';
   }).join('');
 }
 
@@ -587,7 +599,7 @@ function renderDetailValsOnly(){
 
 function renderRank(){
   var tb=document.getElementById('ranktbl'); if(!tb) return;
-  var rows=_grpFiltered_().map(function(t){ var c=calc(t); return {t:t,c:c,sc:scoreAvg(t)}; });
+  var rows=_grpFiltered_().map(function(t){ var c=calc(t); return {t:t,c:c,sc:scoreVal(t).v}; });
   rows.sort(function(a,b){ if(b.sc!==a.sc) return b.sc-a.sc; return (a.c.payback||99)-(b.c.payback||99); });
   if(!rows.length){ tb.innerHTML='<tr><td class="note">候補がありません</td></tr>'; return; }
   var h='<thead><tr><th>#</th><th>枠</th><th>会社名</th><th class="n">希望価格</th><th class="n">算定レンジ</th><th class="n">想定価格</th><th class="n">修正営利</th><th class="n">ｼﾅｼﾞｰ</th><th class="n">回収年数</th><th class="n">総合★</th><th>判定</th></tr></thead><tbody>';
@@ -722,7 +734,7 @@ function printReport(kind){
       body+='</table>';
     }
     // ③ 定性スコア
-    body+='<div style="font-size:12px;font-weight:800;margin:12px 0 4px;border-left:4px solid #1e40af;padding-left:6px">定性スコア（総合★'+scoreAvg(t).toFixed(1)+'）</div><table class="pr-t"><tr>'+SCORE_KEYS.map(function(k){return '<th>'+k[1]+'</th>';}).join('')+'</tr><tr>'+SCORE_KEYS.map(function(k){return '<td class="n">'+(((t.scores||{})[k[0]])||'—')+'</td>';}).join('')+'</tr></table>';
+    body+='<div style="font-size:12px;font-weight:800;margin:12px 0 4px;border-left:4px solid #1e40af;padding-left:6px">定性スコア（総合★'+scoreVal(t).v.toFixed(1)+(scoreVal(t).auto?'・財務から自動':'')+'）</div><table class="pr-t"><tr>'+SCORE_KEYS.map(function(k){return '<th>'+k[1]+'</th>';}).join('')+'</tr><tr>'+SCORE_KEYS.map(function(k){return '<td class="n">'+(((t.scores||{})[k[0]])||'—')+'</td>';}).join('')+'</tr></table>';
     // ④ メモ
     if(t.memo) body+='<div style="font-size:12px;font-weight:800;margin:12px 0 4px;border-left:4px solid #1e40af;padding-left:6px">分析メモ</div><div style="font-size:10.5px;white-space:pre-wrap;line-height:1.6">'+esc(t.memo)+'</div>';
   } else {
