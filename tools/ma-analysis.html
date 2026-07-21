@@ -145,7 +145,7 @@
     </div>
   </div>
 </div>
-<span class="vbadge">v15</span>
+<span class="vbadge">v16</span>
 
 <script>
 var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
@@ -166,6 +166,8 @@ function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }
         if((s!==''&&s!=null)||(o!==''&&o!=null)) t.years.push({label:t[k[0]]||'', sales:s, op:o});
       });
     }
+    // 既存の年度: labelからym(YYYY-MM)を推定して月ピッカーに反映（R8.3期→2026-03）
+    (t.years||[]).forEach(function(y){ if(!y.ym && y.label){ var m=String(y.label).match(/R(\d+)\.(\d+)期/); if(m){ y.ym=(2018+ +m[1])+'-'+('0'+m[2]).slice(-2); } } });
   }); }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){} }
 function uid(){ return 't'+Date.now()+Math.floor(Math.random()*1000); }
@@ -357,23 +359,36 @@ function _yrs_(t){ if(!Array.isArray(t.years)) t.years=[]; return t.years; }
 function addYear(id){ var t=_tById_(id); if(!t) return; _yrs_(t).push({label:''}); save(); renderDetail(); }
 function delYear(id,i){ var t=_tById_(id); if(!t) return; if(!confirm('この年度の列を削除しますか？')) return; t.years.splice(i,1); save(); renderDetail(); }
 function setYr(id,i,f,v){ var t=_tById_(id); if(!t||!t.years[i]) return; t.years[i][f]=v; save(); if(f!=='label') _yrsRender_(t); }
+// 年月(YYYY-MM)→ 決算期ラベル「R8.3期」（令和=年-2018）。1〜4月は前年扱いにせず、選んだ年月そのままを○期に
+function _ymToLabel_(ym){
+  if(!ym) return '';
+  var m=String(ym).match(/^(\d{4})-(\d{2})/); if(!m) return '';
+  var y=+m[1], mo=+m[2], r=y-2018;
+  return (r>=1?('R'+r):(y+''))+'.'+mo+'期';
+}
+function setYearMonth(id,i,ym){ var t=_tById_(id); if(!t||!t.years[i]) return; t.years[i].ym=ym; t.years[i].label=_ymToLabel_(ym); save(); _yrsRender_(t); }
 var YR_ROWS=[['sales','売上高'],['cogs','売上原価'],['sga','販管費'],['op','営業利益'],['ord','経常利益'],['execComp','役員報酬'],['dep','減価償却費'],['outsource','外注加工費'],['cash','現金預金'],['officerLoan','役員借入金'],['shortDebt','短期借入(金融機関)'],['longDebt','長期借入金'],['na','純資産']];
 function _yrsRender_(t){
   var box=document.getElementById('yrsbox-'+t.id); if(!box) return;
   var ys=_yrs_(t);
   if(!ys.length){ box.innerHTML='<div class="note">「＋ 年度を追加」で決算年度の列を作り、売上・原価・販管費・利益などを横並びで比較できます（古い年度を左に）。</div>'; return; }
   var num=function(v){ var n=parseFloat(v); return isNaN(n)?null:n; };
-  var h='<table style="min-width:'+(150+ys.length*112)+'px"><thead><tr><th style="text-align:left;white-space:nowrap">科目＼年度</th>';
+  var h='<table style="min-width:'+(150+ys.length*112)+'px"><thead><tr><th style="text-align:left;white-space:nowrap;vertical-align:top">年度</th>';
   ys.forEach(function(y,i){
     var k=y.kind||'実績'; var kc=(k==='実績')?'#0369a1':'#b45309';
     // 区分ドロップダウンを年度名の上に配置（実績=青／想定系=オレンジのバッジ風）
-    var kindSel='<select onchange="setYr(\''+t.id+'\','+i+',\'kind\',this.value);_yrsRender_(_tById_(\''+t.id+'\'))" style="width:94px;font-size:10.5px;font-weight:800;color:#fff;background:'+kc+';border:1px solid '+kc+';border-radius:5px;padding:2px 4px;text-align:center;text-align-last:center;margin-bottom:3px">'
+    var kindSel='<select onchange="setYr(\''+t.id+'\','+i+',\'kind\',this.value);_yrsRender_(_tById_(\''+t.id+'\'))" style="width:100px;font-size:10.5px;font-weight:800;color:#fff;background:'+kc+';border:1px solid '+kc+';border-radius:5px;padding:2px 4px;text-align:center;text-align-last:center;margin-bottom:3px">'
       +['実績','見込','予定','概算'].map(function(o){return '<option style="color:#111;background:#fff"'+(k===o?' selected':'')+'>'+o+'</option>';}).join('')+'</select>';
-    h+='<th class="n" style="min-width:106px;white-space:nowrap">'+kindSel+'<div><input value="'+esc(y.label||'')+'" placeholder="R6.3期" style="width:80px;font-size:11px;text-align:center" onchange="setYr(\''+t.id+'\','+i+',\'label\',this.value)"> <span onclick="delYear(\''+t.id+'\','+i+')" style="cursor:pointer;color:#b91c1c;font-weight:800" title="この年度を削除">×</span></div></th>';
+    // 決算年月を選ぶと 期ラベルを自動付与（R8.3期 等）
+    var lbl=y.label||_ymToLabel_(y.ym)||'';
+    h+='<th class="n" style="min-width:106px;white-space:nowrap;vertical-align:top">'+kindSel
+      +'<div style="font-weight:800;font-size:12px;color:#1e293b">'+esc(lbl||'（未設定）')+' <span onclick="delYear(\''+t.id+'\','+i+')" style="cursor:pointer;color:#b91c1c;font-weight:800" title="この年度を削除">×</span></div>'
+      +'<input type="month" value="'+esc(y.ym||'')+'" title="決算年月を選ぶと期が自動で付きます" style="width:100px;font-size:10.5px;margin-top:2px" onchange="setYearMonth(\''+t.id+'\','+i+',this.value)">'
+      +'</th>';
   });
   h+='</tr></thead><tbody>';
   YR_ROWS.forEach(function(r){
-    h+='<tr><td style="font-weight:600;white-space:nowrap">'+r[1]+'</td>';
+    h+='<tr><td style="font-weight:600;white-space:nowrap;vertical-align:top">'+r[1]+'</td>';
     ys.forEach(function(y,i){
       var v=y[r[0]];
       // 前年比: 差分額＋増減% をセル内に自動表示（2列目以降・前年と両方数値がある場合）
@@ -389,7 +404,7 @@ function _yrsRender_(t){
             +(pc!=null?('　'+(pc>=0?'+':'')+pc.toFixed(1)+'%'):'')+'</div>';
         }
       }
-      h+='<td class="n"><input type="number" step="any" value="'+(v==null||v===''?'':v)+'" style="width:94px;text-align:right;font-size:12px" oninput="setYr(\''+t.id+'\','+i+',\''+r[0]+'\',this.value)">'+d+'</td>';
+      h+='<td class="n" style="vertical-align:top"><input type="number" step="any" value="'+(v==null||v===''?'':v)+'" style="width:94px;text-align:right;font-size:12px" oninput="setYr(\''+t.id+'\','+i+',\''+r[0]+'\',this.value)">'+d+'</td>';
     });
     h+='</tr>';
   });
