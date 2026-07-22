@@ -109,6 +109,7 @@
     <div style="margin-top:12px"><label class="shl">備考（社内メモ・精算書には印刷されます）</label><input id="sh-note" class="shi"></div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
       <button class="btn" onclick="shClose()">閉じる</button>
+      <button class="btn" onclick="shExcelFromForm()" title="いま入力中の内容をExcel(.xlsx)で書き出す">📊 Excel出力</button>
       <button class="btn" onclick="shSave(false)">💾 保存</button>
       <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2" onclick="shSave(true)">💾 保存して印刷</button>
     </div>
@@ -554,6 +555,122 @@ function shPrint(id){
   var r=shList().find(function(x){return x.id===id;}); if(!r) return;
   shOpenPrint(shDocBlock(r.data||{}), '出張旅費精算書');
 }
+// ── Excel出力（元の 出張申請\*.xlsx と同じ配置・数式で書き出す） ──
+// ExcelJS は押されたときだけ読み込む（普段の起動を重くしない）
+var SH_EXCELJS='https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+function shLoadExcelJS(){
+  if(window.ExcelJS) return Promise.resolve(true);
+  return new Promise(function(ok,ng){
+    var s=document.createElement('script'); s.src=SH_EXCELJS;
+    s.onload=function(){ ok(true); }; s.onerror=function(){ ng(new Error('load failed')); };
+    document.head.appendChild(s);
+  });
+}
+function _shCol(s){ var n=0; for(var i=0;i<s.length;i++) n=n*26+(s.charCodeAt(i)-64); return n; }
+// 出張申請フォルダの命名規則: YYYYMM_日当_氏名.xlsx （例 202611_日当_本多亮.xlsx）
+function shFileName(d){
+  var ym='';
+  var m=String(d.period||'').match(/(\d{4})\s*年\s*(\d{1,2})\s*月/);
+  if(m) ym=m[1]+String(m[2]).padStart(2,'0');
+  else { var f=(d.trips||[]).map(function(t){return t.date;}).filter(Boolean).sort()[0]||d.date||''; ym=String(f).slice(0,7).replace('-',''); }
+  var nm=String(d.name||'').replace(/[\s　]/g,'');
+  return (ym||'出張')+'_日当_'+nm+'.xlsx';
+}
+async function shBuildWB(dRaw){
+  await shLoadExcelJS();
+  var d=shNorm(dRaw), c=shCounts(d);
+  var trips=(d.trips||[]).slice().sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||'')); });
+  var wb=new ExcelJS.Workbook();
+  var ws=wb.addWorksheet('日当',{ pageSetup:{ paperSize:9, orientation:'portrait', fitToPage:true, fitToWidth:1, fitToHeight:1 } });
+  var F='游ゴシック';
+  var THIN={style:'thin',color:{argb:'FF555555'}};
+  var B_ALL={top:THIN,left:THIN,bottom:THIN,right:THIN};
+  ws.columns=Array.from({length:16},function(){ return {width:5.4}; });   // A〜P（元ファイルと同じ16列）
+  function C(addr,val,o){ o=o||{}; var cell=ws.getCell(addr);
+    cell.value=val;
+    cell.font=Object.assign({name:F,size:11},o.f||{});
+    if(o.a) cell.alignment=o.a;
+    if(o.nf) cell.numFmt=o.nf;
+    if(o.fill) cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:o.fill}};
+    return cell; }
+  function box(range){ var m=range.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/); if(!m) return;
+    for(var r=+m[2];r<=+m[4];r++) for(var col=_shCol(m[1]);col<=_shCol(m[3]);col++) ws.getCell(r,col).border=B_ALL; }
+  function M(range,val,o){ ws.mergeCells(range); C(range.split(':')[0],val,o); return range; }
+  var CT={horizontal:'center',vertical:'middle'}, RT={horizontal:'right',vertical:'middle'};
+  var HEAD='FFF0F0F0';
+
+  // 提出日
+  M('H2:P2','提出日',{f:{bold:true},a:CT,fill:HEAD}); box('H2:P2');
+  M('H3:P3', d.date?new Date(d.date):'', {a:CT,nf:'yyyy/m/d'}); box('H3:P3');
+  // タイトル
+  M('A5:P5','出張旅費精算書',{f:{size:16,bold:true},a:CT});
+  // 対象月・氏名
+  M('A7:G7','対象月',{f:{bold:true},a:CT,fill:HEAD}); M('H7:P7', d.period||'', {a:{vertical:'middle'}}); box('A7:P7');
+  M('A8:G8','氏名',{f:{bold:true},a:CT,fill:HEAD});   M('H8:P8', d.name||'',  {a:{vertical:'middle'}}); box('A8:P8');
+  // 出張スケジュール
+  M('A10:P10','出張スケジュール',{f:{bold:true},fill:HEAD}); box('A10:P10');
+  M('A11:D11','区分',{f:{bold:true},a:CT,fill:HEAD});
+  M('E11:J11','期間',{f:{bold:true},a:CT,fill:HEAD});
+  M('K11:P11','訪問先',{f:{bold:true},a:CT,fill:HEAD}); box('A11:P11');
+  var MINROW=8;                                   // 元ファイルと同じ8行枠(12〜19)
+  var n=Math.max(MINROW, trips.length);
+  for(var i=0;i<n;i++){
+    var r=12+i, t=trips[i]||{};
+    M('A'+r+':D'+r, t.kind||'', {a:CT});
+    M('E'+r+':J'+r, t.date?new Date(t.date):'', {a:CT,nf:'yyyy/m/d'});
+    M('K'+r+':P'+r, t.dest||'', {a:{vertical:'middle'}});
+    box('A'+r+':P'+r);
+  }
+  // 旅費明細 / 日当
+  var base=12+n;                                   // 元ファイル(8行)なら 20 になる
+  M('A'+base+':P'+base,'旅費明細',{f:{bold:true},fill:HEAD}); box('A'+base+':P'+base);
+  var r21=base+1;
+  M('A'+r21+':P'+r21,'日　当',{f:{bold:true},fill:'FFF7F7F7'}); box('A'+r21+':P'+r21);
+  var r22=base+2, r23=base+3, r24=base+4, r25=base+5;
+  M('A'+r22+':D'+r22,'日当',{f:{bold:true},a:CT,fill:HEAD});
+  M('E'+r22+':H'+r22,'単価',{f:{bold:true},a:CT,fill:HEAD});
+  M('I'+r22+':L'+r22,'数',  {f:{bold:true},a:CT,fill:HEAD});
+  M('M'+r22+':P'+r22,'金額',{f:{bold:true},a:CT,fill:HEAD}); box('A'+r22+':P'+r22);
+  [[r23,'日帰',c.rateDay,c.day],[r24,'宿泊',c.rateStay,c.stay]].forEach(function(x){
+    M('A'+x[0]+':D'+x[0], x[1], {a:CT});
+    M('E'+x[0]+':H'+x[0], x[2], {a:RT,nf:'#,##0'});
+    M('I'+x[0]+':L'+x[0], x[3], {a:RT,nf:'#,##0'});
+    // 元ファイルと同じく数式で持たせる(単価や数を直しても合計が追従する)
+    M('M'+x[0]+':P'+x[0], {formula:'E'+x[0]+'*I'+x[0], result:x[2]*x[3]}, {a:RT,nf:'#,##0'});
+    box('A'+x[0]+':P'+x[0]);
+  });
+  M('A'+r25+':L'+r25,'日当合計',{f:{bold:true},a:RT,fill:HEAD});
+  M('M'+r25+':P'+r25, {formula:'SUM(M'+r23+':P'+r24+')', result:c.total}, {f:{bold:true},a:RT,nf:'#,##0'});
+  box('A'+r25+':P'+r25);
+  if(d.note){ M('A'+(r25+2)+':P'+(r25+2),'備考：'+d.note,{f:{size:10}}); }
+  return wb;
+}
+async function shExcelDownload(dRaw){
+  var d=shNorm(dRaw);
+  try{
+    hubToast('📊 Excelを作成中…');
+    var wb=await shBuildWB(d);
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url; a.download=shFileName(d); document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 1000);
+    hubToast('📊 '+shFileName(d)+' を書き出しました');
+  }catch(e){
+    console.error(e);
+    hubToast('❌ Excel出力に失敗しました（オフラインの可能性あり）。印刷/PDFはご利用いただけます');
+  }
+}
+function shExcel(id){
+  var r=shList().find(function(x){return x.id===id;}); if(!r) return;
+  shExcelDownload(r.data||{});
+}
+function shExcelFromForm(){
+  var d=shCollect();
+  if(!d.name){ hubToast('氏名を選んでください'); return; }
+  if(!d.trips.length){ hubToast('出張スケジュールを1行以上入力してください（日付が必要です）'); return; }
+  shExcelDownload(d);
+}
 function shPrintSel(){
   var ids=[].slice.call(document.querySelectorAll('.sh-ck:checked')).map(function(c){ return c.value; });
   if(!ids.length){ hubToast('印刷する精算書にチェックを入れてください'); return; }
@@ -603,6 +720,7 @@ function render(){
           +'<span style="display:flex;gap:5px">'
           +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shEdit(\''+r.id+'\')">✏ 編集</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px" title="この精算書をコピーして新規作成" onclick="shCopy(\''+r.id+'\')">📋 複製</button>'
+          +'<button class="btn" style="padding:3px 9px;font-size:12px" title="Excel(.xlsx)で書き出す" onclick="shExcel(\''+r.id+'\')">📊 Excel</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shPrint(\''+r.id+'\')">🖨</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px;color:#c0261c" onclick="shDelete(\''+r.id+'\')">🗑</button>'
           +'</span></div>';
