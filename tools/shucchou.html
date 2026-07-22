@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>出張報告書 | 🧳 出張報告書 | Tokiwa Hub Tools</title>
+<!--
+  ═══════════════════════════════════════════════════════════
+  🧰 Tokiwa Hub ツールテンプレート
+  ─ 新しい小アプリはこのファイルをコピーして作る ─
+
+  ルール:
+  1. データは本体DB (localStorage: murayama_v15) を共有。独自保存しない
+  2. 追加は hubAppend() / 更新は hubSave() を使う (保存後に本体へ自動通知)
+  3. 作ったら index.html の TOOLS_REGISTRY に1行登録 (status: 試作)
+  4. 現場で使われたら status を 運用中 に。使われなければファイルごと削除
+  ═══════════════════════════════════════════════════════════
+-->
+<style>
+  :root{ --lime:#84cc16; --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; letter-spacing:.04em; font-size:14px; }
+  header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:760px; margin:18px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.5rem; text-transform:uppercase; }
+  label{ font-size:11px; color:#888; display:block; margin-bottom:2px; }
+  input,select,textarea{ width:100%; padding:7px 9px; border:1px solid #d0cec8; border-radius:6px; font-size:14px; font-family:inherit; background:#fff; }
+  input:focus,select:focus,textarea:focus{ outline:none; border-color:#1a1a1a; }
+  .btn{ padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:14px; font-family:inherit; font-weight:600; }
+  .btn-p{ background:#0891b2; border-color:#0891b2; color:#fff; }
+  .btn:active{ transform:translateY(1px); }
+  .muted{ font-size:11px; color:#94a3b8; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+
+  .shl{ font-size:11px;color:#888;font-weight:600;display:block;margin-bottom:2px }
+  .shi{ width:100%;padding:7px 9px;border:1px solid #d0cec8;border-radius:6px;font-size:14px;font-family:inherit;box-sizing:border-box }
+  .sh-month{ border:1px solid #e0ddd6;border-radius:10px;margin-bottom:12px;background:#fff }
+  .sh-mhead{ display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f8f7f4;border-radius:10px 10px 0 0;font-weight:700 }
+  .sh-row{ display:flex;align-items:center;gap:10px;padding:7px 12px;border-top:1px solid #f0eee9;font-size:13px;flex-wrap:wrap }
+  .sh-row:hover{ background:#f8fbfd }
+  .sh-amt{ margin-left:auto;font-variant-numeric:tabular-nums;font-weight:700 }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🧰</span>
+  <span class="tname">🧳 出張報告書</span>
+  <span class="user" id="hub-user"></span>
+</header>
+<main>
+  <div class="sec">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2;font-weight:700" onclick="shNew()">＋ 新規作成</button>
+      <input id="sh-q" placeholder="🔍 氏名・行先・目的で検索" oninput="render()" style="flex:1;min-width:200px;padding:7px 9px;border:1px solid #cbd5e1;border-radius:7px;font-family:inherit;font-size:13px">
+      <button class="btn" onclick="shMonthlyPrintSel()" title="チェックした月の出張申請をまとめて印刷（月毎に改ページ・月合計つき）">🖨 選択月をまとめて印刷</button>
+    </div>
+    <div id="sh-list"></div>
+  </div>
+</main>
+<!-- 編集モーダル -->
+<div id="shModal" style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;z-index:220;padding:6vh 10px;overflow:auto">
+  <div style="background:#fff;width:min(860px,96vw);border-radius:12px;padding:18px 20px;box-shadow:0 12px 40px rgba(0,0,0,.3)">
+    <div style="font-size:15px;font-weight:800;margin-bottom:12px" id="sh-modal-title">🧳 出張報告書</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 14px">
+      <div><label class="shl">申請月</label><input type="month" id="sh-month" class="shi"></div>
+      <div><label class="shl">提出日</label><input type="date" id="sh-date" class="shi"></div>
+      <div><label class="shl">氏名</label><input id="sh-name" class="shi"></div>
+      <div><label class="shl">所属</label><input id="sh-dept" class="shi"></div>
+      <div><label class="shl">出張開始</label><input type="date" id="sh-from" class="shi" oninput="shCalc()"></div>
+      <div><label class="shl">出張終了</label><input type="date" id="sh-to" class="shi" oninput="shCalc()"></div>
+      <div><label class="shl">日数</label><input id="sh-days" class="shi" readonly style="background:#f6f4ee"></div>
+      <div><label class="shl">行先</label><input id="sh-dest" class="shi"></div>
+      <div><label class="shl">交通手段</label><input id="sh-trans" class="shi"></div>
+      <div><label class="shl">同行者</label><input id="sh-companions" class="shi"></div>
+    </div>
+    <div style="margin-top:10px"><label class="shl">目的</label><input id="sh-purpose" class="shi"></div>
+    <div style="margin-top:12px"><label class="shl">費用明細</label>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:4px">
+        <thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:5px 8px">項目</th><th style="width:150px;text-align:right;padding:5px 8px">金額(円)</th></tr></thead>
+        <tbody id="sh-exp-body"></tbody>
+        <tfoot><tr><td style="text-align:right;padding:6px 8px;font-weight:700">合計</td><td id="sh-total" style="text-align:right;padding:6px 8px;font-weight:700">¥0</td></tr></tfoot>
+      </table>
+      <button class="btn" style="margin-top:5px;font-size:12px;padding:4px 10px" onclick="shAddRow()">＋ 行追加</button>
+    </div>
+    <div style="margin-top:12px"><label class="shl">報告</label><textarea id="sh-report" rows="5" class="shi" style="resize:vertical"></textarea></div>
+    <div style="margin-top:10px"><label class="shl">備考</label><input id="sh-note" class="shi"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" onclick="shClose()">閉じる</button>
+      <button class="btn" onclick="shSave(false)">💾 保存</button>
+      <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2" onclick="shSave(true)">💾 保存して印刷</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+var HUB_OWN_COLLS=['forms'];
+// ═════════ Tokiwa Hub 共有ヘルパー (全ツール共通・ここから下は原則編集しない) ═════════
+var HUB_DBKEY = 'murayama_v15';
+var HUB_AUTHKEY = 'murayama_auth';
+var HUB_TOOL_ID = 'shucchou'; // ← ツールごとに変更 (通知の識別子)
+// 本体(index.html)の CLOUD_CONFIG と同じ値。ツール単独でも全社クラウド(GAS)へ直接保存するために使う。
+var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
+var HUB_API_KEY = 'mitsumori-2024';
+
+function hubLoad(){
+  try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; }
+  catch(e){ console.error(e); return null; }
+}
+function hubAuth(){
+  try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; }
+}
+// 保存: 必ず「読み直し→変更→書き込み」の形で使う (mutator に最新DBを渡す)
+// localStorage容量対策: 問い合わせ本文(body)等はクラウド(Communications)が正なので、
+// 端末ミラーには一覧最小限だけ残す。容量超過時に本文を落として保存を通す。
+function _hubInqLite_(db){
+  if(!db || !Array.isArray(db.inquiries) || !db.inquiries.length) return db;
+  var KEEP=['id','subject','kind','status','priority','source_type','channel_company','from_name','from_email','from_company','custName','received_at','createdAt','updatedAt','assignee','category','isSpam','tags','linked_project_id','linked_quote_id','linked_invoice_id','cust_id','tel'];
+  var lite=db.inquiries.map(function(r){ if(!r||typeof r!=='object') return r; var o={}; KEEP.forEach(function(k){ if(k in r) o[k]=r[k]; }); o._lite=true; return o; });
+  return Object.assign({}, db, {inquiries:lite});
+}
+function hubSave(mutator){
+  var db = hubLoad();
+  if(!db){ hubToast('❌ 本体データが見つかりません。先に本体アプリへログインしてください'); return false; }
+  try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
+  var _lok=false;
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); _lok=true; }
+  catch(e){
+    try { localStorage.setItem(HUB_DBKEY, JSON.stringify(_hubInqLite_(db))); _lok=true; }
+    catch(e2){ try { var _b=_hubInqLite_(db); _b.inquiries=[]; _b.history=[]; localStorage.setItem(HUB_DBKEY, JSON.stringify(_b)); _lok=true; } catch(e3){} }
+    hubToast(_lok ? '💾 端末保存は軽量化しました（データはクラウドに保存）' : '⚠ 端末保存失敗・クラウドには保存します');
+  }
+  try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
+  hubCloudPushSoon();   // ローカル保存の成否に関わらず全社クラウドへ反映（消失防止）
+  return true;
+}
+// ツール単独で全社クラウド(GAS saveAll)へ即保存。本体経由・BroadcastChannel依存をやめ、強制リロードで消えるのを防ぐ。
+// 注: 本体 saveToCloud と同じく localStorage の全DBを送る（=本体と同一の保存モデル）。
+// 更新時刻ベースの安全な保存: 先にクラウド最新を取得し、このツールが扱うコレクションだけ
+// 「レコードごとに新しい方」をマージして送る。他コレクションはクラウド最新をそのまま返す。
+// これにより、この端末が古いデータを持っていても他機能・他端末の新しい変更を上書きしない。
+function _tsval(r){ if(!r) return 0; var t=r._updatedAt||r.updatedAt||r.paidAt||r.matchedAt||r.createdAt||r._createdAt; var n=t?Date.parse(t):0; return isNaN(n)?0:n; }
+// 論理時計: PCの時計が他PCよりずれていても、直近の編集が必ず「より新しい」と判定される時刻を刻む。
+// 既存レコードを更新するときは必ず hubStamp(rec) を使うこと(new Date()直書き禁止)。
+function hubStamp(rec){ var t=new Date(Math.max(Date.now(), _tsval(rec)+1000)).toISOString(); if(rec) rec._updatedAt=t; return t; }
+function mergeNewestById(localArr, cloudArr){
+  var byId={}, order=[];
+  function take(r, isLocal){ if(!r||!r.id) return;
+    if(!(r.id in byId)){ order.push(r.id); byId[r.id]=r; return; }
+    var a=_tsval(r), b=_tsval(byId[r.id]);
+    if(a>b || (a===b && isLocal)) byId[r.id]=r;   // 同時刻/両方無しはローカル(=このツールの編集)を優先
+  }
+  (Array.isArray(cloudArr)?cloudArr:[]).forEach(function(r){ take(r,false); });
+  (Array.isArray(localArr)?localArr:[]).forEach(function(r){ take(r,true); });
+  return order.map(function(id){ return byId[id]; });
+}
+// このツールが編集の主体となるコレクション(ここだけローカルの新しい変更を反映する)
+function ownColls(){ return (typeof HUB_OWN_COLLS!=='undefined'&&HUB_OWN_COLLS) ? HUB_OWN_COLLS : ((typeof COLL!=='undefined'&&COLL) ? [COLL] : []); }
+async function hubCloudFetch(){
+  var auth=hubAuth(); if(!auth || !auth.loggedIn || !auth.companyId) return null;
+  var url=new URL(HUB_GAS_URL);
+  url.searchParams.set('action','syncAll'); url.searchParams.set('apiKey', HUB_API_KEY); url.searchParams.set('companyId', auth.companyId);
+  var res=await fetch(url.toString(), { method:'GET', redirect:'follow' });
+  var r=await res.json();
+  var d=r && (r.data||r);
+  return (d && typeof d==='object') ? d : null;
+}
+async function hubCloudPush(){
+  var db = hubLoad(), auth = hubAuth();
+  if(!db) return false;
+  if(!auth || !auth.loggedIn || !auth.companyId) return false;   // 未ログインはローカルのみ
+  var cloud=null; try{ cloud=await hubCloudFetch(); }catch(e){ cloud=null; }
+  db=hubLoad()||db;   // 通信待ちの間の入力を失わないよう読み直す
+  var data;
+  if(cloud){
+    data = Object.assign({}, cloud);                 // 他コレクションはクラウド最新を維持
+    ownColls().forEach(function(k){
+      var merged=mergeNewestById(db[k]||[], cloud[k]||[]);
+      data[k]=merged;
+      db[k]=merged;                                   // ローカルにも反映(他端末の新しい変更を取込)
+    });
+    try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){}
+  } else {
+    // クラウド取得失敗: 従来どおりローカル全体(最善努力・消失防止)
+    data = {
+      master: db.master, config: db.conf,
+      projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
+      intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
+      outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
+      calendarOrders: db.calendarOrders||[], inquiries: db.inquiries||[],
+      deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
+      inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
+      toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
+      bookmarkCategories: db.bookmarkCategories||[], leadTimeMaster: db.leadTimeMaster||{},
+      bookmarksDeleted: (db.bookmarksDeleted||[]).slice(-500),
+      bookmarkCategoriesDeleted: (db.bookmarkCategoriesDeleted||[]).slice(-200)
+    };
+  }
+  try {
+    var url = new URL(HUB_GAS_URL);
+    url.searchParams.set('action','saveAll');
+    url.searchParams.set('apiKey', HUB_API_KEY);
+    var res = await fetch(url.toString(), { method:'POST', body: JSON.stringify({ companyId: auth.companyId, data: data }), redirect:'follow' });
+    var r = await res.json();
+    return !!(r && r.success);
+  } catch(e){ console.warn('[Tool] cloud push failed', e); return false; }
+}
+// リアルタイム同期: 20秒ごと＋タブ復帰時にクラウド最新を取り込み、変更があれば再描画
+var _hubAutoBusy=false;
+async function hubAutoSync(){
+  if(_hubAutoBusy || document.hidden) return;
+  var ae=document.activeElement;
+  if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;   // 入力中は邪魔しない
+  _hubAutoBusy=true;
+  try{
+    var cloud=await hubCloudFetch();
+    if(cloud){
+      var db=hubLoad();
+      if(db){
+        var changed=false;
+        ownColls().forEach(function(k){
+          var before=JSON.stringify((db[k]||[]).map(function(r){return r&&r.id+':'+_tsval(r);}));
+          var merged=mergeNewestById(db[k]||[], cloud[k]||[]);
+          var after=JSON.stringify(merged.map(function(r){return r&&r.id+':'+_tsval(r);}));
+          if(after!==before){ db[k]=merged; changed=true; }
+        });
+        if(changed){
+          try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){}
+          try{ if(typeof render==='function') render(); else if(typeof renderResult==='function'){} }catch(e){}
+        }
+      }
+    }
+  }catch(e){}
+  _hubAutoBusy=false;
+}
+setInterval(hubAutoSync, 20000);
+window.addEventListener('focus', hubAutoSync);
+
+var _hubCloudTimer = null;
+function hubCloudPushSoon(){
+  if(_hubCloudTimer) clearTimeout(_hubCloudTimer);
+  _hubCloudTimer = setTimeout(function(){ _hubCloudTimer=null; hubCloudPush(); }, 1500);
+}
+// 配列コレクションへの追加ショートカット
+function hubAppend(key, record){
+  return hubSave(function(db){ if(!Array.isArray(db[key])) db[key] = []; db[key].push(record); });
+}
+function hubEsc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function hubToast(msg){
+  var t = document.getElementById('toast'); if(!t) return alert(msg);
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._tm); t._tm = setTimeout(function(){ t.style.display='none'; }, 2600);
+}
+function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
+// ヘッダーにログインユーザー表示 + 未ログインガード
+(function(){
+  var a = hubAuth();
+  var el = document.getElementById('hub-user');
+  if(el) el.textContent = a.loggedIn ? ('👤 ' + (a.userName||'') + ' / ' + (a.companyName||'')) : '⚠ 本体未ログイン';
+})();
+// ═════════ 共有ヘルパーここまで ═════════
+</script>
+<script>
+// ═════════ 出張報告書 (DB.forms type='shucchou' を共有・過去履歴を継承) ═════════
+function shList(){
+  var db=hubLoad(); var L=(db&&Array.isArray(db.forms))?db.forms:[];
+  return L.filter(function(r){ return r && r.type==='shucchou' && !r.deleted; });
+}
+function shMonth(r){ var d=(r&&r.data)||{}; return d.month || (d.from||d.date||'').slice(0,7); }
+function shMonthLabel(m){ if(!m) return '（申請月 未設定）'; var p=String(m).split('-'); return p[0]+'年'+(p[1]?parseInt(p[1],10)+'月':''); }
+function shTotal(d){ var t=0; ((d&&d.expenses)||[]).forEach(function(x){ t+=parseFloat(x.amount)||0; }); return t; }
+function esc(s){ return hubEsc(s); }
+
+var _editId=null;
+function shNew(){ _editId=null; shFill({}); document.getElementById('sh-modal-title').textContent='🧳 出張報告書（新規）'; document.getElementById('shModal').style.display='flex'; }
+function shEdit(id){
+  var r=shList().find(function(x){return x.id===id;}); if(!r) return;
+  _editId=id; shFill(r.data||{});
+  document.getElementById('sh-modal-title').textContent='🧳 出張報告書（編集）';
+  document.getElementById('shModal').style.display='flex';
+}
+function shClose(){ document.getElementById('shModal').style.display='none'; _editId=null; }
+function shFill(d){
+  var t=new Date().toISOString().slice(0,10);
+  var set=function(id,v){ document.getElementById(id).value=v||''; };
+  set('sh-month', d.month||t.slice(0,7)); set('sh-date', d.date||t);
+  set('sh-name', d.name); set('sh-dept', d.dept);
+  set('sh-from', d.from); set('sh-to', d.to); set('sh-days', d.days);
+  set('sh-dest', d.dest); set('sh-trans', d.trans); set('sh-companions', d.companions);
+  set('sh-purpose', d.purpose); set('sh-report', d.report); set('sh-note', d.note);
+  var tb=document.getElementById('sh-exp-body'); tb.innerHTML='';
+  var exps=(d.expenses&&d.expenses.length)?d.expenses:[{item:'',amount:''}];
+  exps.forEach(function(x){ tb.insertAdjacentHTML('beforeend', shExpRow(x.item,x.amount)); });
+  shCalc();
+}
+function shExpRow(item,amount){
+  var st='width:100%;padding:4px 6px;border:1px solid #d0cec8;border-radius:5px;font-size:13px;box-sizing:border-box;font-family:inherit';
+  return '<tr><td style="padding:3px 6px"><input class="sh-exp-item" value="'+esc(item||'')+'" style="'+st+'"></td>'
+    +'<td style="padding:3px 6px"><input class="sh-exp-amt" type="number" value="'+esc(amount||'')+'" oninput="shCalc()" style="'+st+';text-align:right"></td></tr>';
+}
+function shAddRow(){ document.getElementById('sh-exp-body').insertAdjacentHTML('beforeend', shExpRow('','')); }
+function shCalc(){
+  var f=document.getElementById('sh-from'), t2=document.getElementById('sh-to'), dd=document.getElementById('sh-days');
+  if(f.value&&t2.value){ var n=Math.round((new Date(t2.value)-new Date(f.value))/86400000)+1; dd.value=(n>0?n+'日間':''); }
+  var tot=0; document.querySelectorAll('.sh-exp-amt').forEach(function(i){ tot+=parseFloat(i.value)||0; });
+  document.getElementById('sh-total').textContent='¥'+tot.toLocaleString();
+}
+function shCollect(){
+  var exps=[]; var items=document.querySelectorAll('.sh-exp-item'), amts=document.querySelectorAll('.sh-exp-amt');
+  for(var i=0;i<items.length;i++){ var it=items[i].value.trim(), am=amts[i].value; if(it||am) exps.push({item:it, amount:am}); }
+  var gv=function(id){ return document.getElementById(id).value; };
+  return { month:gv('sh-month'), date:gv('sh-date'), name:gv('sh-name'), dept:gv('sh-dept'),
+    from:gv('sh-from'), to:gv('sh-to'), days:gv('sh-days'), dest:gv('sh-dest'), trans:gv('sh-trans'),
+    companions:gv('sh-companions'), purpose:gv('sh-purpose'), expenses:exps, report:gv('sh-report'), note:gv('sh-note') };
+}
+function shSave(thenPrint){
+  var data=shCollect();
+  if(!data.name && !data.dest){ hubToast('氏名か行先を入力してください'); return; }
+  var title=(data.name||'')+(data.dest?(' / '+data.dest):'');
+  var savedId=null;
+  var ok=hubSave(function(db){
+    if(!Array.isArray(db.forms)) db.forms=[];
+    var rec=_editId ? db.forms.find(function(x){return x&&x.id===_editId;}) : null;
+    if(rec){ rec.data=data; rec.title=title; }
+    else {
+      rec={ id:'frm_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), type:'shucchou', title:title, data:data,
+            createdAt:new Date().toISOString(), createdBy:(hubAuth().userName||'') };
+      db.forms.push(rec);
+    }
+    hubStamp(rec); rec.updatedAt=rec._updatedAt;
+    savedId=rec.id;
+  });
+  if(!ok) return;
+  hubToast('💾 保存しました');
+  shClose(); render();
+  if(thenPrint) shPrint(savedId);
+}
+function shDelete(id){
+  var r=shList().find(function(x){return x.id===id;}); if(!r) return;
+  if(!confirm('「'+(r.title||'出張報告')+'」を削除しますか？')) return;
+  hubSave(function(db){
+    var rec=(db.forms||[]).find(function(x){return x&&x.id===id;});
+    if(rec){ rec.deleted=true; hubStamp(rec); rec.updatedAt=rec._updatedAt; }   // ソフト削除(全PCへ伝播・復元可)
+  });
+  hubToast('🗑 削除しました'); render();
+}
+// ── 印刷(本体アプリの様式を踏襲) ──
+function shStyle(){ return '<style>@page{size:A4;margin:0}body{font-family:"Yu Gothic","Meiryo",sans-serif;color:#111;font-size:13px;padding:16mm}'
+  +'.rh{font-size:20px;text-align:center;letter-spacing:.3em;margin:0 0 4px}'
+  +'.mhd{font-size:16px;font-weight:700;border-bottom:2px solid #334155;padding:6px 0;margin:0 0 8px}'
+  +'.sub{text-align:right;font-size:12px;color:#444;margin-bottom:8px}'
+  +'table{width:100%;border-collapse:collapse;margin-bottom:10px}th,td{border:1px solid #333;padding:6px 8px;font-size:13px;vertical-align:top}'
+  +'th{background:#f0f0f0;text-align:left;white-space:nowrap;width:96px}.rep{min-height:120px;white-space:pre-wrap}.exp th{width:auto}'
+  +'.rep-wrap{page-break-inside:avoid;margin-bottom:16px}.mtotal{text-align:right;font-weight:700;font-size:14px;margin:4px 0 18px}'
+  +'.pgbreak{page-break-before:always}@media print{button{display:none}}</style>'; }
+function shReportBlock(d){
+  var tot=shTotal(d);
+  var exrows=(d.expenses||[]).filter(function(x){return x.item||x.amount;}).map(function(x){
+    return '<tr><td>'+esc(x.item)+'</td><td style="text-align:right">'+((parseFloat(x.amount)||0).toLocaleString())+'</td></tr>'; }).join('');
+  return '<h2 class="rh">出張報告書</h2>'
+    +'<div class="sub">提出日：'+esc(d.date||'')+(d.month?'　申請月：'+esc(d.month):'')+'</div>'
+    +'<table><tr><th>氏名</th><td>'+esc(d.name||'')+'</td><th>所属</th><td>'+esc(d.dept||'')+'</td></tr>'
+    +'<tr><th>出張期間</th><td>'+esc(d.from||'')+' 〜 '+esc(d.to||'')+'　'+esc(d.days||'')+'</td><th>行先</th><td>'+esc(d.dest||'')+'</td></tr>'
+    +'<tr><th>目的</th><td colspan="3">'+esc(d.purpose||'')+'</td></tr>'
+    +'<tr><th>交通手段</th><td>'+esc(d.trans||'')+'</td><th>同行者</th><td>'+esc(d.companions||'')+'</td></tr></table>'
+    +'<table class="exp"><thead><tr><th style="width:auto">費用項目</th><th style="width:140px;text-align:right">金額(円)</th></tr></thead><tbody>'+exrows
+    +'<tr><th style="text-align:right">合計</th><td style="text-align:right;font-weight:700">'+tot.toLocaleString()+'</td></tr></tbody></table>'
+    +'<table><tr><th>報告</th></tr><tr><td class="rep">'+esc(d.report||'')+'</td></tr></table>'
+    +(d.note?('<table><tr><th>備考</th></tr><tr><td>'+esc(d.note)+'</td></tr></table>'):'');
+}
+function shOpenPrint(html, title){
+  var w=window.open('','_blank');
+  if(!w){ hubToast('ポップアップを許可してください'); return; }
+  w.document.write('<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>'+esc(title)+'</title>'+shStyle()+'</head><body>'
+    +'<div style="text-align:right;margin-bottom:6px"><button onclick="window.print()" style="padding:8px 18px;font-size:13px;cursor:pointer">🖨 印刷 / PDF保存</button></div>'
+    +html+'</body></html>');
+  w.document.close();
+}
+function shPrint(id){
+  var r=shList().find(function(x){return x.id===id;}); if(!r) return;
+  shOpenPrint('<div class="rep-wrap">'+shReportBlock(r.data||{})+'</div>', '出張報告書');
+}
+function shMonthlyPrintSel(){
+  var months=[].slice.call(document.querySelectorAll('.sh-mck:checked')).map(function(c){ return c.value; });
+  if(!months.length){ hubToast('印刷する月にチェックを入れてください'); return; }
+  var all=shList(); months.sort();
+  var grand=0, body='', shown=0;
+  months.forEach(function(m){
+    var rs=all.filter(function(r){return shMonth(r)===m;}).sort(function(a,b){return String((a.data||{}).from||'').localeCompare(String((b.data||{}).from||''));});
+    if(!rs.length) return;
+    var mtot=0; rs.forEach(function(r){ mtot+=shTotal(r.data||{}); }); grand+=mtot;
+    body+='<div class="'+(shown>0?'pgbreak':'')+'"><div class="mhd">'+shMonthLabel(m)+'　出張申請（'+rs.length+'件）</div>';
+    rs.forEach(function(r){ body+='<div class="rep-wrap">'+shReportBlock(r.data||{})+'</div>'; });
+    body+='<div class="mtotal">'+shMonthLabel(m)+' 費用合計：¥'+mtot.toLocaleString()+'</div></div>';
+    shown++;
+  });
+  if(!shown){ hubToast('選択した月の出張がありません'); return; }
+  if(months.length>1) body+='<div class="mtotal" style="font-size:15px">総合計：¥'+grand.toLocaleString()+'</div>';
+  shOpenPrint(body, '出張申請');
+}
+// ── 一覧(月別) ──
+function render(){
+  var q=(document.getElementById('sh-q').value||'').trim().toLowerCase();
+  var L=shList().filter(function(r){
+    if(!q) return true;
+    var d=r.data||{};
+    return ((d.name||'')+(d.dest||'')+(d.purpose||'')+(d.companions||'')).toLowerCase().indexOf(q)>=0;
+  });
+  var byM={};
+  L.forEach(function(r){ var m=shMonth(r)||''; (byM[m]=byM[m]||[]).push(r); });
+  var months=Object.keys(byM).sort().reverse();
+  var el=document.getElementById('sh-list');
+  if(!months.length){ el.innerHTML='<div style="color:#999;padding:24px;text-align:center">出張報告はまだありません。「＋ 新規作成」から登録してください。</div>'; return; }
+  el.innerHTML=months.map(function(m){
+    var rs=byM[m].sort(function(a,b){ return String((b.data||{}).from||'').localeCompare(String((a.data||{}).from||'')); });
+    var mtot=0; rs.forEach(function(r){ mtot+=shTotal(r.data||{}); });
+    return '<div class="sh-month">'
+      +'<div class="sh-mhead"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="sh-mck" value="'+esc(m)+'"> '+shMonthLabel(m)+'</label>'
+      +'<span style="font-size:12px;color:#64748b">'+rs.length+'件</span>'
+      +'<span style="margin-left:auto;font-size:13px">月合計 <b>¥'+mtot.toLocaleString()+'</b></span></div>'
+      +rs.map(function(r){
+        var d=r.data||{};
+        return '<div class="sh-row">'
+          +'<span style="min-width:150px">'+esc(d.from||'')+(d.to&&d.to!==d.from?(' 〜 '+esc(d.to)):'')+'</span>'
+          +'<b style="min-width:90px">'+esc(d.name||'')+'</b>'
+          +'<span style="flex:1;min-width:140px">'+esc(d.dest||'')+(d.purpose?('　<span style="color:#64748b">'+esc(d.purpose)+'</span>'):'')+'</span>'
+          +'<span class="sh-amt">¥'+shTotal(d).toLocaleString()+'</span>'
+          +'<span style="display:flex;gap:5px">'
+          +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shEdit(\''+r.id+'\')">✏ 編集</button>'
+          +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shPrint(\''+r.id+'\')">🖨</button>'
+          +'<button class="btn" style="padding:3px 9px;font-size:12px;color:#c0261c" onclick="shDelete(\''+r.id+'\')">🗑</button>'
+          +'</span></div>';
+      }).join('')
+      +'</div>';
+  }).join('');
+}
+render();
+</script>
+
+<!-- HUB共通: 最新データに更新するフローティングボタン（自動挿入） -->
+<style>
+#hubRefreshBtn{position:fixed;right:16px;bottom:16px;z-index:99999;display:inline-flex;align-items:center;gap:6px;
+  padding:9px 14px;font-size:13px;font-weight:700;font-family:inherit;color:#0f172a;background:#fde68a;
+  border:1px solid #f59e0b;border-radius:22px;box-shadow:0 3px 10px rgba(0,0,0,.22);cursor:pointer;line-height:1;}
+#hubRefreshBtn:hover{background:#fcd34d;}
+#hubRefreshBtn:disabled{opacity:.6;cursor:default;}
+@media print{#hubRefreshBtn{display:none!important;}}
+</style>
+<button id="hubRefreshBtn" title="クラウドの最新データに更新します" onclick="hubRefreshNow()">🔄 更新</button>
+<script>
+function hubRefreshNow(){
+  var b=document.getElementById('hubRefreshBtn');
+  var reset=function(){ if(b){ b.disabled=false; b.textContent='🔄 更新'; } };
+  if(b){ b.disabled=true; b.textContent='⏳ 更新中…'; }
+  // 入力中のセルを先に確定(保存)してから取り込む。未確定の入力がクラウドの古い値で消えるのを防ぐ。
+  try{ var ae=document.activeElement; if(ae && ae.blur && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) ae.blur(); }catch(e){}
+  try{
+    // クラウド取込関数を持つツール（カレンダー受注台帳など）は、再読込せず最新だけ取り込む
+    if(typeof hubCloudPull==='function'){
+      Promise.resolve(hubCloudPull()).then(function(){
+        try{ if(typeof _hubCacheClear==='function') _hubCacheClear(); }catch(e){}
+        try{ if(typeof buildYears==='function') buildYears(); }catch(e){}
+        try{ if(typeof buildCats==='function') buildCats(); }catch(e){}
+        try{ if(typeof render==='function') render(); }catch(e){}
+        try{ if(typeof hubToast==='function') hubToast('🔄 最新データに更新しました'); }catch(e){}
+        reset();
+      }).catch(function(){ location.reload(); });
+      return;
+    }
+  }catch(e){}
+  // それ以外のページはページごと再読込（本体アプリは再読込でクラウドから取り直す）
+  location.reload();
+}
+</script>
+<!-- HUB共通: アプリ自動更新＋更新履歴（自動挿入 hubUpdateKit） -->
+<style>
+#hubLogBtn{position:fixed;right:16px;bottom:58px;z-index:99999;width:38px;height:38px;border-radius:50%;
+  border:1px solid #cbd5e1;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.18);cursor:pointer;font-size:17px;line-height:1;}
+#hubLogBtn:hover{background:#f1f5f9;}
+#hubLogPanel{position:fixed;right:16px;bottom:104px;z-index:99999;width:min(360px,calc(100vw - 32px));max-height:60vh;overflow:auto;
+  background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;display:none;font-size:12px;color:#0f172a;text-align:left;}
+#hubLogPanel h3{margin:0 0 8px;font-size:13px;}
+#hubLogPanel .d{font-weight:700;margin:10px 0 3px;color:#0369a1;}
+#hubLogPanel ul{margin:0 0 4px;padding-left:17px;}
+#hubLogPanel li{margin:2px 0;line-height:1.45;}
+#hubUpBanner{position:fixed;left:50%;transform:translateX(-50%);top:10px;z-index:100000;display:none;align-items:center;gap:10px;
+  background:#0f172a;color:#fff;padding:9px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:13px;}
+#hubUpBanner button{font-family:inherit;font-size:12px;font-weight:700;border-radius:7px;border:0;padding:5px 11px;cursor:pointer;background:#fde68a;color:#0f172a;}
+@media print{#hubLogBtn,#hubLogPanel,#hubUpBanner{display:none!important;}}
+</style>
+<button id="hubLogBtn" title="更新履歴を表示" onclick="hubToggleLog()">📋</button>
+<div id="hubLogPanel"></div>
+<div id="hubUpBanner"><span>🆕 新しい版があります（<b id="hubUpCnt">15</b>秒後に自動更新）</span><button onclick="hubDoUpdate()">今すぐ更新</button><button style="background:#334155;color:#fff" onclick="hubCancelUpdate()">後で</button></div>
+<script>
+(function(){
+  var BASE = location.pathname.indexOf('/tools/')>=0 ? '../' : './';
+  // ===== 更新履歴 =====
+  window.hubToggleLog=function(){
+    var p=document.getElementById('hubLogPanel');
+    if(p.style.display==='block'){ p.style.display='none'; return; }
+    p.style.display='block'; p.innerHTML='<h3>📋 更新履歴</h3>読み込み中…';
+    fetch(BASE+'changelog.json?ts='+Date.now(), {cache:'no-store'}).then(function(r){return r.json();}).then(function(list){
+      var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
+      p.innerHTML='<h3>📋 更新履歴</h3>'+list.map(function(e){
+        return '<div class="d">'+esc(e.date)+'</div><ul>'+e.items.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>';
+      }).join('');
+    }).catch(function(){ p.innerHTML='<h3>📋 更新履歴</h3>取得できませんでした'; });
+  };
+  // ===== アプリ本体の自動更新 =====
+  // service-worker.js の版番号を定期取得し、変わっていたら再読込して新しい版に切り替える。
+  var curVer=null, timer=null;
+  function fetchVer(){
+    return fetch(BASE+'service-worker.js?ts='+Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.text(); })
+      .then(function(t){ var m=t.match(/CACHE_VERSION\s*=\s*'([^']+)'/); return m?m[1]:null; })
+      .catch(function(){ return null; });
+  }
+  window.hubDoUpdate=function(){ try{ sessionStorage.setItem('hubJustUpdated','1'); }catch(e){} location.reload(); };
+  window.hubCancelUpdate=function(){ if(timer){ clearInterval(timer); timer=null; } var b=document.getElementById('hubUpBanner'); if(b) b.style.display='none'; };
+  function showBanner(){
+    var b=document.getElementById('hubUpBanner'); if(!b || b.style.display==='flex') return;
+    b.style.display='flex';
+    var n=15, c=document.getElementById('hubUpCnt'); c.textContent=n;
+    timer=setInterval(function(){
+      var ae=document.activeElement;
+      if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;   // 入力中はカウントを止める
+      n--; c.textContent=n;
+      if(n<=0){ clearInterval(timer); hubDoUpdate(); }
+    }, 1000);
+  }
+  function check(){
+    fetchVer().then(function(v){
+      if(!v) return;
+      if(curVer===null){ curVer=v; return; }
+      if(v===curVer) return;
+      // 新しい版を検知: 非表示タブは即時、表示中はバナー＋カウントダウンで自動更新
+      if(document.hidden){ hubDoUpdate(); } else { showBanner(); }
+    });
+  }
+  fetchVer().then(function(v){ curVer=v; });
+  setInterval(check, 180000);   // 3分ごとに版を確認
+  window.addEventListener('focus', check);
+  try{ if(sessionStorage.getItem('hubJustUpdated')){ sessionStorage.removeItem('hubJustUpdated'); } }catch(e){}
+})();
+</script>
+</body>
+</html>
