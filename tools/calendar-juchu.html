@@ -627,13 +627,45 @@ function hubSave(mutator){
 // カレンダー明細を「レコードごとに更新時刻(_updatedAt)が新しい方を採用」してマージする。
 // 全体を丸ごと上書きすると、古いデータを持つ端末の保存で他端末の新しい変更が先祖返りするため。
 function _tsval(r){ var t=r&&r._updatedAt; if(!t) return 0; var n=Date.parse(t); return isNaN(n)?0:n; }
+function _fldts(r, k, base){
+  var f=r&&r._fts&&r._fts[k];
+  if(f){ var n=Date.parse(f); if(!isNaN(n)) return n; }
+  // _fts持ちレコードでスタンプの無い項目は「編集していない」＝古い扱い(0)。
+  // 行時刻を継承させると、片方だけ編集した行の未編集項目(空欄など)が新しい振りをして相手の入力を消す。
+  if(r && r._fts && Object.keys(r._fts).length) return 0;
+  return base;   // 旧形式(_ftsなし)は従来どおり行時刻
+}
+// 同一IDの2レコードを「項目ごとに新しい方」で合成する。
+// 行単位で置き換えると、2台がそれぞれ別の項目(数量と日付など)を入れたとき片方が消えるため。
+function mergeRecFields(a, b, preferB){
+  var ta=_tsval(a), tb=_tsval(b);
+  var out={}, keys={}, k;
+  for(k in a) keys[k]=1; for(k in b) keys[k]=1;
+  for(k in keys){
+    if(k==='_fts'||k==='_edited'||k==='_updatedAt') continue;
+    var tka=_fldts(a,k,ta), tkb=_fldts(b,k,tb);
+    var pick=(tkb>tka || (tkb===tka && preferB)) ? b : a;
+    out[k]=pick[k]!==undefined ? pick[k] : (pick===a?b:a)[k];
+  }
+  var f={}, fa=a._fts||{}, fb=b._fts||{};
+  for(k in fa) f[k]=fa[k];
+  for(k in fb){ if(!f[k] || Date.parse(fb[k])>Date.parse(f[k])) f[k]=fb[k]; }
+  if(Object.keys(f).length) out._fts=f;
+  var e={}, ea=a._edited||{}, eb=b._edited||{};
+  for(k in ea) e[k]=1; for(k in eb) e[k]=1;
+  if(Object.keys(e).length) out._edited=e;
+  out._updatedAt=new Date(Math.max(ta,tb)||Date.now()).toISOString();
+  return out;
+}
 function mergeCalById(localArr, cloudArr, tomb, sig){
   var byId={}, order=[];
-  function take(r){ if(!r||!r.id) return; if(!(r.id in byId)){ order.push(r.id); byId[r.id]=r; return; }
-    // 既にある側と比べ、_updatedAtが新しい方を残す(同点はcloud優先=後勝ちにしないため既存維持)
-    if(_tsval(r) > _tsval(byId[r.id])) byId[r.id]=r; }
-  (Array.isArray(cloudArr)?cloudArr:[]).forEach(take);   // 先にクラウド
-  (Array.isArray(localArr)?localArr:[]).forEach(take);   // ローカルで新しければ上書き
+  function take(r, isLocal){
+    if(!r||!r.id) return;
+    if(!(r.id in byId)){ order.push(r.id); byId[r.id]=r; return; }
+    byId[r.id]=mergeRecFields(byId[r.id], r, !!isLocal);   // 項目単位で新しい方(同時刻はローカル優先)
+  }
+  (Array.isArray(cloudArr)?cloudArr:[]).forEach(function(r){ take(r,false); });   // 先にクラウド
+  (Array.isArray(localArr)?localArr:[]).forEach(function(r){ take(r,true); });    // ローカルで新しい項目を上書き
   return order.filter(function(id){
     var r=byId[id];
     if(tomb && tomb[id]) return false;
@@ -654,6 +686,7 @@ async function hubCloudPush(){
     var gres=await fetch(gurl.toString(), { method:'GET', redirect:'follow' });
     var gj=await gres.json(); cloud=gj && (gj.data||gj);
   }catch(e){ cloud=null; }
+  db=hubLoad()||db;   // ★通信待ちの間に入力された項目を失わないよう、最新のローカルを読み直す
 
   var tomb={}, sig={};
   (db.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
@@ -1202,6 +1235,7 @@ function saveSpec(){
     if(!rec) throw '対象なし';
     rec.spec=sp; rec._updatedAt=new Date().toISOString();
     if(!rec._edited) rec._edited={}; rec._edited.spec=1;
+    if(!rec._fts) rec._fts={}; rec._fts.spec=rec._updatedAt;
   });
   if(ok){ hubToast('📋 仕様を保存しました'); closeSpec(); render(); }
 }
@@ -1519,7 +1553,7 @@ function cardDrag(e){ e.dataTransfer.setData('text/plain', e.target.getAttribute
 function boardOver(e, col){ e.preventDefault(); col.classList.add('over'); }
 function boardDrop(e, col){ e.preventDefault(); col.classList.remove('over'); var id=e.dataTransfer.getData('text/plain'); if(!id) return; var st=col.getAttribute('data-st'); applyReorder(id, null, 'end', st); }
 function setStatus(id, st){
-  var ok = hubSave(function(db){ var rec=(db[COLL]||[]).find(function(x){return x.id===id;}); if(!rec) throw '対象なし'; rec.status=st; rec._updatedAt=new Date().toISOString(); });
+  var ok = hubSave(function(db){ var rec=(db[COLL]||[]).find(function(x){return x.id===id;}); if(!rec) throw '対象なし'; rec.status=st; rec._updatedAt=new Date().toISOString(); if(!rec._fts) rec._fts={}; rec._fts.status=rec._updatedAt; });
   if(ok) render();
 }
 
@@ -1594,6 +1628,7 @@ function pickDate(el){
       rec[f]=v; rec._updatedAt=new Date().toISOString();
       if(!rec._edited) rec._edited={};
       rec._edited[f]=1;   // 手入力を記録 → 資料取込で上書きしない
+      if(!rec._fts) rec._fts={}; rec._fts[f]=rec._updatedAt;
     });
     _hdateHide(dp);
     if(!ok) return;
@@ -1655,7 +1690,7 @@ function autoGrowTA(){
 function editGroup(gi, field, val){
   var g=_mGroups[gi]; if(!g) return;
   var ids={}; g.recs.forEach(function(r){ ids[r.id]=1; });
-  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; if(!r._edited) r._edited={}; r._edited[field]=1; r._updatedAt=new Date().toISOString(); } }); })){ buildCats(); render(); }
+  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; if(!r._edited) r._edited={}; r._edited[field]=1; r._updatedAt=new Date().toISOString(); if(!r._fts) r._fts={}; r._fts[field]=r._updatedAt; } }); })){ buildCats(); render(); }
 }
 // 変更すると他のセル・集計・グループ分けに波及する項目(=全体の再描画が要る)
 var _RERENDER_FIELDS={ cust:1, year:1, product:1, orderQty:1, orderPrice:1, cost:1, purAmt:1, status:1 };
@@ -1672,6 +1707,7 @@ function onEdit(elm){
     rec[f] = val; rec._updatedAt = new Date().toISOString();
     if(!rec._edited) rec._edited={};
     rec._edited[f]=1;   // 手入力を記録 → 以後の資料取込で上書きしない
+    if(!rec._fts) rec._fts={}; rec._fts[f]=rec._updatedAt;   // 項目単位の更新時刻(セル単位マージ用)
   });
   if(ok){
     if(elm.style){ elm.style.background = '#dcfce7'; setTimeout(function(){ elm.style.background=''; }, 500); }
