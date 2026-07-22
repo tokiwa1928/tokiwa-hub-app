@@ -627,6 +627,15 @@ function hubSave(mutator){
 // カレンダー明細を「レコードごとに更新時刻(_updatedAt)が新しい方を採用」してマージする。
 // 全体を丸ごと上書きすると、古いデータを持つ端末の保存で他端末の新しい変更が先祖返りするため。
 function _tsval(r){ var t=r&&r._updatedAt; if(!t) return 0; var n=Date.parse(t); return isNaN(n)?0:n; }
+function stampField(rec, f){
+  var known=_tsval(rec);
+  var known2=0;
+  if(rec && rec._fts){ for(var k in rec._fts){ var n=Date.parse(rec._fts[k]); if(!isNaN(n) && n>known2) known2=n; } }
+  var ts=new Date(Math.max(Date.now(), known+1000, known2+1000)).toISOString();
+  rec._updatedAt=ts;
+  if(!rec._edited) rec._edited={}; rec._edited[f]=1;
+  if(!rec._fts) rec._fts={}; rec._fts[f]=ts;
+}
 function _fldts(r, k, base){
   var f=r&&r._fts&&r._fts[k];
   if(f){ var n=Date.parse(f); if(!isNaN(n)) return n; }
@@ -1233,9 +1242,7 @@ function saveSpec(){
   var ok=hubSave(function(db){
     var rec=(db[COLL]||[]).find(function(x){ return x.id===_specId; });
     if(!rec) throw '対象なし';
-    rec.spec=sp; rec._updatedAt=new Date().toISOString();
-    if(!rec._edited) rec._edited={}; rec._edited.spec=1;
-    if(!rec._fts) rec._fts={}; rec._fts.spec=rec._updatedAt;
+    rec.spec=sp; stampField(rec,'spec');
   });
   if(ok){ hubToast('📋 仕様を保存しました'); closeSpec(); render(); }
 }
@@ -1553,7 +1560,7 @@ function cardDrag(e){ e.dataTransfer.setData('text/plain', e.target.getAttribute
 function boardOver(e, col){ e.preventDefault(); col.classList.add('over'); }
 function boardDrop(e, col){ e.preventDefault(); col.classList.remove('over'); var id=e.dataTransfer.getData('text/plain'); if(!id) return; var st=col.getAttribute('data-st'); applyReorder(id, null, 'end', st); }
 function setStatus(id, st){
-  var ok = hubSave(function(db){ var rec=(db[COLL]||[]).find(function(x){return x.id===id;}); if(!rec) throw '対象なし'; rec.status=st; rec._updatedAt=new Date().toISOString(); if(!rec._fts) rec._fts={}; rec._fts.status=rec._updatedAt; });
+  var ok = hubSave(function(db){ var rec=(db[COLL]||[]).find(function(x){return x.id===id;}); if(!rec) throw '対象なし'; rec.status=st; stampField(rec,'status'); });
   if(ok) render();
 }
 
@@ -1625,10 +1632,7 @@ function pickDate(el){
     var ok=hubSave(function(db){
       var rec=(db[COLL]||[]).find(function(x){ return x.id===id; });
       if(!rec) throw '対象なし';
-      rec[f]=v; rec._updatedAt=new Date().toISOString();
-      if(!rec._edited) rec._edited={};
-      rec._edited[f]=1;   // 手入力を記録 → 資料取込で上書きしない
-      if(!rec._fts) rec._fts={}; rec._fts[f]=rec._updatedAt;
+      rec[f]=v; stampField(rec, f);
     });
     _hdateHide(dp);
     if(!ok) return;
@@ -1690,7 +1694,7 @@ function autoGrowTA(){
 function editGroup(gi, field, val){
   var g=_mGroups[gi]; if(!g) return;
   var ids={}; g.recs.forEach(function(r){ ids[r.id]=1; });
-  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; if(!r._edited) r._edited={}; r._edited[field]=1; r._updatedAt=new Date().toISOString(); if(!r._fts) r._fts={}; r._fts[field]=r._updatedAt; } }); })){ buildCats(); render(); }
+  if(hubSave(function(db){ (db[COLL]||[]).forEach(function(r){ if(ids[r.id]){ r[field]=val; stampField(r, field); } }); })){ buildCats(); render(); }
 }
 // 変更すると他のセル・集計・グループ分けに波及する項目(=全体の再描画が要る)
 var _RERENDER_FIELDS={ cust:1, year:1, product:1, orderQty:1, orderPrice:1, cost:1, purAmt:1, status:1 };
@@ -1704,10 +1708,7 @@ function onEdit(elm){
   var ok = hubSave(function(db){
     var rec = (db[COLL]||[]).find(function(x){ return x.id === id; });
     if(!rec) throw '対象が見つかりません';
-    rec[f] = val; rec._updatedAt = new Date().toISOString();
-    if(!rec._edited) rec._edited={};
-    rec._edited[f]=1;   // 手入力を記録 → 以後の資料取込で上書きしない
-    if(!rec._fts) rec._fts={}; rec._fts[f]=rec._updatedAt;   // 項目単位の更新時刻(セル単位マージ用)
+    rec[f] = val; stampField(rec, f);   // 手入力を記録(論理時計で時計ズレにも負けない)
   });
   if(ok){
     if(elm.style){ elm.style.background = '#dcfce7'; setTimeout(function(){ elm.style.background=''; }, 500); }
