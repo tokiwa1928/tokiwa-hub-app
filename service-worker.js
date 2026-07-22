@@ -6,7 +6,7 @@
 // ============================================================
 
 const CACHE_VERSION = 'tokiwa-hub-v380';
-const RUNTIME_CACHE = 'tokiwa-hub-runtime-v339';
+const RUNTIME_CACHE = 'tokiwa-hub-runtime-v340';
 
 // 起動時に最低限プリキャッシュするアセット (任意で増やせる)
 const PRECACHE_URLS = [
