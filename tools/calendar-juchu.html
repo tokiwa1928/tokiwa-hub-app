@@ -448,6 +448,8 @@
     .mtbl .rowbtn.add:hover{ background:#dcfce7; }
     .mtbl .rowbtn.spec{ border-color:#cbd5e1; color:#64748b; margin-left:3px; }
     .mtbl .rowbtn.spec.on{ border-color:#0891b2; color:#0e7490; background:#ecfeff; }
+    .mtbl .rowbtn.mv{ padding:1px 3px; font-size:8px; margin-left:2px; color:#64748b; }
+    .mtbl .rowbtn.mv:hover{ background:#e2e8f0; }
     .rowbtn.ok{ border-color:#86efac; color:#16a34a; margin-left:3px; }
     .mtbl td .ti{ width:100%; min-width:64px; box-sizing:border-box; padding:1px 2px; font-size:12px; color:#0f172a; border:1px solid #cbd5e1; border-radius:4px; background:#fff; font-family:inherit; }
     /* 折り返し編集欄(備考・納品先など): 内容に合わせて高さが伸び、全文が見える */
@@ -1156,7 +1158,7 @@ function renderTrend(){
     if(ff==='telEmpty' && anyTel) return;
     if(ff==='calledNotOrdered' && !(anyTel&&!anyOrd)) return;
     if(ff==='orderedNotDelivered' && !(anyOrd&&!anyDlv)) return;
-    var recs=g.recs.filter(function(r){ return showYears.indexOf(r.year)>=0; }).sort(function(a,b){ if(a.year!==b.year) return a.year-b.year; return String(a.product||'').localeCompare(String(b.product||''),'ja'); });
+    var recs=g.recs.filter(function(r){ return showYears.indexOf(r.year)>=0; }).sort(cmpRows);
     if(!recs.length) return;
     var nr=recs.length;
     var gi_=gi;
@@ -1219,6 +1221,28 @@ function focusYear(y){
   if(shown.length===1 && shown[0]===y){ _allYears.forEach(function(yy){ yearShow[yy]=true; }); }
   else { _allYears.forEach(function(yy){ yearShow[yy]=(yy===y); }); }
   render();
+}
+// 行の表示順: 年 → 手動並び順(ord・未設定は最後) → 製品名
+function cmpRows(a,b){
+  if(a.year!==b.year) return a.year-b.year;
+  var oa=(a.ord==null||a.ord==='')?1e9:Number(a.ord), ob=(b.ord==null||b.ord==='')?1e9:Number(b.ord);
+  if(oa!==ob) return oa-ob;
+  return String(a.product||'').localeCompare(String(b.product||''),'ja');
+}
+// 同じ年度内で行を上下入れ替え(並び順は ord に保存され全PCで共有)
+function moveRow(id, dir){
+  var g=null; for(var gi=0; gi<_mGroups.length; gi++){ if(_mGroups[gi].recs.some(function(r){return r.id===id;})){ g=_mGroups[gi]; break; } }
+  if(!g) return;
+  var rec=g.recs.filter(function(r){return r.id===id;})[0];
+  var rows=g.recs.filter(function(r){ return r.year===rec.year; }).sort(cmpRows);
+  var i=rows.map(function(r){return r.id;}).indexOf(id), j=i+dir;
+  if(j<0 || j>=rows.length){ hubToast(dir<0?'一番上です':'一番下です'); return; }
+  var order=rows.map(function(r){return r.id;});
+  order[i]=rows[j].id; order[j]=id;
+  var pos={}; order.forEach(function(rid,idx){ pos[rid]=idx; });
+  if(hubSave(function(db){
+    (db[COLL]||[]).forEach(function(r){ if(pos[r.id]!=null && r.ord!==pos[r.id]){ r.ord=pos[r.id]; stampField(r,'ord'); } });
+  })) render();
 }
 function prevRecOf(g, r){ var best=null, same=null; g.recs.forEach(function(x){ if(x.year<r.year && mPrice(x)!==''){ if(!best||x.year>best.year) best=x; if(x.product===r.product && (!same||x.year>same.year)) same=x; } }); return same||best; }
 function prevAnyRecOf(g, r){ var best=null; g.recs.forEach(function(x){ if(x.year<r.year){ if(!best||x.year>best.year) best=x; } }); return best; }
@@ -1350,10 +1374,11 @@ function yearRow2(r, g){
   var crCell=(cr!==''?'<b style="color:'+crColor(cr)+'">'+fmtPct(cr)+'</b>':(isCur?'<span class="dim">自動</span>':'—'));
   var editable=isCur||!!_editUnlocked[r.id];
   var delB='<button class="rowbtn del" onclick="delRow(\''+id+'\')" title="この行を削除">🗑</button>';
+  var mvB='<button class="rowbtn mv" onclick="moveRow(\''+id+'\',-1)" title="同じ年の中で上へ">▲</button><button class="rowbtn mv" onclick="moveRow(\''+id+'\',1)" title="同じ年の中で下へ">▼</button>';
   var specB='<button class="rowbtn spec'+(specHas(r)?' on':'')+'" onclick="openSpec(\''+id+'\')" title="販売基本仕様(サイズ・用紙・色・加工・名入れ等)">📋</button>';
   var addB='<button class="rowbtn add" onclick="repeatRow(\''+id+'\')" title="この行を今日の年で追加（ユーザー〜数量＋納品方法/納品先/申し送りを引継ぎ・伝票番号なし）">＋追加</button>';
   var hubB=isCur?('<button class="rowbtn" onclick="calToEst(\''+id+'\')" title="Hubで見積作成（内容を引き継いで見積画面を開く）">📄</button>'+(r.orderDate?'<button class="rowbtn ok" onclick="calToProject(\''+id+'\')" title="'+(r._hubProjId?'Hub案件を更新':'Hubの案件管理表へ受注登録')+'">'+(r._hubProjId?'🔁':'✅')+'</button>':'')):'';
-  var actCell='<td class="act'+(editable?' curr':'')+'">'+(isCur?delB:(editable?(delB+'<button class="rowbtn ok" onclick="lockEdit(\''+id+'\')" title="編集を終了">✓</button>'):'<button class="rowbtn edit" onclick="unlockEdit(\''+id+'\')" title="この過去データを編集">✏編集</button>'))+hubB+addB+specB+'</td>';
+  var actCell='<td class="act'+(editable?' curr':'')+'">'+(isCur?delB:(editable?(delB+'<button class="rowbtn ok" onclick="lockEdit(\''+id+'\')" title="編集を終了">✓</button>'):'<button class="rowbtn edit" onclick="unlockEdit(\''+id+'\')" title="この過去データを編集">✏編集</button>'))+hubB+addB+specB+mvB+'</td>';
   if(editable){
     return '<td class="d curr stcol">'+stBadge(r)+'</td><td class="ycol curr"><input class="gedit yedit" value="'+r.year+'" data-id="'+id+'" data-f="year" onchange="onEdit(this)">'+alert+'</td><td class="lead curr">'+inp('user','ta')+'</td><td class="lprod curr">'+inp('product','text','prodMaster')+'</td><td class="curr">'+inp('denpyoNo','text')+'</td><td class="d curr"><select class="nsel" data-id="'+id+'" data-f="naire" onchange="onEdit(this)"><option value="">—</option><option'+(r.naire==='有'?' selected':'')+'>有</option><option'+(r.naire==='無'?' selected':'')+'>無</option></select></td><td class="lvendor curr">'+inp('vendor','text','vendorMaster')+'</td><td class="n curr">'+inp('orderQty','num')+'</td><td class="n curr">'+inp('orderPrice','num')+'</td><td class="n curr">'+pctSigned(price,prevP,pyl)+'</td><td class="n curr">'+(saAmt!==''?'¥'+fmt(saAmt):'<span class="dim">自動</span>')+'</td><td class="d curr xw"><select class="nsel" data-id="'+id+'" data-f="plateChg" onchange="onEdit(this)"><option value="">—</option><option'+(r.plateChg==='有'?' selected':'')+'>有</option><option'+(r.plateChg==='無'?' selected':'')+'>無</option></select></td><td class="n curr xw">'+inp('plateCost','num')+'</td><td class="n curr xw">'+inp('shipFee','num')+'</td><td class="n curr xw">'+inp('otherAmt','num')+'</td><td class="n curr">'+inp('cost','num')+costDiff+'</td><td class="n curr">'+(siAmt!==''?'¥'+fmt(siAmt):'<span class="dim">自動</span>')+'</td><td class="n curr">'+crCell+'</td><td class="d curr">'+inp('telDate','date')+'</td><td class="d curr">'+inp('orderDate','date')+'</td><td class="d curr">'+inp('lostDate','date')+'</td><td class="d curr">'+inp('poDate','date')+'</td><td class="d curr">'+inp('poDue','date')+'</td><td class="d curr">'+inp('poConfirm','date')+'</td><td class="d curr">'+inp('inDate','date')+'</td><td class="d curr">'+inp('delivDate','date')+'</td><td class="d curr">'+inp('deliveryMethod','ta')+'</td><td class="lead curr">'+inp('delivTo','ta')+'</td><td class="lead curr">'+inp('memo','ta')+'</td><td class="lead curr">'+inp('note','ta')+'</td>'+actCell;
   }
@@ -2158,9 +2183,13 @@ function buildQuoteSheet(){
 }
 // 保存ファイル名: 20260722_会社名御中(or様)_製品名  (PDFはページタイトルが既定名になる)
 function quoteFileName(q){
-  var prod=(q.lines && q.lines[0] && q.lines[0].name) ? cleanProd(q.lines[0].name) : '見積';
-  var fn=(q.date.replace(/-/g,''))+'_'+(q.cust||'')+(q.hon||'')+'_'+prod;
-  return fn.replace(/[\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,80);
+  var names=(q.lines||[]).map(function(l){ return l&&l.name; }).filter(Boolean).map(cleanProd).filter(Boolean);
+  var head=(q.date.replace(/-/g,''))+'_'+(q.cust||'')+(q.hon||'')+'_';
+  var clean=function(x){ return x.replace(/[\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim(); };
+  var prod=names.length ? names.join('・') : '見積';
+  var fn=clean(head+prod);
+  if(fn.length>80 && names.length>1){ fn=clean(head+names[0]+'ほか'+(names.length-1)+'種'); }   // 長すぎる時は「先頭ほかN種」
+  return fn.slice(0,80);
 }
 function quotePDF(){
   if(!document.querySelectorAll('#qBody tr').length){ hubToast('明細がありません'); return; }
