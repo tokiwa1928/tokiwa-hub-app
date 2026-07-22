@@ -49,6 +49,8 @@
   .sh-sch th{ background:#f1f5f9;font-size:11px;color:#64748b;text-align:left;padding:4px 6px;font-weight:700 }
   .sh-sch td{ padding:3px 4px }
   .sh-sch input,.sh-sch select{ padding:4px 6px;font-size:13px }
+  .sh-hint{ font-size:11px;color:#94a3b8;margin:2px 0 4px;line-height:1.5 }
+  .sh-hint b{ color:#64748b }
   .sh-sum{ display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px 12px;background:#1a1a1a;color:#fff;border-radius:8px;font-size:13px }
   .sh-sum b{ font-size:16px;font-variant-numeric:tabular-nums }
 </style>
@@ -75,17 +77,27 @@
     <div style="font-size:15px;font-weight:800;margin-bottom:12px" id="sh-modal-title">🧳 出張旅費精算書</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 14px">
       <div><label class="shl">提出日</label><input type="date" id="sh-date" class="shi"></div>
-      <div><label class="shl">氏名</label><input id="sh-name" class="shi"></div>
+      <div><label class="shl">氏名</label>
+        <select id="sh-name" class="shi" onchange="shNameChange()"></select>
+        <input id="sh-name-other" class="shi" style="margin-top:5px;display:none" placeholder="氏名を入力">
+      </div>
       <div><label class="shl">対象月</label><input id="sh-period" class="shi" placeholder="例) 2025年11月-2026年3月 / 5月・6月"></div>
     </div>
     <div style="margin-top:14px">
       <label class="shl">出張スケジュール（1日1行・区分で日当が自動計算されます）</label>
+      <div class="sh-hint">日付を入れて <b>Enter</b> または <b>Tab</b> で次の行へ。最終行の訪問先で <b>Enter</b> を押すと行が増えます（区分・訪問先は前の行を引き継ぎ）。</div>
       <table class="sh-sch">
         <thead><tr><th style="width:110px">区分</th><th style="width:170px">期間（日付）</th><th>訪問先</th><th style="width:34px"></th></tr></thead>
         <tbody id="sh-sch-body"></tbody>
       </table>
-      <button class="btn" style="margin-top:5px;font-size:12px;padding:4px 10px" onclick="shAddRow()">＋ 行追加</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px;align-items:center">
+        <button class="btn" style="font-size:12px;padding:4px 10px" onclick="shAddRow(1,true)">＋ 行追加</button>
+        <button class="btn" style="font-size:12px;padding:4px 10px" onclick="shAddRow(5,true)">＋ 5行</button>
+        <button class="btn" style="font-size:12px;padding:4px 10px" onclick="shSortRows()">🔃 日付順に並べ替え</button>
+        <span id="sh-rowcnt" class="muted"></span>
+      </div>
     </div>
+    <datalist id="sh-dests"></datalist>
     <div style="margin-top:14px">
       <label class="shl">日当単価</label>
       <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
@@ -276,6 +288,8 @@ function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
 // ═════════ 出張旅費精算書 (DB.forms type='shucchou' を共有・過去履歴を継承) ═════════
 // 様式は W:\...\20_マネージメント\出張申請\*.xlsx （提出日／対象月・氏名／出張スケジュール／日当）に合わせる。
 var SH_RATE_DAY=1000, SH_RATE_STAY=2000;   // 日帰/宿泊の日当単価(既定)
+var SH_NAMES=['本多　亮','福永　健児'];      // 氏名ドロップダウン(該当者が増えたらここに追加)
+var SH_DEST_DEFAULT=['東京','神奈川','大阪','三重','秋田','岩手','静岡','愛知'];   // 訪問先候補の初期値(過去の入力が優先)
 function shList(){
   var db=hubLoad(); var L=(db&&Array.isArray(db.forms))?db.forms:[];
   return L.filter(function(r){ return r && r.type==='shucchou' && !r.deleted; });
@@ -303,7 +317,8 @@ function shMonthLabel(m){ if(!m) return ''; var p=String(m).split('-'); return p
 function shCounts(d){
   d=shNorm(d);
   var c={day:0, stay:0};
-  (d.trips||[]).forEach(function(t){ if(t&&(t.date||t.dest)){ if(t.kind==='宿泊') c.stay++; else c.day++; } });
+  // 日付が入っている行だけを1日と数える(訪問先だけ引き継いだ空行を日当に含めない)
+  (d.trips||[]).forEach(function(t){ if(t&&t.date){ if(t.kind==='宿泊') c.stay++; else c.day++; } });
   c.rateDay=Number(d.rateDay!=null?d.rateDay:SH_RATE_DAY)||0;
   c.rateStay=Number(d.rateStay!=null?d.rateStay:SH_RATE_STAY)||0;
   c.amtDay=c.day*c.rateDay; c.amtStay=c.stay*c.rateStay; c.total=c.amtDay+c.amtStay;
@@ -311,6 +326,35 @@ function shCounts(d){
 }
 function shTotal(d){ return shCounts(d).total; }
 function shFmtDate(s){ if(!s) return ''; var p=String(s).split('-'); return p.length===3 ? (p[0]+'/'+parseInt(p[1],10)+'/'+parseInt(p[2],10)) : String(s); }
+
+// 過去に入力された訪問先を候補にする(よく使う順→五十音)
+function shDestList(){
+  var cnt={};
+  shList().forEach(function(r){ (shNorm(r.data||{}).trips||[]).forEach(function(t){ var v=(t&&t.dest||'').trim(); if(v) cnt[v]=(cnt[v]||0)+1; }); });
+  SH_DEST_DEFAULT.forEach(function(v){ if(!(v in cnt)) cnt[v]=0; });
+  return Object.keys(cnt).sort(function(a,b){ return (cnt[b]-cnt[a]) || a.localeCompare(b,'ja'); });
+}
+function shSyncDestList(){
+  var dl=document.getElementById('sh-dests'); if(!dl) return;
+  dl.innerHTML=shDestList().map(function(v){ return '<option value="'+esc(v)+'">'; }).join('');
+}
+// 氏名: SH_NAMES + 過去に使われた氏名 + その他(直接入力)
+function shNameOptions(cur){
+  var names=SH_NAMES.slice();
+  shList().forEach(function(r){ var n=(shNorm(r.data||{}).name||'').trim(); if(n && names.indexOf(n)<0) names.push(n); });
+  if(cur && names.indexOf(cur)<0) names.push(cur);
+  return names;
+}
+function shNameChange(){
+  var sel=document.getElementById('sh-name'), other=document.getElementById('sh-name-other');
+  var isOther=(sel.value==='__other__');
+  other.style.display=isOther?'block':'none';
+  if(isOther) other.focus();
+}
+function shNameValue(){
+  var sel=document.getElementById('sh-name');
+  return (sel.value==='__other__') ? document.getElementById('sh-name-other').value.trim() : sel.value;
+}
 
 var _editId=null;
 function shNew(){ _editId=null; shFill({}); document.getElementById('sh-modal-title').textContent='🧳 出張旅費精算書（新規）'; document.getElementById('shModal').style.display='flex'; }
@@ -320,12 +364,31 @@ function shEdit(id){
   document.getElementById('sh-modal-title').textContent='🧳 出張旅費精算書（編集）';
   document.getElementById('shModal').style.display='flex';
 }
+// レコードを複製: 内容を引き継いだ「新規」として開く(保存するまで元は変わらない)
+function shCopy(id){
+  var r=shList().find(function(x){return x.id===id;}); if(!r) return;
+  var d=JSON.parse(JSON.stringify(shNorm(r.data||{})));
+  d.date=new Date().toISOString().slice(0,10);   // 提出日は今日に
+  delete d._legacy;
+  _editId=null; shFill(d);
+  document.getElementById('sh-modal-title').textContent='🧳 出張旅費精算書（コピー／新規として保存されます）';
+  document.getElementById('shModal').style.display='flex';
+  hubToast('📋 コピーしました。対象月・日付を直して保存してください');
+}
 function shClose(){ document.getElementById('shModal').style.display='none'; _editId=null; }
 function shFill(d){
   var t=new Date().toISOString().slice(0,10);
   var set=function(id,v){ document.getElementById(id).value=(v==null?'':v); };
   set('sh-date', d.date||t);
-  set('sh-name', d.name||(hubAuth().userName||''));
+  // 氏名(ドロップダウン)
+  var cur=d.name||(hubAuth().userName||'');
+  var sel=document.getElementById('sh-name');
+  sel.innerHTML='<option value="">（選択してください）</option>'
+    + shNameOptions(cur).map(function(n){ return '<option value="'+esc(n)+'">'+esc(n)+'</option>'; }).join('')
+    + '<option value="__other__">その他（直接入力）</option>';
+  sel.value=cur||''; document.getElementById('sh-name-other').value='';
+  shNameChange();
+  shSyncDestList();
   set('sh-period', d.period||'');
   set('sh-rate-day', d.rateDay!=null?d.rateDay:SH_RATE_DAY);
   set('sh-rate-stay', d.rateStay!=null?d.rateStay:SH_RATE_STAY);
@@ -340,14 +403,40 @@ function shSchRow(t){
   var st='width:100%;border:1px solid #d0cec8;border-radius:5px;box-sizing:border-box;font-family:inherit';
   var sel=['日帰','宿泊'].map(function(k){ return '<option'+(t.kind===k?' selected':'')+'>'+k+'</option>'; }).join('');
   return '<tr><td><select class="sh-t-kind" onchange="shCalc()" style="'+st+'">'+sel+'</select></td>'
-    +'<td><input type="date" class="sh-t-date" value="'+esc(t.date||'')+'" onchange="shCalc()" style="'+st+'"></td>'
-    +'<td><input class="sh-t-dest" value="'+esc(t.dest||'')+'" placeholder="訪問先（例: 東京 / 神奈川）" style="'+st+'"></td>'
+    +'<td><input type="date" class="sh-t-date" value="'+esc(t.date||'')+'" onchange="shCalc()" onkeydown="shRowKey(event)" style="'+st+'"></td>'
+    +'<td><input class="sh-t-dest" list="sh-dests" value="'+esc(t.dest||'')+'" placeholder="訪問先（例: 東京 / 神奈川）" onkeydown="shRowKey(event)" style="'+st+'"></td>'
     +'<td style="text-align:center"><span style="cursor:pointer;color:#b91c1c;font-weight:700" title="この行を削除" onclick="this.closest(\'tr\').remove();shCalc()">✕</span></td></tr>';
 }
-function shAddRow(){
+// n行まとめて追加。前の行の区分・訪問先を引き継ぐので、月に何度も行く先は日付だけ入れれば済む。
+function shAddRow(n, focus){
+  n=n||1;
   var tb=document.getElementById('sh-sch-body');
-  var last=tb.querySelector('tr:last-child .sh-t-dest');
-  tb.insertAdjacentHTML('beforeend', shSchRow({ kind:'日帰', date:'', dest:(last?last.value:'') }));
+  var lastDest=tb.querySelector('tr:last-child .sh-t-dest');
+  var lastKind=tb.querySelector('tr:last-child .sh-t-kind');
+  var first=null;
+  for(var i=0;i<n;i++){
+    tb.insertAdjacentHTML('beforeend', shSchRow({ kind:(lastKind?lastKind.value:'日帰'), date:'', dest:(lastDest?lastDest.value:'') }));
+    if(!first) first=tb.querySelector('tr:last-child .sh-t-date');
+  }
+  shCalc();
+  if(focus && first) first.focus();
+}
+// Enter: 最終行なら行を増やして次の日付欄へ、途中の行なら次の行の日付欄へ移動
+function shRowKey(ev){
+  if(ev.key!=='Enter') return;
+  ev.preventDefault();
+  var tr=ev.target.closest('tr');
+  var next=tr.nextElementSibling;
+  if(!next){ shAddRow(1,true); return; }
+  var d=next.querySelector('.sh-t-date'); if(d) d.focus();
+}
+function shSortRows(){
+  var tb=document.getElementById('sh-sch-body');
+  var rows=[].slice.call(tb.querySelectorAll('tr')).map(function(tr){
+    return { kind:tr.querySelector('.sh-t-kind').value, date:tr.querySelector('.sh-t-date').value, dest:tr.querySelector('.sh-t-dest').value };
+  }).filter(function(r){ return r.date||r.dest; })
+    .sort(function(a,b){ return String(a.date||'9999').localeCompare(String(b.date||'9999')); });
+  tb.innerHTML=rows.map(shSchRow).join('') || shSchRow({kind:'日帰'});
   shCalc();
 }
 function shCalc(){
@@ -356,24 +445,31 @@ function shCalc(){
     '<span>日帰 '+c.day+'日 × '+c.rateDay.toLocaleString()+'円 = '+c.amtDay.toLocaleString()+'円</span>'
     +'<span>宿泊 '+c.stay+'日 × '+c.rateStay.toLocaleString()+'円 = '+c.amtStay.toLocaleString()+'円</span>'
     +'<span style="margin-left:auto">日当合計 <b>¥'+c.total.toLocaleString()+'</b></span>';
+  var rc=document.getElementById('sh-rowcnt');
+  if(rc) rc.textContent='入力済み '+(c.day+c.stay)+'日 / 行数 '+document.querySelectorAll('.sh-t-kind').length;
 }
 function shCollect(){
   var trips=[];
   var kinds=document.querySelectorAll('.sh-t-kind'), dates=document.querySelectorAll('.sh-t-date'), dests=document.querySelectorAll('.sh-t-dest');
   for(var i=0;i<kinds.length;i++){
     var dt=dates[i].value, ds=dests[i].value.trim();
-    if(dt||ds) trips.push({ kind:kinds[i].value, date:dt, dest:ds });
+    if(dt) trips.push({ kind:kinds[i].value, date:dt, dest:ds });   // 日付が無い行は未入力とみなす
   }
   trips.sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||'')); });
   var gv=function(id){ return document.getElementById(id).value; };
   var num=function(id,def){ var v=parseFloat(gv(id)); return isNaN(v)?def:v; };
-  return { date:gv('sh-date'), name:gv('sh-name'), period:gv('sh-period'), trips:trips,
+  return { date:gv('sh-date'), name:shNameValue(), period:gv('sh-period'), trips:trips,
            rateDay:num('sh-rate-day',SH_RATE_DAY), rateStay:num('sh-rate-stay',SH_RATE_STAY), note:gv('sh-note') };
 }
 function shSave(thenPrint){
   var data=shCollect();
-  if(!data.name){ hubToast('氏名を入力してください'); return; }
-  if(!data.trips.length){ hubToast('出張スケジュールを1行以上入力してください'); return; }
+  if(!data.name){ hubToast('氏名を選んでください'); return; }
+  if(!data.trips.length){ hubToast('出張スケジュールを1行以上入力してください（日付が必要です）'); return; }
+  // 訪問先だけで日付が空の行は日当に数えられない。黙って捨てずに知らせる。
+  var noDate=0;
+  var ds=document.querySelectorAll('.sh-t-date'), de=document.querySelectorAll('.sh-t-dest');
+  for(var i=0;i<ds.length;i++){ if(!ds[i].value && de[i].value.trim()) noDate++; }
+  if(noDate && !confirm('日付が空の行が '+noDate+' 行あります。\nこの行は日当に数えられず保存もされません。このまま保存しますか？')) return;
   var title=(data.name||'')+(data.period?(' / '+data.period):'');
   var savedId=null;
   var ok=hubSave(function(db){
@@ -506,6 +602,7 @@ function render(){
           +'<span class="sh-amt">¥'+c.total.toLocaleString()+'</span>'
           +'<span style="display:flex;gap:5px">'
           +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shEdit(\''+r.id+'\')">✏ 編集</button>'
+          +'<button class="btn" style="padding:3px 9px;font-size:12px" title="この精算書をコピーして新規作成" onclick="shCopy(\''+r.id+'\')">📋 複製</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shPrint(\''+r.id+'\')">🖨</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px;color:#c0261c" onclick="shDelete(\''+r.id+'\')">🗑</button>'
           +'</span></div>';
