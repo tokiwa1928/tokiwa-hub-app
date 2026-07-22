@@ -66,7 +66,8 @@
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
       <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2;font-weight:700" onclick="shNew()">＋ 新規作成</button>
       <input id="sh-q" placeholder="🔍 氏名・訪問先・対象月で検索" oninput="render()" style="flex:1;min-width:200px;padding:7px 9px;border:1px solid #cbd5e1;border-radius:7px;font-family:inherit;font-size:13px">
-      <button class="btn" onclick="shPrintSel()" title="チェックした精算書をまとめて印刷（1枚ずつ改ページ）">🖨 選択をまとめて印刷</button>
+      <button class="btn" onclick="shPdfSel()" title="チェックした精算書を1つのPDFにまとめて書き出す（1枚1ページ）">📄 選択をPDF</button>
+      <button class="btn" onclick="shPrintSel()" title="チェックした精算書をまとめて印刷（1枚ずつ改ページ）">🖨 選択を印刷</button>
     </div>
     <div id="sh-list"></div>
   </div>
@@ -109,7 +110,9 @@
     <div style="margin-top:12px"><label class="shl">備考（社内メモ・精算書には印刷されます）</label><input id="sh-note" class="shi"></div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
       <button class="btn" onclick="shClose()">閉じる</button>
-      <button class="btn" onclick="shExcelFromForm()" title="いま入力中の内容をExcel(.xlsx)で書き出す">📊 Excel出力</button>
+      <button class="btn" onclick="shExcelFromForm()" title="いま入力中の内容をExcel(.xlsx)で書き出す">📊 Excel</button>
+      <button class="btn" onclick="shPdfFromForm()" title="いま入力中の内容をPDFで書き出す">📄 PDF</button>
+      <button class="btn" onclick="shPrintFromForm()" title="いま入力中の内容をそのまま印刷">🖨 印刷</button>
       <button class="btn" onclick="shSave(false)">💾 保存</button>
       <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2" onclick="shSave(true)">💾 保存して印刷</button>
     </div>
@@ -543,28 +546,51 @@ function shDocBlock(dRaw){
     +(d.note?('<div class="note">備考：'+esc(d.note)+'</div>'):'')
     +'</div>';
 }
-function shOpenPrint(html, title){
-  var w=window.open('','_blank');
-  if(!w){ hubToast('ポップアップを許可してください'); return; }
-  w.document.write('<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>'+esc(title)+'</title>'+shStyle()+'</head><body>'
-    +'<div style="text-align:right;margin-bottom:6px"><button onclick="window.print()" style="padding:8px 18px;font-size:13px;cursor:pointer">🖨 印刷 / PDF保存</button></div>'
-    +html+'</body></html>');
-  w.document.close();
+// そのまま印刷: 非表示iframeに組んで印刷ダイアログを直接開く(別タブを開かない)
+function shPrintDirect(html){
+  var old=document.getElementById('sh-print-frame'); if(old) old.remove();
+  var f=document.createElement('iframe');
+  f.id='sh-print-frame';
+  f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(f);
+  var doc=f.contentWindow.document;
+  doc.open();
+  doc.write('<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>出張旅費精算書</title>'+shStyle()+'</head><body>'+html+'</body></html>');
+  doc.close();
+  var go=function(){
+    try{ f.contentWindow.focus(); f.contentWindow.print(); }
+    catch(e){ console.error(e); hubToast('❌ 印刷を開けませんでした'); }
+    setTimeout(function(){ f.remove(); }, 60000);   // 印刷ダイアログが閉じるまで残す
+  };
+  if(f.contentWindow.document.readyState==='complete') setTimeout(go,80); else f.onload=function(){ setTimeout(go,80); };
 }
 function shPrint(id){
   var r=shList().find(function(x){return x.id===id;}); if(!r) return;
-  shOpenPrint(shDocBlock(r.data||{}), '出張旅費精算書');
+  shPrintDirect(shDocBlock(r.data||{}));
+}
+function shPrintFromForm(){
+  var d=shCollect();
+  if(!d.name){ hubToast('氏名を選んでください'); return; }
+  if(!d.trips.length){ hubToast('出張スケジュールを1行以上入力してください（日付が必要です）'); return; }
+  shPrintDirect(shDocBlock(d));
 }
 // ── Excel出力（元の 出張申請\*.xlsx と同じ配置・数式で書き出す） ──
 // ExcelJS は押されたときだけ読み込む（普段の起動を重くしない）
 var SH_EXCELJS='https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
-function shLoadExcelJS(){
-  if(window.ExcelJS) return Promise.resolve(true);
+var SH_JSPDF='https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
+var SH_H2C='https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+function shLoadScript(url, ready){
+  if(ready()) return Promise.resolve(true);
   return new Promise(function(ok,ng){
-    var s=document.createElement('script'); s.src=SH_EXCELJS;
-    s.onload=function(){ ok(true); }; s.onerror=function(){ ng(new Error('load failed')); };
+    var s=document.createElement('script'); s.src=url;
+    s.onload=function(){ ok(true); }; s.onerror=function(){ ng(new Error('load failed: '+url)); };
     document.head.appendChild(s);
   });
+}
+function shLoadExcelJS(){ return shLoadScript(SH_EXCELJS, function(){ return !!window.ExcelJS; }); }
+function shLoadPdfLibs(){
+  return shLoadScript(SH_JSPDF, function(){ return !!(window.jspdf&&window.jspdf.jsPDF); })
+    .then(function(){ return shLoadScript(SH_H2C, function(){ return !!window.html2canvas; }); });
 }
 function _shCol(s){ var n=0; for(var i=0;i<s.length;i++) n=n*26+(s.charCodeAt(i)-64); return n; }
 // 出張申請フォルダの命名規則: YYYYMM_日当_氏名.xlsx （例 202611_日当_本多亮.xlsx）
@@ -671,15 +697,66 @@ function shExcelFromForm(){
   if(!d.trips.length){ hubToast('出張スケジュールを1行以上入力してください（日付が必要です）'); return; }
   shExcelDownload(d);
 }
-function shPrintSel(){
+// ── PDF出力（PDFファイルとしてダウンロード。印刷ダイアログを経由しない） ──
+function shPdfName(d){ return shFileName(d).replace(/\.xlsx$/,'.pdf'); }
+// 画面外にA4幅で組んで画像化 → PDFに貼る（日本語フォントの埋め込みが不要）
+function shRenderOffscreen(html){
+  var box=document.createElement('div');
+  box.style.cssText='position:fixed;left:-10000px;top:0;width:794px;background:#fff;padding:60px 60px;z-index:-1';
+  box.innerHTML='<style>'+shStyle().replace(/<\/?style>/g,'')+'</style>'+html;
+  document.body.appendChild(box);
+  return box;
+}
+async function shPdfDownload(docs, name){
+  try{
+    hubToast('📄 PDFを作成中…');
+    await shLoadPdfLibs();
+    var pdf=new window.jspdf.jsPDF({unit:'mm',format:'a4',orientation:'portrait'});
+    for(var i=0;i<docs.length;i++){
+      var box=shRenderOffscreen(docs[i]);
+      var canvas=await window.html2canvas(box,{scale:2,backgroundColor:'#ffffff',useCORS:true});
+      box.remove();
+      var w=210, h=canvas.height*w/canvas.width;
+      if(h>297){ h=297; w=canvas.width*h/canvas.height; }   // 念のため1ページに収める
+      if(i>0) pdf.addPage();
+      pdf.addImage(canvas.toDataURL('image/jpeg',0.95),'JPEG',(210-w)/2,0,w,h);
+    }
+    pdf.save(name);
+    hubToast('📄 '+name+' を書き出しました');
+  }catch(e){
+    console.error(e);
+    hubToast('❌ PDF出力に失敗しました（オフラインの可能性あり）。「🖨 印刷」からPDF保存もできます');
+  }
+}
+function shPdf(id){
+  var r=shList().find(function(x){return x.id===id;}); if(!r) return;
+  var d=r.data||{};
+  shPdfDownload([shDocBlock(d)], shPdfName(shNorm(d)));
+}
+function shPdfFromForm(){
+  var d=shCollect();
+  if(!d.name){ hubToast('氏名を選んでください'); return; }
+  if(!d.trips.length){ hubToast('出張スケジュールを1行以上入力してください（日付が必要です）'); return; }
+  shPdfDownload([shDocBlock(d)], shPdfName(d));
+}
+// ── 選択したものをまとめて（印刷 / PDF） ──
+function shSelIds(){
   var ids=[].slice.call(document.querySelectorAll('.sh-ck:checked')).map(function(c){ return c.value; });
-  if(!ids.length){ hubToast('印刷する精算書にチェックを入れてください'); return; }
+  if(!ids.length){ hubToast('対象の精算書にチェックを入れてください'); return null; }
+  return ids;
+}
+function shSelDocs(ids){
   var all=shList();
-  var body=ids.map(function(id,i){
-    var r=all.find(function(x){return x.id===id;}); if(!r) return '';
-    return '<div class="'+(i>0?'pgbreak':'')+'">'+shDocBlock(r.data||{})+'</div>';
-  }).join('');
-  shOpenPrint(body, '出張旅費精算書');
+  return ids.map(function(id){ var r=all.find(function(x){return x.id===id;}); return r?shDocBlock(r.data||{}):''; }).filter(Boolean);
+}
+function shPrintSel(){
+  var ids=shSelIds(); if(!ids) return;
+  var docs=shSelDocs(ids);
+  shPrintDirect(docs.map(function(h,i){ return '<div class="'+(i>0?'pgbreak':'')+'">'+h+'</div>'; }).join(''));
+}
+function shPdfSel(){
+  var ids=shSelIds(); if(!ids) return;
+  shPdfDownload(shSelDocs(ids), '出張旅費精算書_'+ids.length+'件.pdf');
 }
 // ── 一覧(氏名×対象月の精算書ごと) ──
 function shPeriodKey(r){ var d=shNorm(r.data||{}); return d.period||'（対象月 未設定）'; }
@@ -721,7 +798,8 @@ function render(){
           +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shEdit(\''+r.id+'\')">✏ 編集</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px" title="この精算書をコピーして新規作成" onclick="shCopy(\''+r.id+'\')">📋 複製</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px" title="Excel(.xlsx)で書き出す" onclick="shExcel(\''+r.id+'\')">📊 Excel</button>'
-          +'<button class="btn" style="padding:3px 9px;font-size:12px" onclick="shPrint(\''+r.id+'\')">🖨</button>'
+          +'<button class="btn" style="padding:3px 9px;font-size:12px" title="PDFファイルで書き出す" onclick="shPdf(\''+r.id+'\')">📄 PDF</button>'
+          +'<button class="btn" style="padding:3px 9px;font-size:12px" title="そのまま印刷（印刷ダイアログが開きます）" onclick="shPrint(\''+r.id+'\')">🖨 印刷</button>'
           +'<button class="btn" style="padding:3px 9px;font-size:12px;color:#c0261c" onclick="shDelete(\''+r.id+'\')">🗑</button>'
           +'</span></div>';
       }).join('')
