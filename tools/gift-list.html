@@ -122,17 +122,53 @@
 </div></div>
 
 <!-- 印刷 モーダル -->
-<div class="ov" id="ov-print"><div class="card" style="max-width:460px">
+<div class="ov" id="ov-print"><div class="card" style="max-width:480px">
   <h3>🖨 印刷</h3>
   <div class="fg"><label>対象の期</label><select id="pr-period"></select></div>
-  <div class="fg"><label>種類</label>
-    <select id="pr-kind">
-      <option value="list">送付リスト（送る相手だけ・A4）</option>
-      <option value="lbl12">宛名ラベル A4 12面（83.8×42.3）</option>
-      <option value="lbl21">宛名ラベル A4 21面（70×38.1）</option>
-    </select>
+  <div class="fg"><label>種類</label><select id="pr-kind" onchange="prKindChg()"></select></div>
+  <div class="fg" id="pr-content-wrap" style="display:none"><label>ラベルの内容</label>
+    <select id="pr-content"><option value="auto">自動（大きいラベル=宛名／小さいラベル=会社+担当）</option><option value="addr">宛名（住所＋会社＋担当者様）</option><option value="name">会社名＋担当者様のみ</option></select>
   </div>
-  <div class="cardft"><button class="btn" onclick="closeOv('ov-print')">閉じる</button><button class="btn pri" onclick="doPrint()">印刷</button></div>
+  <div style="font-size:11px;color:var(--mut);margin:2px 0 4px">※ラベルは必ず一度<b>普通紙にテスト印刷</b>して台紙に重ねて位置確認を。印刷時は「実際のサイズ／余白なし・倍率100%」で。</div>
+  <div class="cardft">
+    <button class="btn sm" onclick="openLbl()">⚙ レイアウト編集/追加</button>
+    <span style="flex:1"></span>
+    <button class="btn" onclick="closeOv('ov-print')">閉じる</button><button class="btn pri" onclick="doPrint()">印刷</button>
+  </div>
+</div></div>
+
+<!-- ラベルレイアウト 編集モーダル -->
+<div class="ov" id="ov-lbl"><div class="card">
+  <h3>⚙ ラベルレイアウト</h3>
+  <div class="fg"><label>編集するレイアウト</label><select id="lb-sel" onchange="lbLoad()"></select></div>
+  <div class="row2">
+    <div class="fg"><label>名前</label><input id="lb-name"></div>
+    <div class="fg"><label>用紙向き</label><select id="lb-orient"><option value="landscape">A4 横</option><option value="portrait">A4 縦</option></select></div>
+  </div>
+  <div class="row2">
+    <div class="fg"><label>列数（横）</label><input id="lb-cols" type="number"></div>
+    <div class="fg"><label>行数（縦）</label><input id="lb-rows" type="number"></div>
+  </div>
+  <div class="row2">
+    <div class="fg"><label>ラベル幅 mm</label><input id="lb-w" type="number" step="0.1"></div>
+    <div class="fg"><label>ラベル高 mm</label><input id="lb-h" type="number" step="0.1"></div>
+  </div>
+  <div class="row2">
+    <div class="fg"><label>上余白 mm</label><input id="lb-mt" type="number" step="0.1"></div>
+    <div class="fg"><label>左余白 mm（中央=空欄）</label><input id="lb-ml" type="number" step="0.1" placeholder="中央寄せ"></div>
+  </div>
+  <div class="row2">
+    <div class="fg"><label>列間ギャップ mm</label><input id="lb-gx" type="number" step="0.1"></div>
+    <div class="fg"><label>行間ギャップ mm</label><input id="lb-gy" type="number" step="0.1"></div>
+  </div>
+  <div class="fg"><label>文字サイズ pt</label><input id="lb-fs" type="number" step="0.5"></div>
+  <div class="cardft">
+    <button class="btn" style="color:var(--red)" id="lb-del" onclick="lbDel()">削除</button>
+    <button class="btn sm" onclick="lbNew()">＋ 新規</button>
+    <span style="flex:1"></span>
+    <button class="btn" onclick="closeOv('ov-lbl')">閉じる</button>
+    <button class="btn pri" onclick="lbSave()">保存</button>
+  </div>
 </div></div>
 
 <script>
@@ -141,7 +177,7 @@ var DB={ periods:[], recipients:[], products:[] };
 function uid(){ return 'g'+Math.random().toString(36).slice(2,9); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }catch(e){}
-  if(!DB.periods) DB.periods=[]; if(!DB.recipients) DB.recipients=[]; if(!DB.products) DB.products=[];
+  if(!DB.periods) DB.periods=[]; if(!DB.recipients) DB.recipients=[]; if(!DB.products) DB.products=[]; if(!DB.labelPresets) DB.labelPresets=[];
   DB.recipients.forEach(function(r){ if(!r.id) r.id=uid(); if(!r.gifts) r.gifts={}; if(!r.kind) r.kind='通常'; });
   DB.periods.forEach(function(p){ if(!p.id) p.id=uid(); });
 }
@@ -264,32 +300,115 @@ function pmAdd(){ DB.products.push({code:'',name:'',price:''}); pmRender(); }
 function pmSave(){ DB.products=DB.products.filter(function(p){return (p.code||'').trim();}); save(); closeOv('ov-prod'); render(); }
 
 // ── 印刷 ──
-function openPrint(){ var sel=document.getElementById('pr-period'); sel.innerHTML=DB.periods.map(function(p){return '<option value="'+p.id+'">'+esc(p.label)+'</option>';}).join(''); if(DB.periods.length) sel.value=DB.periods[DB.periods.length-1].id; document.getElementById('ov-print').classList.add('on'); }
+// 組み込みラベルレイアウト（idが builtin- で始まる＝編集不可・複製のみ）
+var BUILTIN_LABELS=[
+  { id:'builtin-white72', name:'白台紙 59×26mm・9列×8行（A4横72面）', orient:'landscape', cols:9, rows:8, w:59.4, h:26.2, mt:0, ml:null, gx:0, gy:0, fs:11 },
+  { id:'builtin-a4-12', name:'A4 12面 99×42mm（縦2×6）', orient:'portrait', cols:2, rows:6, w:99.1, h:42.3, mt:12.9, ml:null, gx:2.5, gy:0, fs:11.5 },
+  { id:'builtin-a4-21', name:'A4 21面 70×38mm（縦3×7）', orient:'portrait', cols:3, rows:7, w:70, h:38.1, mt:15.1, ml:0, gx:0, gy:0, fs:10 }
+];
+function allLabels(){ return BUILTIN_LABELS.concat(DB.labelPresets||[]); }
 function _prodName_(code){ var p=DB.products.find(function(x){return x.code===code;}); return p&&p.name?p.name:''; }
+function prKindChg(){ document.getElementById('pr-content-wrap').style.display = document.getElementById('pr-kind').value==='list'?'none':''; }
+function openPrint(){
+  var sel=document.getElementById('pr-period'); sel.innerHTML=DB.periods.map(function(p){return '<option value="'+p.id+'">'+esc(p.label)+'</option>';}).join(''); if(DB.periods.length) sel.value=DB.periods[DB.periods.length-1].id;
+  document.getElementById('pr-kind').innerHTML='<option value="list">送付リスト（送る相手だけ・A4）</option>'
+    +allLabels().map(function(l){ return '<option value="lbl:'+l.id+'">🏷 '+esc(l.name)+'</option>'; }).join('');
+  prKindChg();
+  document.getElementById('ov-print').classList.add('on');
+}
 function doPrint(){
   var pid=document.getElementById('pr-period').value, kind=document.getElementById('pr-kind').value;
   var per=DB.periods.find(function(x){return x.id===pid;}); if(!per){ alert('期を選んでください'); return; }
   var recs=DB.recipients.filter(function(r){ return r.gifts[pid]; });
   if(!recs.length){ alert('この期に送付予定の相手がいません'); return; }
-  var w=window.open('','_blank'); var b='';
+  var w=window.open('','_blank');
   if(kind==='list'){
-    b='<h1>'+esc(per.label)+' 送付リスト（'+recs.length+'件）</h1>'
+    var b='<h1>'+esc(per.label)+' 送付リスト（'+recs.length+'件）</h1>'
      +'<table class="lst"><tr><th>会社名</th><th>担当者</th><th>住所</th><th>電話</th><th>商品</th></tr>'
      +recs.map(function(r){ var c=r.gifts[pid]; return '<tr><td>'+esc(r.company)+'</td><td>'+esc(r.contact||'')+'</td><td class="ad">'+esc(r.addr||'')+'</td><td>'+esc(r.tel||'')+'</td><td>'+esc(c)+(_prodName_(c)?'／'+esc(_prodName_(c)):'')+'</td></tr>'; }).join('')
      +'</table>';
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(per.label)+' 送付リスト</title><style>@page{size:A4;margin:12mm}body{font-family:"Yu Gothic","Meiryo",sans-serif;font-size:11px}h1{font-size:15px;border-bottom:2px solid #211f1c;padding-bottom:5px}table.lst{width:100%;border-collapse:collapse}table.lst th,table.lst td{border:.5px solid #999;padding:4px 6px;text-align:left;vertical-align:top}table.lst th{background:#211f1c;color:#fff}td.ad{font-size:10px}</style></head><body>'+b+'</body></html>');
   } else {
-    var cfg = kind==='lbl21' ? {cols:3,w:70,h:38.1,mt:15.1,ml:0,fs:10} : {cols:2,w:99.1,h:42.3,mt:12.9,ml:5.5,fs:11.5};
-    var cells=recs.map(function(r){
-      return '<div class="lbl"><div class="ad">〒 '+esc((r.addr||'').replace(/^〒?\s*/,''))+'</div>'
-        +'<div class="co">'+esc(r.company)+'</div>'
-        +'<div class="na">'+esc(r.contact||'')+(r.contact?' 様':'')+'</div></div>';
-    }).join('');
-    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(per.label)+' 宛名ラベル</title><style>@page{size:A4;margin:'+cfg.mt+'mm '+cfg.ml+'mm}body{margin:0;font-family:"Yu Gothic","Meiryo",sans-serif}.sheet{display:grid;grid-template-columns:repeat('+cfg.cols+','+cfg.w+'mm)}.lbl{width:'+cfg.w+'mm;height:'+cfg.h+'mm;padding:5mm 6mm;box-sizing:border-box;overflow:hidden;font-size:'+cfg.fs+'px;display:flex;flex-direction:column;justify-content:center}.lbl .ad{font-size:'+(cfg.fs-1)+'px;line-height:1.35;margin-bottom:3mm}.lbl .co{font-weight:700}.lbl .na{font-size:'+(cfg.fs+3)+'px;font-weight:800;margin-top:1.5mm}</style></head><body><div class="sheet">'+cells+'</div></body></html>');
+    var lid=kind.slice(4); var L=allLabels().find(function(x){return x.id===lid;}); if(!L){ alert('レイアウトが見つかりません'); return; }
+    var content=document.getElementById('pr-content').value;
+    var perPage=L.cols*L.rows;
+    var cellHtml=function(r){
+      var mode = content==='addr'?'addr' : content==='name'?'name' : (L.h>=34?'addr':'name');
+      if(mode==='name'){
+        return '<div class="co big">'+esc(r.company)+'</div><div class="na">'+esc(r.contact||'')+(r.contact?' 様':'')+'</div>';
+      }
+      return '<div class="ad">〒 '+esc((r.addr||'').replace(/^〒?\s*/,''))+'</div><div class="co">'+esc(r.company)+'</div><div class="na">'+esc(r.contact||'')+(r.contact?' 様':'')+'</div>';
+    };
+    var pages='';
+    for(var i=0;i<recs.length;i+=perPage){
+      var slice=recs.slice(i,i+perPage);
+      var blanks=perPage-slice.length;
+      pages+='<div class="page"><div class="sheet">'
+        +slice.map(function(r){ return '<div class="lbl">'+cellHtml(r)+'</div>'; }).join('')
+        +Array(blanks).fill('<div class="lbl"></div>').join('')
+        +'</div></div>';
+    }
+    var sheetW=(L.cols*L.w + (L.cols-1)*(L.gx||0));
+    var mlCss = (L.ml==null) ? 'margin:0 auto;' : 'margin-left:'+L.ml+'mm;';
+    var css='@page{size:A4 '+L.orient+';margin:0}'
+      +'body{margin:0;font-family:"Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif}'
+      +'.page{padding-top:'+(L.mt||0)+'mm;box-sizing:border-box;page-break-after:always;break-after:page}'
+      +'.page:last-child{page-break-after:auto;break-after:auto}'
+      +'.sheet{width:'+sheetW+'mm;'+mlCss+'display:grid;grid-template-columns:repeat('+L.cols+','+L.w+'mm);column-gap:'+(L.gx||0)+'mm;row-gap:'+(L.gy||0)+'mm}'
+      +'.lbl{width:'+L.w+'mm;height:'+L.h+'mm;padding:2mm 3mm;box-sizing:border-box;overflow:hidden;font-size:'+L.fs+'pt;display:flex;flex-direction:column;justify-content:center;text-align:center}'
+      +'.lbl .ad{font-size:'+(L.fs-2)+'pt;line-height:1.3;margin-bottom:2mm;text-align:left}'
+      +'.lbl .co{font-weight:700}.lbl .co.big{font-size:'+(L.fs+2)+'pt}'
+      +'.lbl .na{font-size:'+(L.fs+3)+'pt;font-weight:800;margin-top:1mm}';
+    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(per.label)+' ラベル</title><style>'+css+'</style></head><body>'+pages+'</body></html>');
   }
-  w.document.close(); setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 300);
+  w.document.close(); setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 350);
   closeOv('ov-print');
 }
+
+// ── ラベルレイアウト 編集/追加 ──
+var LBEDIT=null;
+function openLbl(){ lbFillSel(); lbLoad(); document.getElementById('ov-lbl').classList.add('on'); }
+function lbFillSel(){
+  var sel=document.getElementById('lb-sel');
+  sel.innerHTML=BUILTIN_LABELS.map(function(l){return '<option value="'+l.id+'">（標準）'+esc(l.name)+'</option>';}).join('')
+    +(DB.labelPresets||[]).map(function(l){return '<option value="'+l.id+'">'+esc(l.name)+'</option>';}).join('');
+  if(LBEDIT) sel.value=LBEDIT;
+}
+function _lbById_(id){ return allLabels().find(function(x){return x.id===id;}); }
+function lbLoad(){
+  var id=document.getElementById('lb-sel').value; LBEDIT=id; var L=_lbById_(id); if(!L) return;
+  var isBuiltin=id.indexOf('builtin-')===0;
+  document.getElementById('lb-name').value=L.name;
+  document.getElementById('lb-orient').value=L.orient;
+  document.getElementById('lb-cols').value=L.cols; document.getElementById('lb-rows').value=L.rows;
+  document.getElementById('lb-w').value=L.w; document.getElementById('lb-h').value=L.h;
+  document.getElementById('lb-mt').value=L.mt||0; document.getElementById('lb-ml').value=(L.ml==null?'':L.ml);
+  document.getElementById('lb-gx').value=L.gx||0; document.getElementById('lb-gy').value=L.gy||0;
+  document.getElementById('lb-fs').value=L.fs;
+  document.getElementById('lb-del').style.display=isBuiltin?'none':'';
+  // 標準は編集不可（複製して調整）
+  ['lb-name','lb-orient','lb-cols','lb-rows','lb-w','lb-h','lb-mt','lb-ml','lb-gx','lb-gy','lb-fs'].forEach(function(f){ document.getElementById(f).disabled=isBuiltin; });
+}
+function _lbForm_(){
+  var ml=document.getElementById('lb-ml').value.trim();
+  return { name:document.getElementById('lb-name').value.trim()||'新レイアウト', orient:document.getElementById('lb-orient').value,
+    cols:+document.getElementById('lb-cols').value||1, rows:+document.getElementById('lb-rows').value||1,
+    w:+document.getElementById('lb-w').value||50, h:+document.getElementById('lb-h').value||25,
+    mt:+document.getElementById('lb-mt').value||0, ml:(ml===''?null:+ml),
+    gx:+document.getElementById('lb-gx').value||0, gy:+document.getElementById('lb-gy').value||0,
+    fs:+document.getElementById('lb-fs').value||11 };
+}
+function lbNew(){ // 現在の内容を複製して新規（標準の調整に便利）
+  var d=_lbForm_(); d.id='lp'+uid(); d.name=(d.name==='新レイアウト'?'新レイアウト':d.name+' 複製');
+  DB.labelPresets=DB.labelPresets||[]; DB.labelPresets.push(d); save(); LBEDIT=d.id; lbFillSel(); document.getElementById('lb-sel').value=d.id; lbLoad();
+}
+function lbSave(){
+  var id=document.getElementById('lb-sel').value;
+  if(id.indexOf('builtin-')===0){ alert('標準レイアウトは編集できません。「＋新規」で複製して調整してください。'); return; }
+  var i=(DB.labelPresets||[]).findIndex(function(x){return x.id===id;}); if(i<0){ closeOv('ov-lbl'); return; }
+  var d=_lbForm_(); d.id=id; DB.labelPresets[i]=d; save(); alert('保存しました'); closeOv('ov-lbl');
+}
+function lbDel(){ var id=document.getElementById('lb-sel').value; if(id.indexOf('builtin-')===0) return; if(!confirm('このレイアウトを削除しますか？')) return; DB.labelPresets=(DB.labelPresets||[]).filter(function(x){return x.id!==id;}); save(); LBEDIT=null; lbFillSel(); lbLoad(); }
 
 // ── 取込/書出 ──
 function exportJson(){
