@@ -74,6 +74,17 @@
       <label class="chk" style="margin-left:auto"><input type="checkbox" id="o-slim" onchange="refreshPreview()"> 軽量化（PDFのみ再保存）</label>
     </div>
     <div class="muted" id="status" style="margin-top:6px"></div>
+    <div id="viewToggle" style="display:none;gap:8px;align-items:center;margin:8px 0 6px">
+      <button class="btn" id="btnMeasure" onclick="setView('measure')">📐 採寸ビュー（矢印）</button>
+      <button class="btn" id="btnPdf" onclick="setView('pdf')">📄 PDF表示</button>
+      <span class="muted" id="mvHint"></span>
+    </div>
+    <div id="measureWrap" style="display:none;overflow:auto;max-height:660px;border:1px solid var(--line);border-radius:8px;background:#faf9f6;padding:10px;text-align:center">
+      <div id="mInner" style="position:relative;display:inline-block">
+        <canvas id="mCanvas" style="display:block"></canvas>
+        <svg id="mSvg" style="position:absolute;left:0;top:0;overflow:visible"></svg>
+      </div>
+    </div>
     <div id="pvwrap" style="position:relative;display:none">
       <div id="sizeBadge"></div>
       <iframe id="preview" title="プレビュー"></iframe>
@@ -215,14 +226,17 @@ function detectTonbo(geo){
   var yEdges=edgeLines(hmarks, geo.page.w*0.4);
   if(xEdges.length<2 || yEdges.length<2) return null;
   // 二重トンボ(内=仕上り/外=裁ち落とし)なら片側2本ずつ→計4本。単一なら2本。
+  // inLo/inHi=内(仕上り)の座標, outLo/outHi=外(裁ち落とし)の座標も返す(採寸ビューの矢印用)
   function trimBleed(edges){
-    edges.sort(function(a,b){return a-b;});
-    if(edges.length>=4){ return { trim:edges[edges.length-2]-edges[1], bleed:edges[edges.length-1]-edges[0] }; }
-    return { trim:edges[edges.length-1]-edges[0], bleed:(edges[edges.length-1]-edges[0])+2*BLEED_PT };
+    edges.sort(function(a,b){return a-b;}); var n=edges.length;
+    if(n>=4){ return { trim:edges[n-2]-edges[1], bleed:edges[n-1]-edges[0], inLo:edges[1], inHi:edges[n-2], outLo:edges[0], outHi:edges[n-1] }; }
+    return { trim:edges[n-1]-edges[0], bleed:(edges[n-1]-edges[0])+2*BLEED_PT, inLo:edges[0], inHi:edges[n-1], outLo:edges[0]-BLEED_PT, outHi:edges[n-1]+BLEED_PT };
   }
   var W=trimBleed(xEdges), H=trimBleed(yEdges);
   if(W.trim<20 || H.trim<20) return null;
-  return { trimW:W.trim, trimH:H.trim, bleedW:W.bleed, bleedH:H.bleed };
+  return { trimW:W.trim, trimH:H.trim, bleedW:W.bleed, bleedH:H.bleed,
+           trimBox:{x0:W.inLo, x1:W.inHi, y0:H.inLo, y1:H.inHi},
+           bleedBox:{x0:W.outLo, x1:W.outHi, y0:H.outLo, y1:H.outHi} };
 }
 // 封筒枠 = 最大矩形。設計の端からの余白と、窓/小枠のサイズ・位置も返す
 function detectFrame(geo){
@@ -248,18 +262,20 @@ function detectFrame(geo){
     if(r===f) return;
     if(r.x0>f.x0-tol && r.x1<f.x1+tol && r.y0>f.y0-tol && r.y1<f.y1+tol){ xs.push(r.x0,r.x1); ys.push(r.y0,r.y1); }
   });
-  var margins=null;
+  var margins=null, designBox=null;
   if(xs.length){
     var minx=Math.min.apply(null,xs),maxx=Math.max.apply(null,xs),miny=Math.min.apply(null,ys),maxy=Math.max.apply(null,ys);
     margins={ l:minx-f.x0, r:f.x1-maxx, t:f.y1-maxy, b:miny-f.y0 };   // y上向き: t=上辺まで
+    designBox={ x0:minx, x1:maxx, y0:miny, y1:maxy };
   }
-  // 窓・小枠: 枠内にあり、枠より十分小さい矩形
+  // 窓・小枠: 枠内にあり、枠より十分小さい矩形(絶対座標も返す)
   var windows=geo.rects.filter(function(r){
     return r!==f && r.area<f.area*0.4 && r.w>10*MM && r.x0>f.x0-tol && r.x1<f.x1+tol && r.y0>f.y0-tol && r.y1<f.y1+tol;
   }).sort(function(a,b){return b.area-a.area;}).slice(0,3).map(function(r){
-    return { w:r.w, h:r.h, fromL:r.x0-f.x0, fromT:f.y1-r.y1 };   // 左端/上端(上辺)から
+    return { w:r.w, h:r.h, fromL:r.x0-f.x0, fromT:f.y1-r.y1, x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1 };
   });
-  return { frameW:f.w, frameH:f.h, margins:margins, windows:windows };
+  return { frameW:f.w, frameH:f.h, margins:margins, windows:windows,
+           box:{x0:f.x0, y0:f.y0, x1:f.x1, y1:f.y1}, design:designBox };
 }
 function isEnvelopeName(name){ return /封筒|長3|長4|長40|長形|角2|角3|角形|洋長|洋形|窓付|窓あき|窓开|カマス|ダイマス/.test(name||''); }
 // %PDF ヘッダを先頭付近から探す (PDF互換 .ai は %PDF- で始まる/含む)
@@ -290,6 +306,7 @@ async function measureFile(f){
       // 枠(封筒)は封筒ファイルのみ採用。デザイン中の大きな矩形を枠と誤検出しないため。
       m.frame=m.envName ? detectFrame(geo) : null;
       m.tonbo=detectTonbo(geo);
+      m.geoPage=geo.page;   // 採寸ビューの座標対応に使う(ページのpt寸法)
     }catch(e){ /* pdf.js不可でも従来表示は出す */ }
     return m;
   }catch(e){ return null; }
@@ -316,6 +333,109 @@ function badgeHTML(m){
   if(m.pages>1) sub.push('全'+m.pages+'ページ');
   if(m.px) sub.push(m.px);
   return '📐 <b>'+esc(main)+'</b>'+(sub.length?'<div class="sub">'+esc(sub.join(' ／ '))+'</div>':'');
+}
+
+// ═════════ 採寸ビュー: pdf.jsでページを描画し、寸法線(両矢印)＋数値を重ねる ═════════
+var SH_CMAP='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/';
+var C_MAIN='#0891b2', C_BLEED='#dc2626', C_MARGIN='#d97706', C_WIN='#0d9488';
+function _mk(id,c){ return '<marker id="'+id+'" viewBox="0 0 10 10" markerWidth="8" markerHeight="8" refX="8.5" refY="5" orient="auto-start-reverse"><path d="M0.5,1 L9,5 L0.5,9 z" fill="'+c+'"/></marker>'; }
+var MV_MARKERS='<defs>'+_mk('ahMain',C_MAIN)+_mk('ahBleed',C_BLEED)+_mk('ahMargin',C_MARGIN)+_mk('ahWin',C_WIN)+'</defs>';
+function _mvBox(x0,y0,x1,y1,c,dash){ return '<rect x="'+Math.min(x0,x1)+'" y="'+Math.min(y0,y1)+'" width="'+Math.abs(x1-x0)+'" height="'+Math.abs(y1-y0)+'" fill="none" stroke="'+c+'" stroke-width="1.4"'+(dash?' stroke-dasharray="5 4"':'')+'/>'; }
+function _mvLbl(cx,cy,text,c){ var w=(''+text).length*7.1+12; return '<rect x="'+(cx-w/2)+'" y="'+(cy-10)+'" width="'+w+'" height="20" rx="4" fill="#fff" stroke="'+c+'"/><text x="'+cx+'" y="'+(cy+4.5)+'" text-anchor="middle" font-size="12.5" font-weight="700" fill="'+c+'" font-family="sans-serif">'+esc(text)+'</text>'; }
+function _mvDimH(x1,x2,y,label,c,ah){
+  if(Math.abs(x2-x1)<3) return '';
+  return '<line x1="'+x1+'" y1="'+(y-5)+'" x2="'+x1+'" y2="'+(y+5)+'" stroke="'+c+'" stroke-width="1"/>'
+    +'<line x1="'+x2+'" y1="'+(y-5)+'" x2="'+x2+'" y2="'+(y+5)+'" stroke="'+c+'" stroke-width="1"/>'
+    +'<line x1="'+x1+'" y1="'+y+'" x2="'+x2+'" y2="'+y+'" stroke="'+c+'" stroke-width="1.3" marker-start="url(#'+ah+')" marker-end="url(#'+ah+')"/>'
+    +_mvLbl((x1+x2)/2,y,label,c);
+}
+function _mvDimV(y1,y2,x,label,c,ah){
+  if(Math.abs(y2-y1)<3) return '';
+  return '<line x1="'+(x-5)+'" y1="'+y1+'" x2="'+(x+5)+'" y2="'+y1+'" stroke="'+c+'" stroke-width="1"/>'
+    +'<line x1="'+(x-5)+'" y1="'+y2+'" x2="'+(x+5)+'" y2="'+y2+'" stroke="'+c+'" stroke-width="1"/>'
+    +'<line x1="'+x+'" y1="'+y1+'" x2="'+x+'" y2="'+y2+'" stroke="'+c+'" stroke-width="1.3" marker-start="url(#'+ah+')" marker-end="url(#'+ah+')"/>'
+    +_mvLbl(x,(y1+y2)/2,label,c);
+}
+// m(採寸結果) と viewport から寸法注記のSVGを組み立てる
+function drawMeasure(m, vp, PAD){
+  if(!m) return '';
+  function D(x,y){ var p=vp.convertToViewportPoint(x,y); return [p[0]+PAD, p[1]+PAD]; }
+  var out=[];
+  // 表示の優先はバッジ/一覧と同じ: 封筒枠 → トンボ(仕上り) → データ
+  if(m.frame && m.frame.box){
+    var fb=m.frame.box, ftl=D(fb.x0,fb.y1), fbr=D(fb.x1,fb.y0);
+    out.push(_mvBox(ftl[0],ftl[1],fbr[0],fbr[1],C_MAIN,false));
+    out.push(_mvDimH(ftl[0],fbr[0],fbr[1]+26,(m.envName?'封筒 ':'枠 ')+mm(m.frame.frameW)+'mm',C_MAIN,'ahMain'));
+    out.push(_mvDimV(ftl[1],fbr[1],ftl[0]-26,mm(m.frame.frameH)+'mm',C_MAIN,'ahMain'));
+    if(m.frame.design && m.frame.margins){
+      var dg=m.frame.design, dtl=D(dg.x0,dg.y1), dbr=D(dg.x1,dg.y0), g=m.frame.margins;
+      out.push(_mvBox(dtl[0],dtl[1],dbr[0],dbr[1],C_MARGIN,true));
+      var midY=(dtl[1]+dbr[1])/2, midX=(dtl[0]+dbr[0])/2;
+      out.push(_mvDimH(ftl[0],dtl[0],midY,mm1(g.l)+'mm',C_MARGIN,'ahMargin'));
+      out.push(_mvDimH(dbr[0],fbr[0],midY,mm1(g.r)+'mm',C_MARGIN,'ahMargin'));
+      out.push(_mvDimV(ftl[1],dtl[1],midX,mm1(g.t)+'mm',C_MARGIN,'ahMargin'));
+      out.push(_mvDimV(dbr[1],fbr[1],midX,mm1(g.b)+'mm',C_MARGIN,'ahMargin'));
+    }
+    (m.frame.windows||[]).forEach(function(w){
+      var wtl=D(w.x0,w.y1), wbr=D(w.x1,w.y0);
+      out.push(_mvBox(wtl[0],wtl[1],wbr[0],wbr[1],C_WIN,false));
+      out.push(_mvLbl((wtl[0]+wbr[0])/2, wtl[1]-2, sizeMM(w.w,w.h), C_WIN));
+    });
+  } else if(m.tonbo && m.tonbo.trimBox){
+    var tb=m.tonbo.trimBox, bb=m.tonbo.bleedBox;
+    var tl=D(tb.x0,tb.y1), br=D(tb.x1,tb.y0), btl=D(bb.x0,bb.y1), bbr=D(bb.x1,bb.y0);
+    out.push(_mvBox(btl[0],btl[1],bbr[0],bbr[1],C_BLEED,true));     // 裁ち落とし枠(赤・破線)
+    out.push(_mvBox(tl[0],tl[1],br[0],br[1],C_MAIN,false));         // 仕上り枠(青)
+    out.push(_mvDimH(tl[0],br[0],br[1]+26,'仕上り '+mm(m.tonbo.trimW)+'mm',C_MAIN,'ahMain'));
+    out.push(_mvDimV(tl[1],br[1],tl[0]-26,mm(m.tonbo.trimH)+'mm',C_MAIN,'ahMain'));
+    out.push(_mvDimH(btl[0],bbr[0],btl[1]-22,'裁ち落とし '+mm(m.tonbo.bleedW)+'mm',C_BLEED,'ahBleed'));
+  } else {
+    var pw=(m.geoPage&&m.geoPage.w)||m.mediaW, ph=(m.geoPage&&m.geoPage.h)||m.mediaH;
+    if(!pw||!ph) return '';
+    var ptl=D(0,ph), pbr=D(pw,0);
+    out.push(_mvBox(ptl[0],ptl[1],pbr[0],pbr[1],C_MAIN,false));
+    out.push(_mvDimH(ptl[0],pbr[0],pbr[1]+26,mm(pw)+'mm',C_MAIN,'ahMain'));
+    out.push(_mvDimV(ptl[1],pbr[1],ptl[0]-26,mm(ph)+'mm',C_MAIN,'ahMain'));
+  }
+  return out.join('');
+}
+// 現在ファイルを採寸ビューに描画(ページ1をcanvasに、寸法をsvgに)
+var _mvKey=null;
+async function renderMeasure(){
+  if(cur<0 || !files[cur]) return;
+  var f=files[cur];
+  var key=cur+'/'+(document.getElementById('o-slim').checked?'slim':'x');
+  var canvas=document.getElementById('mCanvas'), svg=document.getElementById('mSvg');
+  try{
+    if(!pdfjsReady()) throw new Error('pdf.js未読込');
+    var bytes=(window._curBytes&&_mvKey===key)? window._curBytes : (window._curBytes||await toPdfBytes(f));
+    var doc=await pdfjsLib.getDocument({ data:new Uint8Array(bytes.slice(0)), cMapUrl:SH_CMAP, cMapPacked:true }).promise;
+    var page=await doc.getPage(1);
+    var pw=page.view[2]-page.view[0];
+    var PAD=48;
+    var wrapW=(document.getElementById('measureWrap').clientWidth||760)-24;
+    var s=Math.max(0.3, Math.min(2.2, (Math.min(820,wrapW)-2*PAD)/pw));
+    var vp=page.getViewport({scale:s});
+    canvas.width=Math.round(vp.width+2*PAD); canvas.height=Math.round(vp.height+2*PAD);
+    var ctx=canvas.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save(); ctx.strokeStyle='#e5e3dd'; ctx.strokeRect(PAD-0.5,PAD-0.5,vp.width+1,vp.height+1); ctx.restore();
+    await page.render({ canvasContext:ctx, viewport:vp, transform:[1,0,0,1,PAD,PAD] }).promise;
+    try{ doc.destroy(); }catch(e){}
+    svg.setAttribute('width',canvas.width); svg.setAttribute('height',canvas.height);
+    svg.innerHTML=MV_MARKERS+drawMeasure(f.m, vp, PAD);
+    _mvKey=key;
+    document.getElementById('mvHint').textContent = f.m ? '青=仕上り/枠・赤=裁ち落とし・橙=端からの余白・緑=窓' : '寸法情報なし';
+  }catch(e){ console.warn('measure render', e); svg.innerHTML=''; document.getElementById('mvHint').textContent='採寸ビューを表示できません（PDF表示をお使いください）'; }
+}
+var _view='measure';
+function setView(v){
+  _view=v;
+  var mw=document.getElementById('measureWrap'), pw=document.getElementById('pvwrap');
+  var bm=document.getElementById('btnMeasure'), bp=document.getElementById('btnPdf');
+  var on='background:#1a1a1a;color:#fff;border-color:#1a1a1a';
+  bm.style.cssText=(v==='measure')?on:''; bp.style.cssText=(v==='pdf')?on:'';
+  if(v==='measure'){ mw.style.display='block'; pw.style.display='none'; renderMeasure(); }
+  else { mw.style.display='none'; pw.style.display='block'; }
 }
 function sizeLabel(m){
   if(!m) return '';
@@ -414,7 +534,7 @@ function render(){
 }
 function removeAt(i){
   files.splice(i,1);
-  if(cur===i){ cur=-1; document.getElementById('pvwrap').style.display='none'; document.getElementById('btn-print').disabled=true; document.getElementById('btn-dl').disabled=true; document.getElementById('status').textContent=''; }
+  if(cur===i){ cur=-1; document.getElementById('pvwrap').style.display='none'; document.getElementById('measureWrap').style.display='none'; document.getElementById('viewToggle').style.display='none'; document.getElementById('btn-print').disabled=true; document.getElementById('btn-dl').disabled=true; document.getElementById('status').textContent=''; }
   else if(cur>i){ cur--; }
   render();
   if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); }
@@ -448,11 +568,13 @@ async function refreshPreview(){
     var blob=new Blob([bytes],{type:'application/pdf'});
     _curUrl=URL.createObjectURL(blob);
     window._curBytes=bytes;
-    var pv=document.getElementById('preview'); pv.src=_curUrl;
-    document.getElementById('pvwrap').style.display='block';
+    var pv=document.getElementById('preview'); pv.src=_curUrl;   // 印刷/PDF表示用に読み込む
     // プレビュー上にサイズを重ねて表示
     var badge=document.getElementById('sizeBadge'); var bh=badgeHTML(f.m);
     badge.innerHTML=bh; badge.style.display=bh?'block':'none';
+    // 採寸ビュー(矢印)／PDF表示 の切替を表示し、現在のビューを描画
+    document.getElementById('viewToggle').style.display='flex';
+    setView(_view);
     document.getElementById('btn-print').disabled=false;
     document.getElementById('btn-dl').disabled=false;
     var mode=(f.kind==='psd')?'画像化':(document.getElementById('o-slim').checked?'軽量化':'忠実');
