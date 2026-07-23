@@ -44,7 +44,12 @@
   .frow .nm{ flex:1; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chk{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:#374151; cursor:pointer; }
   .chk input{ width:16px; height:16px; }
-  #preview{ width:100%; height:560px; border:1px solid var(--line); border-radius:8px; background:#fff; display:none; }
+  #preview{ width:100%; height:560px; border:1px solid var(--line); border-radius:8px; background:#fff; display:block; }
+  #sizeBadge{ position:absolute; top:10px; right:10px; z-index:5; background:rgba(26,26,26,.9); color:#fff; font-size:12.5px; font-weight:700;
+    padding:7px 12px; border-radius:8px; line-height:1.5; max-width:min(88%,560px); box-shadow:0 2px 10px rgba(0,0,0,.28); pointer-events:none; }
+  #sizeBadge b{ color:#a3e635; font-size:14px; }
+  #sizeBadge .sub{ color:#cbd5e1; font-weight:600; }
+  @media print{ #sizeBadge{ display:none!important; } }
   #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
 </style>
 </head>
@@ -69,7 +74,10 @@
       <label class="chk" style="margin-left:auto"><input type="checkbox" id="o-slim" onchange="refreshPreview()"> 軽量化（PDFのみ再保存）</label>
     </div>
     <div class="muted" id="status" style="margin-top:6px"></div>
-    <iframe id="preview" title="プレビュー"></iframe>
+    <div id="pvwrap" style="position:relative;display:none">
+      <div id="sizeBadge"></div>
+      <iframe id="preview" title="プレビュー"></iframe>
+    </div>
   </div>
   <p class="muted">🔒 すべてPC内で処理（どこにも送信されません）。「PDF互換」なしで保存された .ai は変換できません→ Illustratorで保存し直してください。EPSはデスクトップの変換batでPDF化を。</p>
 </main>
@@ -289,6 +297,26 @@ async function measureFile(f){
 // 採寸結果を日本語表示
 function sizeMM(w,h){ return mm(w)+'×'+mm(h)+'mm'; }
 function mm1(pt){ var v=Math.round(pt/MM*10)/10; return (Math.abs(v-Math.round(v))<0.05?String(Math.round(v)):v.toFixed(1)); }
+// プレビューに重ねるサイズバッジ(主寸法を大きく、補足を小さく)
+function badgeHTML(m){
+  if(!m) return '';
+  var main='', sub=[];
+  if(m.frame){
+    main=(m.envName?'封筒枠 ':'枠 ')+sizeMM(m.frame.frameW,m.frame.frameH);
+    var g=m.frame.margins; if(g) sub.push('端から 左'+mm1(g.l)+' 右'+mm1(g.r)+' 上'+mm1(g.t)+' 下'+mm1(g.b)+'mm');
+    (m.frame.windows||[]).forEach(function(w){ sub.push('小枠 '+sizeMM(w.w,w.h)); });
+  } else if(m.tonbo){
+    main='仕上り '+sizeMM(m.tonbo.trimW,m.tonbo.trimH);
+    sub.push('裁ち落とし '+sizeMM(m.tonbo.bleedW,m.tonbo.bleedH)+'（塗り足し3mm）');
+  } else if(m.hasTonbo){
+    main='トンボまで '+sizeMM(m.mediaW,m.mediaH); sub.push('データ '+sizeMM(m.trimW,m.trimH));
+  } else {
+    main='データ '+sizeMM(m.mediaW,m.mediaH);
+  }
+  if(m.pages>1) sub.push('全'+m.pages+'ページ');
+  if(m.px) sub.push(m.px);
+  return '📐 <b>'+esc(main)+'</b>'+(sub.length?'<div class="sub">'+esc(sub.join(' ／ '))+'</div>':'');
+}
 function sizeLabel(m){
   if(!m) return '';
   var parts=[];
@@ -386,7 +414,7 @@ function render(){
 }
 function removeAt(i){
   files.splice(i,1);
-  if(cur===i){ cur=-1; var pv=document.getElementById('preview'); pv.style.display='none'; document.getElementById('btn-print').disabled=true; document.getElementById('btn-dl').disabled=true; document.getElementById('status').textContent=''; }
+  if(cur===i){ cur=-1; document.getElementById('pvwrap').style.display='none'; document.getElementById('btn-print').disabled=true; document.getElementById('btn-dl').disabled=true; document.getElementById('status').textContent=''; }
   else if(cur>i){ cur--; }
   render();
   if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); }
@@ -420,7 +448,11 @@ async function refreshPreview(){
     var blob=new Blob([bytes],{type:'application/pdf'});
     _curUrl=URL.createObjectURL(blob);
     window._curBytes=bytes;
-    var pv=document.getElementById('preview'); pv.src=_curUrl; pv.style.display='block';
+    var pv=document.getElementById('preview'); pv.src=_curUrl;
+    document.getElementById('pvwrap').style.display='block';
+    // プレビュー上にサイズを重ねて表示
+    var badge=document.getElementById('sizeBadge'); var bh=badgeHTML(f.m);
+    badge.innerHTML=bh; badge.style.display=bh?'block':'none';
     document.getElementById('btn-print').disabled=false;
     document.getElementById('btn-dl').disabled=false;
     var mode=(f.kind==='psd')?'画像化':(document.getElementById('o-slim').checked?'軽量化':'忠実');

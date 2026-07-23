@@ -97,15 +97,16 @@
     </div>
     <div style="margin-top:14px">
       <label class="shl">出張スケジュール（1日1行・区分で日当が自動計算されます）</label>
-      <div class="sh-hint">日付を入れて <b>Enter</b> または <b>Tab</b> で次の行へ。最終行の訪問先で <b>Enter</b> を押すと行が増えます（区分・訪問先は前の行を引き継ぎ）。</div>
+      <div class="sh-hint">日付を入れて <b>Enter</b> または <b>Tab</b> で次の行へ。最終行の訪問先で <b>Enter</b> を押すと行が増えます（区分・訪問先は前の行を引き継ぎ）。📋＝この行を複製。</div>
       <table class="sh-sch">
-        <thead><tr><th style="width:110px">区分</th><th style="width:170px">期間（日付）</th><th>訪問先</th><th style="width:34px"></th></tr></thead>
+        <thead><tr><th style="width:110px">区分</th><th style="width:170px">期間（日付）</th><th>訪問先</th><th style="width:62px"></th></tr></thead>
         <tbody id="sh-sch-body"></tbody>
       </table>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px;align-items:center">
         <button class="btn" style="font-size:12px;padding:4px 10px" onclick="shAddRow(1,true)">＋ 行追加</button>
         <button class="btn" style="font-size:12px;padding:4px 10px" onclick="shAddRow(5,true)">＋ 5行</button>
         <button class="btn" style="font-size:12px;padding:4px 10px" onclick="shSortRows()">🔃 日付順に並べ替え</button>
+        <label class="chk" style="font-size:12px;color:#374151;font-weight:600;display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="sh-manual" onchange="shToggleManual(this)" style="width:15px;height:15px"> ⌨ 日付・月を手入力</label>
         <span id="sh-rowcnt" class="muted"></span>
       </div>
     </div>
@@ -305,6 +306,26 @@ function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
 var SH_RATE_DAY=1000, SH_RATE_STAY=2000;   // 日帰/宿泊の日当単価(既定)
 var SH_NAMES=['本多　亮','福永　健児'];      // 氏名ドロップダウン(該当者が増えたらここに追加)
 var SH_DEST_DEFAULT=['東京','神奈川','大阪','三重','秋田','岩手','静岡','愛知'];   // 訪問先候補の初期値(過去の入力が優先)
+// 手入力モード(日付/対象月をカレンダーではなくキーボードで入力)
+var _shManual=false; try{ _shManual=!!localStorage.getItem('sh_manual'); }catch(e){}
+// 手入力の日付をISO(YYYY-MM-DD)へ正規化。空/解釈不能はそのまま返す
+function shParseDate(s){
+  s=String(s==null?'':s).trim(); if(!s) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var m=s.match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/) || s.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if(m) return m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2);
+  var md=s.match(/^(\d{1,2})\D+(\d{1,2})$/);   // 年なし M/D → 対象月開始の年
+  if(md){ var y=((document.getElementById('sh-mfrom')||{}).value||'').slice(0,4)||String(new Date().getFullYear()); return y+'-'+('0'+md[1]).slice(-2)+'-'+('0'+md[2]).slice(-2); }
+  return s;
+}
+// 手入力の月をYYYY-MMへ正規化
+function shParseMonth(s){
+  s=String(s==null?'':s).trim(); if(!s) return '';
+  if(/^\d{4}-\d{2}$/.test(s)) return s;
+  var m=s.match(/(\d{4})\D+(\d{1,2})/) || s.match(/^(\d{4})(\d{2})$/);
+  if(m) return m[1]+'-'+('0'+m[2]).slice(-2);
+  return s;
+}
 // 過去の出張報告(W:\...\出張申請\*.xlsx を新様式に取り込んだもの)。ID固定で重複取込しない。
 var SH_PAST_SEED=[
  { id:'frm_past_202505_honda', date:'2025-07-02', name:'本多　亮', periodFrom:'2025-05', periodTo:'2025-06', single:false, period:'2025年5月-2025年6月',
@@ -387,8 +408,10 @@ function shSingleToggle(){
   shPeriodSync();
 }
 function shPeriodSync(){
-  var from=document.getElementById('sh-mfrom').value;
-  var to=document.getElementById('sh-mto').value;
+  var ef=document.getElementById('sh-mfrom'), et=document.getElementById('sh-mto');
+  if(_shManual){ if(ef.value) ef.value=shParseMonth(ef.value); if(et.value) et.value=shParseMonth(et.value); }   // 手入力を正規化
+  var from=ef.value;
+  var to=et.value;
   var single=document.getElementById('sh-single').checked;
   // 終了が開始より前なら入れ替えて案内
   if(!single && from && to && to<from){ var t=from; document.getElementById('sh-mfrom').value=to; document.getElementById('sh-mto').value=t; from=to; to=t; hubToast('開始と終了を入れ替えました'); }
@@ -483,17 +506,43 @@ function shFill(d){
   var tb=document.getElementById('sh-sch-body'); tb.innerHTML='';
   var trips=(d.trips&&d.trips.length)?d.trips:[{kind:'日帰',date:'',dest:''}];
   trips.forEach(function(x){ tb.insertAdjacentHTML('beforeend', shSchRow(x)); });
+  shApplyInputMode();   // 手入力/カレンダーの現在モードを反映
   shCalc();
 }
 function shSchRow(t){
   t=t||{};
   var st='width:100%;border:1px solid #d0cec8;border-radius:5px;box-sizing:border-box;font-family:inherit';
   var sel=['日帰','宿泊'].map(function(k){ return '<option'+(t.kind===k?' selected':'')+'>'+k+'</option>'; }).join('');
+  var dateCell = _shManual
+    ? '<input type="text" inputmode="numeric" class="sh-t-date" value="'+esc(t.date||'')+'" placeholder="2025-11-6 / 11/6" onchange="this.value=shParseDate(this.value);shCalc()" onkeydown="shRowKey(event)" style="'+st+'">'
+    : '<input type="date" class="sh-t-date" value="'+esc(t.date||'')+'" onchange="shCalc()" onkeydown="shRowKey(event)" style="'+st+'">';
   return '<tr><td><select class="sh-t-kind" onchange="shCalc()" style="'+st+'">'+sel+'</select></td>'
-    +'<td><input type="date" class="sh-t-date" value="'+esc(t.date||'')+'" onchange="shCalc()" onkeydown="shRowKey(event)" style="'+st+'"></td>'
+    +'<td>'+dateCell+'</td>'
     +'<td><input class="sh-t-dest" list="sh-dests" value="'+esc(t.dest||'')+'" placeholder="訪問先（例: 東京 / 神奈川）" onkeydown="shRowKey(event)" style="'+st+'"></td>'
-    +'<td style="text-align:center"><span style="cursor:pointer;color:#b91c1c;font-weight:700" title="この行を削除" onclick="this.closest(\'tr\').remove();shCalc()">✕</span></td></tr>';
+    +'<td style="white-space:nowrap;text-align:center">'
+      +'<span style="cursor:pointer;color:#0891b2;font-weight:700;margin-right:9px" title="この行を複製" onclick="shDupRowFrom(this)">📋</span>'
+      +'<span style="cursor:pointer;color:#b91c1c;font-weight:700" title="この行を削除" onclick="this.closest(\'tr\').remove();shCalc()">✕</span></td></tr>';
 }
+// スケジュール行を1行だけ複製(すぐ下に同じ内容を挿入。日付だけ直せば済む)
+function shDupRowFrom(el){
+  var tr=el.closest('tr');
+  var t={ kind:tr.querySelector('.sh-t-kind').value, date:tr.querySelector('.sh-t-date').value, dest:tr.querySelector('.sh-t-dest').value };
+  tr.insertAdjacentHTML('afterend', shSchRow(t));
+  shCalc();
+}
+// 手入力⇔カレンダーの切替。月フィールドの型と全行の日付入力を作り替える(値は保持)
+function shApplyInputMode(){
+  var mf=document.getElementById('sh-mfrom'), mt=document.getElementById('sh-mto');
+  if(mf){ mf.type=_shManual?'text':'month'; mf.placeholder=_shManual?'2025-11 など':''; }
+  if(mt){ mt.type=_shManual?'text':'month'; mt.placeholder=_shManual?'2026-03 など':''; }
+  var cb=document.getElementById('sh-manual'); if(cb) cb.checked=_shManual;
+  var body=document.getElementById('sh-sch-body');
+  if(body && body.children.length){
+    var rows=[].slice.call(body.querySelectorAll('tr')).map(function(tr){ return { kind:tr.querySelector('.sh-t-kind').value, date:tr.querySelector('.sh-t-date').value, dest:tr.querySelector('.sh-t-dest').value }; });
+    body.innerHTML=rows.map(shSchRow).join('');
+  }
+}
+function shToggleManual(cb){ _shManual=cb.checked; try{ localStorage.setItem('sh_manual', _shManual?'1':''); }catch(e){} shApplyInputMode(); }
 // n行まとめて追加。前の行の区分・訪問先を引き継ぐので、月に何度も行く先は日付だけ入れれば済む。
 function shAddRow(n, focus){
   n=n||1;
@@ -539,14 +588,14 @@ function shCollect(){
   var trips=[];
   var kinds=document.querySelectorAll('.sh-t-kind'), dates=document.querySelectorAll('.sh-t-date'), dests=document.querySelectorAll('.sh-t-dest');
   for(var i=0;i<kinds.length;i++){
-    var dt=dates[i].value, ds=dests[i].value.trim();
+    var dt=shParseDate(dates[i].value), ds=dests[i].value.trim();   // 手入力も受けてISOに正規化
     if(dt) trips.push({ kind:kinds[i].value, date:dt, dest:ds });   // 日付が無い行は未入力とみなす
   }
   trips.sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||'')); });
   var gv=function(id){ return document.getElementById(id).value; };
   var num=function(id,def){ var v=parseFloat(gv(id)); return isNaN(v)?def:v; };
-  // 対象月(開始〜終了＋単月)。表示用period文字列も生成(帳票・ファイル名・検索で使用)
-  var from=gv('sh-mfrom'), to=gv('sh-mto'), single=document.getElementById('sh-single').checked;
+  // 対象月(開始〜終了＋単月)。手入力もYYYY-MMへ正規化。表示用period文字列も生成
+  var from=shParseMonth(gv('sh-mfrom')), to=shParseMonth(gv('sh-mto')), single=document.getElementById('sh-single').checked;
   if(single) to=from;
   var period=from ? shPeriodStr(from,to,single) : (gv('sh-period-raw')||'');
   return { date:gv('sh-date'), name:shNameValue(),
