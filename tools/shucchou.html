@@ -68,6 +68,7 @@
       <input id="sh-q" placeholder="🔍 氏名・訪問先・対象月で検索" oninput="render()" style="flex:1;min-width:200px;padding:7px 9px;border:1px solid #cbd5e1;border-radius:7px;font-family:inherit;font-size:13px">
       <button class="btn" onclick="shPdfSel()" title="チェックした精算書を1つのPDFにまとめて書き出す（1枚1ページ）">📄 選択をPDF</button>
       <button class="btn" onclick="shPrintSel()" title="チェックした精算書をまとめて印刷（1枚ずつ改ページ）">🖨 選択を印刷</button>
+      <button class="btn" onclick="shImportPast()" title="出張申請フォルダの過去Excel（本多・福永）をまとめて取り込みます（重複しません）">📥 過去分を取込</button>
     </div>
     <div id="sh-list"></div>
   </div>
@@ -82,7 +83,17 @@
         <select id="sh-name" class="shi" onchange="shNameChange()"></select>
         <input id="sh-name-other" class="shi" style="margin-top:5px;display:none" placeholder="氏名を入力">
       </div>
-      <div><label class="shl">対象月</label><input id="sh-period" class="shi" placeholder="例) 2025年11月-2026年3月 / 5月・6月"></div>
+    </div>
+    <div style="margin-top:12px">
+      <label class="shl">対象月</label>
+      <div style="display:flex;gap:8px 12px;align-items:center;flex-wrap:wrap">
+        <label class="chk" style="font-size:12px;color:#374151;font-weight:600;display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="sh-single" onchange="shSingleToggle()" style="width:15px;height:15px"> 単月</label>
+        <input type="month" id="sh-mfrom" class="shi" style="width:170px" onchange="shPeriodSync()">
+        <span id="sh-mdash" style="color:#94a3b8">〜</span>
+        <input type="month" id="sh-mto" class="shi" style="width:170px" onchange="shPeriodSync()">
+        <span id="sh-pprev" style="font-size:12px;color:#0891b2;font-weight:700"></span>
+      </div>
+      <input type="hidden" id="sh-period-raw">
     </div>
     <div style="margin-top:14px">
       <label class="shl">出張スケジュール（1日1行・区分で日当が自動計算されます）</label>
@@ -294,6 +305,38 @@ function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
 var SH_RATE_DAY=1000, SH_RATE_STAY=2000;   // 日帰/宿泊の日当単価(既定)
 var SH_NAMES=['本多　亮','福永　健児'];      // 氏名ドロップダウン(該当者が増えたらここに追加)
 var SH_DEST_DEFAULT=['東京','神奈川','大阪','三重','秋田','岩手','静岡','愛知'];   // 訪問先候補の初期値(過去の入力が優先)
+// 過去の出張報告(W:\...\出張申請\*.xlsx を新様式に取り込んだもの)。ID固定で重複取込しない。
+var SH_PAST_SEED=[
+ { id:'frm_past_202505_honda', date:'2025-07-02', name:'本多　亮', periodFrom:'2025-05', periodTo:'2025-06', single:false, period:'2025年5月-2025年6月',
+   trips:[{kind:'日帰',date:'2025-05-21',dest:'三重'},{kind:'宿泊',date:'2025-06-11',dest:'秋田'},{kind:'宿泊',date:'2025-06-12',dest:'岩手'},{kind:'宿泊',date:'2025-06-13',dest:'岩手'},{kind:'日帰',date:'2025-06-19',dest:'大阪'}] },
+ { id:'frm_past_202505_fukunaga', date:'2025-07-02', name:'福永　健児', periodFrom:'2025-05', periodTo:'2025-06', single:false, period:'2025年5月-2025年6月',
+   trips:[{kind:'日帰',date:'2025-05-21',dest:'三重'}] },
+ { id:'frm_past_202507_honda', date:'2025-08-08', name:'本多　亮', periodFrom:'2025-07', periodTo:'2025-07', single:true, period:'2025年7月',
+   trips:[{kind:'日帰',date:'2025-07-17',dest:'横浜/東京'}] },
+ { id:'frm_past_202511_honda', date:'2026-04-02', name:'本多　亮', periodFrom:'2025-11', periodTo:'2026-03', single:false, period:'2025年11月-2026年3月',
+   trips:[{kind:'日帰',date:'2025-11-06',dest:'東京'},{kind:'日帰',date:'2026-01-15',dest:'東京'},{kind:'日帰',date:'2026-02-05',dest:'神奈川'},{kind:'日帰',date:'2026-02-18',dest:'神奈川'},{kind:'日帰',date:'2026-03-05',dest:'神奈川'}] },
+ { id:'frm_past_202511_fukunaga', date:'2026-04-02', name:'福永　健児', periodFrom:'2025-11', periodTo:'2026-03', single:false, period:'2025年11月-2026年3月',
+   trips:[{kind:'日帰',date:'2026-01-15',dest:'東京'}] }
+];
+// 過去分をDB.formsへ取込(未登録のものだけ・固定IDで冪等)
+function shImportPast(){
+  var existing={}; (function(){ var db=hubLoad(); (db&&db.forms||[]).forEach(function(r){ if(r&&r.id) existing[r.id]=1; }); })();
+  var toAdd=SH_PAST_SEED.filter(function(s){ return !existing[s.id]; });
+  if(!toAdd.length){ hubToast('過去分はすべて取込済みです'); return; }
+  if(!confirm('過去の出張報告 '+toAdd.length+'件を取り込みます。よろしいですか？\n（すでに取込済みの分は追加されません）')) return;
+  var ok=hubSave(function(db){
+    if(!Array.isArray(db.forms)) db.forms=[];
+    toAdd.forEach(function(s){
+      var rec={ id:s.id, type:'shucchou', title:(s.name+' / '+s.period),
+        data:{ date:s.date, name:s.name, period:s.period, periodFrom:s.periodFrom, periodTo:s.periodTo, single:s.single,
+               rateDay:SH_RATE_DAY, rateStay:SH_RATE_STAY, trips:s.trips, note:'' },
+        createdAt:(s.date+'T00:00:00.000Z'), createdBy:'（過去取込）' };
+      hubStamp(rec); rec.updatedAt=rec._updatedAt;
+      db.forms.push(rec);
+    });
+  });
+  if(ok){ hubToast('📥 過去分 '+toAdd.length+'件を取り込みました'); render(); }
+}
 function shList(){
   var db=hubLoad(); var L=(db&&Array.isArray(db.forms))?db.forms:[];
   return L.filter(function(r){ return r && r.type==='shucchou' && !r.deleted; });
@@ -318,6 +361,40 @@ function shNorm(d){
            trips:trips, rateDay:SH_RATE_DAY, rateStay:SH_RATE_STAY, note:note, _legacy:true };
 }
 function shMonthLabel(m){ if(!m) return ''; var p=String(m).split('-'); return p[0]+'年'+(p[1]?parseInt(p[1],10)+'月':''); }
+// 対象月: 'YYYY-MM' → '2025年11月'
+function shYmLabel(ym){ if(!ym) return ''; var p=String(ym).split('-'); return p[0]+'年'+parseInt(p[1],10)+'月'; }
+// 開始/終了/単月 → 表示文字列
+function shPeriodStr(from,to,single){
+  if(!from) return '';
+  if(single || !to || to===from) return shYmLabel(from);
+  return shYmLabel(from)+'-'+shYmLabel(to);
+}
+// 旧データの対象月文字列を開始/終了に。年付きのみ対応('5月/6月'等の年なしはnull)
+function shParseLegacyPeriod(str){
+  if(!str) return null;
+  var re=/(\d{4})\s*年\s*(\d{1,2})\s*月/g, m, a=[];
+  while((m=re.exec(str))){ a.push(m[1]+'-'+('0'+m[2]).slice(-2)); }
+  if(a.length>=2) return { from:a[0], to:a[a.length-1], single:false };
+  if(a.length===1) return { from:a[0], to:a[0], single:true };
+  return null;
+}
+// 単月チェックの表示切替＋プレビュー更新
+function shSingleToggle(){
+  var single=document.getElementById('sh-single').checked;
+  document.getElementById('sh-mto').style.display=single?'none':'';
+  document.getElementById('sh-mdash').style.display=single?'none':'';
+  if(single){ document.getElementById('sh-mto').value=''; }
+  shPeriodSync();
+}
+function shPeriodSync(){
+  var from=document.getElementById('sh-mfrom').value;
+  var to=document.getElementById('sh-mto').value;
+  var single=document.getElementById('sh-single').checked;
+  // 終了が開始より前なら入れ替えて案内
+  if(!single && from && to && to<from){ var t=from; document.getElementById('sh-mfrom').value=to; document.getElementById('sh-mto').value=t; from=to; to=t; hubToast('開始と終了を入れ替えました'); }
+  var s=shPeriodStr(from,to,single) || document.getElementById('sh-period-raw').value;
+  document.getElementById('sh-pprev').textContent=s?('→ '+s):'';
+}
 function shCounts(d){
   d=shNorm(d);
   var c={day:0, stay:0};
@@ -393,7 +470,13 @@ function shFill(d){
   sel.value=cur||''; document.getElementById('sh-name-other').value='';
   shNameChange();
   shSyncDestList();
-  set('sh-period', d.period||'');
+  // 対象月(開始〜終了＋単月)。旧データの文字列periodは年付きなら自動で読み取る
+  var pf=d.periodFrom, pt=d.periodTo, single=d.single;
+  if(!pf){ var lg=shParseLegacyPeriod(d.period); if(lg){ pf=lg.from; pt=lg.to; single=lg.single; } }
+  document.getElementById('sh-single').checked=!!single;
+  set('sh-mfrom', pf||''); set('sh-mto', (single?'':(pt||'')));
+  set('sh-period-raw', (!pf && d.period)?d.period:'');   // 年なし等でパース不可の文字列は保持
+  shSingleToggle();
   set('sh-rate-day', d.rateDay!=null?d.rateDay:SH_RATE_DAY);
   set('sh-rate-stay', d.rateStay!=null?d.rateStay:SH_RATE_STAY);
   set('sh-note', d.note);
@@ -462,7 +545,12 @@ function shCollect(){
   trips.sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||'')); });
   var gv=function(id){ return document.getElementById(id).value; };
   var num=function(id,def){ var v=parseFloat(gv(id)); return isNaN(v)?def:v; };
-  return { date:gv('sh-date'), name:shNameValue(), period:gv('sh-period'), trips:trips,
+  // 対象月(開始〜終了＋単月)。表示用period文字列も生成(帳票・ファイル名・検索で使用)
+  var from=gv('sh-mfrom'), to=gv('sh-mto'), single=document.getElementById('sh-single').checked;
+  if(single) to=from;
+  var period=from ? shPeriodStr(from,to,single) : (gv('sh-period-raw')||'');
+  return { date:gv('sh-date'), name:shNameValue(),
+           period:period, periodFrom:from, periodTo:to, single:single, trips:trips,
            rateDay:num('sh-rate-day',SH_RATE_DAY), rateStay:num('sh-rate-stay',SH_RATE_STAY), note:gv('sh-note') };
 }
 function shSave(thenPrint){
