@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>アーカイブ検索 | Tokiwa Hub Tools</title>
+<style>
+  :root{ --ink:#211f1c; --line:#e2e0da; --bg:#f4f3f0; --blue:#1e40af; --red:#b91c1c; --mut:#94a3b8; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); font-size:13px; }
+  header{ background:var(--ink); color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; letter-spacing:.04em; font-size:14px; }
+  header .logo b{ color:#a3e635; }
+  header .tname{ font-size:15px; font-weight:800; }
+  header .sub{ font-size:10px; color:#cbd5e1; letter-spacing:.12em; text-transform:uppercase; }
+  header .back{ margin-left:auto; font-size:12px; color:#cbd5e1; text-decoration:none; }
+  main{ max-width:1200px; margin:14px auto; padding:0 14px; }
+  .bar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+  .btn{ background:#fff; border:1px solid var(--line); border-radius:7px; padding:6px 11px; font-size:12px; font-weight:700; cursor:pointer; color:#333; }
+  .btn:hover{ background:#f8f7f4; }
+  .btn.pri{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .btn.sm{ padding:3px 8px; font-size:11px; }
+  input{ font-family:inherit; border:1px solid var(--line); border-radius:6px; padding:7px 9px; font-size:13px; background:#fff; }
+  .search{ flex:1; min-width:260px; }
+  .kpis{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .kpi{ background:var(--ink); color:#fff; border-radius:8px; padding:8px 14px; min-width:90px; }
+  .kpi .k{ font-size:9.5px; letter-spacing:.1em; color:#cbd5e1; text-transform:uppercase; }
+  .kpi .v{ font-size:19px; font-weight:800; margin-top:2px; }
+  .kpi.g .v{ color:#a3e635; }
+  .wrap{ background:#fff; border:1px solid var(--line); border-radius:8px; overflow:auto; max-height:64vh; }
+  table{ border-collapse:collapse; width:100%; }
+  th,td{ border-bottom:1px solid var(--line); padding:6px 8px; white-space:nowrap; text-align:left; }
+  thead th{ background:var(--ink) !important; color:#fff !important; font-size:11px; position:sticky; top:0; z-index:2; }
+  tbody tr:hover{ background:#eff6ff; }
+  td.nm{ font-weight:700; color:var(--blue); max-width:340px; overflow:hidden; text-overflow:ellipsis; }
+  td.loc{ color:#555; font-size:11.5px; max-width:360px; overflow:hidden; text-overflow:ellipsis; }
+  td.n{ text-align:right; font-variant-numeric:tabular-nums; color:#555; }
+  .cust{ font-size:10px; font-weight:800; background:#e0e7ff; color:#3730a3; border-radius:5px; padding:2px 6px; }
+  .empty{ padding:26px; text-align:center; color:var(--mut); }
+  .note{ font-size:11px; color:var(--mut); margin-top:8px; line-height:1.7; }
+  mark{ background:#fde68a; padding:0 1px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b></span>
+  <div><div class="tname">🗄 アーカイブ検索</div><div class="sub">ZIP ARCHIVE / FIND / EXTRACT</div></div>
+  <a class="back" href="../index.html">← Hubへ戻る</a>
+</header>
+<main>
+  <div class="bar">
+    <input id="q" class="search" placeholder="🔍 ファイル名・案件・得意先で検索（スペース区切りでAND）" oninput="render()">
+    <button class="btn" onclick="document.getElementById('imp').click()">⬆ 目録を取込</button>
+    <button class="btn" onclick="pickExtract()" id="btn-extract">🔽 取り出しリスト書き出し（<span id="seln">0</span>）</button>
+    <button class="btn sm" onclick="clearAll()" title="取り込んだ目録を全消去">🗑 目録クリア</button>
+    <input type="file" id="imp" accept=".json" multiple style="display:none" onchange="importIdx(this)">
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="wrap"><table id="tbl"></table></div>
+  <div class="note">
+    ・目録（archive_index.json）を「⬆目録を取込」で読み込むと、その中身をキーワードで探せます（複数得意先ぶん重ねてOK）。<br>
+    ・チェックした行を「🔽取り出しリスト書き出し」でダウンロード → ローカルの取り出しエージェントが該当zipから1ファイルだけ解凍します。<br>
+    ・目録・zipの実体は端末/ドライブにあり、公開リポジトリには含まれません。
+  </div>
+</main>
+<script>
+var KEY='archive_index_v1';
+var DB={ indexes:{} };   // { custKey: {cust, generated, zips, files:[...] } }
+var SEL={};              // key -> entry (選択中)
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+function fmtSize(b){ b=+b||0; if(b>=1073741824) return (b/1073741824).toFixed(2)+' GB'; if(b>=1048576) return (b/1048576).toFixed(1)+' MB'; if(b>=1024) return (b/1024).toFixed(0)+' KB'; return b+' B'; }
+function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }catch(e){} if(!DB.indexes) DB.indexes={}; }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){ alert('保存に失敗（容量超過の可能性）: '+e.message); } }
+
+function allFiles(){
+  var out=[];
+  Object.keys(DB.indexes).forEach(function(k){
+    var ix=DB.indexes[k]; (ix.files||[]).forEach(function(f){ out.push(f); });
+  });
+  return out;
+}
+function keyOf(f){ return (f.cust||'')+'|'+(f.zip||'')+'|'+(f.inzip||''); }
+
+function importIdx(inp){
+  var files=inp.files; if(!files||!files.length) return;
+  var done=0, add=0;
+  Array.prototype.forEach.call(files, function(file){
+    var fr=new FileReader();
+    fr.onload=function(){
+      try{
+        var d=JSON.parse(fr.result);
+        if(!d.files || !Array.isArray(d.files)) throw '目録形式ではありません（filesがありません）';
+        var ck=d.cust||file.name;
+        DB.indexes[ck]={ cust:d.cust||ck, generated:d.generated||'', zips:d.zips||[], files:d.files };
+        add++;
+      }catch(e){ alert('取込失敗（'+file.name+'）: '+e.message); }
+      done++;
+      if(done===files.length){ save(); render(); if(add) alert('目録を取込みました（'+add+'件の得意先）'); }
+    };
+    fr.readAsText(file);
+  });
+  inp.value='';
+}
+function clearAll(){ if(!confirm('取り込んだ目録を全て消しますか？（zip実体は消えません）')) return; DB={indexes:{}}; SEL={}; save(); render(); }
+
+function _terms_(){ return (document.getElementById('q').value||'').toLowerCase().split(/\s+/).filter(Boolean); }
+function _filtered_(){
+  var terms=_terms_(); var all=allFiles();
+  if(!terms.length) return all.slice(0, 300);
+  return all.filter(function(f){
+    var hay=((f.name||'')+' '+(f.rel||'')+' '+(f.cust||'')+' '+(f.zip||'')).toLowerCase();
+    return terms.every(function(t){ return hay.indexOf(t)>=0; });
+  });
+}
+function hl(s){ var terms=_terms_(); s=esc(s); terms.forEach(function(t){ if(!t) return; try{ s=s.replace(new RegExp('('+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>'); }catch(e){} }); return s; }
+
+var _byKey={};   // key -> entry（全ファイル。選択の実体引き用）
+function toggleSel(k){ if(SEL[k]) delete SEL[k]; else if(_byKey[k]) SEL[k]=_byKey[k]; document.getElementById('seln').textContent=Object.keys(SEL).length; }
+
+function render(){
+  var all=allFiles();
+  _byKey={}; all.forEach(function(f){ _byKey[keyOf(f)]=f; });
+  var list=_filtered_();
+  var q=(document.getElementById('q').value||'').trim();
+  var custN=Object.keys(DB.indexes).length;
+  var zipN=Object.keys(DB.indexes).reduce(function(s,k){ return s+((DB.indexes[k].zips||[]).length); },0);
+  document.getElementById('kpis').innerHTML=
+     '<div class="kpi"><div class="k">得意先(目録)</div><div class="v">'+custN+'</div></div>'
+    +'<div class="kpi"><div class="k">総ファイル</div><div class="v">'+all.length.toLocaleString()+'</div></div>'
+    +'<div class="kpi"><div class="k">zip数</div><div class="v">'+zipN+'</div></div>'
+    +'<div class="kpi g"><div class="k">'+(q?'該当':'表示')+'</div><div class="v">'+list.length.toLocaleString()+'</div></div>';
+
+  var h='<thead><tr><th style="width:28px"></th><th>ファイル名</th><th>得意先</th><th>場所（zip内）</th><th>サイズ</th><th>更新日</th></tr></thead><tbody>';
+  if(!all.length){ document.getElementById('tbl').innerHTML=h+'<tr><td colspan="6" class="empty">目録が未取込です。「⬆目録を取込」で archive_index.json を読み込んでください。</td></tr></tbody>'; return; }
+  if(!list.length){ document.getElementById('tbl').innerHTML=h+'<tr><td colspan="6" class="empty">「'+esc(q)+'」に一致するファイルがありません</td></tr></tbody>'; return; }
+  list.forEach(function(f){
+    var k=keyOf(f);
+    h+='<tr>'
+      +'<td><input type="checkbox" '+(SEL[k]?'checked':'')+' data-k="'+esc(k)+'" onchange="toggleSel(this.getAttribute(\'data-k\'))"></td>'
+      +'<td class="nm" title="'+esc(f.rel||f.name)+'">'+hl(f.name||'')+'</td>'
+      +'<td><span class="cust">'+esc(f.cust||'')+'</span></td>'
+      +'<td class="loc" title="'+esc(f.zip+' → '+f.inzip)+'">'+esc(f.zip)+' → '+hl(f.inzip||'')+'</td>'
+      +'<td class="n">'+fmtSize(f.size)+'</td>'
+      +'<td class="n">'+esc(f.mtime||'')+'</td>'
+      +'</tr>';
+  });
+  document.getElementById('tbl').innerHTML=h+'</tbody>';
+  document.getElementById('seln').textContent=Object.keys(SEL).length;
+}
+function pickExtract(){
+  var keys=Object.keys(SEL);
+  if(!keys.length){ alert('取り出したいファイルにチェックを入れてください'); return; }
+  var req={ generated:'', items:keys.map(function(k){ var f=SEL[k]; return { cust:f.cust, zip:f.zip, inzip:f.inzip, rel:f.rel, name:f.name }; }) };
+  var blob=new Blob([JSON.stringify(req,null,1)],{type:'application/json'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='extract_request.json'; a.click();
+  alert(keys.length+'件の取り出しリストを書き出しました。\nローカルの取り出しエージェントで実行してください。');
+}
+
+load(); render();
+</script>
+</body>
+</html>
