@@ -46,6 +46,16 @@
   .num .s{ font-size:6pt; color:#000; }
   /* 枠なし（配送ラベル的）: 全ての罫線を消す */
   .gp.nf, .gp.nf .r, .gp.nf .c, .gp.nf .foot{ border:none !important; }
+  /* シンプル梱包テンプレート（設計 148.5×70mm） */
+  .gps{ width:148.5mm; height:70mm; border:.4mm solid #000; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; gap:3mm; padding:5mm 7mm; color:#000; background:#fff; overflow:hidden; }
+  .gps.nf{ border:none; }
+  .gps .s-cust{ font-size:22pt; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .gps .s-item{ font-size:15pt; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .gps .s-row{ display:flex; gap:9mm; align-items:baseline; }
+  .gps .s-row .k2{ font-size:9pt; color:#444; font-weight:700; }
+  .gps .s-row .v2{ font-size:18pt; font-weight:800; }
+  .gps .s-foot{ font-size:9pt; color:#333; border-top:.2mm solid #999; padding-top:1.5mm; margin-top:1mm; }
+  .gps.nf .s-foot{ border-top:none; }
   /* プレビュー用の縮尺枠 */
   .sheetprev{ transform-origin:top left; }
 </style>
@@ -53,11 +63,23 @@
 <body>
 <header>
   <span class="logo">TOKIWA <b>HUB</b></span>
-  <div><div class="tname">🏷 ラベル作成（現品票・配送）</div><div class="sub">LABEL / Nana C6I 6面 / 枠・社名 切替</div></div>
+  <div><div class="tname">🏷 梱包ラベル作成</div><div class="sub">PACKING LABEL / 台紙・内容・枠・社名 選択</div></div>
   <a class="back" href="../index.html">← Hubへ戻る</a>
 </header>
 <main>
   <div class="card">
+    <div class="st">台紙・内容</div>
+    <div class="row">
+      <div><label>台紙</label><select id="f-sheet" onchange="pv()">
+        <option value="c6i">Nana C6I 6面（70×148.5・M5101381）</option>
+        <option value="a4-40">A4横 40面（59.4×26.25）</option>
+      </select></div>
+      <div><label>内容</label><select id="f-content" onchange="pv()">
+        <option value="genpin">現品票（トキワ様式・全項目）</option>
+        <option value="simple">シンプル梱包（得意先・品名・入数・箱数）</option>
+      </select></div>
+    </div>
+    <div class="hint" style="font-size:11px;color:#94a3b8;margin-top:4px">※シンプル梱包は「品名・御得意先・入数・箱数(個口)・連番・社名」を使用。現品票は下の全項目を使用。内容は台紙に合わせて自動で縮小（C6Iは90°回転）。</div>
     <div class="st">記載内容</div>
     <label>品名コード</label><input id="f-code" oninput="pv()">
     <div class="row">
@@ -75,7 +97,7 @@
     <div class="row3">
       <div><label>箱数（個口）</label><input id="f-boxes" type="number" min="1" max="200" value="1" oninput="pv()"></div>
       <div><label>各面コピー</label><input id="f-copies" type="number" min="1" max="60" value="1" oninput="pv()"></div>
-      <div><label>開始位置(1-6)</label><input id="f-start" type="number" min="1" max="6" value="1" oninput="pv()"></div>
+      <div><label>開始位置(左上=1)</label><input id="f-start" type="number" min="1" max="40" value="1" oninput="pv()"></div>
     </div>
     <div class="hint">箱数を入れると「個口N・番n」「連続ナンバー」を1..Nで連番生成します。開始位置＝使いかけシートの続き（左上=1）。</div>
 
@@ -104,11 +126,35 @@
 <script>
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function val(id){ return (document.getElementById(id).value||'').trim(); }
-// C6I 諸元(mm)
-var SHEET={ pw:210, ph:297, lw:70, lh:148.5, cols:3, rows:2, mt:0, ml:0, gx:0.2, gy:0.2 };
+// 台紙プリセット(mm)。rotate=内容(横148.5×70)を90°回転して縦長ラベルに載せる
+var DESIGN_W=148.5, DESIGN_H=70;   // ラベル内容の設計サイズ(横向き)
+var SHEETS={
+  'c6i':  { name:'Nana C6I 6面（A4縦・70×148.5・M5101381）', pw:210, ph:297, orient:'portrait',  lw:70,   lh:148.5, cols:3, rows:2, mt:0, ml:0, gx:0.2, gy:0.2, rotate:true },
+  'a4-40':{ name:'A4横 40面（59.4×26.25・5列×8行）',          pw:297, ph:210, orient:'landscape', lw:59.4, lh:26.25, cols:5, rows:8, mt:0, ml:0, gx:0,   gy:0,   rotate:false }
+};
+function curSheet(){ var s=document.getElementById('f-sheet'); return (s&&SHEETS[s.value])||SHEETS['c6i']; }
+function fitScale(sh){ var iw=sh.rotate?sh.lh:sh.lw, ih=sh.rotate?sh.lw:sh.lh; return Math.min(iw/DESIGN_W, ih/DESIGN_H); }
 
-// ラベル1枚(横148.5×70)のHTML。n=この箱の番号 / N=個口総数
+// ラベル1枚(設計サイズ 横148.5×70mm)。内容テンプレートで分岐
 function labelHTML(o, n, N){
+  return o.content==='simple' ? labelSimple(o,n,N) : labelGenpin(o,n,N);
+}
+// シンプル梱包（得意先/品名/入数/箱数/連番）。枠・社名の有無に対応
+function labelSimple(o, n, N){
+  var serial = o.serial ? String((parseInt(o.serial,10)||0) + (n-1)) : '';
+  return '<div class="gps'+(o.frame===false?' nf':'')+'">'
+    +'<div class="s-cust">'+esc(o.cust||'')+(o.cust?'　様':'')+'</div>'
+    +(o.item?'<div class="s-item">'+esc(o.item)+'</div>':'')
+    +'<div class="s-row">'
+    +  '<span class="s-cell"><b class="k2">入数</b> <b class="v2">'+esc(o.iri||'')+'</b></span>'
+    +  '<span class="s-cell"><b class="k2">箱</b> <b class="v2">'+n+'</b>/'+N+'</span>'
+    +  (serial?'<span class="s-cell"><b class="k2">No.</b> <b class="v2">'+esc(serial)+'</b></span>':'')
+    +'</div>'
+    +(o.showco?('<div class="s-foot">'+esc(o.coname||'')+(o.coaddr?'　'+esc((o.coaddr||'').split(/\n/)[0]):'')+'</div>'):'')
+    +'</div>';
+}
+// トキワ現品票（ボックス様式）
+function labelGenpin(o, n, N){
   var showco=o.showco;
   var serial = o.serial ? String((parseInt(o.serial,10)||0) + (n-1)) : '';
   var cust = o.cust ? (esc(o.cust)) : '';
@@ -136,12 +182,14 @@ function labelHTML(o, n, N){
 }
 
 function readForm(){
+  var _per=curSheet().cols*curSheet().rows;
   return {
+    content:(document.getElementById('f-content')||{}).value||'genpin',
     code:val('f-code'), size:val('f-size'), iri:val('f-iri'), item:val('f-item'),
     cust:val('f-cust'), order:val('f-order'), serial:val('f-serial'),
     boxes:Math.max(1,Math.min(200,parseInt(val('f-boxes'))||1)),
     copies:Math.max(1,Math.min(60,parseInt(val('f-copies'))||1)),
-    start:Math.max(1,Math.min(6,parseInt(val('f-start'))||1)),
+    start:Math.max(1,Math.min(_per,parseInt(val('f-start'))||1)),
     frame:document.getElementById('f-frame').checked,
     showco:document.getElementById('f-showco').checked,
     coname:val('f-coname'), coaddr:val('f-coaddr'),
@@ -155,25 +203,24 @@ function buildLabels(o){
   return arr;
 }
 
-// C6Iシート(3列×2行)のHTML。回転してセルに収める
+// 選択台紙に面付け。内容は .fit で倍率＋（必要なら）90°回転してセルに収める
 function sheetsHTML(o){
+  var sh=curSheet();
   var labels=buildLabels(o);
-  var per=SHEET.cols*SHEET.rows;   // 6
+  var per=sh.cols*sh.rows;
   var pos=Math.min(o.start,per)-1;
   var pages=[]; var cur=new Array(per).fill('');
   var filled=pos;
-  // 先頭の空きを飛ばす
   labels.forEach(function(lab){
     if(filled>=per){ pages.push(cur); cur=new Array(per).fill(''); filled=0; }
     cur[filled]=lab; filled++;
   });
   pages.push(cur);
-  var cellW=SHEET.lw, cellH=SHEET.lh;
   var html='';
   pages.forEach(function(cells){
     var inner='';
     cells.forEach(function(lab){
-      inner += '<div class="cell">'+(lab?('<div class="rot">'+lab+'</div>'):'')+'</div>';
+      inner += '<div class="cell">'+(lab?('<div class="fit">'+lab+'</div>'):'')+'</div>';
     });
     html += '<div class="page">'+inner+'</div>';
   });
@@ -181,49 +228,47 @@ function sheetsHTML(o){
 }
 
 function sheetCSS(o){
-  return '@page{size:A4 portrait;margin:0}'
+  var sh=curSheet(); var S=fitScale(sh); var rot=sh.rotate?' rotate(-90deg)':'';
+  return '@page{size:A4 '+sh.orient+';margin:0}'
     +'body{margin:0}'
-    +'.page{width:'+SHEET.pw+'mm;height:'+SHEET.ph+'mm;box-sizing:border-box;padding-top:'+(SHEET.mt+o.ox)+'mm;padding-left:'+(SHEET.ml+o.oy)+'mm;'
-    +'display:grid;grid-template-columns:repeat('+SHEET.cols+','+SHEET.lw+'mm);grid-template-rows:repeat('+SHEET.rows+','+SHEET.lh+'mm);column-gap:'+SHEET.gx+'mm;row-gap:'+SHEET.gy+'mm;page-break-after:always;break-after:page}'
+    +'.page{width:'+sh.pw+'mm;height:'+sh.ph+'mm;box-sizing:border-box;padding-top:'+(sh.mt+o.ox)+'mm;padding-left:'+(sh.ml+o.oy)+'mm;'
+    +'display:grid;grid-template-columns:repeat('+sh.cols+','+sh.lw+'mm);grid-template-rows:repeat('+sh.rows+','+sh.lh+'mm);column-gap:'+sh.gx+'mm;row-gap:'+sh.gy+'mm;page-break-after:always;break-after:page}'
     +'.page:last-child{page-break-after:auto;break-after:auto}'
-    +'.cell{width:'+SHEET.lw+'mm;height:'+SHEET.lh+'mm;position:relative;overflow:hidden}'
-    +'.rot{position:absolute;top:50%;left:50%;width:'+SHEET.lh+'mm;height:'+SHEET.lw+'mm;transform:translate(-50%,-50%) rotate(-90deg);transform-origin:center center}';
+    +'.cell{width:'+sh.lw+'mm;height:'+sh.lh+'mm;position:relative;overflow:hidden}'
+    +'.fit{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)'+rot+' scale('+S+');transform-origin:center center}';
 }
 
 function pv(){
-  var o=readForm();
-  var css=[
-    '.gp{width:148.5mm;height:70mm;border:.3mm solid #000;box-sizing:border-box;display:flex;flex-direction:column;font-size:9pt;color:#000;background:#fff;overflow:hidden}',
-    document.querySelector('style').innerHTML  // 既存の .gp 系スタイルを流用
-  ];
-  // プレビューは回転せず横向きの1枚＋シート俯瞰
+  var o=readForm(); var sh=curSheet();
+  // プレビューは内容1枚(横148.5×70の設計)＋台紙の面付け俯瞰
   var one=labelHTML(o,1,o.boxes);
   var prev=document.getElementById('preview');
   var scale=Math.min(1,(prev.clientWidth-40)/ (148.5*3.7795) );
   prev.innerHTML=
-     '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">ラベル1枚（148.5×70mm・実寸の約'+Math.round(scale*100)+'%）</div>'
+     '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">ラベル内容 1枚（設計 148.5×70mm・実寸の約'+Math.round(scale*100)+'%／印刷時は台紙に合わせて縮小'+(sh.rotate?'＋90°回転':'')+'）</div>'
     +'<div class="sheetprev" style="transform:scale('+scale+')">'+one+'</div>'
     +'<div style="clear:both;height:'+Math.round(70*3.7795*scale+10)+'px"></div>'
-    +'<div style="font-size:11px;color:#94a3b8;margin:10px 0 6px">C6I 6面（A4・3列×2行）に90°回転で配置。印刷イメージ↓</div>'
+    +'<div style="font-size:11px;color:#94a3b8;margin:10px 0 6px">'+esc(sh.name)+' に面付け（'+sh.cols+'列×'+sh.rows+'行）'+(sh.rotate?'・90°回転':'')+'。印刷イメージ↓</div>'
     +miniSheet(o, prev.clientWidth-40);
 }
-// A4シートのミニ俯瞰（面付け位置の確認用・軽量：枠と番号のみ）
+// 台紙の面付け俯瞰（軽量：枠と番号のみ）
 function miniSheet(o, wpx){
-  var mm2px=Math.min(wpx,260)/210;
+  var sh=curSheet();
+  var mm2px=Math.min(wpx,300)/sh.pw;
   var labels=buildLabels(o);
-  var per=6, pos=Math.min(o.start,6)-1;
-  var used=Math.min(6, pos+labels.length);
-  var html='<div style="position:relative;width:'+(210*mm2px)+'px;height:'+(297*mm2px)+'px;border:1px solid #cbd5e1;background:#fafafa">';
-  for(var r=0;r<2;r++) for(var c=0;c<3;c++){
-    var i=r*3+c;
-    var x=(SHEET.ml + c*(SHEET.lw+SHEET.gx))*mm2px;
-    var y=(SHEET.mt + r*(SHEET.lh+SHEET.gy))*mm2px;
-    var w=SHEET.lw*mm2px, h=SHEET.lh*mm2px;
+  var per=sh.cols*sh.rows, pos=Math.min(o.start,per)-1;
+  var used=Math.min(per, pos+labels.length);
+  var html='<div style="position:relative;width:'+(sh.pw*mm2px)+'px;height:'+(sh.ph*mm2px)+'px;border:1px solid #cbd5e1;background:#fafafa">';
+  for(var r=0;r<sh.rows;r++) for(var c=0;c<sh.cols;c++){
+    var i=r*sh.cols+c;
+    var x=(sh.ml + c*(sh.lw+sh.gx))*mm2px;
+    var y=(sh.mt + r*(sh.lh+sh.gy))*mm2px;
+    var w=sh.lw*mm2px, h=sh.lh*mm2px;
     var on=(i>=pos && i<used);
     html+='<div style="position:absolute;left:'+x+'px;top:'+y+'px;width:'+w+'px;height:'+h+'px;border:1px dashed '+(on?'#0e7c86':'#e2e0da')+';background:'+(on?'#ecfeff':'#fff')+';'
-      +'display:flex;align-items:center;justify-content:center;font-size:10px;color:'+(on?'#0e7c86':'#cbd5e1')+'">'+(on?'ラベル':(i+1))+'</div>';
+      +'display:flex;align-items:center;justify-content:center;font-size:9px;color:'+(on?'#0e7c86':'#cbd5e1')+'">'+(on?'●':(i+1))+'</div>';
   }
-  html+='</div><div style="font-size:10px;color:#94a3b8;margin-top:4px">※各セルに現品票を90°回転で配置（縦70×横148.5→縦148.5×横70）</div>';
+  html+='</div>';
   return html;
 }
 
