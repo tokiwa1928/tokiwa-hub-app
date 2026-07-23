@@ -56,8 +56,8 @@
 </header>
 <main>
   <div class="sec">
-    <div id="drop" onclick="document.getElementById('fi').click()">📂 .ai（イラレ）/ .psd（フォトショ）/ .pdf をドラッグ&ドロップ（複数OK）<div class="muted" style="margin-top:6px">※ .ai は「PDF互換ファイルを作成」で保存したもの／.psd は画像化／.pdf はそのまま採寸・印刷。InDesign(.indd)は「PDF書き出し」してからそのPDFを。連結や校正枠は「PDFツール」へ</div></div>
-    <input type="file" id="fi" accept=".ai,.psd,.pdf,application/postscript,application/illustrator,image/vnd.adobe.photoshop,application/pdf" multiple style="display:none" onchange="addFiles(this.files)">
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 .ai / .psd / .pdf / .indd をドラッグ&ドロップ（複数OK）<div class="muted" style="margin-top:6px">※ .ai は「PDF互換」保存／.psd は画像化／.pdf はそのまま／.indd はローカルのInDesignで自動PDF化（印刷エージェント常駐＋InDesign必須・リンク画像は低解像度）。連結や校正枠は「PDFツール」へ</div></div>
+    <input type="file" id="fi" accept=".ai,.psd,.pdf,.indd,application/postscript,application/illustrator,image/vnd.adobe.photoshop,application/pdf" multiple style="display:none" onchange="addFiles(this.files)">
     <div id="flist"></div>
   </div>
 
@@ -105,7 +105,8 @@ function matMul(a,b){ // a∘b (bを先に適用)
 // ページ1から線分と矩形を、CTMを適用したユーザー空間座標で取り出す
 async function extractGeometry(buf){
   if(!pdfjsReady()) throw new Error('pdfjs未読込');
-  var task=pdfjsLib.getDocument({ data:new Uint8Array(buf.slice(0)), stopAtErrors:false, isEvalSupported:false });
+  var task=pdfjsLib.getDocument({ data:new Uint8Array(buf.slice(0)), stopAtErrors:false, isEvalSupported:false,
+    cMapUrl:'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', cMapPacked:true });
   var doc=await task.promise;
   var page=await doc.getPage(1);
   var OPS=pdfjsLib.OPS;
@@ -332,20 +333,41 @@ var drop=document.getElementById('drop');
 ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('over');}); });
 drop.addEventListener('drop',function(e){ addFiles(e.dataTransfer.files); });
 
+// ローカル印刷エージェント(常駐)。InDesign(.indd)はここへ送ってPDF化する。
+var AGENT_URL='http://127.0.0.1:17650';
+// バイト列を1ファイルとして取り込み(採寸・プレビュー用の共通処理)
+async function addBufAsFile(name, buf){
+  var kind=fkind(name);
+  var ok=(kind==='psd') ? (typeof agPsd!=='undefined') : isPdfCompatible(buf);
+  var rec={ name:name, buf:buf, kind:kind, ok:ok, m:null };
+  files.push(rec);
+  if(ok){ try{ rec.m=await measureFile(rec); }catch(e){} }
+  render();
+  if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); }
+}
+// .indd をローカル印刷エージェント経由でInDesignにPDF化させる
+async function inddViaAgent(f){
+  var res=await fetch(AGENT_URL+'/indd2pdf', { method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:f });
+  if(!res.ok){ var j=null; try{ j=await res.json(); }catch(e){} throw new Error((j&&j.error)||('HTTP '+res.status)); }
+  return await res.arrayBuffer();
+}
 function addFiles(fl){
-  var arr=[].slice.call(fl).filter(function(f){ return /\.(ai|psd|pdf)$/i.test(f.name); });
-  if(!arr.length){ toast('.ai（イラレ）/ .psd（フォトショ）/ .pdf を入れてください'); return; }
-  if([].slice.call(fl).some(function(f){ return /\.indd$/i.test(f.name); })) toast('InDesign(.indd)は中身がPDF/プレビュー画像でないため直接は表示できません → InDesignで「PDF書き出し」し、そのPDFをここへ入れてください（PDFも採寸・印刷できます）');
-  var pending=arr.length;
+  var all=[].slice.call(fl);
+  var arr=all.filter(function(f){ return /\.(ai|psd|pdf)$/i.test(f.name); });
+  var indd=all.filter(function(f){ return /\.indd$/i.test(f.name); });
+  if(!arr.length && !indd.length){ toast('.ai / .psd / .pdf / .indd を入れてください'); return; }
+  // 通常ファイル(ai/psd/pdf)
   arr.forEach(function(f){
-    f.arrayBuffer().then(async function(buf){
-      var kind=fkind(f.name);
-      var ok=(kind==='psd') ? (typeof agPsd!=='undefined') : isPdfCompatible(buf);
-      var rec={ name:f.name, buf:buf, kind:kind, ok:ok, m:null };
-      files.push(rec);
-      if(ok){ try{ rec.m=await measureFile(rec); }catch(e){} }
-      if(--pending===0){ render(); if(cur<0){ var fi=files.findIndex(function(x){return x.ok;}); if(fi>=0) select(fi); } }
-    }).catch(function(e){ pending--; toast('❌ '+f.name+': '+(e.message||e)); });
+    f.arrayBuffer().then(function(buf){ return addBufAsFile(f.name, buf); })
+      .catch(function(e){ toast('❌ '+f.name+': '+(e.message||e)); });
+  });
+  // InDesign(.indd) → エージェントでPDF化して取り込む
+  indd.forEach(function(f){
+    toast('🅸 InDesignで変換中… '+f.name+'（初回は数十秒）');
+    inddViaAgent(f)
+      .then(function(buf){ return addBufAsFile(f.name.replace(/\.indd$/i,'.pdf'), buf); })
+      .then(function(){ toast('✅ '+f.name+' をPDFに変換しました'); })
+      .catch(function(e){ toast('❌ InDesign変換に失敗: '+(e.message||e)+' ／ 印刷エージェントの常駐とInDesignをご確認ください'); });
   });
 }
 function render(){
