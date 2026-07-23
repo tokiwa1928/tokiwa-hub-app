@@ -111,6 +111,9 @@
     <div class="st">枠線・社名</div>
     <label class="ck"><input type="checkbox" id="f-frame" checked onchange="pv()"> 枠線を表示する（OFF＝無枠・配送ラベル的）</label>
     <label class="ck"><input type="checkbox" id="f-showco" checked onchange="pv()"> 社名フッターを表示する（OFF＝ブランク版）</label>
+    <label>会社（社名フッター・マスタから選択）</label>
+    <select id="f-coselect" onchange="onCoSelect()"></select>
+    <div class="hint" id="co-scope-hint" style="font-size:11px;color:#94a3b8;margin-top:3px"></div>
     <label>社名</label><input id="f-coname" value="トキワ印刷株式会社" oninput="pv()">
     <label>住所・TEL（改行で2行まで）</label><textarea id="f-coaddr" rows="2" oninput="pv()">静岡県浜松市中央区法枝町115　☎053-441-2784代</textarea>
 
@@ -133,6 +136,56 @@
 <script>
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function val(id){ return (document.getElementById(id).value||'').trim(); }
+
+// ── 社名マスタ（Hub会社マスタ＋帳票の会社情報から。ログイン会社で選べる社名を絞る）──
+var GROUP_COMPANIES = [
+  {id:'COMP002', code:'TK', name:'トキワ印刷株式会社',   addr:'静岡県浜松市中央区法枝町115', tel:'☎053-441-2784代'},
+  {id:'COMP001', code:'MU', name:'村山印刷有限会社',     addr:'東京都武蔵村山市残堀2-1-1',  tel:'☎042-560-2431'},
+  {id:'COMP004', code:'KT', name:'有限会社北上プリント', addr:'岩手県北上市大曲町2-13',     tel:'☎0197-64-7082'},
+  {id:'COMP006', code:'NK', name:'中尾印刷株式会社',     addr:'愛知県豊川市中央通3-22',     tel:'☎0533-86-2046'},
+  {id:'COMP003', code:'TS', name:'株式会社津島プリント社', addr:'愛知県津島市愛宕町8-13-3',  tel:'☎0567-26-0087'},
+  {id:'COMP005', code:'AS', name:'有限会社アート・エス', addr:'', tel:''},
+  {id:'COMP007', code:'YM', name:'ヤマウチ印刷株式会社', addr:'', tel:''}
+];
+function _hubDB(){ try{ return JSON.parse(localStorage.getItem('murayama_v15'))||{}; }catch(e){ return {}; } }
+function _hubAuth(){ try{ return JSON.parse(localStorage.getItem('murayama_auth'))||{}; }catch(e){ return {}; } }
+// 住所/TELはHubの「帳票の会社情報」(companyProfiles)を優先し、無ければ既定
+function _companyList(){
+  var prof=(_hubDB().conf&&_hubDB().conf.companyProfiles)||{};
+  return GROUP_COMPANIES.map(function(c){
+    var p=prof[c.id]||{};
+    var addr=(p.addr||c.addr||'').trim();
+    var tel=[(p.tel||c.tel||'').trim(), (p.fax||'').trim()].filter(Boolean).join('　');
+    return { id:c.id, code:c.code, name:c.name, addr:addr, tel:tel };
+  });
+}
+// ログイン会社で選べる社名を絞る（トキワ/管理者/未ログイン=全社、他社=自社のみ）
+function _allowedCompanies(){
+  var a=_hubAuth(), list=_companyList();
+  if(!a || !a.loggedIn) return {list:list, all:true, mine:null};
+  var isTK=(a.companyId==='COMP002'||a.companyCode==='TK'||a.role==='admin'||a.viewScope==='all');
+  var mine=list.filter(function(c){ return c.id===a.companyId||c.code===a.companyCode; })[0]||null;
+  return isTK ? {list:list, all:true, mine:mine} : {list:list.filter(function(c){ return c.id===a.companyId||c.code===a.companyCode; }), all:false, mine:mine};
+}
+function populateCoSelect(){
+  var sel=document.getElementById('f-coselect'); if(!sel) return;
+  var ac=_allowedCompanies();
+  sel.innerHTML=ac.list.map(function(c){ return '<option value="'+c.id+'">'+esc(c.name)+'</option>'; }).join('')+'<option value="__manual">（手入力）</option>';
+  // 既定＝自社（あれば）／無ければ先頭
+  var def=(ac.mine&&ac.mine.id)||(ac.list[0]&&ac.list[0].id)||'__manual';
+  sel.value=def;
+  var hint=document.getElementById('co-scope-hint');
+  if(hint){ var a=_hubAuth(); hint.textContent = ac.all ? '（全社の社名を選べます）' : ('（ログイン会社：'+(ac.mine?ac.mine.name:(a.companyName||'自社'))+' のみ選択可）'); }
+  fillCoFromSelect();
+}
+function fillCoFromSelect(){
+  var id=document.getElementById('f-coselect').value;
+  if(id==='__manual') return;
+  var c=_companyList().filter(function(x){ return x.id===id; })[0]; if(!c) return;
+  document.getElementById('f-coname').value=c.name;
+  document.getElementById('f-coaddr').value=[c.addr, c.tel].filter(Boolean).join('　');
+}
+function onCoSelect(){ fillCoFromSelect(); pv(); }
 // 台紙プリセット(mm)。rotate=内容(横148.5×70)を90°回転して縦長ラベルに載せる
 var DESIGN_W=148.5, DESIGN_H=70;   // ラベル内容の設計サイズ(横向き)
 var SHEETS={
@@ -302,6 +355,7 @@ function doPrint(){
   setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 350);
 }
 
+populateCoSelect();
 pv();
 window.addEventListener('resize', pv);
 </script>
