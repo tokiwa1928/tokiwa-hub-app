@@ -10,13 +10,18 @@
   - .ai/.pdf: 最近の .ai は「PDF互換ファイルを作成」で保存されていれば中身が PDF。
     その PDF 部分をそのまま使う(最も忠実)。任意で pdf-lib 再保存による軽量化も可。
   - .psd: ag-psd で合成画像を取り出し→解像度に合わせてPDF化(ラスタライズ)。
-  - サイズ表示: トンボ(裁ち落とし枠)があれば「トンボまで」と「データ(仕上り)」、無ければデータのみ。複数ページはページ数も。
+  - サイズ表示: pdf.js で図形(線/矩形)を読み、
+      ・トンボ(線)があれば「仕上り」「裁ち落とし(塗り足し3mm)」を自動採寸(角トンボの上下/左右対応で絵柄ノイズを除外・塗りやクリップの線は無視)
+      ・ファイル名が封筒(長3/角2/窓付 等)なら「封筒枠(最大矩形)」「4辺の端からの余白」「窓/小枠のサイズ・位置」を表示
+      ・どちらも無ければ PDFボックス(MediaBox/TrimBox)から データ/トンボまで を表示。複数ページはページ数も。
   - PC内処理(どこにも送信しない)。
   - InDesign(.indd)は独自形式でPDFを内包しないため非対応 → InDesignからPDF書き出しを。
 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/ag-psd@16.0.0/dist/bundle.js"></script>
+<!-- pdf.js: トンボ罫線・封筒枠の図形座標を読むために使う(採寸時に遅延読み込み) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
   *{ box-sizing:border-box; }
@@ -81,7 +86,173 @@ var _curUrl=null;
 
 var MM=72/25.4;
 function mm(pt){ var v=Math.round(pt/MM*10)/10; return (Math.abs(v-Math.round(v))<0.05?String(Math.round(v)):v.toFixed(1)); }
+function mmN(pt){ return Math.round(pt/MM*10)/10; }   // 数値のmm(丸め1桁)
 function fkind(name){ return /\.psd$/i.test(name) ? 'psd' : 'pdf'; }
+
+// ═════════ トンボ・封筒枠の図形採寸 (pdf.js で線分/矩形を読む) ═════════
+var BLEED_PT=3*MM;   // 塗り足し3mm = 8.5pt
+function pdfjsReady(){
+  if(typeof pdfjsLib==='undefined') return false;
+  try{ if(!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){}
+  return true;
+}
+function mat(m,x,y){ return [m[0]*x+m[2]*y+m[4], m[1]*x+m[3]*y+m[5]]; }
+function matMul(a,b){ // a∘b (bを先に適用)
+  return [ a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
+           a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
+           a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5] ];
+}
+// ページ1から線分と矩形を、CTMを適用したユーザー空間座標で取り出す
+async function extractGeometry(buf){
+  if(!pdfjsReady()) throw new Error('pdfjs未読込');
+  var task=pdfjsLib.getDocument({ data:new Uint8Array(buf.slice(0)), stopAtErrors:false, isEvalSupported:false });
+  var doc=await task.promise;
+  var page=await doc.getPage(1);
+  var OPS=pdfjsLib.OPS;
+  var opl=await page.getOperatorList();
+  var ctm=[1,0,0,1,0,0], stack=[];
+  var segs=[], rects=[];
+  var pSegs=[], pRects=[];   // 現在パスの一時バッファ(描画方法が確定してから採否)
+  var cx=0, cy=0, sx=0, sy=0;   // 現在点・サブパス始点(ユーザー空間)
+  function P(x,y){ return mat(ctm,x,y); }
+  var STROKE={}, FILL={}, DROP={};
+  [OPS.stroke,OPS.closeStroke,OPS.fillStroke,OPS.eoFillStroke,OPS.closeFillStroke,OPS.closeEOFillStroke].forEach(function(o){ if(o!=null) STROKE[o]=1; });
+  [OPS.fill,OPS.eoFill].forEach(function(o){ if(o!=null) FILL[o]=1; });
+  [OPS.endPath,OPS.clip,OPS.eoClip].forEach(function(o){ if(o!=null) DROP[o]=1; });
+  function flush(fn){
+    // トンボは線(stroke)。塗り(fill)の輪郭やクリップ枠は線分として採らない=絵柄ノイズを除去。
+    // 矩形(封筒枠/窓)は塗り/線どちらでも構造として使うが、クリップは捨てる。
+    if(STROKE[fn]){ segs=segs.concat(pSegs); rects=rects.concat(pRects); }
+    else if(FILL[fn]){ rects=rects.concat(pRects); }   // 塗り: 矩形だけ採用(枠/窓)、線分は捨てる
+    // DROP(clip/endPath): 何も採らない
+    pSegs=[]; pRects=[];
+  }
+  for(var k=0;k<opl.fnArray.length;k++){
+    var fn=opl.fnArray[k], a=opl.argsArray[k];
+    if(fn===OPS.save){ stack.push(ctm.slice()); }
+    else if(fn===OPS.restore){ if(stack.length) ctm=stack.pop(); }
+    else if(fn===OPS.transform){ ctm=matMul(ctm,[a[0],a[1],a[2],a[3],a[4],a[5]]); }
+    else if(fn===OPS.constructPath){
+      var ops=a[0], co=a[1], i=0, p, p0;
+      for(var j=0;j<ops.length;j++){
+        var op=ops[j];
+        if(op===OPS.moveTo){ p=P(co[i],co[i+1]); cx=co[i]; cy=co[i+1]; sx=cx; sy=cy; i+=2; }
+        else if(op===OPS.lineTo){ p0=P(cx,cy); p=P(co[i],co[i+1]); pSegs.push([p0[0],p0[1],p[0],p[1]]); cx=co[i]; cy=co[i+1]; i+=2; }
+        else if(op===OPS.curveTo){ cx=co[i+4]; cy=co[i+5]; i+=6; }
+        else if(op===OPS.curveTo2){ cx=co[i+2]; cy=co[i+3]; i+=4; }
+        else if(op===OPS.curveTo3){ cx=co[i+2]; cy=co[i+3]; i+=4; }
+        else if(op===OPS.closePath){ if(sx!==cx||sy!==cy){ p0=P(cx,cy); p=P(sx,sy); pSegs.push([p0[0],p0[1],p[0],p[1]]); } cx=sx; cy=sy; }
+        else if(op===OPS.rectangle){
+          var rx=co[i], ry=co[i+1], rw=co[i+2], rh=co[i+3]; i+=4;
+          var c1=P(rx,ry), c2=P(rx+rw,ry), c3=P(rx+rw,ry+rh), c4=P(rx,ry+rh);
+          var xs=[c1[0],c2[0],c3[0],c4[0]], ys=[c1[1],c2[1],c3[1],c4[1]];
+          var x0=Math.min.apply(null,xs), x1=Math.max.apply(null,xs), y0=Math.min.apply(null,ys), y1=Math.max.apply(null,ys);
+          pRects.push({x0:x0,y0:y0,x1:x1,y1:y1,w:x1-x0,h:y1-y0,area:(x1-x0)*(y1-y0)});
+          cx=rx; cy=ry; sx=rx; sy=ry;
+        }
+      }
+    }
+    else if(STROKE[fn] || FILL[fn] || DROP[fn]){ flush(fn); }
+  }
+  var pg={ w:page.view[2]-page.view[0], h:page.view[3]-page.view[1] };
+  try{ doc.destroy(); }catch(e){}
+  return { segs:segs, rects:rects, page:pg };
+}
+// 軸並行の短い線分の座標を集めてクラスタ化 → 3mm(塗り足し)離れた平行ペアを探し仕上り/裁ち落としを出す
+function cluster1D(vals, tol){
+  vals=vals.slice().sort(function(a,b){return a-b;});
+  var out=[];
+  for(var i=0;i<vals.length;i++){
+    var v=vals[i];
+    if(out.length && Math.abs(v-out[out.length-1].c)<=tol){ var o=out[out.length-1]; o.c=(o.c*o.n+v)/(o.n+1); o.n++; }
+    else out.push({c:v,n:1});
+  }
+  return out;
+}
+function findPairs(cl){ // ~BLEED_PT離れた2値
+  var pairs=[];
+  for(var i=0;i<cl.length;i++) for(var j=i+1;j<cl.length;j++){
+    if(Math.abs((cl[j].c-cl[i].c)-BLEED_PT)<1.6) pairs.push([cl[i].c, cl[j].c]);
+  }
+  return pairs;
+}
+// トンボの角マークは「同じXに上・下両方のマーク」「同じYに左・右両方のマーク」を持つ。
+// この2次元構造で、密なイラストの短線をトンボと誤検出しないようにする。
+// clusterAxis: 縦マーク(=X位置ごとにY範囲) / 横マーク(=Y位置ごとにX範囲) をまとめて、
+//   反対側の端までまたぐ(spanが大きい)クラスタだけを「トンボの辺」とみなす。
+function edgeLines(marks, spanNeed){
+  // marks: [{pos, cross}] pos=辺の座標, cross=直交方向の中心
+  marks.sort(function(a,b){return a.pos-b.pos;});
+  var cl=[];
+  marks.forEach(function(m){
+    if(cl.length && Math.abs(m.pos-cl[cl.length-1].pos)<1.2){ var o=cl[cl.length-1]; o.pos=(o.pos*o.n+m.pos)/(o.n+1); o.n++; o.lo=Math.min(o.lo,m.cross); o.hi=Math.max(o.hi,m.cross); }
+    else cl.push({pos:m.pos,n:1,lo:m.cross,hi:m.cross});
+  });
+  return cl.filter(function(c){ return (c.hi-c.lo)>=spanNeed; }).map(function(c){return c.pos;});
+}
+function detectTonbo(geo){
+  var segs=geo.segs;
+  var len=function(s){ return Math.hypot(s[2]-s[0],s[3]-s[1]); };
+  var vmarks=[], hmarks=[];   // 縦マーク(x辺)/横マーク(y辺)
+  segs.forEach(function(s){ var L=len(s);
+    if(L>3 && L<45){
+      if(Math.abs(s[2]-s[0])<0.6) vmarks.push({pos:(s[0]+s[2])/2, cross:(s[1]+s[3])/2});
+      else if(Math.abs(s[3]-s[1])<0.6) hmarks.push({pos:(s[1]+s[3])/2, cross:(s[0]+s[2])/2});
+    }
+  });
+  if(vmarks.length<4 || hmarks.length<4) return null;
+  // 角マーク: 縦マークが上下両端(ページ高の4割以上)にまたがるXだけを辺とする
+  var xEdges=edgeLines(vmarks, geo.page.h*0.4);
+  var yEdges=edgeLines(hmarks, geo.page.w*0.4);
+  if(xEdges.length<2 || yEdges.length<2) return null;
+  // 二重トンボ(内=仕上り/外=裁ち落とし)なら片側2本ずつ→計4本。単一なら2本。
+  function trimBleed(edges){
+    edges.sort(function(a,b){return a-b;});
+    if(edges.length>=4){ return { trim:edges[edges.length-2]-edges[1], bleed:edges[edges.length-1]-edges[0] }; }
+    return { trim:edges[edges.length-1]-edges[0], bleed:(edges[edges.length-1]-edges[0])+2*BLEED_PT };
+  }
+  var W=trimBleed(xEdges), H=trimBleed(yEdges);
+  if(W.trim<20 || H.trim<20) return null;
+  return { trimW:W.trim, trimH:H.trim, bleedW:W.bleed, bleedH:H.bleed };
+}
+// 封筒枠 = 最大矩形。設計の端からの余白と、窓/小枠のサイズ・位置も返す
+function detectFrame(geo){
+  var pageArea=geo.page.w*geo.page.h;
+  // ページ全面の囲み(トンボ用の背景/クリップ枠)は候補から除外して、次に大きい矩形を枠とする
+  var rs=geo.rects.slice().filter(function(r){
+    return r.w>30*MM && r.h>30*MM && r.area<pageArea*0.985;
+  }).sort(function(a,b){return b.area-a.area;});
+  if(!rs.length) return null;
+  var f=rs[0];
+  // 枠内の図形(枠自身を除く)の外接矩形 → 端からの余白
+  var tol=1.5, xs=[], ys=[];
+  geo.segs.forEach(function(s){
+    [[s[0],s[1]],[s[2],s[3]]].forEach(function(p){
+      if(p[0]>f.x0-tol && p[0]<f.x1+tol && p[1]>f.y0-tol && p[1]<f.y1+tol){
+        // 枠の辺上の点は除外
+        var onEdge=(Math.abs(p[0]-f.x0)<tol||Math.abs(p[0]-f.x1)<tol||Math.abs(p[1]-f.y0)<tol||Math.abs(p[1]-f.y1)<tol);
+        if(!onEdge){ xs.push(p[0]); ys.push(p[1]); }
+      }
+    });
+  });
+  geo.rects.forEach(function(r){
+    if(r===f) return;
+    if(r.x0>f.x0-tol && r.x1<f.x1+tol && r.y0>f.y0-tol && r.y1<f.y1+tol){ xs.push(r.x0,r.x1); ys.push(r.y0,r.y1); }
+  });
+  var margins=null;
+  if(xs.length){
+    var minx=Math.min.apply(null,xs),maxx=Math.max.apply(null,xs),miny=Math.min.apply(null,ys),maxy=Math.max.apply(null,ys);
+    margins={ l:minx-f.x0, r:f.x1-maxx, t:f.y1-maxy, b:miny-f.y0 };   // y上向き: t=上辺まで
+  }
+  // 窓・小枠: 枠内にあり、枠より十分小さい矩形
+  var windows=geo.rects.filter(function(r){
+    return r!==f && r.area<f.area*0.4 && r.w>10*MM && r.x0>f.x0-tol && r.x1<f.x1+tol && r.y0>f.y0-tol && r.y1<f.y1+tol;
+  }).sort(function(a,b){return b.area-a.area;}).slice(0,3).map(function(r){
+    return { w:r.w, h:r.h, fromL:r.x0-f.x0, fromT:f.y1-r.y1 };   // 左端/上端(上辺)から
+  });
+  return { frameW:f.w, frameH:f.h, margins:margins, windows:windows };
+}
+function isEnvelopeName(name){ return /封筒|長3|長4|長40|長形|角2|角3|角形|洋長|洋形|窓付|窓あき|窓开|カマス|ダイマス/.test(name||''); }
 // %PDF ヘッダを先頭付近から探す (PDF互換 .ai は %PDF- で始まる/含む)
 function isPdfCompatible(buf){
   try{
@@ -102,19 +273,40 @@ async function measureFile(f){
     var mb=p.getMediaBox(), tb=p.getTrimBox();
     var eps=2; // pt
     var hasTonbo=(mb.width-tb.width>eps)||(mb.height-tb.height>eps);
-    return { pages:n, mediaW:mb.width, mediaH:mb.height, trimW:tb.width, trimH:tb.height, hasTonbo:hasTonbo };
+    var m={ pages:n, mediaW:mb.width, mediaH:mb.height, trimW:tb.width, trimH:tb.height, hasTonbo:hasTonbo };
+    // 図形からトンボ/封筒枠を採寸(1ページ目のみ・失敗しても無視)
+    try{
+      var geo=await extractGeometry(f.buf);
+      m.envName=isEnvelopeName(f.name);
+      // 枠(封筒)は封筒ファイルのみ採用。デザイン中の大きな矩形を枠と誤検出しないため。
+      m.frame=m.envName ? detectFrame(geo) : null;
+      m.tonbo=detectTonbo(geo);
+    }catch(e){ /* pdf.js不可でも従来表示は出す */ }
+    return m;
   }catch(e){ return null; }
 }
 // 採寸結果を日本語表示
+function sizeMM(w,h){ return mm(w)+'×'+mm(h)+'mm'; }
+function mm1(pt){ var v=Math.round(pt/MM*10)/10; return (Math.abs(v-Math.round(v))<0.05?String(Math.round(v)):v.toFixed(1)); }
 function sizeLabel(m){
   if(!m) return '';
   var parts=[];
   if(m.pages>1) parts.push('全'+m.pages+'ページ');
-  if(m.hasTonbo){
-    parts.push('トンボまで '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm');
-    parts.push('データ '+mm(m.trimW)+'×'+mm(m.trimH)+'mm');
+  if(m.frame){
+    // 封筒(枠あり): 枠サイズ＋4辺の余白＋窓/小枠 を表示(トンボ行は出さない)
+    parts.push((m.envName?'封筒枠 ':'枠 ')+sizeMM(m.frame.frameW,m.frame.frameH));
+    var g=m.frame.margins;
+    if(g) parts.push('端から 左'+mm1(g.l)+' 右'+mm1(g.r)+' 上'+mm1(g.t)+' 下'+mm1(g.b)+'mm');
+    (m.frame.windows||[]).forEach(function(w){ parts.push('小枠 '+sizeMM(w.w,w.h)+'（左端'+mm1(w.fromL)+' 上端'+mm1(w.fromT)+'）'); });
+  } else if(m.tonbo){
+    // トンボあり(封筒以外): 仕上り＋裁ち落とし
+    parts.push('仕上り '+sizeMM(m.tonbo.trimW,m.tonbo.trimH));
+    parts.push('裁ち落とし '+sizeMM(m.tonbo.bleedW,m.tonbo.bleedH)+'（塗り足し3mm）');
+  } else if(m.hasTonbo){
+    parts.push('トンボまで '+sizeMM(m.mediaW,m.mediaH));
+    parts.push('データ '+sizeMM(m.trimW,m.trimH));
   } else {
-    parts.push('データ '+mm(m.mediaW)+'×'+mm(m.mediaH)+'mm');
+    parts.push('データ '+sizeMM(m.mediaW,m.mediaH));
   }
   if(m.px) parts.push(m.px);
   return parts.join(' ／ ');
@@ -163,8 +355,8 @@ function render(){
     var sz=f.ok ? (sizeLabel(f.m)||kb(f.buf.byteLength)) : (f.kind==='psd'?'読込失敗':'PDF互換なし');
     return '<div class="frow'+(i===cur?' cur':'')+'" onclick="select('+i+')">'
       + '<span>'+ico+'</span>'
-      + '<span class="nm" style="flex:0 1 auto;max-width:46%">'+(i+1)+'. '+esc(f.name)+'</span>'
-      + '<span class="muted" style="flex:1;text-align:right">'+sz+'</span>'
+      + '<span class="nm" style="flex:0 1 auto;max-width:40%">'+(i+1)+'. '+esc(f.name)+'</span>'
+      + '<span class="muted" style="flex:1;text-align:right;white-space:normal;line-height:1.55">'+sz+'</span>'
       + '<span class="frow-x" style="color:#b91c1c;padding:2px 8px;border:1px solid #d0cec8;border-radius:5px" onclick="event.stopPropagation();removeAt('+i+')">✕</span></div>';
   }).join('');
   var anyOk=files.some(function(f){return f.ok;});
