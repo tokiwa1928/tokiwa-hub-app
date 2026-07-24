@@ -12236,6 +12236,30 @@ function _tankaDel_(i){
   if(!confirm('この単価マスタ行を削除しますか？')) return;
   var st=_tankaLoad_(); if(st.master) st.master.splice(i,1); _tankaSave_(st); renderMaster('tanka');
 }
+// 封筒マスターの「規格・仕様(sp)」を サイズ/種類(紙質)/斤量/加工 に分解・再構成（spは見積の表示専用なので細列化しても照合は不変）
+function _envParseSp_(sp){
+  var toks=String(sp||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+  var size=toks.length?toks.shift():'';
+  var kind='', wt='', opts=[];
+  toks.forEach(function(tk){
+    var m=tk.match(/^(.*?)(\d+)\s*g$/);   // 紙質+斤量 (例: クラフト50g / SCパステルカラー80g)
+    if(m && kind===''){ kind=m[1].trim(); wt=m[2]+'g'; }
+    else opts.push(tk);
+  });
+  return { size:size, kind:kind, wt:wt, opt:opts.join('、') };
+}
+function _envJoinSp_(size,kind,wt,opt){
+  size=String(size||'').trim(); kind=String(kind||'').trim(); wt=String(wt||'').trim();
+  if(/^\d+$/.test(wt)) wt=wt+'g';   // 数字のみは g を補う
+  var opts=String(opt||'').split(/[、,]/).map(function(s){return s.trim();}).filter(Boolean);
+  var parts=[]; if(size)parts.push(size); var kw=kind+wt; if(kw)parts.push(kw); opts.forEach(function(o){parts.push(o);});
+  return parts.join(',');
+}
+function _envSpFromRow_(oi, el){
+  var tr=el.closest('tr'); if(!tr) return;
+  var g=function(c){ var i=tr.querySelector('.'+c); return i?i.value:''; };
+  updateMasterField('envelope', oi, 'sp', _envJoinSp_(g('env-sz'),g('env-kd'),g('env-wt'),g('env-op')));
+}
 function renderMaster(id){
   const mp=document.getElementById('master-panels');if(!mp)return;
   const labels={paper:'用紙マスター',envelope:'封筒マスター',print:'印刷単価',printOption:'印刷オプション（組付け・色替え等）',plate:'製版・CTP',data:'データ作成',bind:'製本・加工',cust:'取引先マスター（得意先・外注先・エンドユーザー）',prod:'製品名マスター',intercoRates:'会社間掛け率',outsourceVendors:'外注先マスター'};
@@ -12403,12 +12427,15 @@ function renderMaster(id){
     if(filteredData.length>200)html+=`<tr><td colspan="12" style="padding:6px;color:#aaa;font-size:11px;text-align:center">※ 検索で絞り込んでください（残り${filteredData.length-200}件）</td></tr>`;
     html+='</tbody></table></div>';
   } else if(id==='envelope'){
-    html+=`<table class="m-tbl"><thead><tr><th>封筒名</th><th>規格・仕様</th><th style="text-align:right;width:80px">単価（円）</th><th class="dx"></th></tr></thead><tbody>`;
-    data.forEach((r,i)=>{const oi=DB.master.envelope.indexOf(r);
+    html+=`<table class="m-tbl"><thead><tr><th>封筒名</th><th style="width:78px">サイズ</th><th>種類（紙質）</th><th style="width:64px">斤量</th><th style="width:132px">加工・オプション</th><th style="text-align:right;width:80px">単価（円）</th><th class="dx"></th></tr></thead><tbody>`;
+    data.forEach((r,i)=>{const oi=DB.master.envelope.indexOf(r); const _sp=_envParseSp_(r.sp||'');
       html+=`<tr>
-        <td><input type="text" value="${r.nm||''}" onchange="DB.master.envelope[${oi}].nm=this.value"></td>
-        <td><input type="text" value="${r.sp||''}" onchange="DB.master.envelope[${oi}].sp=this.value"></td>
-        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" onchange="DB.master.envelope[${oi}].p=this.value?parseFloat(this.value):null"></td>
+        <td><input type="text" value="${(r.nm||'').replace(/"/g,'&quot;')}" onchange="updateMasterField('envelope',${oi},'nm',this.value)"></td>
+        <td><input class="env-sz" type="text" value="${_sp.size.replace(/"/g,'&quot;')}" placeholder="長3" style="width:70px" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-kd" type="text" value="${_sp.kind.replace(/"/g,'&quot;')}" placeholder="クラフト/ケント 等" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-wt" type="text" value="${_sp.wt.replace(/"/g,'&quot;')}" placeholder="80g" style="width:56px" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-op" type="text" value="${_sp.opt.replace(/"/g,'&quot;')}" placeholder="スチック付・横貼 等" style="width:124px" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" onchange="updateMasterField('envelope',${oi},'p',this.value?parseFloat(this.value):null)"></td>
         <td class="dx" style="white-space:nowrap">${_priceHistBtn_('envelope',oi)}${MOVE_BTNS('envelope',oi)}<button class="del-btn" onclick="if(confirm('「${escQ(r.nm||'')}」を削除しますか?')){DB.master.envelope.splice(${oi},1);renderMaster('envelope')}">×</button></td>
       </tr>`;
     });
