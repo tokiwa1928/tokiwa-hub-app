@@ -12043,40 +12043,96 @@ function renderCostRefMaster(mp){
       :'<div style="padding:30px;text-align:center;color:#888"><div style="font-size:32px;margin-bottom:8px">📐</div>参考原価マスタが空です<br><span style="font-size:11px">「📥 分析シード取込」で 参考原価マスタ_取込用.json を読み込んでください</span></div>')
     +'</div>';
 }
-// 品目マスタ描画（検索テーブル）
+// 品目マスタ: 外注先候補（品目で使用中＋取引先マスタの外注先）
+function _hmVendorList_(){
+  var used=(DB.itemMaster||[]).map(function(r){return r&&r.vendor||'';}).filter(Boolean);
+  var master=(DB.master&&DB.master.cust||[]).filter(function(r){return r&&typeof r==='object'&&(r.type==='vendor'||r.type==='both');}).map(function(r){return r.org||'';}).filter(Boolean);
+  return [...new Set(used.concat(master))].sort();
+}
+// 品目マスタ: 1件のフィールド更新（品目コードをキーに）＋保存
+function _hmSet_(code, field, value){
+  var r=(DB.itemMaster||[]).find(function(x){return x&&x.code===code;});
+  if(!r) return; r[field]=value; r._lastModified=new Date().toISOString();
+  if(typeof saveDB==='function') saveDB();
+}
+function _hmSetNum_(code, field, value){ _hmSet_(code, field, value===''?null:parseFloat(value)); }
+function _hmFilter_set(k,v){ window._hmFilterState_=window._hmFilterState_||{}; window._hmFilterState_[k]=v; window._hmFocusQ_=(k==='q'); renderMaster('hinmoku'); }
+function _hmFilterClear_(){ window._hmFilterState_={}; renderMaster('hinmoku'); }
+function _hmAdd_(){
+  DB.itemMaster=DB.itemMaster||[];
+  var code='HM'+String(Date.now()).slice(-9);
+  DB.itemMaster.unshift({code:code,group:'',name:'新規品目',kd:'',info:'',sz:'',wt:'',p:null,vendor:'',company:'',_manual:true});
+  if(typeof saveDB==='function') saveDB(); renderMaster('hinmoku');
+}
+function _hmDel_(code){
+  var r=(DB.itemMaster||[]).find(function(x){return x&&x.code===code;}); if(!r) return;
+  if(!confirm('「'+(r.name||code)+'」を削除しますか？'+(r._manual?'':'（GEN再取込で復活する場合があります）'))) return;
+  DB.itemMaster=(DB.itemMaster||[]).filter(function(x){return x&&x.code!==code;});
+  if(typeof saveDB==='function') saveDB(); renderMaster('hinmoku');
+}
+// 品目マスタ描画（検索ドロップダウン・インライン編集・外注先/会社カテゴリ）
 function renderHinmokuMaster(mp){
   DB.itemMaster=DB.itemMaster||[];
-  var q=(document.getElementById('m-q-hinmoku')?.value||'').toLowerCase();
+  var F=window._hmFilterState_||(window._hmFilterState_={});
   var all=DB.itemMaster;
-  var data=q?all.filter(function(r){return JSON.stringify(r).toLowerCase().indexOf(q)>=0;}):all;
-  var byGrp={}; all.forEach(function(r){ var k=r.group||'(未分類)'; byGrp[k]=(byGrp[k]||0)+1; });
-  var grpBadges=Object.keys(byGrp).sort().map(function(k){return '<span style="font-size:10.5px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:1px 8px;margin-right:4px">'+k+' '+byGrp[k]+'</span>';}).join('');
+  var esc=function(s){return String(s==null?'':s).replace(/"/g,'&quot;');};
+  var groups=[...new Set(all.map(function(r){return r.group||'';}).filter(Boolean))].sort();
+  var kds=[...new Set(all.map(function(r){return r.kd||'';}).filter(Boolean))].sort();
+  var vendors=_hmVendorList_();
+  var coList=(DB.companies||[]);
+  var coNames=coList.map(function(c){return c.name||c.id;});
+  var data=all.filter(function(r){
+    if(F.group && (r.group||'')!==F.group) return false;
+    if(F.kd && (r.kd||'')!==F.kd) return false;
+    if(F.vendor && (r.vendor||'')!==F.vendor) return false;
+    if(F.company && (r.company||'')!==F.company) return false;
+    if(F.q && JSON.stringify(r).toLowerCase().indexOf(String(F.q).toLowerCase())<0) return false;
+    return true;
+  });
+  var selOpt=function(cur,arr){ return '<option value="">すべて</option>'+arr.map(function(v){return '<option'+(cur===v?' selected':'')+'>'+esc(v)+'</option>';}).join(''); };
+  var coOpt=function(cur){ return '<option value="">（未設定）</option>'+coList.map(function(c){var n=c.name||c.id;return '<option value="'+esc(n)+'"'+(cur===n?' selected':'')+'>'+esc(n)+'</option>';}).join(''); };
+  var ist='width:100%;font-size:11.5px;padding:2px 5px;border:1px solid #e2e8f0;border-radius:4px;box-sizing:border-box;font-family:inherit';
   var rowsHtml=data.slice(0,600).map(function(r){
+    var c=esc(r.code);
     return '<tr>'
-      +'<td style="font-family:monospace;color:#0f766e;font-weight:700;white-space:nowrap">'+(r.code||'')+'</td>'
-      +'<td style="white-space:nowrap;font-size:11px;color:#64748b">'+(r.group||'')+'</td>'
-      +'<td>'+(r.name||'')+'</td>'
-      +'<td style="white-space:nowrap">'+(r.kd||'')+'</td>'
-      +'<td>'+(r.info||'')+'</td>'
-      +'<td style="white-space:nowrap">'+(r.sz||'')+'</td>'
-      +'<td style="white-space:nowrap;text-align:right">'+(r.wt||'')+'</td>'
-      +'<td style="text-align:right">'+(r.p?('¥'+r.p.toLocaleString()):'')+'</td>'
+      +'<td style="font-family:monospace;color:#0f766e;font-weight:700;white-space:nowrap;font-size:11px">'+esc(r.code)+(r._manual?' <span title="Hubで追加(GEN外)" style="color:#7c3aed">✎</span>':'')+'</td>'
+      +'<td><input value="'+esc(r.group)+'" style="'+ist+';min-width:88px" onchange="_hmSet_(\''+c+'\',\'group\',this.value)"></td>'
+      +'<td><input value="'+esc(r.name)+'" style="'+ist+';min-width:190px" onchange="_hmSet_(\''+c+'\',\'name\',this.value)"></td>'
+      +'<td><input value="'+esc(r.kd)+'" style="'+ist+';min-width:88px" onchange="_hmSet_(\''+c+'\',\'kd\',this.value)"></td>'
+      +'<td><input value="'+esc(r.info)+'" style="'+ist+';min-width:110px" onchange="_hmSet_(\''+c+'\',\'info\',this.value)"></td>'
+      +'<td><input value="'+esc(r.sz)+'" style="'+ist+';min-width:58px" onchange="_hmSet_(\''+c+'\',\'sz\',this.value)"></td>'
+      +'<td><input value="'+esc(r.wt)+'" style="'+ist+';min-width:48px" onchange="_hmSet_(\''+c+'\',\'wt\',this.value)"></td>'
+      +'<td><input type="number" step="0.01" value="'+(r.p!=null?r.p:'')+'" style="'+ist+';text-align:right;min-width:62px;background:#eff6ff" onchange="_hmSetNum_(\''+c+'\',\'p\',this.value)"></td>'
+      +'<td><input list="hm-vendors" value="'+esc(r.vendor)+'" placeholder="外注先/仕入先" style="'+ist+';min-width:120px;background:#fff7ed" onchange="_hmSet_(\''+c+'\',\'vendor\',this.value)"></td>'
+      +'<td><select style="'+ist+';min-width:108px;background:#f0fdf4" onchange="_hmSet_(\''+c+'\',\'company\',this.value)">'+coOpt(r.company||'')+'</select></td>'
+      +'<td style="text-align:center"><span onclick="_hmDel_(\''+c+'\')" style="cursor:pointer;color:#b91c1c;font-weight:700" title="削除">×</span></td>'
       +'</tr>';
   }).join('');
+  var active=(F.group||F.kd||F.vendor||F.company||F.q);
   mp.innerHTML='<div class="sec">'
     +'<div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">品目マスタ（GEN由来・品目コード付き）'
-      +'<input id="m-q-hinmoku" placeholder="コード/品目名/種類で検索…" value="'+q.replace(/"/g,'&quot;')+'" style="width:220px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="renderMaster(\'hinmoku\')">'
+      +'<input id="m-q-hinmoku" placeholder="コード/品目名/種類で検索…" value="'+esc(F.q||'')+'" style="width:200px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="_hmFilter_set(\'q\',this.value)">'
+      +'<button class="btn" style="font-size:11px;background:#0891b2;color:#fff;border-color:#0891b2;font-weight:700" onclick="_hmAdd_()">＋ 品目追加</button>'
       +'<button class="btn" style="font-size:11px;background:#0f766e;color:#fff;border-color:#0f766e;font-weight:700" onclick="document.getElementById(\'hinmoku-import-file\').click()" title="GENの品目マスタ(Excel)を取込。品目コードで更新/追加">📥 GEN品目マスタ取込 (Excel)</button>'
       +'<input type="file" id="hinmoku-import-file" accept=".xlsx,.xls" style="display:none" onchange="hinmokuImport(this)">'
       +'<button class="btn" style="font-size:11px;background:#fff;border-color:#b91c1c;color:#b91c1c" onclick="hinmokuClear()">🗑 全削除</button>'
     +'</div>'
-    +'<div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:8px 12px;margin:.4rem 0;font-size:11.5px;color:#0f766e;line-height:1.7">💡 これは<b>請求・発注・GEN連携用</b>の品目カタログです（用語の正＝GEN）。見積のコスト計算は「用紙」タブの<b>キロ単価マスタ</b>を使い、両者は<b>用紙種類</b>でひも付きます。</div>'
-    +'<div style="font-size:11px;color:#888;margin-bottom:.4rem">'+data.length+' 件'+(data.length>600?'（先頭600件表示）':'')+' / 全'+all.length+' 件　'+grpBadges+'</div>'
-    +(all.length?('<div style="overflow:auto;max-height:60vh"><table class="tbl" style="font-size:12px;width:100%"><thead><tr>'
-        +'<th>品目コード</th><th>グループ</th><th>品目名</th><th>用紙種類</th><th>紙情報</th><th>サイズ</th><th>厚さ</th><th>単価</th></tr></thead><tbody>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:.45rem 0;font-size:11.5px;color:#475569">'
+      +'<label>グループ <select style="font-size:11.5px;padding:3px 6px" onchange="_hmFilter_set(\'group\',this.value)">'+selOpt(F.group||'',groups)+'</select></label>'
+      +'<label>用紙種類 <select style="font-size:11.5px;padding:3px 6px" onchange="_hmFilter_set(\'kd\',this.value)">'+selOpt(F.kd||'',kds)+'</select></label>'
+      +'<label>外注先 <select style="font-size:11.5px;padding:3px 6px" onchange="_hmFilter_set(\'vendor\',this.value)">'+selOpt(F.vendor||'',vendors)+'</select></label>'
+      +'<label>会社 <select style="font-size:11.5px;padding:3px 6px" onchange="_hmFilter_set(\'company\',this.value)">'+selOpt(F.company||'',coNames)+'</select></label>'
+      +(active?'<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_hmFilterClear_()">✕ 絞込解除</button>':'')
+    +'</div>'
+    +'<div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:8px 12px;margin:.4rem 0;font-size:11.5px;color:#0f766e;line-height:1.7">💡 <b>請求・発注・GEN連携用</b>の品目カタログ（用語の正＝GEN）。<b style="color:#b45309">品目名・種類・単価などGEN由来の項目は次回のGEN取込で上書き</b>されます。<b>外注先・会社はHub独自</b>で、GEN取込しても保持されます。見積のコスト計算は「用紙」タブの<b>キロ単価マスタ</b>（用紙種類でひも付け）。</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:.4rem">'+data.length+' 件'+(data.length>600?'（先頭600件表示・絞り込みで全件対象）':'')+' / 全'+all.length+' 件</div>'
+    +'<datalist id="hm-vendors">'+vendors.map(function(v){return '<option value="'+esc(v)+'">';}).join('')+'</datalist>'
+    +(all.length?('<div style="overflow:auto;max-height:62vh"><table class="tbl" style="font-size:12px;width:100%;min-width:1180px"><thead><tr>'
+        +'<th>品目コード</th><th>グループ</th><th>品目名</th><th>用紙種類</th><th>紙情報</th><th>サイズ</th><th>厚さ</th><th>単価</th><th>外注先/仕入先</th><th>会社</th><th></th></tr></thead><tbody>'
         +rowsHtml+'</tbody></table></div>')
-      :'<div style="padding:30px;text-align:center;color:#888"><div style="font-size:32px;margin-bottom:8px">📦</div>品目マスタが空です<br><span style="font-size:11px">「📥 GEN品目マスタ取込」からGENのExcel（品目マスタ）を読み込んでください</span></div>')
+      :'<div style="padding:30px;text-align:center;color:#888"><div style="font-size:32px;margin-bottom:8px">📦</div>品目マスタが空です<br><span style="font-size:11px">「📥 GEN品目マスタ取込」からExcelを読み込むか、「＋ 品目追加」で手入力してください</span></div>')
     +'</div>';
+  var qel=document.getElementById('m-q-hinmoku'); if(qel && window._hmFocusQ_){ window._hmFocusQ_=false; qel.focus(); try{qel.setSelectionRange(qel.value.length,qel.value.length);}catch(e){} }
 }
 // 🤖 キロ単価表のスキャン(画像)をAIで読み取り → マスターに反映
 function kiloScanImport(){
