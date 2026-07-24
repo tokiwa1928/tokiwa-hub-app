@@ -60,7 +60,9 @@
   <div class="note">
     ・目録（archive_index.json）を「⬆目録を取込」で読み込むと、その中身をキーワードで探せます（複数得意先ぶん重ねてOK）。<br>
     ・チェックした行を「🔽取り出しリスト書き出し」でダウンロード → ローカルの取り出しエージェントが該当zipから1ファイルだけ解凍します。<br>
-    ・目録・zipの実体は端末/ドライブにあり、公開リポジトリには含まれません。
+    ・NAS素置き目録は結果の「📋パス」でフルパスをコピー→エクスプローラーに貼付で開けます（フォルダ粒度なら📁でフォルダごと）。<br>
+    ・大容量目録（8000件超・六幸堂など）はブラウザに保存されず“その場読込”です。使う時に目録ファイル（NAS/ドライブ上）を取込んでください。<br>
+    ・目録・zipの実体は端末/NAS/ドライブにあり、公開リポジトリには含まれません。
   </div>
 </main>
 <script>
@@ -70,7 +72,18 @@ var SEL={};              // key -> entry (選択中)
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function fmtSize(b){ b=+b||0; if(b>=1073741824) return (b/1073741824).toFixed(2)+' GB'; if(b>=1048576) return (b/1048576).toFixed(1)+' MB'; if(b>=1024) return (b/1024).toFixed(0)+' KB'; return b+' B'; }
 function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }catch(e){} if(!DB.indexes) DB.indexes={}; }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){ alert('保存に失敗（容量超過の可能性）: '+e.message); } }
+// 大容量目録(_mem)はlocalStorageに保存しない（都度読込）。小さい目録だけ永続化。
+function save(){
+  try{
+    var persist={ indexes:{} };
+    Object.keys(DB.indexes).forEach(function(k){ if(!DB.indexes[k]._mem) persist.indexes[k]=DB.indexes[k]; });
+    localStorage.setItem(KEY, JSON.stringify(persist));
+  }catch(e){
+    // 小さい目録でも溢れた場合は空に退避（メモリ側は保持され今回のセッションは検索可）
+    try{ localStorage.setItem(KEY, JSON.stringify({indexes:{}})); }catch(_){}
+  }
+}
+var MEM_THRESHOLD=8000; // これ超の目録はメモリ保持（NAS大容量アーカイブ想定）
 
 function allFiles(){
   var out=[];
@@ -92,7 +105,9 @@ function importIdx(inp){
         var d=JSON.parse(fr.result);
         if(!d.files || !Array.isArray(d.files)) throw '目録形式ではありません（filesがありません）';
         var ck=d.cust||file.name;
-        DB.indexes[ck]={ cust:d.cust||ck, generated:d.generated||'', zips:d.zips||[], files:d.files };
+        var big=(d.files.length>MEM_THRESHOLD);
+        DB.indexes[ck]={ cust:d.cust||ck, generated:d.generated||'', zips:d.zips||[], files:d.files,
+                         level:d.level||'file', _mem:big };
         add++;
       }catch(e){ alert('取込失敗（'+file.name+'）: '+e.message); }
       done++;
@@ -124,11 +139,10 @@ function render(){
   var list=_filtered_();
   var q=(document.getElementById('q').value||'').trim();
   var custN=Object.keys(DB.indexes).length;
-  var zipN=Object.keys(DB.indexes).reduce(function(s,k){ return s+((DB.indexes[k].zips||[]).length); },0);
+  var memN=Object.keys(DB.indexes).filter(function(k){ return DB.indexes[k]._mem; }).length;
   document.getElementById('kpis').innerHTML=
-     '<div class="kpi"><div class="k">得意先(目録)</div><div class="v">'+custN+'</div></div>'
-    +'<div class="kpi"><div class="k">総ファイル</div><div class="v">'+all.length.toLocaleString()+'</div></div>'
-    +'<div class="kpi"><div class="k">zip数</div><div class="v">'+zipN+'</div></div>'
+     '<div class="kpi"><div class="k">得意先(目録)</div><div class="v">'+custN+(memN?' <span style="font-size:11px;color:#0e7c86">(内'+memN+'大容量)</span>':'')+'</div></div>'
+    +'<div class="kpi"><div class="k">総エントリ</div><div class="v">'+all.length.toLocaleString()+'</div></div>'
     +'<div class="kpi g"><div class="k">'+(q?'該当':'表示')+'</div><div class="v">'+list.length.toLocaleString()+'</div></div>';
 
   var h='<thead><tr><th style="width:28px"></th><th>ファイル名</th><th>得意先</th><th>場所（zip内／NAS）</th><th>サイズ</th><th>更新日</th></tr></thead><tbody>';
@@ -141,7 +155,10 @@ function render(){
       +'<td class="nm" title="'+esc(f.rel||f.name)+'">'+hl(f.name||'')+'</td>'
       +'<td><span class="cust">'+esc(f.cust||'')+'</span></td>'
       +(f.nas
-          ? '<td class="loc" title="'+esc(f.nas)+'"><span style="color:#0e7c86;font-weight:700">NAS</span> '+hl(f.rel||f.name)+' <button class="btn sm" style="padding:1px 6px;font-size:10px" data-p="'+esc(f.nas)+'" onclick="event.stopPropagation();copyPath(this)" title="NASフルパスをコピー→エクスプローラーに貼付で開く">📋 パス</button></td>'
+          ? '<td class="loc" title="'+esc(f.nas)+'">'
+            +'<span style="color:#0e7c86;font-weight:700">'+(f.isDir?'📁NAS':'NAS')+'</span> '+hl(f.rel||f.name)
+            +(f.isDir&&f.files?' <span style="color:#64748b">('+f.files+'件)</span>':'')
+            +' <button class="btn sm" style="padding:1px 6px;font-size:10px" data-p="'+esc(f.nas)+'" onclick="event.stopPropagation();copyPath(this)" title="'+(f.isDir?'フォルダのパスをコピー→エクスプローラーに貼付で開く':'NASフルパスをコピー→エクスプローラーに貼付で開く')+'">📋 パス</button></td>'
           : '<td class="loc" title="'+esc(f.zip+' → '+f.inzip)+'">'+esc(f.zip)+' → '+hl(f.inzip||'')+'</td>')
       +'<td class="n">'+fmtSize(f.size)+'</td>'
       +'<td class="n">'+esc(f.mtime||'')+'</td>'
