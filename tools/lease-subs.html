@@ -47,6 +47,7 @@
   .tag{ font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:10px; border:1px solid #d0cec8; background:#f6f5f1; white-space:nowrap; }
   .tag.lease{ border-color:#0891b2; color:#0e7490; background:#ecfeff; }
   .tag.subs{ border-color:#7c3aed; color:#6d28d9; background:#f5f3ff; }
+  .tag.loan{ border-color:#d97706; color:#b45309; background:#fff7ed; }
   .tag.cancel{ border-color:#94a3b8; color:#64748b; }
   .tag.plan{ border-color:#d97706; color:#b45309; background:#fffbeb; }
   .dleft{ font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:10px; white-space:nowrap; }
@@ -77,7 +78,7 @@
       <button class="btn btn-p" onclick="lsNew()">＋ 新規契約</button>
       <input class="q" id="ls-q" placeholder="🔍 契約名・提供元・部門で検索" oninput="render()">
       <select id="ls-fco" onchange="render()" style="display:none"></select>
-      <select id="ls-fkind" onchange="render()"><option value="">種別: すべて</option><option>リース</option><option>サブスク</option></select>
+      <select id="ls-fkind" onchange="render()"><option value="">種別: すべて</option><option>リース</option><option>サブスク</option><option>借入金</option></select>
       <select id="ls-fcat" onchange="render()"></select>
       <select id="ls-fst" onchange="render()"><option value="active">状態: 契約中</option><option value="">すべて</option><option>解約予定</option><option>解約済</option></select>
       <select id="ls-sort" onchange="render()"><option value="end">満了日順</option><option value="amt">月額順</option><option value="name">契約名順</option></select>
@@ -96,17 +97,26 @@
     <div class="grid">
       <div><label>会社</label><select id="f-company"></select></div>
       <div><label>契約名・サービス名</label><input id="f-name" placeholder="例) 複合機リース / Adobe CC / Microsoft 365"></div>
-      <div><label>種別</label><select id="f-kind"><option>リース</option><option>サブスク</option></select></div>
+      <div><label>種別</label><select id="f-kind" onchange="lsKindChange()"><option>リース</option><option>サブスク</option><option>借入金</option></select></div>
       <div><label>カテゴリ</label><select id="f-cat"></select></div>
       <div><label>提供元・リース会社</label><input id="f-vendor" list="ls-vendors" placeholder="例) 三菱HCキャピタル / Adobe"></div>
       <div><label>部門・用途</label><input id="f-dept" placeholder="例) 総務 / 製造 / 全社"></div>
-      <div><label>金額（円・税抜/税込は運用で統一）</label><input id="f-amount" type="number" inputmode="numeric" oninput="lsCalcHint()"></div>
+      <div><label id="f-amount-lab">金額（円・税抜/税込は運用で統一）</label><input id="f-amount" type="number" inputmode="numeric" oninput="lsCalcHint()"></div>
       <div><label>支払サイクル</label><select id="f-cycle" onchange="lsCalcHint()"></select></div>
       <div><label>支払方法</label><select id="f-pay"></select></div>
       <div><label>契約開始</label><input type="date" id="f-start"></div>
       <div><label>満了・次回更新日</label><input type="date" id="f-end"></div>
       <div style="display:flex;align-items:flex-end"><label class="chk"><input type="checkbox" id="f-auto"> 自動更新</label></div>
       <div><label>状態</label><select id="f-status"></select></div>
+    </div>
+    <div id="loan-fields" style="display:none;margin-top:10px;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px">
+      <div style="font-size:11px;font-weight:700;color:#b45309;margin-bottom:6px">借入金の追加項目</div>
+      <div class="grid">
+        <div><label>当初借入額（円）</label><input id="f-principal" type="number" inputmode="numeric"></div>
+        <div><label>借入残高（円）</label><input id="f-balance" type="number" inputmode="numeric"></div>
+        <div><label>金利（％・年利）</label><input id="f-rate" type="number" inputmode="decimal" step="0.01"></div>
+      </div>
+      <div class="muted" style="margin-top:5px">※ 金額欄には「月々の返済額」を入れてください（月額として月額合計に反映されます）。満了・更新日＝最終返済日（完済予定）。</div>
     </div>
     <div style="margin-top:10px"><label>備考</label><input id="f-note"></div>
     <div class="muted" id="f-hint" style="margin-top:8px"></div>
@@ -276,7 +286,7 @@ function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
 // ═════════ リース・サブスク契約経費管理表 ═════════
 var COLL='leases';
 var LS_COMPANIES=['トキワ','村山','北上','中尾','アート','ヤマウチ','津島'];
-var LS_CATS=['複合機・機器','車両','ソフトウェア','クラウド/SaaS','通信回線','保守・サポート','不動産・設備','その他'];
+var LS_CATS=['複合機・機器','車両','ソフトウェア','クラウド/SaaS','通信回線','保守・サポート','不動産・設備','借入・ファイナンス','その他'];
 var LS_CYCLES=['月額','四半期','半年','年額','一括'];
 var LS_CYCLE_M={'月額':1,'四半期':3,'半年':6,'年額':12,'一括':0};
 var LS_PAY=['口座振替','クレジットカード','請求書払い','その他'];
@@ -352,16 +362,20 @@ function render(){
   var scoped=lsScoped();
   // ── KPI(契約中のみ) ──
   var act=scoped.filter(lsActive);
-  var mSum=0, leaseM=0, subsM=0;
-  act.forEach(function(r){ var m=lsMonthly(r); mSum+=m; if(r.kind==='サブスク') subsM+=m; else leaseM+=m; });
+  var mSum=0, leaseM=0, subsM=0, loanM=0, balSum=0, loanCnt=0;
+  act.forEach(function(r){ var m=lsMonthly(r); mSum+=m;
+    if(r.kind==='サブスク') subsM+=m;
+    else if(r.kind==='借入金'){ loanM+=m; balSum+=(Number(r.balance)||0); loanCnt++; }
+    else leaseM+=m; });
   var soon=act.filter(function(r){ var d=lsDaysLeft(r); return d!=null && d<=60; }).length;
   var kpi=document.getElementById('ls-kpis');
   kpi.innerHTML=
-     card('MONTHLY / 月額換算 合計', yen(mSum), '税抜/税込は運用で統一')
+     card('MONTHLY / 月々の支払 合計', yen(mSum), 'リース・サブスク・借入返済の月額計')
     +card('YEARLY / 年額換算', yen(mSum*12), '月額×12')
-    +card('LEASE / SUBSC', yen(leaseM)+' <small>/</small> '+yen(subsM), 'リース／サブスク 月額')
+    +card('LEASE / SUBSC 月額', yen(leaseM)+' <small>/</small> '+yen(subsM), 'リース／サブスク')
+    +(loanCnt?card('DEBT / 借入残高 合計', yen(balSum), '月々返済 '+yen(loanM)+'（'+loanCnt+'件）'):'')
     +card('ACTIVE / 契約中', act.length+' <small>件</small>', '全'+scoped.length+'件中')
-    +cardWarn('RENEWAL / 更新60日以内', soon+' <small>件</small>', '満了・更新が近い契約');
+    +cardWarn('RENEWAL / 更新60日以内', soon+' <small>件</small>', '満了・更新・完済が近い');
   // ── アラート ──
   var al=act.filter(function(r){ var d=lsDaysLeft(r); return d!=null && d<=60; })
            .sort(function(a,b){ return (lsDaysLeft(a))-(lsDaysLeft(b)); });
@@ -384,14 +398,16 @@ function render(){
   var rows=L.map(function(r){
     var d=lsDaysLeft(r); var dl='';
     if(lsActive(r) && d!=null){ var cls=d<0?'dl-urgent':(d<=30?'dl-urgent':(d<=60?'dl-soon':'dl-ok')); dl='<span class="dleft '+cls+'">'+(d<0?'期限超過':'あと'+d+'日')+'</span>'; }
-    var kindTag='<span class="tag '+(r.kind==='サブスク'?'subs':'lease')+'">'+esc(r.kind||'リース')+'</span>';
+    var kc=(r.kind==='サブスク')?'subs':(r.kind==='借入金'?'loan':'lease');
+    var kindTag='<span class="tag '+kc+'">'+esc(r.kind||'リース')+'</span>';
+    var amtCell=yen(r.amount)+'<div class="muted">'+esc(r.cycle||'')+(r.kind==='借入金'?' 返済':'')+'</div>'+((r.kind==='借入金'&&r.balance!=null)?'<div class="muted">残高 '+yen(r.balance)+'</div>':'');
     var stTag=(r.status==='解約済')?'<span class="tag cancel">解約済</span>':(r.status==='解約予定'?'<span class="tag plan">解約予定</span>':'<span class="tag" style="border-color:#16a34a;color:#15803d;background:#f0fdf4">契約中</span>');
     return '<tr class="'+((r.status==='解約済')?'row-cancel':'')+'">'
       +'<td><b>'+esc(r.name||'')+'</b>'+(r.dept?'<div class="muted">'+esc(r.dept)+'</div>':'')+'</td>'
       +'<td>'+kindTag+'</td>'
       +'<td>'+esc(r.category||'')+'</td>'
       +'<td>'+esc(r.vendor||'')+'</td>'
-      +'<td class="num">'+yen(r.amount)+'<div class="muted">'+esc(r.cycle||'')+'</div></td>'
+      +'<td class="num">'+amtCell+'</td>'
       +'<td class="num"><b>'+(lsMonthly(r)?yen(lsMonthly(r)):'—')+'</b></td>'
       +'<td>'+(r.endDate?esc(r.endDate):'<span class="muted">—</span>')+' '+dl+(r.autoRenew?'<div class="muted">🔁自動更新</div>':'')+'</td>'
       +'<td>'+esc(r.payment||'')+'</td>'
@@ -418,7 +434,7 @@ function lsFillForm(d){
   lsFillSelect('f-company', LS_COMPANIES, d.company||(adm?'トキワ':lsAuthCo()) );
   document.getElementById('f-company').disabled=!adm;   // 他社は自社固定
   document.getElementById('f-name').value=d.name||'';
-  lsFillSelect('f-kind', ['リース','サブスク'], d.kind||'リース');
+  lsFillSelect('f-kind', ['リース','サブスク','借入金'], d.kind||'リース');
   lsFillSelect('f-cat', LS_CATS, d.category||LS_CATS[0]);
   document.getElementById('f-vendor').value=d.vendor||'';
   document.getElementById('f-dept').value=d.dept||'';
@@ -430,7 +446,18 @@ function lsFillForm(d){
   document.getElementById('f-auto').checked=!!d.autoRenew;
   lsFillSelect('f-status', LS_STATUS, d.status||'契約中');
   document.getElementById('f-note').value=d.note||'';
+  document.getElementById('f-principal').value=(d.principal!=null?d.principal:'');
+  document.getElementById('f-balance').value=(d.balance!=null?d.balance:'');
+  document.getElementById('f-rate').value=(d.rate!=null?d.rate:'');
+  lsKindChange();
   lsCalcHint();
+}
+// 種別=借入金 のときだけ借入項目を表示し、金額欄を「月々返済額」に
+function lsKindChange(){
+  var loan=(document.getElementById('f-kind').value==='借入金');
+  document.getElementById('loan-fields').style.display=loan?'block':'none';
+  document.getElementById('f-amount-lab').textContent=loan?'月々の返済額（円）':'金額（円・税抜/税込は運用で統一）';
+  document.getElementById('f-vendor').placeholder=loan?'例) 商工中金 / 日本政策金融公庫':'例) 三菱HCキャピタル / Adobe';
 }
 function lsCalcHint(){
   var amt=parseFloat(document.getElementById('f-amount').value)||0;
@@ -449,7 +476,10 @@ function lsCollectForm(){
     vendor:g('f-vendor').trim(), dept:g('f-dept').trim(),
     amount:(parseFloat(g('f-amount'))||0), cycle:g('f-cycle'), payment:g('f-pay'),
     startDate:g('f-start'), endDate:g('f-end'), autoRenew:document.getElementById('f-auto').checked,
-    status:g('f-status'), note:g('f-note').trim() };
+    status:g('f-status'), note:g('f-note').trim(),
+    principal:(g('f-principal')!==''?(parseFloat(g('f-principal'))||0):null),
+    balance:(g('f-balance')!==''?(parseFloat(g('f-balance'))||0):null),
+    rate:(g('f-rate')!==''?(parseFloat(g('f-rate'))||0):null) };
 }
 function lsSaveForm(){
   var d=lsCollectForm();
@@ -480,7 +510,7 @@ function lsPrint(){
   var rows=L.map(function(r){
     var d=lsDaysLeft(r); var dtxt=(lsActive(r)&&d!=null)?(d<0?'期限超過':'あと'+d+'日'):'';
     return '<tr><td>'+esc(r.name||'')+'</td><td class="c">'+esc(r.kind||'')+'</td><td>'+esc(r.category||'')+'</td><td>'+esc(r.vendor||'')+'</td>'
-      +'<td class="r">'+yen(r.amount)+'</td><td class="c">'+esc(r.cycle||'')+'</td><td class="r">'+(lsMonthly(r)?yen(lsMonthly(r)):'—')+'</td>'
+      +'<td class="r">'+yen(r.amount)+((r.kind==='借入金'&&r.balance!=null)?('<br><span style="font-size:9px">残高'+yen(r.balance)+'</span>'):'')+'</td><td class="c">'+esc(r.cycle||'')+'</td><td class="r">'+(lsMonthly(r)?yen(lsMonthly(r)):'—')+'</td>'
       +'<td class="c">'+esc(r.endDate||'')+(dtxt?('<br><span style="font-size:9px">'+dtxt+'</span>'):'')+'</td><td class="c">'+esc(r.payment||'')+'</td>'
       +(adm?'<td class="c">'+esc(r.company||'')+'</td>':'')+'<td class="c">'+esc(r.status||'')+'</td></tr>';
   }).join('');
@@ -510,19 +540,21 @@ async function lsExcel(){
     ws.columns=[
       {header:'会社',key:'company',width:8},{header:'契約名',key:'name',width:28},{header:'種別',key:'kind',width:8},
       {header:'カテゴリ',key:'category',width:14},{header:'提供元',key:'vendor',width:18},{header:'部門・用途',key:'dept',width:12},
-      {header:'金額',key:'amount',width:12},{header:'サイクル',key:'cycle',width:9},{header:'月額換算',key:'monthly',width:12},
-      {header:'年額換算',key:'yearly',width:12},{header:'支払方法',key:'payment',width:12},{header:'契約開始',key:'startDate',width:12},
+      {header:'金額/月々返済',key:'amount',width:12},{header:'サイクル',key:'cycle',width:9},{header:'月額換算',key:'monthly',width:12},
+      {header:'年額換算',key:'yearly',width:12},{header:'当初借入額',key:'principal',width:13},{header:'借入残高',key:'balance',width:13},{header:'金利%',key:'rate',width:8},
+      {header:'支払方法',key:'payment',width:12},{header:'契約開始',key:'startDate',width:12},
       {header:'満了・更新',key:'endDate',width:12},{header:'自動更新',key:'autoRenew',width:8},{header:'状態',key:'status',width:9},{header:'備考',key:'note',width:24}
     ];
     ws.getRow(1).font={bold:true}; ws.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEFEFEA'}};
-    var mSum=0;
-    L.forEach(function(r){ var m=lsMonthly(r); if(lsActive(r)) mSum+=m;
+    var mSum=0, balSum=0;
+    L.forEach(function(r){ var m=lsMonthly(r); if(lsActive(r)){ mSum+=m; if(r.kind==='借入金') balSum+=(Number(r.balance)||0); }
       ws.addRow({ company:r.company||'', name:r.name||'', kind:r.kind||'', category:r.category||'', vendor:r.vendor||'', dept:r.dept||'',
-        amount:Number(r.amount)||0, cycle:r.cycle||'', monthly:Math.round(m), yearly:Math.round(m*12), payment:r.payment||'',
-        startDate:r.startDate||'', endDate:r.endDate||'', autoRenew:r.autoRenew?'○':'', status:r.status||'', note:r.note||'' });
+        amount:Number(r.amount)||0, cycle:r.cycle||'', monthly:Math.round(m), yearly:Math.round(m*12),
+        principal:(r.principal!=null?Number(r.principal):''), balance:(r.balance!=null?Number(r.balance):''), rate:(r.rate!=null?Number(r.rate):''),
+        payment:r.payment||'', startDate:r.startDate||'', endDate:r.endDate||'', autoRenew:r.autoRenew?'○':'', status:r.status||'', note:r.note||'' });
     });
-    ['amount','monthly','yearly'].forEach(function(k){ ws.getColumn(k).numFmt='#,##0'; });
-    var tr=ws.addRow({ name:'月額換算 合計（契約中）', monthly:Math.round(mSum), yearly:Math.round(mSum*12) }); tr.font={bold:true};
+    ['amount','monthly','yearly','principal','balance'].forEach(function(k){ ws.getColumn(k).numFmt='#,##0'; });
+    var tr=ws.addRow({ name:'合計（契約中）', monthly:Math.round(mSum), yearly:Math.round(mSum*12), balance:balSum?Math.round(balSum):'' }); tr.font={bold:true};
     var buf=await wb.xlsx.writeBuffer();
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var url=URL.createObjectURL(blob); var a=document.createElement('a');
