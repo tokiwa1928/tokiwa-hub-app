@@ -1582,6 +1582,7 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-outsourceVendors" onclick="swMaster('outsourceVendors',this)">外注先</button>
     <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
     <button class="pill" id="mc-costref" onclick="swMaster('costref',this)" title="参考原価マスタ（作業別の最低料金・単価・原価率%。見積の指針用・別管理）">参考原価</button>
+    <button class="pill" id="mc-tanka" onclick="swMaster('tanka',this)" style="background:linear-gradient(135deg,#0369a1,#0891b2);color:#fff;font-weight:700" title="単価マスタ構築ツールの蓄積（得意先×品名×仕様の前回単価）を確認・修正">💴 単価マスタ</button>
     <button class="pill" id="mc-stock" onclick="swMaster('stock',this)" title="リピート品（在庫品候補）— FM2020-26で繰り返し・仕様変更なしの受注。閑散期に見込み生産する候補">🔁 リピート品</button>
   </div>
   <div id="master-panels"></div>
@@ -12168,6 +12169,61 @@ function _kiloApplyScan_(){
   renderMaster('paper');
   if(typeof _toastMsg === 'function') _toastMsg('✅ ' + n + ' 件をマスターに反映しました（単価も再計算済み）');
 }
+// 💴 単価マスタ（単価マスタ構築ツール tools/tanka-master.html の蓄積を📚マスターで確認・修正）
+function _tankaLoad_(){ try{ return JSON.parse(localStorage.getItem('tokiwa_quote_tools_v1'))||{master:[],quotes:[],companies:[]}; }catch(e){ return {master:[],quotes:[],companies:[]}; } }
+function _tankaSave_(st){ try{ localStorage.setItem('tokiwa_quote_tools_v1', JSON.stringify(st)); }catch(e){ alert('保存に失敗（容量超過の可能性）: '+e.message); } }
+function renderTankaMaster(mp){
+  var st=_tankaLoad_(); var list=st.master||[];
+  var q=((document.getElementById('m-q-tanka')||{}).value||'').toLowerCase().trim();
+  var rows=list.filter(function(m){ if(!q) return true; return ((m.cust||'')+' '+(m.rawItem||m.item||'')+' '+(m.spec||'')).toLowerCase().indexOf(q)>=0; });
+  var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">💴 単価マスタ（得意先×品名×仕様の前回単価）'
+    +' <button class="add-btn" onclick="_tankaAdd_()">＋ 追加</button>'
+    +'<input id="m-q-tanka" placeholder="得意先・品名・仕様で検索…" style="width:210px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="renderMaster(\'tanka\')" value="'+_escAttr_(q)+'">'
+    +'<span style="font-size:11px;color:#888">'+rows.length+' / '+list.length+' 件</span>'
+    +'<a href="tools/tanka-master.html" style="font-size:11px;color:#1e40af;margin-left:auto;text-decoration:underline">🔧 取込ツールを開く →</a>'
+    +'</div>'
+    +'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">※単価マスタ構築ツール（端末内保存）の蓄積です。ここでの修正はその蓄積に反映されます（本体クラウド同期とは別・端末ごと）。単価を変えると前回値は履歴に残ります。</div>'
+    +'<div style="overflow-x:auto"><table class="m-tbl" style="min-width:860px"><thead><tr>'
+    +['得意先','品名','仕様','数量','単価','前回履歴','状態',''].map(function(t){return '<th>'+t+'</th>';}).join('')
+    +'</tr></thead><tbody>';
+  if(!rows.length){ html+='<tr><td colspan="8" style="text-align:center;color:#aaa;padding:1.5rem">'+(q?'該当なし':'単価マスタが空です。「🔧 取込ツール」でロータス/Excelの見積計算書を取り込むか「＋ 追加」で登録してください')+'</td></tr>'; }
+  rows.forEach(function(m){
+    var gi=list.indexOf(m);
+    var prev=(m.prevPrices||[]).slice(-3).reverse().map(function(p){return '@'+fmt(p.price)+(p.year?'('+p.year+')':'');}).join(' / ');
+    html+='<tr>'
+      +'<td><input value="'+_escAttr_(m.cust||'')+'" style="width:120px;font-size:12px" onchange="_tankaEdit_('+gi+',\'cust\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(m.rawItem||m.item||'')+'" style="width:180px;font-size:12px" onchange="_tankaEdit_('+gi+',\'rawItem\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(m.spec||'')+'" style="width:170px;font-size:12px" onchange="_tankaEdit_('+gi+',\'spec\',this.value)"></td>'
+      +'<td><input type="number" value="'+(m.qty!=null&&m.qty!==''?m.qty:'')+'" style="width:68px;font-size:12px;text-align:right" onchange="_tankaEdit_('+gi+',\'qty\',this.value)"></td>'
+      +'<td><input type="number" step="0.01" value="'+(m.price!=null&&m.price!==''?m.price:'')+'" style="width:82px;font-size:12.5px;text-align:right;font-weight:800;color:#0369a1" onchange="_tankaEdit_('+gi+',\'price\',this.value)"></td>'
+      +'<td style="font-size:11px;color:#64748b;white-space:nowrap">'+_escDiff(prev||'—')+'</td>'
+      +'<td style="font-size:11px">'+_escDiff(m.status||'')+'</td>'
+      +'<td><button class="del-btn" onclick="_tankaDel_('+gi+')" title="削除">×</button></td>'
+      +'</tr>';
+  });
+  html+='</tbody></table></div></div>';
+  mp.innerHTML=html;
+}
+function _tankaEdit_(i,f,v){
+  var st=_tankaLoad_(); var m=st.master&&st.master[i]; if(!m) return;
+  if(f==='price'||f==='qty') v=(v===''?'':(parseFloat(v)||0));
+  if(f==='price' && (parseFloat(m.price)||0)!==(parseFloat(v)||0) && (parseFloat(m.price)||0)>0){
+    m.prevPrices=m.prevPrices||[]; m.prevPrices.push({price:m.price,year:m.year||'',src:m.src||'',at:new Date().toISOString(),note:'マスタ画面で修正'});
+  }
+  m[f]=v; m.updatedAt=new Date().toISOString();
+  m.item=(m.cust?m.cust+' ':'')+(m.rawItem||'')+(m.spec?' / '+m.spec:'');
+  _tankaSave_(st);
+  if(f==='price'||f==='cust'||f==='rawItem'||f==='spec') renderMaster('tanka');
+}
+function _tankaAdd_(){
+  var st=_tankaLoad_(); st.master=st.master||[];
+  st.master.unshift({id:'TM-'+Date.now()+'-'+Math.floor(Math.random()*100000), item:'', rawItem:'', spec:'', unit:'', qty:'', price:'', cust:'', year:'', src:'手動', prevPrices:[], status:'', updatedAt:new Date().toISOString()});
+  _tankaSave_(st); renderMaster('tanka');
+}
+function _tankaDel_(i){
+  if(!confirm('この単価マスタ行を削除しますか？')) return;
+  var st=_tankaLoad_(); if(st.master) st.master.splice(i,1); _tankaSave_(st); renderMaster('tanka');
+}
 function renderMaster(id){
   const mp=document.getElementById('master-panels');if(!mp)return;
   const labels={paper:'用紙マスター',envelope:'封筒マスター',print:'印刷単価',printOption:'印刷オプション（組付け・色替え等）',plate:'製版・CTP',data:'データ作成',bind:'製本・加工',cust:'取引先マスター（得意先・外注先・エンドユーザー）',prod:'製品名マスター',intercoRates:'会社間掛け率',outsourceVendors:'外注先マスター'};
@@ -12191,6 +12247,10 @@ function renderMaster(id){
   }
   if(id==='stock'){
     renderStockCandidates(mp);
+    return;
+  }
+  if(id==='tanka'){
+    renderTankaMaster(mp);
     return;
   }
 
