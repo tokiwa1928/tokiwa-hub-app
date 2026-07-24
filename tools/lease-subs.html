@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>💳 リース・サブスク契約経費管理表 | Tokiwa Hub Tools</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230891b2'/><rect x='24' y='34' width='52' height='34' rx='5' fill='none' stroke='%23fff' stroke-width='6'/><rect x='24' y='44' width='52' height='7' fill='%23fff'/></svg>">
+<!--
+  リース・サブスク契約の経費管理表。
+  - 契約(リース/サブスク)を登録し、月額換算・年額換算を自動集計。
+  - 満了/次回更新が近い契約を自動アラート。
+  - 会社スコープ: トキワ(管理会社)は全社閲覧、他社は自社のみ。
+  - データは本体DB(leases)を共有し全社同期。印刷・Excel出力対応。
+-->
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; --amber:#d97706; --red:#dc2626; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; }
+  header .logo{ font-weight:800; letter-spacing:.04em; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  main{ max-width:1120px; margin:16px auto; padding:0 14px; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
+  .btn{ padding:8px 14px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13px; font-family:inherit; font-weight:700; }
+  .btn-p{ background:var(--cyan); border-color:var(--cyan); color:#fff; }
+  .btn:active{ transform:translateY(1px); }
+  .muted{ font-size:11px; color:#94a3b8; }
+  label{ font-size:11px; color:#888; display:block; margin-bottom:2px; }
+  input,select,textarea{ width:100%; padding:7px 9px; border:1px solid #d0cec8; border-radius:6px; font-size:14px; font-family:inherit; background:#fff; }
+  input:focus,select:focus,textarea:focus{ outline:none; border-color:#1a1a1a; }
+  /* 黒メトリクスカード(techC) */
+  .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin-bottom:12px; }
+  .kpi{ background:#1a1a1a; color:#fff; border-radius:10px; padding:12px 14px; }
+  .kpi .lab{ font-size:9.5px; font-weight:700; letter-spacing:.12em; color:#94a3b8; text-transform:uppercase; }
+  .kpi .val{ font-size:23px; font-weight:800; font-variant-numeric:tabular-nums; margin-top:3px; }
+  .kpi .val small{ font-size:12px; font-weight:600; color:#cbd5e1; margin-left:3px; }
+  .kpi.warn{ background:#7c2d12; } .kpi.warn .lab{ color:#fed7aa; }
+  .tbar{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  .tbar input.q{ flex:1; min-width:180px; }
+  .tbar select{ width:auto; min-width:96px; }
+  table.lt{ width:100%; border-collapse:collapse; font-size:13px; }
+  table.lt th{ background:#f1f0ec; font-size:10.5px; letter-spacing:.05em; color:#64748b; text-align:left; padding:7px 8px; white-space:nowrap; border-bottom:2px solid #e0ddd6; }
+  table.lt td{ padding:7px 8px; border-bottom:1px solid #f0eee9; vertical-align:middle; }
+  table.lt tr:hover td{ background:#f8fbfd; }
+  .num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .tag{ font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:10px; border:1px solid #d0cec8; background:#f6f5f1; white-space:nowrap; }
+  .tag.lease{ border-color:#0891b2; color:#0e7490; background:#ecfeff; }
+  .tag.subs{ border-color:#7c3aed; color:#6d28d9; background:#f5f3ff; }
+  .tag.cancel{ border-color:#94a3b8; color:#64748b; }
+  .tag.plan{ border-color:#d97706; color:#b45309; background:#fffbeb; }
+  .dleft{ font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:10px; white-space:nowrap; }
+  .dl-ok{ color:#64748b; background:#f1f5f9; } .dl-soon{ color:#b45309; background:#fef3c7; } .dl-urgent{ color:#fff; background:#dc2626; }
+  .row-cancel td{ opacity:.5; }
+  .alert{ background:#fffbeb; border:1px solid #fcd34d; border-radius:9px; padding:9px 12px; margin-bottom:10px; font-size:12.5px; }
+  .alert b{ color:#b45309; }
+  .modal{ position:fixed; inset:0; background:rgba(15,23,42,.45); display:none; align-items:flex-start; justify-content:center; z-index:220; padding:5vh 10px; overflow:auto; }
+  .modal .box{ background:#fff; width:min(820px,96vw); border-radius:12px; padding:18px 20px; box-shadow:0 12px 40px rgba(0,0,0,.3); }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px 14px; }
+  .chk{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:#374151; cursor:pointer; }
+  .chk input{ width:16px; height:16px; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+  .empty{ color:#999; padding:26px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 💳</span>
+  <span class="tname">リース・サブスク契約経費管理表</span>
+  <span class="user" id="hub-user"></span>
+</header>
+<main>
+  <div class="sec">
+    <div class="kpis" id="ls-kpis"></div>
+    <div id="ls-alert"></div>
+    <div class="tbar">
+      <button class="btn btn-p" onclick="lsNew()">＋ 新規契約</button>
+      <input class="q" id="ls-q" placeholder="🔍 契約名・提供元・部門で検索" oninput="render()">
+      <select id="ls-fco" onchange="render()" style="display:none"></select>
+      <select id="ls-fkind" onchange="render()"><option value="">種別: すべて</option><option>リース</option><option>サブスク</option></select>
+      <select id="ls-fcat" onchange="render()"></select>
+      <select id="ls-fst" onchange="render()"><option value="active">状態: 契約中</option><option value="">すべて</option><option>解約予定</option><option>解約済</option></select>
+      <select id="ls-sort" onchange="render()"><option value="end">満了日順</option><option value="amt">月額順</option><option value="name">契約名順</option></select>
+      <button class="btn" onclick="lsPrint()" title="一覧を印刷">🖨 印刷</button>
+      <button class="btn" onclick="lsExcel()" title="Excel(.xlsx)で書き出す">📊 Excel</button>
+    </div>
+    <div style="overflow-x:auto"><div id="ls-list"></div></div>
+  </div>
+  <p class="muted">💾 保存先は本体データ（全社同期）。トキワは全社、他社は自社の契約のみ表示されます。月額換算＝年額÷12・四半期÷3・半年÷6（一括は月額換算に含めません）。</p>
+</main>
+
+<!-- 編集モーダル -->
+<div class="modal" id="lsModal">
+  <div class="box">
+    <div style="font-size:15px;font-weight:800;margin-bottom:12px" id="ls-mtitle">💳 契約</div>
+    <div class="grid">
+      <div><label>会社</label><select id="f-company"></select></div>
+      <div><label>契約名・サービス名</label><input id="f-name" placeholder="例) 複合機リース / Adobe CC / Microsoft 365"></div>
+      <div><label>種別</label><select id="f-kind"><option>リース</option><option>サブスク</option></select></div>
+      <div><label>カテゴリ</label><select id="f-cat"></select></div>
+      <div><label>提供元・リース会社</label><input id="f-vendor" list="ls-vendors" placeholder="例) 三菱HCキャピタル / Adobe"></div>
+      <div><label>部門・用途</label><input id="f-dept" placeholder="例) 総務 / 製造 / 全社"></div>
+      <div><label>金額（円・税抜/税込は運用で統一）</label><input id="f-amount" type="number" inputmode="numeric" oninput="lsCalcHint()"></div>
+      <div><label>支払サイクル</label><select id="f-cycle" onchange="lsCalcHint()"></select></div>
+      <div><label>支払方法</label><select id="f-pay"></select></div>
+      <div><label>契約開始</label><input type="date" id="f-start"></div>
+      <div><label>満了・次回更新日</label><input type="date" id="f-end"></div>
+      <div style="display:flex;align-items:flex-end"><label class="chk"><input type="checkbox" id="f-auto"> 自動更新</label></div>
+      <div><label>状態</label><select id="f-status"></select></div>
+    </div>
+    <div style="margin-top:10px"><label>備考</label><input id="f-note"></div>
+    <div class="muted" id="f-hint" style="margin-top:8px"></div>
+    <datalist id="ls-vendors"></datalist>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" onclick="lsClose()">閉じる</button>
+      <button class="btn btn-p" onclick="lsSaveForm()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+var HUB_OWN_COLLS=['leases'];
+// ═════════ Tokiwa Hub 共有ヘルパー (全ツール共通・ここから下は原則編集しない) ═════════
+var HUB_DBKEY = 'murayama_v15';
+var HUB_AUTHKEY = 'murayama_auth';
+var HUB_TOOL_ID = 'lease-subs';
+var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
+var HUB_API_KEY = 'mitsumori-2024';
+
+function hubLoad(){
+  try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; }
+  catch(e){ console.error(e); return null; }
+}
+function hubAuth(){
+  try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; }
+}
+function _hubInqLite_(db){
+  if(!db || !Array.isArray(db.inquiries) || !db.inquiries.length) return db;
+  var KEEP=['id','subject','kind','status','priority','source_type','channel_company','from_name','from_email','from_company','custName','received_at','createdAt','updatedAt','assignee','category','isSpam','tags','linked_project_id','linked_quote_id','linked_invoice_id','cust_id','tel'];
+  var lite=db.inquiries.map(function(r){ if(!r||typeof r!=='object') return r; var o={}; KEEP.forEach(function(k){ if(k in r) o[k]=r[k]; }); o._lite=true; return o; });
+  return Object.assign({}, db, {inquiries:lite});
+}
+function hubSave(mutator){
+  var db = hubLoad();
+  if(!db){ hubToast('❌ 本体データが見つかりません。先に本体アプリへログインしてください'); return false; }
+  try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
+  var _lok=false;
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); _lok=true; }
+  catch(e){
+    try { localStorage.setItem(HUB_DBKEY, JSON.stringify(_hubInqLite_(db))); _lok=true; }
+    catch(e2){ try { var _b=_hubInqLite_(db); _b.inquiries=[]; _b.history=[]; localStorage.setItem(HUB_DBKEY, JSON.stringify(_b)); _lok=true; } catch(e3){} }
+    hubToast(_lok ? '💾 端末保存は軽量化しました（データはクラウドに保存）' : '⚠ 端末保存失敗・クラウドには保存します');
+  }
+  try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
+  hubCloudPushSoon();
+  return true;
+}
+function _tsval(r){ if(!r) return 0; var t=r._updatedAt||r.updatedAt||r.paidAt||r.matchedAt||r.createdAt||r._createdAt; var n=t?Date.parse(t):0; return isNaN(n)?0:n; }
+function hubStamp(rec){ var t=new Date(Math.max(Date.now(), _tsval(rec)+1000)).toISOString(); if(rec) rec._updatedAt=t; return t; }
+function mergeNewestById(localArr, cloudArr){
+  var byId={}, order=[];
+  function take(r, isLocal){ if(!r||!r.id) return;
+    if(!(r.id in byId)){ order.push(r.id); byId[r.id]=r; return; }
+    var a=_tsval(r), b=_tsval(byId[r.id]);
+    if(a>b || (a===b && isLocal)) byId[r.id]=r;
+  }
+  (Array.isArray(cloudArr)?cloudArr:[]).forEach(function(r){ take(r,false); });
+  (Array.isArray(localArr)?localArr:[]).forEach(function(r){ take(r,true); });
+  return order.map(function(id){ return byId[id]; });
+}
+function ownColls(){ return (typeof HUB_OWN_COLLS!=='undefined'&&HUB_OWN_COLLS) ? HUB_OWN_COLLS : ((typeof COLL!=='undefined'&&COLL) ? [COLL] : []); }
+async function hubCloudFetch(){
+  var auth=hubAuth(); if(!auth || !auth.loggedIn || !auth.companyId) return null;
+  var url=new URL(HUB_GAS_URL);
+  url.searchParams.set('action','syncAll'); url.searchParams.set('apiKey', HUB_API_KEY); url.searchParams.set('companyId', auth.companyId);
+  var res=await fetch(url.toString(), { method:'GET', redirect:'follow' });
+  var r=await res.json();
+  var d=r && (r.data||r);
+  return (d && typeof d==='object') ? d : null;
+}
+async function hubCloudPush(){
+  var db = hubLoad(), auth = hubAuth();
+  if(!db) return false;
+  if(!auth || !auth.loggedIn || !auth.companyId) return false;
+  var cloud=null; try{ cloud=await hubCloudFetch(); }catch(e){ cloud=null; }
+  db=hubLoad()||db;
+  var data;
+  if(cloud){
+    data = Object.assign({}, cloud);
+    ownColls().forEach(function(k){
+      var merged=mergeNewestById(db[k]||[], cloud[k]||[]);
+      data[k]=merged;
+      db[k]=merged;
+    });
+    try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){}
+  } else {
+    data = {
+      master: db.master, config: db.conf,
+      projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
+      intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
+      outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
+      calendarOrders: db.calendarOrders||[], inquiries: db.inquiries||[],
+      deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
+      leases: db.leases||[],
+      inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
+      toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
+      bookmarkCategories: db.bookmarkCategories||[], leadTimeMaster: db.leadTimeMaster||{},
+      bookmarksDeleted: (db.bookmarksDeleted||[]).slice(-500),
+      bookmarkCategoriesDeleted: (db.bookmarkCategoriesDeleted||[]).slice(-200)
+    };
+  }
+  try {
+    var url = new URL(HUB_GAS_URL);
+    url.searchParams.set('action','saveAll');
+    url.searchParams.set('apiKey', HUB_API_KEY);
+    var res = await fetch(url.toString(), { method:'POST', body: JSON.stringify({ companyId: auth.companyId, data: data }), redirect:'follow' });
+    var r = await res.json();
+    return !!(r && r.success);
+  } catch(e){ console.warn('[Tool] cloud push failed', e); return false; }
+}
+var _hubAutoBusy=false;
+async function hubAutoSync(){
+  if(_hubAutoBusy || document.hidden) return;
+  var ae=document.activeElement;
+  if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;
+  _hubAutoBusy=true;
+  try{
+    var cloud=await hubCloudFetch();
+    if(cloud){
+      var db=hubLoad();
+      if(db){
+        var changed=false;
+        ownColls().forEach(function(k){
+          var before=JSON.stringify((db[k]||[]).map(function(r){return r&&r.id+':'+_tsval(r);}));
+          var merged=mergeNewestById(db[k]||[], cloud[k]||[]);
+          var after=JSON.stringify(merged.map(function(r){return r&&r.id+':'+_tsval(r);}));
+          if(after!==before){ db[k]=merged; changed=true; }
+        });
+        if(changed){
+          try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){}
+          try{ if(typeof render==='function') render(); }catch(e){}
+        }
+      }
+    }
+  }catch(e){}
+  _hubAutoBusy=false;
+}
+setInterval(hubAutoSync, 20000);
+window.addEventListener('focus', hubAutoSync);
+var _hubCloudTimer = null;
+function hubCloudPushSoon(){
+  if(_hubCloudTimer) clearTimeout(_hubCloudTimer);
+  _hubCloudTimer = setTimeout(function(){ _hubCloudTimer=null; hubCloudPush(); }, 1500);
+}
+function hubAppend(key, record){
+  return hubSave(function(db){ if(!Array.isArray(db[key])) db[key] = []; db[key].push(record); });
+}
+function hubEsc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function hubToast(msg){
+  var t = document.getElementById('toast'); if(!t) return alert(msg);
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._tm); t._tm = setTimeout(function(){ t.style.display='none'; }, 2600);
+}
+function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
+(function(){
+  var a = hubAuth();
+  var el = document.getElementById('hub-user');
+  if(el) el.textContent = a.loggedIn ? ('👤 ' + (a.userName||'') + ' / ' + (a.companyName||'')) : '⚠ 本体未ログイン';
+})();
+// ═════════ 共有ヘルパーここまで ═════════
+</script>
+
+<script>
+// ═════════ リース・サブスク契約経費管理表 ═════════
+var COLL='leases';
+var LS_COMPANIES=['トキワ','村山','北上','中尾','アート','ヤマウチ','津島'];
+var LS_CATS=['複合機・機器','車両','ソフトウェア','クラウド/SaaS','通信回線','保守・サポート','不動産・設備','その他'];
+var LS_CYCLES=['月額','四半期','半年','年額','一括'];
+var LS_CYCLE_M={'月額':1,'四半期':3,'半年':6,'年額':12,'一括':0};
+var LS_PAY=['口座振替','クレジットカード','請求書払い','その他'];
+var LS_STATUS=['契約中','解約予定','解約済'];
+function esc(s){ return hubEsc(s); }
+function yen(n){ return '¥'+Math.round(Number(n)||0).toLocaleString(); }
+
+// 会社スコープ: トキワ(管理会社)は全社閲覧、他社は自社のみ
+function lsAuthCo(){
+  var n=(hubAuth().companyName||'')+'';
+  for(var i=0;i<LS_COMPANIES.length;i++){ if(n.indexOf(LS_COMPANIES[i])>=0) return LS_COMPANIES[i]; }
+  return '';
+}
+function lsIsAdmin(){ return /トキワ/.test(hubAuth().companyName||'') || !hubAuth().loggedIn; }
+
+function lsRaw(){ var db=hubLoad(); var L=(db&&Array.isArray(db.leases))?db.leases:[]; return L.filter(function(r){return r&&!r.deleted;}); }
+// スコープ適用済み(会社)
+function lsScoped(){
+  var L=lsRaw();
+  if(!lsIsAdmin()){ var my=lsAuthCo(); L=L.filter(function(r){ return (r.company||'')===my; }); }
+  return L;
+}
+function lsMonthly(r){ var f=LS_CYCLE_M[r.cycle]; if(!f) return 0; return (Number(r.amount)||0)/f; }
+function lsDaysLeft(r){
+  if(!r.endDate) return null;
+  var today=new Date(new Date().toISOString().slice(0,10)+'T00:00:00');
+  var end=new Date(r.endDate+'T00:00:00'); if(isNaN(end)) return null;
+  return Math.round((end-today)/86400000);
+}
+function lsActive(r){ return (r.status||'契約中')!=='解約済'; }
+
+// ── フィルタ済み・並べ替え済みの表示リスト ──
+function lsView(){
+  var q=(document.getElementById('ls-q').value||'').trim().toLowerCase();
+  var fco=document.getElementById('ls-fco').value;
+  var fkind=document.getElementById('ls-fkind').value;
+  var fcat=document.getElementById('ls-fcat').value;
+  var fst=document.getElementById('ls-fst').value;
+  var sort=document.getElementById('ls-sort').value;
+  var L=lsScoped().filter(function(r){
+    if(fco && (r.company||'')!==fco) return false;
+    if(fkind && (r.kind||'')!==fkind) return false;
+    if(fcat && (r.category||'')!==fcat) return false;
+    if(fst==='active'){ if(!lsActive(r)) return false; }
+    else if(fst && (r.status||'契約中')!==fst) return false;
+    if(q){ var hay=((r.name||'')+(r.vendor||'')+(r.dept||'')+(r.note||'')+(r.company||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    return true;
+  });
+  L.sort(function(a,b){
+    if(sort==='amt') return lsMonthly(b)-lsMonthly(a);
+    if(sort==='name') return String(a.name||'').localeCompare(String(b.name||''),'ja');
+    // end: 満了日昇順(空は末尾)
+    var ea=a.endDate||'9999-99', eb=b.endDate||'9999-99'; return String(ea).localeCompare(String(eb));
+  });
+  return L;
+}
+
+function lsFillSelect(id, opts, cur, allLabel){
+  var el=document.getElementById(id); if(!el) return;
+  var h=(allLabel!=null)?('<option value="">'+allLabel+'</option>'):'';
+  h+=opts.map(function(o){ return '<option'+(o===cur?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
+  el.innerHTML=h; if(cur!=null) el.value=cur;
+}
+
+function render(){
+  // フィルタ用select初期化(初回のみ中身を作る)
+  if(!document.getElementById('ls-fcat').options.length){ lsFillSelect('ls-fcat', LS_CATS, '', 'カテゴリ: すべて'); }
+  // 会社フィルタ(管理会社のみ表示)
+  var fcoEl=document.getElementById('ls-fco');
+  if(lsIsAdmin()){ fcoEl.style.display=''; if(fcoEl.options.length<=1){ var cur=fcoEl.value; lsFillSelect('ls-fco', LS_COMPANIES, '', '会社: すべて'); fcoEl.value=cur; } }
+  else { fcoEl.style.display='none'; }
+
+  var scoped=lsScoped();
+  // ── KPI(契約中のみ) ──
+  var act=scoped.filter(lsActive);
+  var mSum=0, leaseM=0, subsM=0;
+  act.forEach(function(r){ var m=lsMonthly(r); mSum+=m; if(r.kind==='サブスク') subsM+=m; else leaseM+=m; });
+  var soon=act.filter(function(r){ var d=lsDaysLeft(r); return d!=null && d<=60; }).length;
+  var kpi=document.getElementById('ls-kpis');
+  kpi.innerHTML=
+     card('MONTHLY / 月額換算 合計', yen(mSum), '税抜/税込は運用で統一')
+    +card('YEARLY / 年額換算', yen(mSum*12), '月額×12')
+    +card('LEASE / SUBSC', yen(leaseM)+' <small>/</small> '+yen(subsM), 'リース／サブスク 月額')
+    +card('ACTIVE / 契約中', act.length+' <small>件</small>', '全'+scoped.length+'件中')
+    +cardWarn('RENEWAL / 更新60日以内', soon+' <small>件</small>', '満了・更新が近い契約');
+  // ── アラート ──
+  var al=act.filter(function(r){ var d=lsDaysLeft(r); return d!=null && d<=60; })
+           .sort(function(a,b){ return (lsDaysLeft(a))-(lsDaysLeft(b)); });
+  var ael=document.getElementById('ls-alert');
+  if(al.length){
+    ael.innerHTML='<div class="alert">⚠ <b>更新・満了が近い契約 '+al.length+'件</b>：'
+      + al.slice(0,6).map(function(r){ var d=lsDaysLeft(r); return esc(r.name)+'（'+(d<0?'期限超過':'あと'+d+'日')+'・'+esc(r.endDate)+(r.autoRenew?'・自動更新':'')+'）'; }).join(' ／ ')
+      + (al.length>6?(' 他'+(al.length-6)+'件'):'') + '</div>';
+  } else ael.innerHTML='';
+  // ── 訪問先候補(datalist) ──
+  var vs={}; lsRaw().forEach(function(r){ if(r.vendor) vs[r.vendor]=1; });
+  document.getElementById('ls-vendors').innerHTML=Object.keys(vs).sort().map(function(v){return '<option value="'+esc(v)+'">';}).join('');
+
+  // ── テーブル ──
+  var L=lsView();
+  var el=document.getElementById('ls-list');
+  if(!L.length){ el.innerHTML='<div class="empty">該当する契約はありません。「＋ 新規契約」から登録してください。</div>'; return; }
+  var adm=lsIsAdmin();
+  var head='<tr><th>契約名</th><th>種別</th><th>カテゴリ</th><th>提供元</th><th class="num">金額/サイクル</th><th class="num">月額換算</th><th>満了・更新</th><th>支払</th>'+(adm?'<th>会社</th>':'')+'<th>状態</th><th></th></tr>';
+  var rows=L.map(function(r){
+    var d=lsDaysLeft(r); var dl='';
+    if(lsActive(r) && d!=null){ var cls=d<0?'dl-urgent':(d<=30?'dl-urgent':(d<=60?'dl-soon':'dl-ok')); dl='<span class="dleft '+cls+'">'+(d<0?'期限超過':'あと'+d+'日')+'</span>'; }
+    var kindTag='<span class="tag '+(r.kind==='サブスク'?'subs':'lease')+'">'+esc(r.kind||'リース')+'</span>';
+    var stTag=(r.status==='解約済')?'<span class="tag cancel">解約済</span>':(r.status==='解約予定'?'<span class="tag plan">解約予定</span>':'<span class="tag" style="border-color:#16a34a;color:#15803d;background:#f0fdf4">契約中</span>');
+    return '<tr class="'+((r.status==='解約済')?'row-cancel':'')+'">'
+      +'<td><b>'+esc(r.name||'')+'</b>'+(r.dept?'<div class="muted">'+esc(r.dept)+'</div>':'')+'</td>'
+      +'<td>'+kindTag+'</td>'
+      +'<td>'+esc(r.category||'')+'</td>'
+      +'<td>'+esc(r.vendor||'')+'</td>'
+      +'<td class="num">'+yen(r.amount)+'<div class="muted">'+esc(r.cycle||'')+'</div></td>'
+      +'<td class="num"><b>'+(lsMonthly(r)?yen(lsMonthly(r)):'—')+'</b></td>'
+      +'<td>'+(r.endDate?esc(r.endDate):'<span class="muted">—</span>')+' '+dl+(r.autoRenew?'<div class="muted">🔁自動更新</div>':'')+'</td>'
+      +'<td>'+esc(r.payment||'')+'</td>'
+      +(adm?'<td>'+esc(r.company||'')+'</td>':'')
+      +'<td>'+stTag+'</td>'
+      +'<td style="white-space:nowrap"><button class="btn" style="padding:3px 8px;font-size:11.5px" onclick="lsEdit(\''+r.id+'\')">✏</button> '
+        +'<button class="btn" style="padding:3px 8px;font-size:11.5px" title="複製" onclick="lsCopy(\''+r.id+'\')">📋</button> '
+        +'<button class="btn" style="padding:3px 8px;font-size:11.5px;color:#c0261c" onclick="lsDelete(\''+r.id+'\')">🗑</button></td>'
+      +'</tr>';
+  }).join('');
+  // 月額合計行
+  var vSum=0; L.forEach(function(r){ if(lsActive(r)) vSum+=lsMonthly(r); });
+  var foot='<tr><td colspan="5" class="num" style="font-weight:700;border-top:2px solid #cbd5e1">表示中の月額換算 合計（契約中）</td><td class="num" style="font-weight:800;border-top:2px solid #cbd5e1">'+yen(vSum)+'</td><td colspan="'+(adm?5:4)+'" style="border-top:2px solid #cbd5e1"></td></tr>';
+  el.innerHTML='<table class="lt"><thead>'+head+'</thead><tbody>'+rows+foot+'</tbody></table>';
+}
+function card(lab,val,sub){ return '<div class="kpi"><div class="lab">'+esc(lab)+'</div><div class="val">'+val+'</div><div class="lab" style="color:#64748b;letter-spacing:0;text-transform:none;margin-top:3px">'+esc(sub||'')+'</div></div>'; }
+function cardWarn(lab,val,sub){ return '<div class="kpi warn"><div class="lab">'+esc(lab)+'</div><div class="val">'+val+'</div><div class="lab" style="color:#fdba74;letter-spacing:0;text-transform:none;margin-top:3px">'+esc(sub||'')+'</div></div>'; }
+
+// ── 追加/編集 ──
+var _editId=null;
+function lsFillForm(d){
+  d=d||{};
+  var adm=lsIsAdmin();
+  lsFillSelect('f-company', LS_COMPANIES, d.company||(adm?'トキワ':lsAuthCo()) );
+  document.getElementById('f-company').disabled=!adm;   // 他社は自社固定
+  document.getElementById('f-name').value=d.name||'';
+  lsFillSelect('f-kind', ['リース','サブスク'], d.kind||'リース');
+  lsFillSelect('f-cat', LS_CATS, d.category||LS_CATS[0]);
+  document.getElementById('f-vendor').value=d.vendor||'';
+  document.getElementById('f-dept').value=d.dept||'';
+  document.getElementById('f-amount').value=(d.amount!=null?d.amount:'');
+  lsFillSelect('f-cycle', LS_CYCLES, d.cycle||'月額');
+  lsFillSelect('f-pay', LS_PAY, d.payment||LS_PAY[0]);
+  document.getElementById('f-start').value=d.startDate||'';
+  document.getElementById('f-end').value=d.endDate||'';
+  document.getElementById('f-auto').checked=!!d.autoRenew;
+  lsFillSelect('f-status', LS_STATUS, d.status||'契約中');
+  document.getElementById('f-note').value=d.note||'';
+  lsCalcHint();
+}
+function lsCalcHint(){
+  var amt=parseFloat(document.getElementById('f-amount').value)||0;
+  var cyc=document.getElementById('f-cycle').value;
+  var f=LS_CYCLE_M[cyc]||0;
+  var m=f?amt/f:0;
+  document.getElementById('f-hint').innerHTML= f? ('月額換算 <b>'+yen(m)+'</b> ／ 年額換算 <b>'+yen(m*12)+'</b>') : '一括契約は月額換算に含めません';
+}
+function lsNew(){ _editId=null; lsFillForm({}); document.getElementById('ls-mtitle').textContent='💳 契約（新規）'; document.getElementById('lsModal').style.display='flex'; }
+function lsEdit(id){ var r=lsRaw().find(function(x){return x.id===id;}); if(!r) return; _editId=id; lsFillForm(r); document.getElementById('ls-mtitle').textContent='💳 契約（編集）'; document.getElementById('lsModal').style.display='flex'; }
+function lsCopy(id){ var r=lsRaw().find(function(x){return x.id===id;}); if(!r) return; var d=JSON.parse(JSON.stringify(r)); delete d.id; d.name=(d.name||'')+'（コピー）'; _editId=null; lsFillForm(d); document.getElementById('ls-mtitle').textContent='💳 契約（複製→新規）'; document.getElementById('lsModal').style.display='flex'; hubToast('📋 コピーしました。内容を直して保存してください'); }
+function lsClose(){ document.getElementById('lsModal').style.display='none'; _editId=null; }
+function lsCollectForm(){
+  var g=function(id){ return document.getElementById(id).value; };
+  return { company:g('f-company'), name:g('f-name').trim(), kind:g('f-kind'), category:g('f-cat'),
+    vendor:g('f-vendor').trim(), dept:g('f-dept').trim(),
+    amount:(parseFloat(g('f-amount'))||0), cycle:g('f-cycle'), payment:g('f-pay'),
+    startDate:g('f-start'), endDate:g('f-end'), autoRenew:document.getElementById('f-auto').checked,
+    status:g('f-status'), note:g('f-note').trim() };
+}
+function lsSaveForm(){
+  var d=lsCollectForm();
+  if(!d.name){ hubToast('契約名を入力してください'); return; }
+  if(!d.company){ hubToast('会社を選んでください'); return; }
+  var ok=hubSave(function(db){
+    if(!Array.isArray(db.leases)) db.leases=[];
+    var rec=_editId? db.leases.find(function(x){return x&&x.id===_editId;}) : null;
+    if(rec){ Object.assign(rec, d); }
+    else { rec=Object.assign({ id:'lease_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), createdAt:new Date().toISOString(), createdBy:(hubAuth().userName||'') }, d); db.leases.push(rec); }
+    hubStamp(rec); rec.updatedAt=rec._updatedAt;
+  });
+  if(ok){ hubToast('💾 保存しました'); lsClose(); render(); }
+}
+function lsDelete(id){
+  var r=lsRaw().find(function(x){return x.id===id;}); if(!r) return;
+  if(!confirm('「'+(r.name||'契約')+'」を削除しますか？')) return;
+  hubSave(function(db){ var rec=(db.leases||[]).find(function(x){return x&&x.id===id;}); if(rec){ rec.deleted=true; hubStamp(rec); rec.updatedAt=rec._updatedAt; } });
+  hubToast('🗑 削除しました'); render();
+}
+
+// ── 印刷(一覧表・ヘッダー/フッターは@page margin:0で出さない) ──
+function lsPrint(){
+  var L=lsView(); if(!L.length){ hubToast('印刷対象がありません'); return; }
+  var adm=lsIsAdmin();
+  var mSum=0; L.forEach(function(r){ if(lsActive(r)) mSum+=lsMonthly(r); });
+  var title='リース・サブスク契約 経費管理表'+(adm && document.getElementById('ls-fco').value?('（'+esc(document.getElementById('ls-fco').value)+'）'):(adm?'（全社）':'（'+esc(lsAuthCo())+'）'));
+  var rows=L.map(function(r){
+    var d=lsDaysLeft(r); var dtxt=(lsActive(r)&&d!=null)?(d<0?'期限超過':'あと'+d+'日'):'';
+    return '<tr><td>'+esc(r.name||'')+'</td><td class="c">'+esc(r.kind||'')+'</td><td>'+esc(r.category||'')+'</td><td>'+esc(r.vendor||'')+'</td>'
+      +'<td class="r">'+yen(r.amount)+'</td><td class="c">'+esc(r.cycle||'')+'</td><td class="r">'+(lsMonthly(r)?yen(lsMonthly(r)):'—')+'</td>'
+      +'<td class="c">'+esc(r.endDate||'')+(dtxt?('<br><span style="font-size:9px">'+dtxt+'</span>'):'')+'</td><td class="c">'+esc(r.payment||'')+'</td>'
+      +(adm?'<td class="c">'+esc(r.company||'')+'</td>':'')+'<td class="c">'+esc(r.status||'')+'</td></tr>';
+  }).join('');
+  var css='<style>@page{size:A4 landscape;margin:0}body{font-family:"Yu Gothic","Meiryo",sans-serif;color:#111;margin:0;padding:12mm;font-size:11px}'
+    +'h1{font-size:17px;text-align:center;letter-spacing:.15em;margin:0 0 4px}.sub{text-align:center;color:#555;font-size:11px;margin-bottom:10px}'
+    +'table{width:100%;border-collapse:collapse}th,td{border:.5px solid #666;padding:4px 6px}th{background:#eee;font-size:10px;text-align:left}'
+    +'td.c{text-align:center}td.r{text-align:right;font-variant-numeric:tabular-nums}tfoot td{font-weight:700;background:#f5f5f5}'
+    +'@media print{button{display:none}}</style>';
+  var head='<tr><th>契約名</th><th>種別</th><th>カテゴリ</th><th>提供元</th><th>金額</th><th>サイクル</th><th>月額換算</th><th>満了・更新</th><th>支払</th>'+(adm?'<th>会社</th>':'')+'<th>状態</th></tr>';
+  var foot='<tfoot><tr><td colspan="6" style="text-align:right">月額換算 合計（契約中）</td><td class="r">'+yen(mSum)+'</td><td colspan="'+(adm?4:3)+'">年額換算 '+yen(mSum*12)+'</td></tr></tfoot>';
+  var html='<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>'+esc(title)+'</title>'+css+'</head><body>'
+    +'<h1>'+esc(title)+'</h1><div class="sub">作成日 '+new Date().toISOString().slice(0,10)+'　'+L.length+'件</div>'
+    +'<table><thead>'+head+'</thead><tbody>'+rows+'</tbody>'+foot+'</table></body></html>';
+  var f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden'; document.body.appendChild(f);
+  var doc=f.contentWindow.document; doc.open(); doc.write(html); doc.close();
+  var go=function(){ try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){ hubToast('❌ 印刷を開けませんでした'); } setTimeout(function(){ f.remove(); }, 60000); };
+  if(doc.readyState==='complete') setTimeout(go,80); else f.onload=function(){ setTimeout(go,80); };
+}
+
+// ── Excel(.xlsx)出力(ExcelJSを押されたときだけ読み込む) ──
+function lsLoadExcelJS(){ if(window.ExcelJS) return Promise.resolve(true); return new Promise(function(ok,ng){ var s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js'; s.onload=function(){ok(true);}; s.onerror=function(){ng(new Error('load failed'));}; document.head.appendChild(s); }); }
+async function lsExcel(){
+  var L=lsView(); if(!L.length){ hubToast('出力対象がありません'); return; }
+  try{
+    hubToast('📊 Excelを作成中…'); await lsLoadExcelJS();
+    var wb=new ExcelJS.Workbook(); var ws=wb.addWorksheet('リース・サブスク');
+    ws.columns=[
+      {header:'会社',key:'company',width:8},{header:'契約名',key:'name',width:28},{header:'種別',key:'kind',width:8},
+      {header:'カテゴリ',key:'category',width:14},{header:'提供元',key:'vendor',width:18},{header:'部門・用途',key:'dept',width:12},
+      {header:'金額',key:'amount',width:12},{header:'サイクル',key:'cycle',width:9},{header:'月額換算',key:'monthly',width:12},
+      {header:'年額換算',key:'yearly',width:12},{header:'支払方法',key:'payment',width:12},{header:'契約開始',key:'startDate',width:12},
+      {header:'満了・更新',key:'endDate',width:12},{header:'自動更新',key:'autoRenew',width:8},{header:'状態',key:'status',width:9},{header:'備考',key:'note',width:24}
+    ];
+    ws.getRow(1).font={bold:true}; ws.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEFEFEA'}};
+    var mSum=0;
+    L.forEach(function(r){ var m=lsMonthly(r); if(lsActive(r)) mSum+=m;
+      ws.addRow({ company:r.company||'', name:r.name||'', kind:r.kind||'', category:r.category||'', vendor:r.vendor||'', dept:r.dept||'',
+        amount:Number(r.amount)||0, cycle:r.cycle||'', monthly:Math.round(m), yearly:Math.round(m*12), payment:r.payment||'',
+        startDate:r.startDate||'', endDate:r.endDate||'', autoRenew:r.autoRenew?'○':'', status:r.status||'', note:r.note||'' });
+    });
+    ['amount','monthly','yearly'].forEach(function(k){ ws.getColumn(k).numFmt='#,##0'; });
+    var tr=ws.addRow({ name:'月額換算 合計（契約中）', monthly:Math.round(mSum), yearly:Math.round(mSum*12) }); tr.font={bold:true};
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob); var a=document.createElement('a');
+    a.href=url; a.download='リース・サブスク契約管理_'+new Date().toISOString().slice(0,10)+'.xlsx'; document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 1000);
+    hubToast('📊 Excelを書き出しました');
+  }catch(e){ console.error(e); hubToast('❌ Excel出力に失敗（オフラインの可能性あり）。印刷をご利用ください'); }
+}
+
+render();
+</script>
+
+<!-- HUB共通: 最新データに更新するフローティングボタン（自動挿入） -->
+<style>
+#hubRefreshBtn{position:fixed;right:16px;bottom:16px;z-index:99999;display:inline-flex;align-items:center;gap:6px;
+  padding:9px 14px;font-size:13px;font-weight:700;font-family:inherit;color:#0f172a;background:#fde68a;
+  border:1px solid #f59e0b;border-radius:22px;box-shadow:0 3px 10px rgba(0,0,0,.22);cursor:pointer;line-height:1;}
+#hubRefreshBtn:hover{background:#fcd34d;}
+#hubRefreshBtn:disabled{opacity:.6;cursor:default;}
+@media print{#hubRefreshBtn{display:none!important;}}
+</style>
+<button id="hubRefreshBtn" title="クラウドの最新データに更新します" onclick="hubRefreshNow()">🔄 更新</button>
+<script>
+function hubRefreshNow(){
+  var b=document.getElementById('hubRefreshBtn');
+  var reset=function(){ if(b){ b.disabled=false; b.textContent='🔄 更新'; } };
+  if(b){ b.disabled=true; b.textContent='⏳ 更新中…'; }
+  try{ var ae=document.activeElement; if(ae && ae.blur && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) ae.blur(); }catch(e){}
+  try{
+    if(typeof hubCloudPull==='function'){
+      Promise.resolve(hubCloudPull()).then(function(){
+        try{ if(typeof render==='function') render(); }catch(e){}
+        try{ if(typeof hubToast==='function') hubToast('🔄 最新データに更新しました'); }catch(e){}
+        reset();
+      }).catch(function(){ location.reload(); });
+      return;
+    }
+  }catch(e){}
+  location.reload();
+}
+</script>
+<!-- HUB共通: アプリ自動更新＋更新履歴（自動挿入 hubUpdateKit） -->
+<style>
+#hubLogBtn{position:fixed;right:16px;bottom:58px;z-index:99999;width:38px;height:38px;border-radius:50%;
+  border:1px solid #cbd5e1;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.18);cursor:pointer;font-size:17px;line-height:1;}
+#hubLogBtn:hover{background:#f1f5f9;}
+#hubLogPanel{position:fixed;right:16px;bottom:104px;z-index:99999;width:min(360px,calc(100vw - 32px));max-height:60vh;overflow:auto;
+  background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;display:none;font-size:12px;color:#0f172a;text-align:left;}
+#hubLogPanel h3{margin:0 0 8px;font-size:13px;}
+#hubLogPanel .d{font-weight:700;margin:10px 0 3px;color:#0369a1;}
+#hubLogPanel ul{margin:0 0 4px;padding-left:17px;}
+#hubLogPanel li{margin:2px 0;line-height:1.45;}
+#hubUpBanner{position:fixed;left:50%;transform:translateX(-50%);top:10px;z-index:100000;display:none;align-items:center;gap:10px;
+  background:#0f172a;color:#fff;padding:9px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:13px;}
+#hubUpBanner button{font-family:inherit;font-size:12px;font-weight:700;border-radius:7px;border:0;padding:5px 11px;cursor:pointer;background:#fde68a;color:#0f172a;}
+@media print{#hubLogBtn,#hubLogPanel,#hubUpBanner{display:none!important;}}
+</style>
+<button id="hubLogBtn" title="更新履歴を表示" onclick="hubToggleLog()">📋</button>
+<div id="hubLogPanel"></div>
+<div id="hubUpBanner"><span>🆕 新しい版があります（<b id="hubUpCnt">15</b>秒後に自動更新）</span><button onclick="hubDoUpdate()">今すぐ更新</button><button style="background:#334155;color:#fff" onclick="hubCancelUpdate()">後で</button></div>
+<script>
+(function(){
+  var BASE = location.pathname.indexOf('/tools/')>=0 ? '../' : './';
+  window.hubToggleLog=function(){
+    var p=document.getElementById('hubLogPanel');
+    if(p.style.display==='block'){ p.style.display='none'; return; }
+    p.style.display='block'; p.innerHTML='<h3>📋 更新履歴</h3>読み込み中…';
+    fetch(BASE+'changelog.json?ts='+Date.now(), {cache:'no-store'}).then(function(r){return r.json();}).then(function(list){
+      var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
+      p.innerHTML='<h3>📋 更新履歴</h3>'+list.map(function(e){
+        return '<div class="d">'+esc(e.date)+'</div><ul>'+e.items.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>';
+      }).join('');
+    }).catch(function(){ p.innerHTML='<h3>📋 更新履歴</h3>取得できませんでした'; });
+  };
+  var curVer=null, timer=null;
+  function fetchVer(){
+    return fetch(BASE+'service-worker.js?ts='+Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.text(); })
+      .then(function(t){ var m=t.match(/CACHE_VERSION\s*=\s*'([^']+)'/); return m?m[1]:null; })
+      .catch(function(){ return null; });
+  }
+  window.hubDoUpdate=function(){ try{ sessionStorage.setItem('hubJustUpdated','1'); }catch(e){} location.reload(); };
+  window.hubCancelUpdate=function(){ if(timer){ clearInterval(timer); timer=null; } var b=document.getElementById('hubUpBanner'); if(b) b.style.display='none'; };
+  function showBanner(){
+    var b=document.getElementById('hubUpBanner'); if(!b || b.style.display==='flex') return;
+    b.style.display='flex';
+    var n=15, c=document.getElementById('hubUpCnt'); c.textContent=n;
+    timer=setInterval(function(){
+      var ae=document.activeElement;
+      if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;
+      n--; c.textContent=n;
+      if(n<=0){ clearInterval(timer); hubDoUpdate(); }
+    }, 1000);
+  }
+  function check(){
+    fetchVer().then(function(v){
+      if(!v) return;
+      if(curVer===null){ curVer=v; return; }
+      if(v===curVer) return;
+      if(document.hidden){ hubDoUpdate(); } else { showBanner(); }
+    });
+  }
+  fetchVer().then(function(v){ curVer=v; });
+  setInterval(check, 180000);
+  window.addEventListener('focus', check);
+  try{ if(sessionStorage.getItem('hubJustUpdated')){ sessionStorage.removeItem('hubJustUpdated'); } }catch(e){}
+})();
+</script>
+</body>
+</html>
