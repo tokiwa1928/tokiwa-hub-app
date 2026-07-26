@@ -40535,7 +40535,8 @@ function renderProjects(){
   if(typeof _populateProjFilterOptions_ === 'function') _populateProjFilterOptions_();
   // NNNNN-1: 見積中ステージは見積一覧を表示 (見積管理を吸収)
   var stage = window._projStageTab_ || 'all';
-  if(stage === 'quote' || stage === 'allquote'){ _renderProjQuoteList_(stage); return; }
+  if(stage === 'quote' || stage === 'allquote'){ if(typeof _projSetHeader_==='function')_projSetHeader_('quote'); _renderProjQuoteList_(stage); return; }
+  if(typeof _projSetHeader_==='function')_projSetHeader_('orders');
   // RPPPP-1: 見積中以外では合冊ツールバーを隠す
   var _mt = document.getElementById('quote-merge-toolbar');
   if(_mt) _mt.style.display = 'none';
@@ -40769,13 +40770,18 @@ function renderProjects(){
       <td class="r pj-gp" style="white-space:nowrap;color:${grossProfit>=0?'#059669':'#dc2626'}">${r.exTax>0?fmt(grossProfit):'-'}</td>
       <td style="white-space:nowrap"><span class="pj-status" style="color:#fff;font-weight:700;border-radius:9px;background:${sc};display:inline-block;white-space:nowrap">${r.status||'-'}</span>${(function(){var m=_projStatusMeta_(r);if(!m.start)return '';var late=(m.days!=null&&m.days>=14&&r.status!=='完了'&&r.status!=='納品済');return ' <span style="font-size:9px;color:#64748b">'+m.start.slice(5).replace('-','/')+'〜<b style="color:'+(late?'#dc2626':'#334155')+'">'+(m.days!=null?(m.days+'日'):'')+'</b></span>';})()}</td>
       <td style="font-size:11px;white-space:nowrap"><span style="white-space:nowrap">${_escDiff(r.assignee||'-')}</span></td>
-      <td style="white-space:nowrap" onclick="event.stopPropagation()">
+      <td onclick="event.stopPropagation()">
+       <div style="display:flex;gap:4px;align-items:center;flex-wrap:nowrap;white-space:nowrap">
+        <button class="btn" style="font-size:10px;padding:2px 6px;white-space:nowrap;flex:0 0 auto" onclick="event.stopPropagation();_openProjInEstForm_(${oi})" title="この案件を編集（見積フォームを開く）">✏️ 編集</button>
+        <button class="btn" style="font-size:10px;padding:2px 6px;background:#06b6d4;color:#fff;border-color:#06b6d4;white-space:nowrap;flex:0 0 auto" onclick="event.stopPropagation();_entryGate_('order')" title="受注登録（リピート／流用新規から。上部の＋受注登録と同じ）">📋 受注登録</button>
+        <button class="btn" style="font-size:10px;padding:2px 6px;background:#a855f7;color:#fff;border-color:#a855f7;white-space:nowrap;flex:0 0 auto" onclick="event.stopPropagation();_entryGate_('quote')" title="見積登録（リピート／流用新規から。上部の＋見積登録と同じ）">📄 見積登録</button>
         ${r._deleteRequested
-          ? `<span title="${String(r._deleteRequested.reason||'').replace(/"/g,'&quot;')}" style="font-size:10px;color:#b91c1c;background:#fee2e2;border-radius:4px;padding:2px 6px;white-space:nowrap">🗑 削除申請中</span>`
+          ? `<span title="${String(r._deleteRequested.reason||'').replace(/"/g,'&quot;')}" style="font-size:10px;color:#b91c1c;background:#fee2e2;border-radius:4px;padding:2px 6px;white-space:nowrap;flex:0 0 auto">🗑 削除申請中</span>`
             + ((currentAuth&&currentAuth.role==='admin')
-                ? ` <button class="btn" style="font-size:10px;background:#dc2626;color:#fff;border-color:#dc2626" onclick="_approveDeleteProj_(${oi})" title="承認して削除">承認</button> <button class="btn" style="font-size:10px" onclick="_cancelDeleteProj_(${oi})" title="申請を却下">却下</button>`
-                : ` <button class="btn" style="font-size:10px" onclick="_cancelDeleteProj_(${oi})" title="申請を取消">取消</button>`)
-          : `<button class="del-btn" onclick="_requestDeleteProj_(${oi})" title="削除申請 (承認後に削除)">×</button>`}
+                ? ` <button class="btn" style="font-size:10px;background:#dc2626;color:#fff;border-color:#dc2626;white-space:nowrap;flex:0 0 auto" onclick="_approveDeleteProj_(${oi})" title="承認して削除">承認</button> <button class="btn" style="font-size:10px;white-space:nowrap;flex:0 0 auto" onclick="_cancelDeleteProj_(${oi})" title="申請を却下">却下</button>`
+                : ` <button class="btn" style="font-size:10px;white-space:nowrap;flex:0 0 auto" onclick="_cancelDeleteProj_(${oi})" title="申請を取消">取消</button>`)
+          : `<button class="del-btn" style="flex:0 0 auto" onclick="_requestDeleteProj_(${oi})" title="削除申請 (承認後に削除)">×</button>`}
+       </div>
       </td>
     </tr>`;
 
@@ -40867,6 +40873,34 @@ function _renderProjFlatList_(){
 }
 
 // NNNNN-1: 見積中ステージ — 見積一覧 (見積管理を案件管理に吸収)
+// 見積書一覧/受注一覧で列構成が異なるため、ヘッダー(thead)を切り替える。
+// orders(受注一覧)=元の13列, quote(見積書一覧)=見積用の列。元ヘッダーは初回に退避して復元。
+var _PROJ_FLAT_THEAD_HTML = null;
+function _projSetHeader_(mode){
+  var thead = document.getElementById('proj-thead');
+  if(!thead) return;
+  var tr = thead.querySelector('tr');
+  if(!tr) return;
+  if(_PROJ_FLAT_THEAD_HTML === null) _PROJ_FLAT_THEAD_HTML = tr.innerHTML; // 受注一覧ヘッダーを退避
+  if(mode === 'quote'){
+    if(tr.getAttribute('data-mode') === 'quote') return;
+    tr.setAttribute('data-mode','quote');
+    tr.innerHTML = '<th style="min-width:120px">見積番号</th>'
+      + '<th style="min-width:76px">作成日</th>'
+      + '<th style="min-width:100px">得意先</th>'
+      + '<th style="min-width:140px">品名</th>'
+      + '<th class="r" style="min-width:90px">見積金額</th>'
+      + '<th class="r" style="min-width:64px">原価</th>'
+      + '<th class="r" style="min-width:56px">原価率</th>'
+      + '<th style="min-width:64px">数量</th>'
+      + '<th style="min-width:84px">ステータス</th>'
+      + '<th colspan="2" style="min-width:180px">操作</th>';
+  } else {
+    if(tr.getAttribute('data-mode') !== 'quote') return; // 既に受注一覧ヘッダー
+    tr.removeAttribute('data-mode');
+    tr.innerHTML = _PROJ_FLAT_THEAD_HTML;
+  }
+}
 function _renderProjQuoteList_(stageArg){
   var body = document.getElementById('proj-body');
   if(!body) return;
@@ -40908,8 +40942,8 @@ function _renderProjQuoteList_(stageArg){
     var up = e.qty > 0 ? Math.round((e.exTax||0)/e.qty*100)/100 : 0;
     var costRate = (e.exTax > 0 && e.estCost) ? Math.round(e.estCost/e.exTax*100) : null;
     return '<tr style="cursor:pointer;background:#f0f9ff;border-left:4px solid #0891b2" onclick="if(typeof editEstimateInTab===\'function\')editEstimateInTab(\'' + _escAttr_(e.id) + '\')">' +
-      '<td style="font-size:11px;font-family:monospace"><label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" class="quote-merge-cb" value="' + _escAttr_(e.id) + '" onchange="_updateMergeCount_()" style="width:15px;height:15px;cursor:pointer">' + _escDiff(e.id||'') + '</label></td>' +
-      '<td style="font-size:11px">' + (e.createdAt||'').slice(0,10) + '</td>' +
+      '<td style="font-size:11px;font-family:monospace;white-space:nowrap"><label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap"><input type="checkbox" class="quote-merge-cb" value="' + _escAttr_(e.id) + '" onchange="_updateMergeCount_()" style="width:15px;height:15px;cursor:pointer;flex:0 0 auto"><span style="white-space:nowrap">' + _escDiff(e.id||'') + '</span></label></td>' +
+      '<td style="font-size:11px;white-space:nowrap">' + (e.createdAt||'').slice(0,10) + '</td>' +
       '<td style="font-size:12px">' + _escDiff(e.cust||'') + '</td>' +
       '<td style="font-size:12px">' + _escDiff(e.item||'') + (e.spec?'<br><span style="font-size:10px;color:#999">'+_escDiff(e.spec.slice(0,30))+'</span>':'') + '</td>' +
       '<td class="r" style="font-size:12px;font-weight:700">¥' + (parseInt(e.exTax)||0).toLocaleString() + '<br><span style="font-size:10px;color:#999">@¥' + up.toLocaleString() + '</span></td>' +
@@ -41410,7 +41444,7 @@ function _saveCostRevision_(){
 // ═══════════════════════════════════════════════════════════
 window._projViewMode_ = (function(){ try { var m = localStorage.getItem('proj_view_mode') || 'detail'; return (m === 'list' || m === 'flat') ? 'detail' : m; } catch(e){ return 'detail'; } })();
 window._projRowMode_ = 'detail';
-window._projStageTab_ = 'all';
+window._projStageTab_ = 'orders'; // デフォルト表示=受注案件一覧（すべてではなく）
 
 // NNNNN-1: ライフサイクル ステージ定義 (見積管理・受注管理を吸収)
 // GGGGGG-2: 集約2タブ(受注案件一覧/見積書一覧) + 詳細4タブ(見積中/受注・進行中/完了/失注)
