@@ -1599,6 +1599,7 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-intercoRates" onclick="swMaster('intercoRates',this)">会社間掛け率</button>
     <button class="pill" id="mc-outsourceVendors" onclick="swMaster('outsourceVendors',this)">外注先</button>
     <button class="pill" id="mc-makerterms" onclick="swMaster('makerterms',this)" style="color:#b45309;border-color:#fcd34d;font-weight:700" title="メーカー別呼称の対訳（封筒・用紙）— 窓の号数はメーカーで違うので実寸で紐づけます。基準はハート表記">🏭 メーカー呼称</button>
+    <button class="pill" id="mc-supplyrules" onclick="swMaster('supplyrules',this)" style="color:#0f766e;border-color:#5eead4;font-weight:700" title="仕入ルール — メーカーを安い順に並べ取扱範囲を登録すると、封筒の発注先が自動で決まります（相見積の手間をなくす）">🚚 仕入ルール</button>
     <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
     <button class="pill" id="mc-costref" onclick="swMaster('costref',this)" title="参考原価マスタ（作業別の最低料金・単価・原価率%。見積の指針用・別管理）">参考原価</button>
     <button class="pill" id="mc-tanka" onclick="swMaster('tanka',this)" style="color:#0369a1;border-color:#7dd3fc;font-weight:700" title="単価マスタ構築ツールの蓄積（得意先×品名×仕様の前回単価）を確認・修正">💴 単価マスタ</button>
@@ -3761,6 +3762,7 @@ let DB={
   calendarOrders: [],   // カレンダー受注台帳（全カテゴリ・全社同期）
   makerTerms: [],       // メーカー別呼称の対訳（封筒/用紙。窓の号数がメーカーで異なるため実寸で紐づける）
   makerList: [],        // 対訳表の列に出すメーカー名（既定はハート/ムトウユニパック/キングコーポレーション/山櫻/ヤマガタ）
+  supplyRules: [],      // 仕入ルール（メーカー別の優先順位＝安い順・取扱範囲）。発注先を自動判定して相見積の手間を省く
   conf:{     // 会社設定
     name:'村山印刷有限会社',
     rep:'代表取締役 比留間 節子',
@@ -4100,7 +4102,7 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   if(!d.inquirySettings) d.inquirySettings={autoReply:true,autoReplyMessage:'',categories:['見積依頼','納品について','データ入稿','校正確認','クレーム','その他'],assignees:[]};
   if(!d.wikiArticles) d.wikiArticles=[];
   if(!d.templates) d.templates=[];
-  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
+  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],supplyRules:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
   // AAAA-1: マスター番号 backfill (起動時に既存データに割り当て)
   if(typeof _backfillMasterNos_ === 'function') _backfillMasterNos_();
   // 移行による変更を永続化（しないと次回リロードで元に戻り、フラグだけ立って再実行もされない）
@@ -4373,6 +4375,15 @@ async function loadFromCloud() {
   // 対訳表の列（メーカー名）— 件数が多い側を採用（列の追加を消さない）
   if (Array.isArray(result.data.makerList)) {
     if(!Array.isArray(DB.makerList) || result.data.makerList.length >= DB.makerList.length) DB.makerList = result.data.makerList;
+  }
+  // 仕入ルール（メーカー別の取扱範囲・優先順位）— id単位で新しい方を採用
+  if (result.data.supplyRules) {
+    var _srTs=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var _srById={}, _srOrder=[];
+    var _srTake=function(r){ if(!r||!r.id) return; if(!(r.id in _srById)){ _srOrder.push(r.id); _srById[r.id]=r; } else if(_srTs(r)>_srTs(_srById[r.id])){ _srById[r.id]=r; } };
+    (Array.isArray(DB.supplyRules)?DB.supplyRules:[]).forEach(_srTake);
+    result.data.supplyRules.forEach(_srTake);
+    DB.supplyRules = _srOrder.map(function(id){ return _srById[id]; });
   }
 
   // カレンダー受注台帳（年度更新式・全カテゴリ）
@@ -4925,6 +4936,7 @@ async function saveToCloud() {
     leases: DB.leases || [],
     makerTerms: DB.makerTerms || [],
     makerList: DB.makerList || [],
+    supplyRules: DB.supplyRules || [],
     calendarOrders: DB.calendarOrders || [],
     calendarOrdersDeleted: (DB.calendarOrdersDeleted || []).slice(-2000),
     calendarOrdersDeletedSig: (DB.calendarOrdersDeletedSig || []).slice(-2000),
@@ -12455,6 +12467,10 @@ function renderMaster(id){
     renderMakerTerms(mp);
     return;
   }
+  if(id==='supplyrules'){
+    renderSupplyRules(mp);
+    return;
+  }
   if(id==='stock'){
     renderStockCandidates(mp);
     return;
@@ -12630,6 +12646,7 @@ function renderMaster(id){
     <datalist id="dl-env-glue">${_dl('glue')}</datalist><datalist id="dl-env-paste">${_dl('paste')}</datalist>
     <div style="overflow-x:auto"><table class="m-tbl"><thead><tr>
       <th style="min-width:118px">メーカー／仕入元</th>
+      <th style="min-width:104px" title="「🚚 仕入ルール」の優先順位と取扱範囲から自動で決まる発注先。上のメーカーが扱えない場合は理由を添えて次のメーカーになります">発注先 <span style="font-weight:400;font-size:9px;color:#94a3b8">(自動)</span></th>
       <th style="min-width:190px">封筒名 <span style="font-weight:400;font-size:9px;color:#94a3b8">(自動)</span></th>
       <th style="min-width:84px">サイズ</th>
       <th style="min-width:120px">種類（紙質）</th>
@@ -12647,6 +12664,7 @@ function renderMaster(id){
       const _mismatch=(_autoNm.trim() && _autoNm!==(r.nm||''));
       html+=`<tr>
         <td><input list="dl-env-mk" type="text" value="${(r.mk||'').replace(/"/g,'&quot;')}" placeholder="未設定" title="この封筒をどのメーカー／仕入先から買っているか（発注先が一目で分かるように入れてください）" style="width:100%;font-size:11px${r.mk?'':';background:#fffbeb'}" onchange="updateMasterField('envelope',${oi},'mk',this.value)"></td>
+        <td style="white-space:nowrap">${_supplyCellHtml_(r)}</td>
         <td><input class="env-nm" type="text" readonly value="${(r.nm||'').replace(/"/g,'&quot;')}" title="${_mismatch?('組み合わせからは「'+_autoNm.replace(/"/g,'&quot;')+'」になります（🔄 一括で作り直すと揃います）'):'組み合わせから自動生成された封筒名です'}" style="width:100%;background:${_mismatch?'#fdf6e8':'#f6f6f4'};color:#333;font-weight:600;cursor:not-allowed"></td>
         <td><input class="env-sz" list="dl-env-size" type="text" value="${_sp.size.replace(/"/g,'&quot;')}" placeholder="長3" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
         <td><input class="env-kd" list="dl-env-kind" type="text" value="${_sp.kind.replace(/"/g,'&quot;')}" placeholder="クラフト/ケント 等" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
@@ -13187,6 +13205,199 @@ function _mtConflicts_(){
     });
   });
   return warn;
+}
+// ═══════════════════════════════════════════════════════════
+// 🚚 仕入ルール（メーカー別の取扱範囲・優先順位）
+//   狙い: 「基本はムトウ（安価）だが取扱いの幅が狭い。扱いがない組み合わせはハートに見積」を
+//         ルールとして持ち、封筒の全品目の発注先を自動判定する（毎回の相見積をなくす）
+//   DB.supplyRules = [{id, maker, priority(1が最優先=基本ここ), sizes, kinds, wtMin, wtMax,
+//                      ngWin(窓付き不可), ngFrameless(枠なし不可), ngGlue(糊付き不可),
+//                      lead(納期), note, lastChecked('2026-07'), active}]
+//   品目側の例外: envRow.supOk = {メーカー:true/false}（true=扱える/false=扱えない）を優先
+// ═══════════════════════════════════════════════════════════
+function _supplyRules_(){ if(!Array.isArray(DB.supplyRules)) DB.supplyRules=[]; return DB.supplyRules; }
+function _srSorted_(){
+  return _supplyRules_().filter(function(r){return r.active!==false;})
+    .slice().sort(function(a,b){ return (parseInt(a.priority)||99)-(parseInt(b.priority)||99); });
+}
+function _srListSplit_(v){ return String(v||'').split(/[,、\s]+/).map(function(s){return s.trim();}).filter(Boolean); }
+// 1品目 × 1ルール の取扱可否を判定（品目側の個別設定が最優先）
+function _srCanHandle_(rule, sp, envRow){
+  var ov=(envRow && envRow.supOk) ? envRow.supOk[rule.maker] : undefined;
+  if(ov===false) return {ok:false, why:'この品目は扱い不可（個別設定）'};
+  if(ov===true)  return {ok:true,  why:'この品目は扱える（個別設定）'};
+  var sizes=_srListSplit_(rule.sizes);
+  if(sizes.length && sizes.indexOf(sp.size)<0) return {ok:false, why:(sp.size||'このサイズ')+'は取扱範囲外'};
+  var kinds=_srListSplit_(rule.kinds);
+  if(kinds.length && !kinds.some(function(k){ return String(sp.kind||'').indexOf(k)>=0; })) return {ok:false, why:(sp.kind||'この紙質')+'は取扱範囲外'};
+  var wt=parseInt(String(sp.wt||'').replace(/[^0-9]/g,''))||0;
+  var wMin=parseInt(rule.wtMin)||0, wMax=parseInt(rule.wtMax)||0;
+  if(wt && wMin && wt<wMin) return {ok:false, why:'斤量'+wt+'gは下限'+wMin+'g未満'};
+  if(wt && wMax && wt>wMax) return {ok:false, why:'斤量'+wt+'gは上限'+wMax+'g超'};
+  if(rule.ngWin && sp.win) return {ok:false, why:'窓付きは扱いなし'};
+  if(rule.ngFrameless && sp.frame) return {ok:false, why:'枠なしは扱いなし'};
+  if(rule.ngGlue && sp.glue) return {ok:false, why:'糊/テープ付きは扱いなし'};
+  return {ok:true, why:''};
+}
+// 発注先の自動判定: 優先順位（安い順）に見て、最初に扱えるメーカーを返す
+function _supplyEval_(envRow){
+  var sp=_envParseSp_((envRow&&envRow.sp)||'');
+  var rules=_srSorted_();
+  if(!rules.length) return {pick:null, all:[], noRules:true};
+  var all=rules.map(function(r){
+    var v=_srCanHandle_(r, sp, envRow);
+    return {maker:r.maker, ok:v.ok, why:v.why, priority:parseInt(r.priority)||99, rule:r};
+  });
+  var pick=null, skipped=[];
+  for(var i=0;i<all.length;i++){
+    if(all[i].ok){ pick=all[i]; break; }
+    skipped.push(all[i]);
+  }
+  return {pick:pick, all:all, skipped:skipped};
+}
+// 発注先セルの表示（封筒マスタの各行）
+function _supplyCellHtml_(envRow){
+  var ev=_supplyEval_(envRow);
+  if(ev.noRules) return '<span style="font-size:10px;color:#94a3b8" title="「🚚 仕入ルール」タブでメーカーの優先順位と取扱範囲を登録すると、ここに発注先が自動で出ます">ルール未登録</span>';
+  if(!ev.pick){
+    var r1=(ev.skipped[0]||{});
+    return '<span style="font-size:10px;color:#b91c1c;background:#fee2e2;border-radius:4px;padding:2px 6px;font-weight:700" title="どのメーカーも取扱範囲外です。'+_escAttr_(ev.all.map(function(x){return x.maker+':'+x.why;}).join(' / '))+'">⚠ 要確認</span>';
+  }
+  var tip=ev.skipped.length? ev.skipped.map(function(s){return s.maker+'は'+s.why;}).join('・')+' → '+ev.pick.maker : ev.pick.maker+'（最優先で取扱あり）';
+  var alt=ev.skipped.length
+    ? '<span style="font-size:9px;color:#b45309;display:block">'+_escDiff(ev.skipped[0].maker)+'✕ '+_escDiff(ev.skipped[0].why)+'</span>' : '';
+  return '<span title="'+_escAttr_(tip)+'"><span style="font-size:10.5px;font-weight:700;color:#065f46;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:4px;padding:1px 6px">'+_escDiff(ev.pick.maker)+'</span>'+alt+'</span>';
+}
+// 仕入ルールの追加・編集・削除
+function _srAdd_(){
+  var L=_makerList_();
+  var used=_supplyRules_().map(function(r){return r.maker;});
+  var cand=L.filter(function(m){return used.indexOf(m)<0;});
+  var r={ id:'SR'+Date.now()+'-'+Math.floor(Math.random()*100000), maker:(cand[0]||L[0]||''),
+    priority:(_supplyRules_().length+1), sizes:'', kinds:'', wtMin:'', wtMax:'',
+    ngWin:false, ngFrameless:false, ngGlue:false, lead:'', note:'', lastChecked:'', active:true };
+  r.updatedAt=r._updatedAt=new Date().toISOString();
+  _supplyRules_().push(r); saveDB(); renderSupplyRules(document.getElementById('master-panels'));
+}
+function _srEdit_(id, field, v){
+  var r=_supplyRules_().find(function(x){return x.id===id;}); if(!r) return;
+  r[field]=v; r.updatedAt=r._updatedAt=new Date().toISOString(); saveDB();
+}
+function _srEditRe_(id, field, v){ _srEdit_(id, field, v); renderSupplyRules(document.getElementById('master-panels')); }
+function _srDel_(id){
+  var r=_supplyRules_().find(function(x){return x.id===id;});
+  if(!confirm('仕入ルール「'+((r&&r.maker)||'')+'」を削除しますか？')) return;
+  DB.supplyRules=_supplyRules_().filter(function(x){return x.id!==id;});
+  saveDB(); renderSupplyRules(document.getElementById('master-panels'));
+}
+function _srMove_(id, dir){
+  var list=_supplyRules_();
+  var i=list.findIndex(function(x){return x.id===id;}); if(i<0) return;
+  var j=i+dir; if(j<0||j>=list.length) return;
+  var t=list[i]; list[i]=list[j]; list[j]=t;
+  list.forEach(function(r,k){ r.priority=k+1; r.updatedAt=r._updatedAt=new Date().toISOString(); });
+  saveDB(); renderSupplyRules(document.getElementById('master-panels'));
+}
+function _srCheckedNow_(id){
+  var d=new Date(); var ym=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  _srEdit_(id,'lastChecked',ym); renderSupplyRules(document.getElementById('master-panels'));
+}
+// 最終確認から6か月以上経っていれば「要確認」
+function _srStale_(ym){
+  if(!ym) return true;
+  var m=String(ym).match(/^(\d{4})-(\d{1,2})/); if(!m) return true;
+  var then=new Date(+m[1], (+m[2])-1, 1), now=new Date();
+  return ((now.getFullYear()-then.getFullYear())*12 + (now.getMonth()-then.getMonth())) >= 6;
+}
+function renderSupplyRules(mp){
+  if(!mp) return;
+  var L=_makerList_(), rules=_supplyRules_();
+  var sorted=rules.slice().sort(function(a,b){ return (parseInt(a.priority)||99)-(parseInt(b.priority)||99); });
+  // 全封筒品目に対する判定サマリー
+  var env=(DB.master&&DB.master.envelope)||[];
+  var byMaker={}, ng=0, noRule=0;
+  env.forEach(function(r){
+    var ev=_supplyEval_(r);
+    if(ev.noRules){ noRule++; return; }
+    if(!ev.pick){ ng++; return; }
+    byMaker[ev.pick.maker]=(byMaker[ev.pick.maker]||0)+1;
+  });
+  var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">🚚 仕入ルール（メーカー別の取扱範囲・優先順位）'
+    +'<button class="add-btn" onclick="_srAdd_()">＋ メーカーを追加</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportSupplyRulesCSV()">📤 CSV書き出し</button>'
+    +'</div>'
+    +'<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">'
+    +'💡 <b>上にあるメーカーから順に発注先を決めます</b>（＝安い順に並べてください。↑↓で入れ替え）。'
+    +'上のメーカーが<b>取扱範囲外</b>なら自動で次のメーカーになるので、毎回の相見積が不要になります。<br>'
+    +'💡 <b>取扱範囲は「空欄＝制限なし」</b>です。例: ムトウ＝サイズ「長3 角2」・紙質「クラフト ケント」・<b>窓付き不可</b>にすると、窓付きは自動でハートに回ります。<br>'
+    +'💡 個々の品目だけ例外がある場合は、封筒マスタの「発注先」欄のツールチップで理由を確認し、必要なら品目側で上書きできます（今後追加）。<br>'
+    +'🗓 <b>半年に1回は見直し</b>を。最終確認から6か月経つと「要確認」が出ます（確認したら「確認済にする」を押してください）。'
+    +'</div>';
+  // 判定サマリー
+  if(sorted.length){
+    html+='<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;padding:7px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">'
+      +'<span style="font-size:11px;font-weight:700;color:#334155">📦 封筒'+env.length+'件の発注先（このルールでの判定）:</span>';
+    Object.keys(byMaker).sort(function(a,b){return byMaker[b]-byMaker[a];}).forEach(function(k){
+      html+='<span style="font-size:10.5px;font-weight:700;color:#065f46;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:12px;padding:2px 9px">'+_escDiff(k)+' '+byMaker[k]+'</span>';
+    });
+    if(ng) html+='<span style="font-size:10.5px;font-weight:700;color:#b91c1c;background:#fee2e2;border:1px solid #fca5a5;border-radius:12px;padding:2px 9px" title="どのメーカーも取扱範囲外の品目。範囲を広げるか、品目を見直してください">⚠ 要確認 '+ng+'</span>';
+    html+='</div>';
+  }
+  html+='<div style="overflow-x:auto"><table class="m-tbl"><thead><tr>'
+    +'<th style="min-width:64px">優先</th>'
+    +'<th style="min-width:150px">メーカー</th>'
+    +'<th style="min-width:150px">サイズ <span style="font-weight:400;font-size:9px;color:#94a3b8">(空=全て)</span></th>'
+    +'<th style="min-width:170px">紙質 <span style="font-weight:400;font-size:9px;color:#94a3b8">(空=全て)</span></th>'
+    +'<th style="min-width:110px">斤量 下限〜上限</th>'
+    +'<th style="min-width:170px">扱えないもの</th>'
+    +'<th style="min-width:80px">納期</th>'
+    +'<th style="min-width:120px">最終確認</th>'
+    +'<th style="min-width:140px">備考</th>'
+    +'<th style="min-width:56px">状態</th><th class="dx"></th>'
+    +'</tr></thead><tbody>';
+  if(!sorted.length){
+    html+='<tr><td colspan="11" style="text-align:center;color:#aaa;padding:1.6rem">'
+      +'まだ仕入ルールがありません。「＋ メーカーを追加」で、<b>安い順</b>に並べて取扱範囲を入れてください<br>'
+      +'<span style="font-size:11px">例）1番目=ムトウユニパック（サイズ 長3 角2 / 窓付き不可）、2番目=ハート（制限なし）</span></td></tr>';
+  }
+  sorted.forEach(function(r,idx){
+    var stale=_srStale_(r.lastChecked);
+    html+='<tr'+(r.active===false?' style="opacity:.5"':'')+'>'
+      +'<td style="white-space:nowrap"><span style="font-size:12px;font-weight:800;color:#0f766e">'+(idx+1)+'</span>'
+        +'<button class="btn" style="font-size:10px;padding:1px 4px;margin-left:3px" title="上へ（優先度を上げる）" onclick="_srMove_(\''+r.id+'\',-1)">↑</button>'
+        +'<button class="btn" style="font-size:10px;padding:1px 4px" title="下へ" onclick="_srMove_(\''+r.id+'\',1)">↓</button></td>'
+      +'<td><input list="dl-sr-maker" value="'+_escAttr_(r.maker||'')+'" placeholder="メーカー名" style="width:100%;font-weight:700" onchange="_srEditRe_(\''+r.id+'\',\'maker\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(r.sizes||'')+'" placeholder="例: 長3 角2（空=全サイズ）" title="扱えるサイズ。空白またはカンマ区切り。空欄＝全サイズOK" style="width:100%" onchange="_srEditRe_(\''+r.id+'\',\'sizes\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(r.kinds||'')+'" placeholder="例: クラフト ケント（空=全紙質）" title="扱える紙質。部分一致で判定します（例「クラフト」でクラフトゴールドもOK）" style="width:100%" onchange="_srEditRe_(\''+r.id+'\',\'kinds\',this.value)"></td>'
+      +'<td style="white-space:nowrap"><input type="number" value="'+(r.wtMin||'')+'" placeholder="下限" style="width:46px" onchange="_srEditRe_(\''+r.id+'\',\'wtMin\',this.value)">〜<input type="number" value="'+(r.wtMax||'')+'" placeholder="上限" style="width:46px" onchange="_srEditRe_(\''+r.id+'\',\'wtMax\',this.value)">g</td>'
+      +'<td style="font-size:10px;white-space:nowrap">'
+        +'<label style="display:block"><input type="checkbox"'+(r.ngWin?' checked':'')+' style="width:auto" onchange="_srEditRe_(\''+r.id+'\',\'ngWin\',this.checked)">窓付き</label>'
+        +'<label style="display:block"><input type="checkbox"'+(r.ngFrameless?' checked':'')+' style="width:auto" onchange="_srEditRe_(\''+r.id+'\',\'ngFrameless\',this.checked)">枠なし</label>'
+        +'<label style="display:block"><input type="checkbox"'+(r.ngGlue?' checked':'')+' style="width:auto" onchange="_srEditRe_(\''+r.id+'\',\'ngGlue\',this.checked)">糊・テープ付き</label>'
+      +'</td>'
+      +'<td><input value="'+_escAttr_(r.lead||'')+'" placeholder="例: 3日" style="width:100%;font-size:11px" onchange="_srEdit_(\''+r.id+'\',\'lead\',this.value)"></td>'
+      +'<td style="white-space:nowrap"><input value="'+_escAttr_(r.lastChecked||'')+'" placeholder="2026-07" style="width:66px;font-size:11px'+(stale?';background:#fffbeb':'')+'" onchange="_srEditRe_(\''+r.id+'\',\'lastChecked\',this.value)">'
+        +(stale?'<span style="font-size:9px;color:#b45309;font-weight:700;margin-left:3px" title="最終確認から6か月以上たっています。単価・取扱範囲を確認してください">要確認</span>':'')
+        +'<button class="btn" style="font-size:9.5px;padding:1px 5px;margin-left:3px" title="今月の確認済みとして記録します" onclick="_srCheckedNow_(\''+r.id+'\')">確認済</button></td>'
+      +'<td><input value="'+_escAttr_(r.note||'')+'" placeholder="例: 基本ここ・安価" style="width:100%;font-size:11px" onchange="_srEdit_(\''+r.id+'\',\'note\',this.value)"></td>'
+      +'<td style="text-align:center"><span style="cursor:pointer;font-size:14px" title="'+(r.active===false?'停止中（判定に使いません）':'有効')+'" onclick="_srEditRe_(\''+r.id+'\',\'active\','+(r.active===false?'true':'false')+')">'+(r.active===false?'⬜':'✅')+'</span></td>'
+      +'<td class="dx"><button class="del-btn" onclick="_srDel_(\''+r.id+'\')">×</button></td>'
+      +'</tr>';
+  });
+  html+='</tbody></table></div>'
+    +'<datalist id="dl-sr-maker">'+L.map(function(m){return '<option value="'+_escAttr_(m)+'">';}).join('')+'</datalist>'
+    +'<div style="margin-top:10px"><button class="btn btn-p" style="font-size:12px;padding:5px 14px" onclick="saveDB();alert(\'保存しました\')">保存</button></div></div>';
+  mp.innerHTML=html;
+}
+function exportSupplyRulesCSV(){
+  var rules=_srSorted_();
+  if(!rules.length){ alert('仕入ルールが空です'); return; }
+  var out=[['優先','メーカー','サイズ','紙質','斤量下限','斤量上限','窓付き不可','枠なし不可','糊テープ不可','納期','最終確認','備考']];
+  rules.forEach(function(r,i){
+    out.push([i+1, r.maker||'', r.sizes||'', r.kinds||'', r.wtMin||'', r.wtMax||'',
+      r.ngWin?'✓':'', r.ngFrameless?'✓':'', r.ngGlue?'✓':'', r.lead||'', r.lastChecked||'', r.note||'']);
+  });
+  _downloadCSV_(out, '仕入ルール_'+_todayTag_()+'.csv');
 }
 // ═══ 仕入元メーカーの見える化（封筒・用紙 共通） ═══
 //   mk = メーカー／仕入元。指定の有無に関わらず「どこから買っているか」を常に持たせる。
