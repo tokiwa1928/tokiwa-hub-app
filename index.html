@@ -1598,6 +1598,7 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-prod" onclick="swMaster('prod',this)">製品名</button>
     <button class="pill" id="mc-intercoRates" onclick="swMaster('intercoRates',this)">会社間掛け率</button>
     <button class="pill" id="mc-outsourceVendors" onclick="swMaster('outsourceVendors',this)">外注先</button>
+    <button class="pill" id="mc-makerterms" onclick="swMaster('makerterms',this)" style="color:#b45309;border-color:#fcd34d;font-weight:700" title="メーカー別呼称の対訳（封筒・用紙）— 窓の号数はメーカーで違うので実寸で紐づけます。基準はハート表記">🏭 メーカー呼称</button>
     <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
     <button class="pill" id="mc-costref" onclick="swMaster('costref',this)" title="参考原価マスタ（作業別の最低料金・単価・原価率%。見積の指針用・別管理）">参考原価</button>
     <button class="pill" id="mc-tanka" onclick="swMaster('tanka',this)" style="color:#0369a1;border-color:#7dd3fc;font-weight:700" title="単価マスタ構築ツールの蓄積（得意先×品名×仕様の前回単価）を確認・修正">💴 単価マスタ</button>
@@ -3758,6 +3759,8 @@ let DB={
   artesoCases: [],      // アート・エス案件管理（専用台帳・全社同期）
   leases: [],           // リース・サブスク契約経費管理（全社同期・会社スコープ）
   calendarOrders: [],   // カレンダー受注台帳（全カテゴリ・全社同期）
+  makerTerms: [],       // メーカー別呼称の対訳（封筒/用紙。窓の号数がメーカーで異なるため実寸で紐づける）
+  makerList: [],        // 対訳表の列に出すメーカー名（既定はハート/ムトウユニパック/キングコーポレーション/山櫻/ヤマガタ）
   conf:{     // 会社設定
     name:'村山印刷有限会社',
     rep:'代表取締役 比留間 節子',
@@ -4097,7 +4100,7 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   if(!d.inquirySettings) d.inquirySettings={autoReply:true,autoReplyMessage:'',categories:['見積依頼','納品について','データ入稿','校正確認','クレーム','その他'],assignees:[]};
   if(!d.wikiArticles) d.wikiArticles=[];
   if(!d.templates) d.templates=[];
-  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
+  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
   // AAAA-1: マスター番号 backfill (起動時に既存データに割り当て)
   if(typeof _backfillMasterNos_ === 'function') _backfillMasterNos_();
   // 移行による変更を永続化（しないと次回リロードで元に戻り、フラグだけ立って再実行もされない）
@@ -4356,6 +4359,20 @@ async function loadFromCloud() {
     (Array.isArray(DB.leases)?DB.leases:[]).forEach(_lsTake);
     result.data.leases.forEach(_lsTake);
     DB.leases = _lsOrder.map(function(id){ return _lsById[id]; });
+  }
+
+  // メーカー別呼称の対訳（封筒/用紙・全社同期）— id単位で新しい方を採用
+  if (result.data.makerTerms) {
+    var _mtTs=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var _mtById={}, _mtOrder=[];
+    var _mtTake=function(r){ if(!r||!r.id) return; if(!(r.id in _mtById)){ _mtOrder.push(r.id); _mtById[r.id]=r; } else if(_mtTs(r)>_mtTs(_mtById[r.id])){ _mtById[r.id]=r; } };
+    (Array.isArray(DB.makerTerms)?DB.makerTerms:[]).forEach(_mtTake);
+    result.data.makerTerms.forEach(_mtTake);
+    DB.makerTerms = _mtOrder.map(function(id){ return _mtById[id]; });
+  }
+  // 対訳表の列（メーカー名）— 件数が多い側を採用（列の追加を消さない）
+  if (Array.isArray(result.data.makerList)) {
+    if(!Array.isArray(DB.makerList) || result.data.makerList.length >= DB.makerList.length) DB.makerList = result.data.makerList;
   }
 
   // カレンダー受注台帳（年度更新式・全カテゴリ）
@@ -4906,6 +4923,8 @@ async function saveToCloud() {
     outsourceOrders: DB.outsourceOrders || [],
     artesoCases: DB.artesoCases || [],
     leases: DB.leases || [],
+    makerTerms: DB.makerTerms || [],
+    makerList: DB.makerList || [],
     calendarOrders: DB.calendarOrders || [],
     calendarOrdersDeleted: (DB.calendarOrdersDeleted || []).slice(-2000),
     calendarOrdersDeletedSig: (DB.calendarOrdersDeletedSig || []).slice(-2000),
@@ -12326,28 +12345,31 @@ function _tankaDel_(i){
 }
 // 封筒マスターの「規格・仕様(sp)」を サイズ/種類(紙質)/斤量/窓/糊/貼り方/その他 に分解・再構成
 //   spは見積の表示専用なので細列化しても照合は不変。封筒名(nm)は下の _envAutoName_ で自動生成する
-//   実データの並び: サイズ, 糊, 窓, 紙質+斤量g, 貼り方, その他  (例: 長3,スチック付,ケント80g,横貼)
+//   実データの並び: サイズ, 糊, 窓, 紙質+斤量g, 貼り方, 郵便枠, その他  (例: 長3,スチック付,ケント80g,横貼)
+//   郵便枠(frame)は「空欄＝枠あり(標準)／枠なし」の運用。他の列(空欄＝無し)と逆なので選択式にしている
 function _envParseSp_(sp){
   var toks=String(sp||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
   var size=toks.length?toks.shift():'';
-  var kind='', wt='', win='', glue='', paste='', opts=[];
+  var kind='', wt='', win='', glue='', paste='', frame='', opts=[];
   toks.forEach(function(tk){
     var m=tk.match(/^(.*?)(\d+)\s*g$/);   // 紙質+斤量 (例: クラフト50g / SCパステルカラー80g)
     if(m && kind===''){ kind=m[1].trim(); wt=m[2]+'g'; return; }
     if(!glue && /スチック|アドヘヤ|グラシン|両面テープ|口糊|のり付/.test(tk)){ glue=tk; return; }
-    if(!win  && /窓|枠なし/.test(tk)){ win=tk; return; }
+    if(!frame && /枠/.test(tk)){ frame=tk; return; }        // 郵便枠（枠なし 等）— 窓より先に判定
+    if(!win  && /窓/.test(tk)){ win=tk; return; }
     if(!paste && /貼/.test(tk)){ paste=tk; return; }
     opts.push(tk);
   });
-  return { size:size, kind:kind, wt:wt, win:win, glue:glue, paste:paste, opt:opts.join('、') };
+  return { size:size, kind:kind, wt:wt, win:win, glue:glue, paste:paste, frame:frame, opt:opts.join('、') };
 }
-function _envJoinSp_(size,kind,wt,win,glue,paste,opt){
+function _envJoinSp_(size,kind,wt,win,glue,paste,frame,opt){
   size=String(size||'').trim(); kind=String(kind||'').trim(); wt=String(wt||'').trim();
   if(/^\d+$/.test(wt)) wt=wt+'g';   // 数字のみは g を補う
   var pre=[], suf=[];
   var g=String(glue||'').trim();  if(g) pre.push(g);                       // 糊は紙質の前（実データ準拠）
-  var w=String(win||'').trim();   if(w){ (/^セロ窓|^窓/.test(w)?pre:suf).push(w); } // セロ窓は前・枠なしは後
+  var w=String(win||'').trim();   if(w){ (/^セロ窓|^窓/.test(w)?pre:suf).push(w); } // セロ窓は前
   var p=String(paste||'').trim(); if(p) suf.push(p);                        // 貼り方は後
+  var f=String(frame||'').trim(); if(f) suf.push(f);                        // 郵便枠(枠なし)は後
   String(opt||'').split(/[、,]/).map(function(s){return s.trim();}).filter(Boolean).forEach(function(o){ suf.push(o); });
   var parts=[]; if(size)parts.push(size);
   pre.forEach(function(x){parts.push(x);});
@@ -12361,7 +12383,7 @@ function _envJoinSp_(size,kind,wt,win,glue,paste,opt){
 //   ・紙質＋斤量は g を付けない (クラフト70)
 //   ・枠なし・貼り方・その他は後ろに空白区切りで付ける
 //   例) 長3 クラフト50 / 長3スチック ケント80 横貼 / 長3窓 クラフトゴールド70 / 洋長3 クラフト85 枠なし
-function _envAutoName_(size,kind,wt,win,glue,paste,opt){
+function _envAutoName_(size,kind,wt,win,glue,paste,frame,opt){
   size=String(size||'').trim(); kind=String(kind||'').trim();
   var wtNum=String(wt||'').replace(/\s*g\s*$/i,'').trim();   // nm は g なし
   var pre='', suf=[];
@@ -12371,8 +12393,9 @@ function _envAutoName_(size,kind,wt,win,glue,paste,opt){
   else if(g) suf.push(g);
   var w=String(win||'').trim();
   if(/^セロ窓|^窓/.test(w)) pre+='窓';
-  else if(w) suf.push(w);                                    // 枠なし 等
+  else if(w) suf.push(w);
   var p=String(paste||'').trim(); if(p) suf.push(p);
+  var f=String(frame||'').trim(); if(f) suf.push(f);          // 郵便枠なし は後置（枠ありは書かない）
   String(opt||'').split(/[、,]/).map(function(s){return s.trim();}).filter(Boolean).forEach(function(o){ suf.push(o); });
   var head=size+pre, body=(kind+wtNum).trim();
   var nm=[head,body].filter(Boolean).join(' ');
@@ -12381,10 +12404,10 @@ function _envAutoName_(size,kind,wt,win,glue,paste,opt){
 function _envSpFromRow_(oi, el){
   var tr=el.closest('tr'); if(!tr) return;
   var g=function(c){ var i=tr.querySelector('.'+c); return i?i.value:''; };
-  var size=g('env-sz'), kind=g('env-kd'), wt=g('env-wt'), win=g('env-win'), glue=g('env-glue'), paste=g('env-paste'), opt=g('env-op');
-  updateMasterField('envelope', oi, 'sp', _envJoinSp_(size,kind,wt,win,glue,paste,opt));
+  var size=g('env-sz'), kind=g('env-kd'), wt=g('env-wt'), win=g('env-win'), glue=g('env-glue'), paste=g('env-paste'), frame=g('env-frame'), opt=g('env-op');
+  updateMasterField('envelope', oi, 'sp', _envJoinSp_(size,kind,wt,win,glue,paste,frame,opt));
   // 封筒名は自動生成（サイズ・紙質・斤量が揃っている行のみ更新）
-  var nm=_envAutoName_(size,kind,wt,win,glue,paste,opt);
+  var nm=_envAutoName_(size,kind,wt,win,glue,paste,frame,opt);
   if(nm.trim()){
     updateMasterField('envelope', oi, 'nm', nm);
     var nmCell=tr.querySelector('.env-nm'); if(nmCell) nmCell.value=nm;
@@ -12397,7 +12420,7 @@ function _envRebuildAllNames_(){
   var diffs=[];
   arr.forEach(function(r){
     var s=_envParseSp_(r.sp||'');
-    var nm=_envAutoName_(s.size,s.kind,s.wt,s.win,s.glue,s.paste,s.opt);
+    var nm=_envAutoName_(s.size,s.kind,s.wt,s.win,s.glue,s.paste,s.frame,s.opt);
     if(nm.trim() && nm!==(r.nm||'')) diffs.push({r:r, from:(r.nm||''), to:nm});
   });
   if(!diffs.length){ alert('✅ 封筒名はすべて組み合わせと一致しています（変更なし）'); return; }
@@ -12426,6 +12449,10 @@ function renderMaster(id){
   }
   if(id==='costref'){
     renderCostRefMaster(mp);
+    return;
+  }
+  if(id==='makerterms'){
+    renderMakerTerms(mp);
     return;
   }
   if(id==='stock'){
@@ -12575,20 +12602,23 @@ function renderMaster(id){
     html+='</tbody></table></div>';
   } else if(id==='envelope'){
     // 既存データから候補（datalist）を収集 — 窓・糊/テープ・貼り方・紙質はメーカー表記が混ざるため選択式＋自由入力
-    const _envCand={size:{},kind:{},wt:{},win:{},glue:{},paste:{}};
+    const _envCand={size:{},kind:{},wt:{},win:{},glue:{},paste:{},frame:{}};
     (DB.master.envelope||[]).forEach(function(r){
       var s=_envParseSp_(r.sp||'');
       if(s.size)_envCand.size[s.size]=1; if(s.kind)_envCand.kind[s.kind]=1; if(s.wt)_envCand.wt[s.wt]=1;
       if(s.win)_envCand.win[s.win]=1; if(s.glue)_envCand.glue[s.glue]=1; if(s.paste)_envCand.paste[s.paste]=1;
+      if(s.frame)_envCand.frame[s.frame]=1;
     });
     // 実務でよく使う候補を補完（空白＝無しの扱い）
-    ['セロ窓1号','セロ窓2号','セロ窓3号','枠なし'].forEach(function(v){_envCand.win[v]=1;});
+    ['セロ窓1号','セロ窓2号','セロ窓3号'].forEach(function(v){_envCand.win[v]=1;});
     ['スチック付','テープスチック付','アドヘヤ付','グラシン付'].forEach(function(v){_envCand.glue[v]=1;});
     ['横貼','センター貼','カマス貼','ダイヤ貼'].forEach(function(v){_envCand.paste[v]=1;});
     const _dl=function(key){ return Object.keys(_envCand[key]).sort().map(function(v){return '<option value="'+_escAttr_(v)+'">';}).join(''); };
     html+=`<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#f9f9f7;border-radius:6px">
-      💡 <b>封筒名は自動生成</b>です（サイズ・紙質・斤量・窓・糊/テープ・貼り方の組み合わせから作ります）。各列を変えると封筒名も自動で更新されます。<br>
-      💡 <b>窓・糊/テープ・貼り方は空欄＝「無し」</b>です。欄をクリックすると候補が出ます（一覧にない呼び方は直接入力できます）。
+      💡 <b>封筒名は自動生成</b>です（サイズ・紙質・斤量・窓・糊/テープ・貼り方・郵便枠の組み合わせから作ります）。各列を変えると封筒名も自動で更新されます。<br>
+      💡 <b>窓・糊/テープ・貼り方は空欄＝「無し」</b>です。欄をクリックすると候補が出ます（一覧にない呼び方は直接入力できます）。<br>
+      💡 <b>郵便枠は「枠あり(標準)」が既定</b>で、名前には出ません。枠なしの商品だけ「枠なし」を選んでください。<br>
+      🏭 呼び名は<b>ハートの表記を基準</b>にしています。メーカーで呼称が違う場合は「メーカー呼称」タブの対訳表で確認してください。
       <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:8px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="_envRebuildAllNames_()" title="全行の封筒名を、いまの組み合わせから作り直します（手入力で崩れた名前を揃えます）">🔄 封筒名を一括で作り直す</button>
     </div>
     <datalist id="dl-env-size">${_dl('size')}</datalist><datalist id="dl-env-kind">${_dl('kind')}</datalist>
@@ -12602,12 +12632,13 @@ function renderMaster(id){
       <th style="min-width:104px">窓</th>
       <th style="min-width:118px">糊・テープ</th>
       <th style="min-width:96px">貼り方</th>
+      <th style="min-width:98px">郵便枠</th>
       <th style="min-width:96px">その他</th>
       <th style="text-align:right;min-width:76px">単価（円）</th>
       <th class="dx"></th>
     </tr></thead><tbody>`;
     data.forEach((r,i)=>{const oi=DB.master.envelope.indexOf(r); const _sp=_envParseSp_(r.sp||'');
-      const _autoNm=_envAutoName_(_sp.size,_sp.kind,_sp.wt,_sp.win,_sp.glue,_sp.paste,_sp.opt);
+      const _autoNm=_envAutoName_(_sp.size,_sp.kind,_sp.wt,_sp.win,_sp.glue,_sp.paste,_sp.frame,_sp.opt);
       const _mismatch=(_autoNm.trim() && _autoNm!==(r.nm||''));
       html+=`<tr>
         <td><input class="env-nm" type="text" readonly value="${(r.nm||'').replace(/"/g,'&quot;')}" title="${_mismatch?('組み合わせからは「'+_autoNm.replace(/"/g,'&quot;')+'」になります（🔄 一括で作り直すと揃います）'):'組み合わせから自動生成された封筒名です'}" style="width:100%;background:${_mismatch?'#fdf6e8':'#f6f6f4'};color:#333;font-weight:600;cursor:not-allowed"></td>
@@ -12617,6 +12648,11 @@ function renderMaster(id){
         <td><input class="env-win" list="dl-env-win" type="text" value="${_sp.win.replace(/"/g,'&quot;')}" placeholder="なし" title="空欄＝窓なし。例: セロ窓1号 / 枠なし" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
         <td><input class="env-glue" list="dl-env-glue" type="text" value="${_sp.glue.replace(/"/g,'&quot;')}" placeholder="なし" title="空欄＝糊なし。例: スチック付 / テープスチック付" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
         <td><input class="env-paste" list="dl-env-paste" type="text" value="${_sp.paste.replace(/"/g,'&quot;')}" placeholder="なし" title="空欄＝指定なし。例: 横貼 / センター貼 / カマス貼" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><select class="env-frame" title="郵便枠（赤枠）の有無。空欄＝枠あり（標準・名前には出ません）" style="width:100%;font-size:11px${_sp.frame?';color:#b45309;font-weight:700':''}" onchange="_envSpFromRow_(${oi},this)">
+          <option value=""${!_sp.frame?' selected':''}>枠あり（標準）</option>
+          <option value="枠なし"${_sp.frame==='枠なし'?' selected':''}>枠なし</option>
+          ${(_sp.frame&&_sp.frame!=='枠なし')?`<option value="${_sp.frame.replace(/"/g,'&quot;')}" selected>${_sp.frame}</option>`:''}
+        </select></td>
         <td><input class="env-op" type="text" value="${_sp.opt.replace(/"/g,'&quot;')}" placeholder="なし" title="上記以外の加工（読点「、」区切り）" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
         <td><input class="r" type="number" value="${r.p!=null?r.p:''}" style="width:100%" onchange="updateMasterField('envelope',${oi},'p',this.value?parseFloat(this.value):null)"></td>
         <td class="dx" style="white-space:nowrap">${_priceHistBtn_('envelope',oi)}${MOVE_BTNS('envelope',oi)}<button class="del-btn" onclick="if(confirm('「${escQ(r.nm||'')}」を削除しますか?')){DB.master.envelope.splice(${oi},1);renderMaster('envelope')}">×</button></td>
@@ -13085,6 +13121,135 @@ function addIntercoRate(){
   renderIntercoRates(document.getElementById('master-panels'));
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🏭 メーカー別呼称の対訳（封筒/用紙）
+//   目的: メーカーで色・テープ・窓の呼び名が変わるため、誰でも迷わず外注できるように横並びで持つ。
+//   ⚠️ 窓は「ハート1号 = ムトウ3号」のように号数がズレるので、正は【実寸(mm)】。号数は各社の欄に書く。
+//   DB.makerTerms = [{id, cat(窓/テープ・糊/色・紙質/サイズ/その他), std(自社呼称), spec(実寸・仕様), m:{メーカー名:呼称}, note, updatedAt}]
+//   DB.makerList  = ['ハート','ムトウユニパック',...]（列＝メーカー。追加・削除できる）
+// ═══════════════════════════════════════════════════════════
+var MAKER_LIST_DEFAULT = ['ハート','ムトウユニパック','キングコーポレーション','山櫻','ヤマガタ'];
+var MAKER_TERM_CATS = ['窓','郵便枠','テープ・糊','色・紙質','サイズ','貼り方','用紙','その他'];
+function _makerList_(){
+  if(!Array.isArray(DB.makerList) || !DB.makerList.length) DB.makerList = MAKER_LIST_DEFAULT.slice();
+  return DB.makerList;
+}
+function _makerTerms_(){ if(!Array.isArray(DB.makerTerms)) DB.makerTerms=[]; return DB.makerTerms; }
+function _mtStamp_(r){ r.updatedAt=new Date().toISOString(); r._updatedAt=r.updatedAt; }
+function _mtAdd_(cat){
+  var r={ id:'MT'+Date.now()+'-'+Math.floor(Math.random()*100000), cat:cat||'窓', std:'', spec:'', m:{}, note:'' };
+  _mtStamp_(r); _makerTerms_().unshift(r);
+  saveDB(); renderMakerTerms(document.getElementById('master-panels'));
+}
+function _mtEdit_(id, field, v){
+  var r=_makerTerms_().find(function(x){return x.id===id;}); if(!r) return;
+  r[field]=v; _mtStamp_(r); saveDB();
+}
+function _mtEditMaker_(id, maker, v){
+  var r=_makerTerms_().find(function(x){return x.id===id;}); if(!r) return;
+  r.m=r.m||{}; r.m[maker]=v; _mtStamp_(r); saveDB();
+}
+function _mtDel_(id){
+  var r=_makerTerms_().find(function(x){return x.id===id;});
+  if(!confirm('「'+((r&&r.std)||'この行')+'」を削除しますか？')) return;
+  DB.makerTerms=_makerTerms_().filter(function(x){return x.id!==id;});
+  saveDB(); renderMakerTerms(document.getElementById('master-panels'));
+}
+function _mtAddMaker_(){
+  var nm=prompt('追加するメーカー名を入力してください（例: 寿堂）');
+  if(!nm) return; nm=nm.trim(); if(!nm) return;
+  var L=_makerList_();
+  if(L.indexOf(nm)>=0){ alert('「'+nm+'」はすでにあります'); return; }
+  L.push(nm); saveDB(); renderMakerTerms(document.getElementById('master-panels'));
+}
+function _mtDelMaker_(nm){
+  if(!confirm('メーカー列「'+nm+'」を削除しますか？\n（各行に入力したこのメーカーの呼称も消えます）')) return;
+  DB.makerList=_makerList_().filter(function(x){return x!==nm;});
+  _makerTerms_().forEach(function(r){ if(r.m && (nm in r.m)){ delete r.m[nm]; _mtStamp_(r); } });
+  saveDB(); renderMakerTerms(document.getElementById('master-panels'));
+}
+// 窓の号数など、メーカー間で同じ呼称が別物を指す組み合わせを警告する
+function _mtConflicts_(){
+  var byMaker={}, warn=[];
+  _makerTerms_().forEach(function(r){
+    if(r.cat!=='窓') return;
+    Object.keys(r.m||{}).forEach(function(mk){
+      var v=String(r.m[mk]||'').trim(); if(!v) return;
+      var k=mk+'|'+v;
+      if(byMaker[k] && byMaker[k]!==r.std) warn.push(mk+'の「'+v+'」が複数の自社呼称に使われています（'+byMaker[k]+' / '+r.std+'）');
+      byMaker[k]=r.std;
+    });
+  });
+  return warn;
+}
+function renderMakerTerms(mp){
+  if(!mp) return;
+  var L=_makerList_(), rows=_makerTerms_();
+  var q=((document.getElementById('m-q-maker')||{}).value||'').toLowerCase().trim();
+  var catF=window._mtCatF_||'';
+  var view=rows.filter(function(r){
+    if(catF && r.cat!==catF) return false;
+    if(!q) return true;
+    var hay=(r.std||'')+' '+(r.spec||'')+' '+(r.note||'')+' '+Object.keys(r.m||{}).map(function(k){return k+' '+r.m[k];}).join(' ');
+    return hay.toLowerCase().indexOf(q)>=0;
+  });
+  var warns=_mtConflicts_();
+  var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">🏭 メーカー別呼称の対訳（封筒・用紙）'
+    +'<select onchange="window._mtCatF_=this.value;renderMakerTerms(document.getElementById(\'master-panels\'))" style="width:auto;font-size:11px;padding:3px 6px">'
+    +'<option value="">すべての区分</option>'+MAKER_TERM_CATS.map(function(c){return '<option'+(catF===c?' selected':'')+'>'+c+'</option>';}).join('')+'</select>'
+    +'<input id="m-q-maker" placeholder="自社呼称・実寸・各社の呼び名で検索…" style="width:230px;font-size:12px;padding:3px 6px" oninput="renderMakerTerms(document.getElementById(\'master-panels\'))" value="'+_escAttr_(q)+'">'
+    +'<button class="add-btn" onclick="_mtAdd_(\''+(catF||'窓')+'\')">＋ 行を追加</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_mtAddMaker_()" title="対訳表の列にメーカーを追加します">＋ メーカー列</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportMakerTermsCSV()" title="対訳表をCSVで書き出し（外注先に渡す一覧にも使えます）">📤 CSV書き出し</button>'
+    +'<span style="font-size:11px;color:#888;margin-left:auto">'+view.length+' / '+rows.length+' 件</span>'
+    +'</div>'
+    +'<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px">'
+    +'⚠️ <b>窓の号数はメーカーで違います</b>（例: ハート「1号」＝ムトウ「3号」）。正は <b>実寸(mm)</b> です。発注時は必ず実寸で確認し、各社の欄の呼び名で伝えてください。<br>'
+    +'🏭 <b>自社呼称は「ハート」の表記を基準</b>にしています（封筒マスタの窓・テープ欄と同じ言葉にしておくと繋がります）。ハート列が空のときは自社呼称と同じ意味です。<br>'
+    +'💡 空欄は「その社では扱いなし／要確認」。<b>用紙をメーカー指定で発注するときは、必ずそのメーカーの呼称</b>で伝えてください（区分「用紙」に登録しておくと引けます）。'
+    +'</div>';
+  if(warns.length){
+    html+='<div style="font-size:11px;color:#b91c1c;background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;padding:7px 10px;margin-bottom:6px">🚩 呼称の重複チェック<br>'+warns.map(function(w){return '・'+_escDiff(w);}).join('<br>')+'</div>';
+  }
+  html+='<div style="overflow-x:auto"><table class="m-tbl"><thead><tr>'
+    +'<th style="min-width:92px">区分</th>'
+    +'<th style="min-width:130px">自社呼称</th>'
+    +'<th style="min-width:150px">実寸・仕様 <span style="font-weight:400;font-size:9px;color:#94a3b8">(これが正)</span></th>'
+    + L.map(function(mk){ var isBase=(mk==='ハート');
+        return '<th style="min-width:120px;white-space:nowrap'+(isBase?';background:#78350f !important':'')+'">'+_escDiff(mk)
+        +(isBase?' <span style="font-size:9px;font-weight:700;background:#fcd34d;color:#78350f;border-radius:4px;padding:1px 5px" title="自社呼称はハートの表記に合わせています（基準）">基準</span>':'')
+        +'<button class="del-btn" style="font-size:10px;margin-left:4px" title="このメーカー列を削除" onclick="_mtDelMaker_(\''+String(mk).replace(/'/g,"\\'")+'\')">×</button></th>'; }).join('')
+    +'<th style="min-width:130px">備考</th><th class="dx"></th>'
+    +'</tr></thead><tbody>';
+  if(!view.length){
+    html+='<tr><td colspan="'+(L.length+5)+'" style="text-align:center;color:#aaa;padding:1.6rem">'
+      +(q||catF?'該当なし':'まだ登録がありません。「＋ 行を追加」で、窓・テープ・色の呼び名をメーカーごとに並べて登録してください')+'</td></tr>';
+  }
+  view.forEach(function(r){
+    html+='<tr>'
+      +'<td><select style="width:100%;font-size:11px" onchange="_mtEdit_(\''+r.id+'\',\'cat\',this.value);renderMakerTerms(document.getElementById(\'master-panels\'))">'
+        +MAKER_TERM_CATS.map(function(c){return '<option'+(r.cat===c?' selected':'')+'>'+c+'</option>';}).join('')+'</select></td>'
+      +'<td><input value="'+_escAttr_(r.std||'')+'" placeholder="例: セロ窓1号" style="width:100%;font-weight:600" onchange="_mtEdit_(\''+r.id+'\',\'std\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(r.spec||'')+'" placeholder="例: 窓 90×45mm 左下15mm" title="メーカー間で号数がズレるため、実寸(mm)や位置を必ず入れてください" style="width:100%;background:#f0fdf4" onchange="_mtEdit_(\''+r.id+'\',\'spec\',this.value)"></td>'
+      + L.map(function(mk){ var v=(r.m&&r.m[mk])||'';
+          return '<td><input value="'+_escAttr_(v)+'" placeholder="—" title="'+_escAttr_(mk)+'での呼び名" style="width:100%'+(v?'':';background:#fafafa')+'" onchange="_mtEditMaker_(\''+r.id+'\',\''+String(mk).replace(/'/g,"\\'")+'\',this.value)"></td>'; }).join('')
+      +'<td><input value="'+_escAttr_(r.note||'')+'" placeholder="注意点・在庫等" style="width:100%" onchange="_mtEdit_(\''+r.id+'\',\'note\',this.value)"></td>'
+      +'<td class="dx"><button class="del-btn" onclick="_mtDel_(\''+r.id+'\')">×</button></td>'
+      +'</tr>';
+  });
+  html+='</tbody></table></div>'
+    +'<div style="margin-top:10px"><button class="btn btn-p" style="font-size:12px;padding:5px 14px" onclick="saveDB();alert(\'保存しました\')">保存</button></div></div>';
+  mp.innerHTML=html;
+}
+function exportMakerTermsCSV(){
+  var L=_makerList_(), rows=_makerTerms_();
+  if(!rows.length){ alert('対訳表が空です'); return; }
+  var out=[['区分','自社呼称','実寸・仕様(正)'].concat(L).concat(['備考'])];
+  rows.forEach(function(r){
+    out.push([r.cat||'', r.std||'', r.spec||''].concat(L.map(function(mk){ return (r.m&&r.m[mk])||''; })).concat([r.note||'']));
+  });
+  _downloadCSV_(out, 'メーカー別呼称対訳_'+_todayTag_()+'.csv');
+}
 // ═══ マスター CSV 書き出し（共通） ═══
 function _csvCell_(v){ v=(v==null?'':String(v)); if(/[",\n\r]/.test(v)){ v='"'+v.replace(/"/g,'""')+'"'; } return v; }
 function _downloadCSV_(rows, filename){
