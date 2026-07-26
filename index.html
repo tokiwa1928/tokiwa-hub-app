@@ -12324,29 +12324,88 @@ function _tankaDel_(i){
   if(!confirm('この単価マスタ行を削除しますか？')) return;
   var st=_tankaLoad_(); if(st.master) st.master.splice(i,1); _tankaSave_(st); renderMaster('tanka');
 }
-// 封筒マスターの「規格・仕様(sp)」を サイズ/種類(紙質)/斤量/加工 に分解・再構成（spは見積の表示専用なので細列化しても照合は不変）
+// 封筒マスターの「規格・仕様(sp)」を サイズ/種類(紙質)/斤量/窓/糊/貼り方/その他 に分解・再構成
+//   spは見積の表示専用なので細列化しても照合は不変。封筒名(nm)は下の _envAutoName_ で自動生成する
+//   実データの並び: サイズ, 糊, 窓, 紙質+斤量g, 貼り方, その他  (例: 長3,スチック付,ケント80g,横貼)
 function _envParseSp_(sp){
   var toks=String(sp||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
   var size=toks.length?toks.shift():'';
-  var kind='', wt='', opts=[];
+  var kind='', wt='', win='', glue='', paste='', opts=[];
   toks.forEach(function(tk){
     var m=tk.match(/^(.*?)(\d+)\s*g$/);   // 紙質+斤量 (例: クラフト50g / SCパステルカラー80g)
-    if(m && kind===''){ kind=m[1].trim(); wt=m[2]+'g'; }
-    else opts.push(tk);
+    if(m && kind===''){ kind=m[1].trim(); wt=m[2]+'g'; return; }
+    if(!glue && /スチック|アドヘヤ|グラシン|両面テープ|口糊|のり付/.test(tk)){ glue=tk; return; }
+    if(!win  && /窓|枠なし/.test(tk)){ win=tk; return; }
+    if(!paste && /貼/.test(tk)){ paste=tk; return; }
+    opts.push(tk);
   });
-  return { size:size, kind:kind, wt:wt, opt:opts.join('、') };
+  return { size:size, kind:kind, wt:wt, win:win, glue:glue, paste:paste, opt:opts.join('、') };
 }
-function _envJoinSp_(size,kind,wt,opt){
+function _envJoinSp_(size,kind,wt,win,glue,paste,opt){
   size=String(size||'').trim(); kind=String(kind||'').trim(); wt=String(wt||'').trim();
   if(/^\d+$/.test(wt)) wt=wt+'g';   // 数字のみは g を補う
-  var opts=String(opt||'').split(/[、,]/).map(function(s){return s.trim();}).filter(Boolean);
-  var parts=[]; if(size)parts.push(size); var kw=kind+wt; if(kw)parts.push(kw); opts.forEach(function(o){parts.push(o);});
+  var pre=[], suf=[];
+  var g=String(glue||'').trim();  if(g) pre.push(g);                       // 糊は紙質の前（実データ準拠）
+  var w=String(win||'').trim();   if(w){ (/^セロ窓|^窓/.test(w)?pre:suf).push(w); } // セロ窓は前・枠なしは後
+  var p=String(paste||'').trim(); if(p) suf.push(p);                        // 貼り方は後
+  String(opt||'').split(/[、,]/).map(function(s){return s.trim();}).filter(Boolean).forEach(function(o){ suf.push(o); });
+  var parts=[]; if(size)parts.push(size);
+  pre.forEach(function(x){parts.push(x);});
+  var kw=kind+wt; if(kw)parts.push(kw);
+  suf.forEach(function(x){parts.push(x);});
   return parts.join(',');
+}
+// 封筒名を組み合わせから自動生成（手入力による不整合を防ぐ）
+//   既存110件と完全一致する規則:
+//   ・糊/セロ窓は「サイズ」に連結して短縮 (スチック付→長3スチック / セロ窓1号→長3窓)
+//   ・紙質＋斤量は g を付けない (クラフト70)
+//   ・枠なし・貼り方・その他は後ろに空白区切りで付ける
+//   例) 長3 クラフト50 / 長3スチック ケント80 横貼 / 長3窓 クラフトゴールド70 / 洋長3 クラフト85 枠なし
+function _envAutoName_(size,kind,wt,win,glue,paste,opt){
+  size=String(size||'').trim(); kind=String(kind||'').trim();
+  var wtNum=String(wt||'').replace(/\s*g\s*$/i,'').trim();   // nm は g なし
+  var pre='', suf=[];
+  var g=String(glue||'').trim();
+  if(/テープスチック/.test(g)) pre+='テープスチック';
+  else if(/スチック/.test(g)) pre+='スチック';
+  else if(g) suf.push(g);
+  var w=String(win||'').trim();
+  if(/^セロ窓|^窓/.test(w)) pre+='窓';
+  else if(w) suf.push(w);                                    // 枠なし 等
+  var p=String(paste||'').trim(); if(p) suf.push(p);
+  String(opt||'').split(/[、,]/).map(function(s){return s.trim();}).filter(Boolean).forEach(function(o){ suf.push(o); });
+  var head=size+pre, body=(kind+wtNum).trim();
+  var nm=[head,body].filter(Boolean).join(' ');
+  return nm + (suf.length? ' '+suf.join(' ') : '');
 }
 function _envSpFromRow_(oi, el){
   var tr=el.closest('tr'); if(!tr) return;
   var g=function(c){ var i=tr.querySelector('.'+c); return i?i.value:''; };
-  updateMasterField('envelope', oi, 'sp', _envJoinSp_(g('env-sz'),g('env-kd'),g('env-wt'),g('env-op')));
+  var size=g('env-sz'), kind=g('env-kd'), wt=g('env-wt'), win=g('env-win'), glue=g('env-glue'), paste=g('env-paste'), opt=g('env-op');
+  updateMasterField('envelope', oi, 'sp', _envJoinSp_(size,kind,wt,win,glue,paste,opt));
+  // 封筒名は自動生成（サイズ・紙質・斤量が揃っている行のみ更新）
+  var nm=_envAutoName_(size,kind,wt,win,glue,paste,opt);
+  if(nm.trim()){
+    updateMasterField('envelope', oi, 'nm', nm);
+    var nmCell=tr.querySelector('.env-nm'); if(nmCell) nmCell.value=nm;
+  }
+}
+// 全行の封筒名を組み合わせから作り直す（手入力で崩れた名前を一括で揃える）
+function _envRebuildAllNames_(){
+  var arr=(DB.master&&DB.master.envelope)||[];
+  if(!arr.length){ alert('封筒マスターが空です'); return; }
+  var diffs=[];
+  arr.forEach(function(r){
+    var s=_envParseSp_(r.sp||'');
+    var nm=_envAutoName_(s.size,s.kind,s.wt,s.win,s.glue,s.paste,s.opt);
+    if(nm.trim() && nm!==(r.nm||'')) diffs.push({r:r, from:(r.nm||''), to:nm});
+  });
+  if(!diffs.length){ alert('✅ 封筒名はすべて組み合わせと一致しています（変更なし）'); return; }
+  var prev=diffs.slice(0,12).map(function(d){return '・'+(d.from||'(空)')+'  →  '+d.to;}).join('\n');
+  if(!confirm('🔄 封筒名を組み合わせから作り直します。\n\n変更: '+diffs.length+' / '+arr.length+' 件\n\n'+prev+(diffs.length>12?'\n…他 '+(diffs.length-12)+' 件':'')+'\n\n実行しますか？')) return;
+  diffs.forEach(function(d){ d.r.nm=d.to; });
+  saveDB(); renderMaster('envelope');
+  alert('✅ '+diffs.length+' 件の封筒名を自動生成し直しました');
 }
 function renderMaster(id){
   const mp=document.getElementById('master-panels');if(!mp)return;
@@ -12515,19 +12574,55 @@ function renderMaster(id){
     if(filteredData.length>200)html+=`<tr><td colspan="12" style="padding:6px;color:#aaa;font-size:11px;text-align:center">※ 検索で絞り込んでください（残り${filteredData.length-200}件）</td></tr>`;
     html+='</tbody></table></div>';
   } else if(id==='envelope'){
-    html+=`<table class="m-tbl"><thead><tr><th>封筒名</th><th style="width:78px">サイズ</th><th>種類（紙質）</th><th style="width:64px">斤量</th><th style="width:132px">加工・オプション</th><th style="text-align:right;width:80px">単価（円）</th><th class="dx"></th></tr></thead><tbody>`;
+    // 既存データから候補（datalist）を収集 — 窓・糊/テープ・貼り方・紙質はメーカー表記が混ざるため選択式＋自由入力
+    const _envCand={size:{},kind:{},wt:{},win:{},glue:{},paste:{}};
+    (DB.master.envelope||[]).forEach(function(r){
+      var s=_envParseSp_(r.sp||'');
+      if(s.size)_envCand.size[s.size]=1; if(s.kind)_envCand.kind[s.kind]=1; if(s.wt)_envCand.wt[s.wt]=1;
+      if(s.win)_envCand.win[s.win]=1; if(s.glue)_envCand.glue[s.glue]=1; if(s.paste)_envCand.paste[s.paste]=1;
+    });
+    // 実務でよく使う候補を補完（空白＝無しの扱い）
+    ['セロ窓1号','セロ窓2号','セロ窓3号','枠なし'].forEach(function(v){_envCand.win[v]=1;});
+    ['スチック付','テープスチック付','アドヘヤ付','グラシン付'].forEach(function(v){_envCand.glue[v]=1;});
+    ['横貼','センター貼','カマス貼','ダイヤ貼'].forEach(function(v){_envCand.paste[v]=1;});
+    const _dl=function(key){ return Object.keys(_envCand[key]).sort().map(function(v){return '<option value="'+_escAttr_(v)+'">';}).join(''); };
+    html+=`<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#f9f9f7;border-radius:6px">
+      💡 <b>封筒名は自動生成</b>です（サイズ・紙質・斤量・窓・糊/テープ・貼り方の組み合わせから作ります）。各列を変えると封筒名も自動で更新されます。<br>
+      💡 <b>窓・糊/テープ・貼り方は空欄＝「無し」</b>です。欄をクリックすると候補が出ます（一覧にない呼び方は直接入力できます）。
+      <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:8px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="_envRebuildAllNames_()" title="全行の封筒名を、いまの組み合わせから作り直します（手入力で崩れた名前を揃えます）">🔄 封筒名を一括で作り直す</button>
+    </div>
+    <datalist id="dl-env-size">${_dl('size')}</datalist><datalist id="dl-env-kind">${_dl('kind')}</datalist>
+    <datalist id="dl-env-wt">${_dl('wt')}</datalist><datalist id="dl-env-win">${_dl('win')}</datalist>
+    <datalist id="dl-env-glue">${_dl('glue')}</datalist><datalist id="dl-env-paste">${_dl('paste')}</datalist>
+    <div style="overflow-x:auto"><table class="m-tbl"><thead><tr>
+      <th style="min-width:190px">封筒名 <span style="font-weight:400;font-size:9px;color:#94a3b8">(自動)</span></th>
+      <th style="min-width:84px">サイズ</th>
+      <th style="min-width:120px">種類（紙質）</th>
+      <th style="min-width:62px">斤量</th>
+      <th style="min-width:104px">窓</th>
+      <th style="min-width:118px">糊・テープ</th>
+      <th style="min-width:96px">貼り方</th>
+      <th style="min-width:96px">その他</th>
+      <th style="text-align:right;min-width:76px">単価（円）</th>
+      <th class="dx"></th>
+    </tr></thead><tbody>`;
     data.forEach((r,i)=>{const oi=DB.master.envelope.indexOf(r); const _sp=_envParseSp_(r.sp||'');
+      const _autoNm=_envAutoName_(_sp.size,_sp.kind,_sp.wt,_sp.win,_sp.glue,_sp.paste,_sp.opt);
+      const _mismatch=(_autoNm.trim() && _autoNm!==(r.nm||''));
       html+=`<tr>
-        <td><input type="text" value="${(r.nm||'').replace(/"/g,'&quot;')}" onchange="updateMasterField('envelope',${oi},'nm',this.value)"></td>
-        <td><input class="env-sz" type="text" value="${_sp.size.replace(/"/g,'&quot;')}" placeholder="長3" style="width:70px" onchange="_envSpFromRow_(${oi},this)"></td>
-        <td><input class="env-kd" type="text" value="${_sp.kind.replace(/"/g,'&quot;')}" placeholder="クラフト/ケント 等" onchange="_envSpFromRow_(${oi},this)"></td>
-        <td><input class="env-wt" type="text" value="${_sp.wt.replace(/"/g,'&quot;')}" placeholder="80g" style="width:56px" onchange="_envSpFromRow_(${oi},this)"></td>
-        <td><input class="env-op" type="text" value="${_sp.opt.replace(/"/g,'&quot;')}" placeholder="スチック付・横貼 等" style="width:124px" onchange="_envSpFromRow_(${oi},this)"></td>
-        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" onchange="updateMasterField('envelope',${oi},'p',this.value?parseFloat(this.value):null)"></td>
+        <td><input class="env-nm" type="text" readonly value="${(r.nm||'').replace(/"/g,'&quot;')}" title="${_mismatch?('組み合わせからは「'+_autoNm.replace(/"/g,'&quot;')+'」になります（🔄 一括で作り直すと揃います）'):'組み合わせから自動生成された封筒名です'}" style="width:100%;background:${_mismatch?'#fdf6e8':'#f6f6f4'};color:#333;font-weight:600;cursor:not-allowed"></td>
+        <td><input class="env-sz" list="dl-env-size" type="text" value="${_sp.size.replace(/"/g,'&quot;')}" placeholder="長3" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-kd" list="dl-env-kind" type="text" value="${_sp.kind.replace(/"/g,'&quot;')}" placeholder="クラフト/ケント 等" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-wt" list="dl-env-wt" type="text" value="${_sp.wt.replace(/"/g,'&quot;')}" placeholder="80g" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-win" list="dl-env-win" type="text" value="${_sp.win.replace(/"/g,'&quot;')}" placeholder="なし" title="空欄＝窓なし。例: セロ窓1号 / 枠なし" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-glue" list="dl-env-glue" type="text" value="${_sp.glue.replace(/"/g,'&quot;')}" placeholder="なし" title="空欄＝糊なし。例: スチック付 / テープスチック付" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-paste" list="dl-env-paste" type="text" value="${_sp.paste.replace(/"/g,'&quot;')}" placeholder="なし" title="空欄＝指定なし。例: 横貼 / センター貼 / カマス貼" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="env-op" type="text" value="${_sp.opt.replace(/"/g,'&quot;')}" placeholder="なし" title="上記以外の加工（読点「、」区切り）" style="width:100%" onchange="_envSpFromRow_(${oi},this)"></td>
+        <td><input class="r" type="number" value="${r.p!=null?r.p:''}" style="width:100%" onchange="updateMasterField('envelope',${oi},'p',this.value?parseFloat(this.value):null)"></td>
         <td class="dx" style="white-space:nowrap">${_priceHistBtn_('envelope',oi)}${MOVE_BTNS('envelope',oi)}<button class="del-btn" onclick="if(confirm('「${escQ(r.nm||'')}」を削除しますか?')){DB.master.envelope.splice(${oi},1);renderMaster('envelope')}">×</button></td>
       </tr>`;
     });
-    html+='</tbody></table>';
+    html+='</tbody></table></div>';
   } else if(id==='cust'){
     // CUSTCO-1: 会社別に分離。管理会社(トキワ)は会社フィルタで切替、他社は自社のみ
     var _mgmtCust = (typeof _canSeeAllCompanies_==='function') ? _canSeeAllCompanies_() : true;
