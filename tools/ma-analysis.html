@@ -224,7 +224,12 @@ var STD_DD_INIT=[
 ];
 var DD_CATS=['財務','取引先','人事','設備','事業','法務','その他'];
 var DD_CAT_COLOR={ '財務':'#0369a1','取引先':'#b45309','人事':'#7c3aed','設備':'#475569','事業':'#15803d','法務':'#b91c1c','その他':'#64748b' };
-function stdDD(){ if(!Array.isArray(DB.stdDD)||!DB.stdDD.length){ DB.stdDD=JSON.parse(JSON.stringify(STD_DD_INIT)); } return DB.stdDD; }
+// 空のときは初期ひな型を入れる。ただし利用者が「すべて削除」した場合(stdDDCleared)は空のままにする
+function stdDD(){
+  if(!Array.isArray(DB.stdDD)) DB.stdDD=[];
+  if(!DB.stdDD.length && !DB.stdDDCleared){ DB.stdDD=JSON.parse(JSON.stringify(STD_DD_INIT)); }
+  return DB.stdDD;
+}
 var DD_ST=['未確認','確認中','OK','懸念'];
 // 交渉ステータス（案件管理表ふうのステージ）
 var STAGES=['面談前','ウェブ面談','対面面談','基本合意','合意','破談'];
@@ -540,10 +545,18 @@ function _ddRender_(t){
   var dd=t.dd||[];
   if(!dd.length){ box.innerHTML='<div class="note">「＋ 標準質問を追加」で印刷会社M&Aの基本チェックが入ります。</div>'; return; }
   var stc={ '未確認':'#94a3b8','確認中':'#2563eb','OK':'#0f766e','懸念':'#b91c1c' };
-  box.innerHTML=dd.map(function(d,i){ var st=d.st||'未確認';
+  // 一括操作バー（選択して削除／すべて削除）
+  box.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:5px 8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;flex-wrap:wrap">'
+    +'<label style="font-size:11px;color:#475569;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" onchange="_ddCkAll_(\''+t.id+'\',this.checked)" style="width:auto">全選択</label>'
+    +'<span id="ddselc-'+t.id+'" style="font-size:11px;color:#94a3b8">0件選択</span>'
+    +'<button class="btn dan" style="font-size:10.5px;padding:3px 10px" onclick="_ddDelSelected_(\''+t.id+'\')">☑ 選択を削除</button>'
+    +'<button class="btn dan" style="font-size:10.5px;padding:3px 10px;margin-left:auto" onclick="_ddDelAll_(\''+t.id+'\')" title="この候補の質問をすべて削除します">🗑 すべて削除（'+dd.length+'件）</button>'
+    +'</div>';
+  box.innerHTML+=dd.map(function(d,i){ var st=d.st||'未確認';
     var cc=DD_CAT_COLOR[d.cat]||'#94a3b8';
     var catSel='<select onchange="setDd(\''+t.id+'\','+i+',\'cat\',this.value)" title="カテゴリ" style="flex:0 0 64px;font-size:10px;font-weight:700;color:'+cc+';border:1px solid '+cc+'55;border-radius:5px;padding:4px 2px;background:#fff"><option value=""'+(!d.cat?' selected':'')+'>—</option>'+DD_CATS.map(function(c){return '<option'+(d.cat===c?' selected':'')+'>'+c+'</option>';}).join('')+'</select>';
     return '<div class="ddrow" style="display:flex;gap:6px;align-items:stretch;margin-bottom:5px">'
+      +'<input type="checkbox" class="dd-ck" data-i="'+i+'" onchange="_ddCkCount_(\''+t.id+'\')" title="選択して まとめて削除できます" style="width:auto;flex:0 0 auto;align-self:center">'
       +catSel
       +'<button onclick="cycleDd(\''+t.id+'\','+i+')" style="flex:0 0 58px;font-size:10.5px;font-weight:700;color:#fff;background:'+stc[st]+';border:none;border-radius:5px;padding:5px 4px;cursor:pointer">'+st+'</button>'
       +'<textarea rows="1" oninput="_ddPairGrow_(this);setDd(\''+t.id+'\','+i+',\'q\',this.value)" style="flex:2;min-height:30px;overflow:hidden;resize:none" placeholder="質問・確認事項">'+esc(d.q||'')+'</textarea>'
@@ -552,6 +565,30 @@ function _ddRender_(t){
   }).join('');
   // 各行の質問／回答を、高い方に左右そろえて全文表示
   box.querySelectorAll('.ddrow').forEach(function(row){ _ddPairGrowRow_(row); });
+}
+// ── 質問の一括操作（全選択／選択を削除／すべて削除）──
+function _ddCks_(id){ var box=document.getElementById('ddbox-'+id); return box?box.querySelectorAll('.dd-ck'):[]; }
+function _ddCkAll_(id, on){
+  [].forEach.call(_ddCks_(id), function(c){ c.checked=on; });
+  _ddCkCount_(id);
+}
+function _ddCkCount_(id){
+  var n=[].filter.call(_ddCks_(id), function(c){ return c.checked; }).length;
+  var el=document.getElementById('ddselc-'+id);
+  if(el){ el.textContent=n+'件選択'; el.style.color=n?'#b91c1c':'#94a3b8'; el.style.fontWeight=n?'700':'400'; }
+}
+function _ddDelSelected_(id){
+  var t=_tById_(id); if(!t||!t.dd) return;
+  var idxs=[].filter.call(_ddCks_(id), function(c){ return c.checked; }).map(function(c){ return parseInt(c.getAttribute('data-i'),10); });
+  if(!idxs.length){ alert('削除する質問にチェックを入れてください'); return; }
+  if(!confirm('選択した '+idxs.length+' 件の質問を削除しますか？')) return;
+  idxs.sort(function(a,b){return b-a;}).forEach(function(i){ t.dd.splice(i,1); });   // 後ろから消して番号ズレを防ぐ
+  save(); renderDetail();
+}
+function _ddDelAll_(id){
+  var t=_tById_(id); if(!t||!t.dd||!t.dd.length){ alert('削除する質問がありません'); return; }
+  if(!confirm('この候補の質問 '+t.dd.length+' 件をすべて削除します。\nよろしいですか？（元に戻せません）')) return;
+  t.dd=[]; save(); renderDetail();
 }
 function _taGrow_(ta){ if(!ta) return; ta.style.height='auto'; ta.style.height=(ta.scrollHeight+2)+'px'; }
 // 質問／回答ペア: 両方の必要高さを測り、高い方に揃える
@@ -576,10 +613,45 @@ function stdDdMgr(){
     +'<div style="padding:12px 16px;background:#1e40af;color:#fff;display:flex;justify-content:space-between;align-items:center"><strong style="font-size:14px">⚙ 標準質問の管理（全候補共通のひな型）</strong><button onclick="document.getElementById(\'stddd-modal\').remove()" style="font-size:20px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
     +'<div style="padding:10px 16px;font-size:11px;color:#64748b">ここで直した内容が「＋標準質問を追加」で入るひな型になります（既に各候補に入っている質問はそのまま）。</div>'
     +'<div id="stddd-body" style="padding:0 16px;overflow-y:auto;flex:1"></div>'
-    +'<div style="padding:10px 16px;border-top:1px solid #e2e8f0;display:flex;gap:8px"><button class="btn" onclick="stdDD().push({cat:\'その他\',q:\'\'});save();_stdDdRender_()">＋ 質問を追加</button><span style="margin-left:auto;font-size:11px;color:#94a3b8">変更は自動保存されます</span></div>'
+    +'<div style="padding:10px 16px;border-top:1px solid #e2e8f0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      +'<button class="btn" onclick="_stdAddRow_()">＋ 質問を追加</button>'
+      +'<label style="font-size:11px;color:#475569;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" onchange="_stdCkAll_(this.checked)" style="width:auto">全選択</label>'
+      +'<span id="stdselc" style="font-size:11px;color:#94a3b8">0件選択</span>'
+      +'<button class="btn dan" style="font-size:10.5px;padding:3px 10px" onclick="_stdDelSelected_()">☑ 選択を削除</button>'
+      +'<button class="btn dan" style="font-size:10.5px;padding:3px 10px" onclick="_stdDelAll_()" title="ひな型の質問をすべて削除します">🗑 すべて削除</button>'
+      +'<span style="margin-left:auto;font-size:11px;color:#94a3b8">変更は自動保存されます</span></div>'
     +'</div>';
   document.body.appendChild(ov);
   _stdDdRender_();
+}
+// 空欄を1行追加（すべて削除した後もここから作り直せる）
+function _stdAddRow_(){
+  if(!Array.isArray(DB.stdDD)) DB.stdDD=[];
+  DB.stdDD.push({cat:'その他', q:''});
+  save(); _stdDdRender_(); _stdCkCount_();
+}
+// ── 標準質問の一括操作 ──
+function _stdCks_(){ var b=document.getElementById('stddd-body'); return b?b.querySelectorAll('.std-ck'):[]; }
+function _stdCkAll_(on){ [].forEach.call(_stdCks_(), function(c){ c.checked=on; }); _stdCkCount_(); }
+function _stdCkCount_(){
+  var n=[].filter.call(_stdCks_(), function(c){ return c.checked; }).length;
+  var el=document.getElementById('stdselc');
+  if(el){ el.textContent=n+'件選択'; el.style.color=n?'#b91c1c':'#94a3b8'; el.style.fontWeight=n?'700':'400'; }
+}
+function _stdDelSelected_(){
+  var idxs=[].filter.call(_stdCks_(), function(c){ return c.checked; }).map(function(c){ return parseInt(c.getAttribute('data-i'),10); });
+  if(!idxs.length){ alert('削除する質問にチェックを入れてください'); return; }
+  if(!confirm('選択した '+idxs.length+' 件のひな型質問を削除しますか？')) return;
+  var a=stdDD();
+  idxs.sort(function(x,y){return y-x;}).forEach(function(i){ a.splice(i,1); });
+  save(); _stdDdRender_(); _stdCkCount_();
+}
+function _stdDelAll_(){
+  var a=stdDD();
+  if(!a.length){ alert('削除する質問がありません'); return; }
+  if(!confirm('ひな型の質問 '+a.length+' 件をすべて削除します。\nよろしいですか？（各候補に入っている質問はそのまま残ります）')) return;
+  DB.stdDD=[]; DB.stdDDCleared=true;   // 空のままにする（初期ひな型を復活させない）
+  save(); _stdDdRender_(); _stdCkCount_();
 }
 // 標準質問の並べ替え（この順が「＋標準質問を追加」で候補に入る出現順）
 function _stdDdMove_(i, dir){ var a=stdDD(); var j=i+dir; if(j<0||j>=a.length) return; var t=a[i]; a[i]=a[j]; a[j]=t; save(); _stdDdRender_(); }
@@ -638,6 +710,7 @@ function _stdDdRender_(){
       +' ondragstart="_stdDragStart_('+i+',event)" ondragend="_stdDragEnd_()"'
       +' ondragover="_stdDragOver_('+i+',event)" ondragleave="_stdDragLeave_('+i+')" ondrop="_stdDrop_('+i+',event)"'
       +' style="display:flex;gap:6px;align-items:center;margin-bottom:5px;background:#fff">'
+      +'<input type="checkbox" class="std-ck" data-i="'+i+'" onchange="_stdCkCount_()" title="選択して まとめて削除できます" style="width:auto;flex:0 0 auto">'
       +'<span title="つかんで上下に動かすと並べ替えできます" style="cursor:grab;color:#94a3b8;font-size:14px;line-height:1;user-select:none;padding:0 2px">⠿</span>'
       +'<input type="number" min="1" max="'+n+'" value="'+(i+1)+'" title="番号を書き換えるとその位置へ移動します（例: 1 と入れると先頭）" style="width:42px;font-size:11px;padding:3px 4px;text-align:center" onchange="_stdDdJump_('+i+',this.value)">'
       +'<span style="display:inline-flex;flex-direction:column;gap:1px">'
