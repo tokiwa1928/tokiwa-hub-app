@@ -11773,6 +11773,56 @@ function _crsEstCost_(q){
   });
   return {tot:Math.round(tot), parts:parts};
 }
+// ═══════════════════════════════════════════════════════════
+// 📊 概算の粗利（原価が未入力でも粗利の目安を出す）
+//   100%の原価把握は現実的でないため、原価率から概算して「≈」付きで表示する。
+//   原価率の決め方: ①参考原価マスタの品目マッチ ②同・全体指針 ③自社実績の中央値 ④既定75.7%
+//   ※ 実原価が入っている案件はそのまま実額を出す（概算と実額は色と記号で区別）
+// ═══════════════════════════════════════════════════════════
+var _EST_RATE_CACHE=null;
+function _histCostRate_(){
+  if(_EST_RATE_CACHE!=null) return _EST_RATE_CACHE;
+  var rates=[];
+  (DB.projects||[]).forEach(function(p){
+    var ex=parseInt(p.exTax)||0;
+    var c=(parseInt(p.grand)||0)||(parseInt(p.outsourceTotal)||0)||(parseInt(p.estCost)||0);
+    if(ex>0 && c>0 && c<ex*3) rates.push(c/ex*100);
+  });
+  if(rates.length<3){ _EST_RATE_CACHE={rate:null,n:rates.length}; return _EST_RATE_CACHE; }
+  rates.sort(function(a,b){return a-b;});
+  _EST_RATE_CACHE={ rate:Math.round(rates[Math.floor(rates.length/2)]*10)/10, n:rates.length };
+  return _EST_RATE_CACHE;
+}
+function _estCostRate_(rec){
+  var cat=(rec&&(rec.category||rec.cat))||'';
+  if(typeof _crsGuideRatio_==='function'){
+    try{
+      var g=cat?_crsGuideRatio_(cat):null;
+      if(g) return { rate:g, src:'参考原価マスタ「'+cat+'」の原価率 '+g+'%' };
+      var all=_crsGuideRatio_('すべて');
+      if(all) return { rate:all, src:'参考原価マスタ 全体指針の原価率 '+all+'%' };
+    }catch(e){}
+  }
+  var h=_histCostRate_();
+  if(h.rate) return { rate:h.rate, src:'原価が入っている自社実績 '+h.n+'件の中央値 '+h.rate+'%' };
+  return { rate:75.7, src:'全体の目安 75.7%（参考原価マスタの設定も、原価入りの実績もまだ足りないため）' };
+}
+// 実額 or 概算の粗利セル（受注一覧・見積一覧の共通）
+//   hasCost=true → 実額 / false → 原価率から概算して「≈」を付ける
+function _gpCellsHtml_(exTax, gpReal, hasCost, rec){
+  var ex=parseInt(exTax)||0;
+  if(ex<=0) return { gp:'-', rate:'-', color:'#cbd5e1', tip:'金額が未入力です', est:false };
+  if(hasCost){
+    return { gp:fmt(gpReal), rate:(Math.round(gpReal/ex*1000)/10)+'%',
+             color:(gpReal>=0?'#059669':'#dc2626'), tip:'原価から計算した実際の粗利', est:false };
+  }
+  var e=_estCostRate_(rec);
+  var gp=Math.round(ex*(1-e.rate/100));
+  return { gp:'≈'+fmt(gp), rate:'≈'+(Math.round((1-e.rate/100)*1000)/10)+'%',
+           color:'#0891b2',
+           tip:'⚠ 原価が未入力のため概算です（'+e.src+'）。実際の原価を入れると正確な粗利になります',
+           est:true };
+}
 function _crsGuideRatio_(cat){
   var M=(typeof DB!=='undefined'&&DB.costRefMaster)||[];
   var row=M.find(function(r){return r.cat==='全体指針'&&r.sub===cat&&r.ratio;});
@@ -41518,6 +41568,7 @@ function renderProjects(){
     // 原価が未入力だと「粗利＝受注金額」になり粗利率100%と誤解を招くため、その場合は粗利・粗利率を「-」で出す
     const _pjCost = (parseInt(r.grand)||0) || (parseInt(outsourceTotal)||0) || (parseInt(r.estCost)||0);
     const _pjHasCost = (_pjCost>0) || (typeof r.grossProfit==='number' && r.grossProfit !== (parseInt(r.exTax)||0));
+    const _pjGpC = _gpCellsHtml_(r.exTax, grossProfit, _pjHasCost, r);
     
     const stepsHtml=PROC_STEPS.map(step=>{
       const val=r.steps?.[step]||'─';
@@ -41683,8 +41734,8 @@ function renderProjects(){
       </td>
       <td class="r" style="font-size:11px;white-space:nowrap;color:#7c3aed">${_unitP}</td>
       <td class="r" style="font-size:12px;white-space:nowrap">${r.exTax>0?fmt(r.exTax):''}</td>
-      <td class="r pj-gp" style="white-space:nowrap;color:${_pjHasCost?(grossProfit>=0?'#059669':'#dc2626'):'#cbd5e1'}"${_pjHasCost?'':' title="原価が未入力のため粗利を出せません"'}>${(r.exTax>0&&_pjHasCost)?fmt(grossProfit):'-'}</td>
-      <td class="r" style="font-size:11px;white-space:nowrap;color:${_pjHasCost?(grossProfit>=0?'#059669':'#dc2626'):'#cbd5e1'}" title="${_pjHasCost?'粗利 ÷ 受注金額':'原価が未入力のため粗利率を出せません'}">${(r.exTax>0&&_pjHasCost)?((Math.round(grossProfit/r.exTax*1000)/10)+'%'):'-'}</td>
+      <td class="r pj-gp" style="white-space:nowrap;color:${_pjGpC.color}" title="${_pjGpC.tip}">${_pjGpC.gp}</td>
+      <td class="r" style="font-size:11px;white-space:nowrap;color:${_pjGpC.color}" title="${_pjGpC.tip}">${_pjGpC.rate}</td>
       <td style="white-space:nowrap"><span class="pj-status" style="color:#fff;font-weight:700;border-radius:9px;background:${sc};display:inline-block;white-space:nowrap">${r.status||'-'}</span>${(function(){var m=_projStatusMeta_(r);if(!m.start)return '';var late=(m.days!=null&&m.days>=14&&r.status!=='完了'&&r.status!=='納品済');return ' <span style="font-size:9px;color:#64748b">'+m.start.slice(5).replace('-','/')+'〜<b style="color:'+(late?'#dc2626':'#334155')+'">'+(m.days!=null?(m.days+'日'):'')+'</b></span>';})()}</td>
       <td style="font-size:11px;white-space:nowrap"><span style="white-space:nowrap">${_escDiff(r.assignee||'-')}</span></td>
       <td onclick="event.stopPropagation()">
@@ -41866,6 +41917,7 @@ function _renderProjQuoteList_(stageArg){
     var _qCost = parseInt(e.estCost)||0;
     var _qHasCost = (_qCost>0);
     var _qGp = _qEx - _qCost;
+    var _qGpC = _gpCellsHtml_(_qEx, _qGp, _qHasCost, e);
     return '<tr style="cursor:pointer;background:#f0f9ff;border-left:4px solid #0891b2" onclick="if(typeof editEstimateInTab===\'function\')editEstimateInTab(\'' + _escAttr_(e.id) + '\')">' +
       '<td style="font-size:11px;font-family:monospace;white-space:nowrap"><label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap"><input type="checkbox" class="quote-merge-cb" value="' + _escAttr_(e.id) + '" onchange="_updateMergeCount_()" style="width:15px;height:15px;cursor:pointer;flex:0 0 auto"><span style="white-space:nowrap">' + _escDiff(e.id||'') + '</span></label></td>' +
       // 以下は受注案件一覧と同じ体裁（日付は日本語1行・得意先は pj-cust・品名は pj-item・状態は pj-status）
@@ -41874,8 +41926,8 @@ function _renderProjQuoteList_(stageArg){
       '<td style="max-width:260px"><div class="pj-item" style="font-size:12px;font-weight:600">' + _escDiff(e.item||'') + (e.spec?'<span style="font-size:10px;color:#94a3b8;font-weight:400">　'+_escDiff(e.spec)+'</span>':'') + '</div></td>' +
       '<td class="r" style="font-size:11px;white-space:nowrap;color:#7c3aed">' + (up>0?('@¥'+up.toLocaleString()):'') + '</td>' +
       '<td class="r" style="font-size:12px;white-space:nowrap">' + (_qEx>0?fmt(_qEx):'') + '</td>' +
-      '<td class="r pj-gp" style="white-space:nowrap;color:' + (_qHasCost?(_qGp>=0?'#059669':'#dc2626'):'#cbd5e1') + '"' + (_qHasCost?'':' title="原価が未入力のため粗利を出せません"') + '>' + ((_qEx>0&&_qHasCost)?fmt(_qGp):'-') + '</td>' +
-      '<td class="r" style="font-size:11px;white-space:nowrap;color:' + (_qHasCost?(_qGp>=0?'#059669':'#dc2626'):'#cbd5e1') + '" title="' + (_qHasCost?'粗利 ÷ 見積金額':'原価が未入力のため粗利率を出せません') + '">' + ((_qEx>0&&_qHasCost)?((Math.round(_qGp/_qEx*1000)/10)+'%'):'-') + '</td>' +
+      '<td class="r pj-gp" style="white-space:nowrap;color:' + _qGpC.color + '" title="' + _qGpC.tip + '">' + _qGpC.gp + '</td>' +
+      '<td class="r" style="font-size:11px;white-space:nowrap;color:' + _qGpC.color + '" title="' + _qGpC.tip + '">' + _qGpC.rate + '</td>' +
       '<td style="font-size:11px;white-space:nowrap">' + (e.qty?parseInt(e.qty).toLocaleString()+(e.unit||''):'') + '</td>' +
       '<td style="white-space:nowrap"><span class="pj-status" style="color:#fff;font-weight:700;border-radius:9px;background:#0891b2;display:inline-block;white-space:nowrap">' + (stLabel[e.status]||e.status||'見積中') + '</span></td>' +
       '<td colspan="2" style="white-space:nowrap">' +
