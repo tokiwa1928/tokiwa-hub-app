@@ -12365,32 +12365,98 @@ function _kiloApplyScan_(){
 // 💴 単価マスタ（単価マスタ構築ツール tools/tanka-master.html の蓄積を📚マスターで確認・修正）
 function _tankaLoad_(){ try{ return JSON.parse(localStorage.getItem('tokiwa_quote_tools_v1'))||{master:[],quotes:[],companies:[]}; }catch(e){ return {master:[],quotes:[],companies:[]}; } }
 function _tankaSave_(st){ try{ localStorage.setItem('tokiwa_quote_tools_v1', JSON.stringify(st)); }catch(e){ alert('保存に失敗（容量超過の可能性）: '+e.message); } }
+// 単価マスタの「会社」＝どの会社の売価か（基準単価との差を会社別に見るために使う）
+var TANKA_COMPANIES=['トキワ印刷','村山印刷','アート・エス','北上プリント','中尾印刷','ヤマウチ印刷','津島プリント'];
+// 1行の基準単価と基準比を求める（基準単価表 stdRates から引き当て）
+function _tankaVsStd_(m){
+  var price=parseFloat(m.price)||0, qty=parseFloat(m.qty)||0;
+  if(!(price>0)) return null;
+  var text=((m.rawItem||m.item||'')+' '+(m.spec||''));
+  var hit=(typeof stdRateLookup==='function')? stdRateLookup('', text, qty) : null;
+  if(!hit || !(hit.unit>0)) return { price:price, std:null };
+  return { price:price, std:hit.unit, ratio:Math.round(price/hit.unit*1000)/10, label:hit.label };
+}
 function renderTankaMaster(mp){
   var st=_tankaLoad_(); var list=st.master||[];
   var q=((document.getElementById('m-q-tanka')||{}).value||'').toLowerCase().trim();
-  var rows=list.filter(function(m){ if(!q) return true; return ((m.cust||'')+' '+(m.rawItem||m.item||'')+' '+(m.spec||'')).toLowerCase().indexOf(q)>=0; });
-  var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">💴 単価マスタ（得意先×品名×仕様の前回単価）'
+  var coF=window._tankaCoF_||'';
+  var rows=list.filter(function(m){
+    if(coF && (m.company||'')!==coF) return false;
+    if(!q) return true;
+    return ((m.cust||'')+' '+(m.rawItem||m.item||'')+' '+(m.spec||'')+' '+(m.company||'')).toLowerCase().indexOf(q)>=0;
+  });
+  // ── 会社別の「基準比」サマリー（村山は基準の何%、アート・エスは何% を出す）──
+  var byCo={};
+  list.forEach(function(m){
+    var v=_tankaVsStd_(m);
+    if(!v || v.std==null) return;
+    var co=(m.company||'（会社未設定）');
+    (byCo[co]=byCo[co]||[]).push(v.ratio);
+  });
+  var coStats=Object.keys(byCo).map(function(co){
+    var a=byCo[co].slice().sort(function(x,y){return x-y;});
+    return { co:co, n:a.length, med:Math.round(a[Math.floor(a.length/2)]*10)/10, min:a[0], max:a[a.length-1] };
+  }).sort(function(a,b){ return b.n-a.n; });
+  var nStd=(DB.stdRates||[]).length;
+
+  var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">📚 前回単価の実績（得意先×品名×仕様／各社の売価）'
     +' <button class="add-btn" onclick="_tankaAdd_()">＋ 追加</button>'
-    +'<input id="m-q-tanka" placeholder="得意先・品名・仕様で検索…" style="width:210px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="renderMaster(\'tanka\')" value="'+_escAttr_(q)+'">'
+    +'<input id="m-q-tanka" placeholder="得意先・品名・仕様・会社で検索…" style="width:220px;font-size:12px;padding:3px 6px;margin-left:4px" oninput="renderMaster(\'tanka\')" value="'+_escAttr_(q)+'">'
+    +'<select style="width:auto;font-size:11px;padding:3px 6px" onchange="window._tankaCoF_=this.value;renderMaster(\'tanka\')">'
+      +'<option value="">会社: すべて</option>'
+      + TANKA_COMPANIES.map(function(c){ return '<option'+(coF===c?' selected':'')+'>'+c+'</option>'; }).join('')
+    +'</select>'
     +'<span style="font-size:11px;color:#888">'+rows.length+' / '+list.length+' 件</span>'
     +'<a href="tools/tanka-master.html" style="font-size:11px;color:#1e40af;margin-left:auto;text-decoration:underline">🔧 取込ツールを開く →</a>'
     +'</div>'
-    +'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">※単価マスタ構築ツール（端末内保存）の蓄積です。ここでの修正はその蓄積に反映されます（本体クラウド同期とは別・端末ごと）。単価を変えると前回値は履歴に残ります。</div>'
-    +'<div style="overflow-x:auto"><table class="m-tbl" style="min-width:860px"><thead><tr>'
-    +['得意先','品名','仕様','数量','単価','前回履歴','状態',''].map(function(t){return '<th>'+t+'</th>';}).join('')
+    +'<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">'
+    +'💡 各社の<b>売価</b>をここに入れると、<b>💴 基準単価</b>と突き合わせて「基準に対して何％で売っているか」を会社別に集計します。'
+    +'100%＝基準どおり、<b style="color:#dc2626">100%未満＝基準より安く売っている</b>（利益が薄い可能性）、<b style="color:#059669">100%超＝基準より高い</b>。<br>'
+    +'※この実績は端末内に保存されます（本体のクラウド同期とは別）。単価を変えると前回値は履歴に残ります。'
+    +(nStd? '' : '<br>⚠ <b>基準単価がまだ登録されていません。</b>「💴 基準単価」タブで基準を作ると、ここに基準比が出ます')
+    +'</div>';
+  // 会社別サマリー
+  if(coStats.length){
+    html+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
+      + coStats.map(function(s){
+          var col=(s.med<100?'#b91c1c':'#065f46'), bg=(s.med<100?'#fee2e2':'#ecfdf5'), bd=(s.med<100?'#fca5a5':'#6ee7b7');
+          return '<div style="min-width:190px;flex:1;background:'+bg+';border:1px solid '+bd+';border-radius:8px;padding:8px 11px">'
+            +'<div style="font-size:11px;font-weight:700;color:#334155">'+_escDiff(s.co)+'</div>'
+            +'<div style="font-size:20px;font-weight:800;color:'+col+';line-height:1.15">'+s.med+'<span style="font-size:12px">%</span></div>'
+            +'<div style="font-size:10px;color:#64748b">基準比の中央値／'+s.n+'件（'+s.min+'〜'+s.max+'%）</div>'
+            +'</div>';
+        }).join('')
+      +'</div>';
+  }
+  html+='<div style="overflow-x:auto"><table class="m-tbl" style="min-width:1020px"><thead><tr>'
+    +['会社','得意先','品名','仕様','数量','売価','基準単価','基準比','前回履歴',''].map(function(t){return '<th>'+t+'</th>';}).join('')
     +'</tr></thead><tbody>';
-  if(!rows.length){ html+='<tr><td colspan="8" style="text-align:center;color:#aaa;padding:1.5rem">'+(q?'該当なし':'単価マスタが空です。「🔧 取込ツール」でロータス/Excelの見積計算書を取り込むか「＋ 追加」で登録してください')+'</td></tr>'; }
+  if(!rows.length){ html+='<tr><td colspan="10" style="text-align:center;color:#aaa;padding:1.5rem">'+((q||coF)?'該当なし':'まだ実績がありません。「🔧 取込ツール」で見積計算書を取り込むか「＋ 追加」で登録してください')+'</td></tr>'; }
   rows.forEach(function(m){
     var gi=list.indexOf(m);
     var prev=(m.prevPrices||[]).slice(-3).reverse().map(function(p){return '@'+fmt(p.price)+(p.year?'('+p.year+')':'');}).join(' / ');
+    var v=_tankaVsStd_(m);
+    var stdCell='<span style="font-size:10px;color:#cbd5e1">—</span>', ratioCell=stdCell;
+    if(v && v.std!=null){
+      stdCell='<span style="font-size:11px;color:#065f46" title="'+_escAttr_(v.label||'')+'">@'+v.std+'</span>';
+      var col=(v.ratio<100?'#b91c1c':'#059669');
+      ratioCell='<span style="font-size:12px;font-weight:800;color:'+col+'" title="売価 ÷ 基準単価。100%未満は基準より安く売っています（照合: '+_escAttr_(v.label||'')+'）">'+v.ratio+'%</span>';
+    }else if(v){
+      stdCell='<span style="font-size:10px;color:#94a3b8" title="この品名・仕様・数量に合う基準単価が見つかりません。基準単価表に行を足すか、品目・仕様の言い方を合わせてください">基準なし</span>';
+    }
     html+='<tr>'
+      +'<td><select style="width:110px;font-size:11px" onchange="_tankaEdit_('+gi+',\'company\',this.value)">'
+        +'<option value=""'+(!m.company?' selected':'')+'>未設定</option>'
+        + TANKA_COMPANIES.map(function(c){ return '<option'+(m.company===c?' selected':'')+'>'+c+'</option>'; }).join('')
+        +'</select></td>'
       +'<td><input value="'+_escAttr_(m.cust||'')+'" style="width:120px;font-size:12px" onchange="_tankaEdit_('+gi+',\'cust\',this.value)"></td>'
       +'<td><input value="'+_escAttr_(m.rawItem||m.item||'')+'" style="width:180px;font-size:12px" onchange="_tankaEdit_('+gi+',\'rawItem\',this.value)"></td>'
-      +'<td><input value="'+_escAttr_(m.spec||'')+'" style="width:170px;font-size:12px" onchange="_tankaEdit_('+gi+',\'spec\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(m.spec||'')+'" style="width:160px;font-size:12px" onchange="_tankaEdit_('+gi+',\'spec\',this.value)"></td>'
       +'<td><input type="number" value="'+(m.qty!=null&&m.qty!==''?m.qty:'')+'" style="width:68px;font-size:12px;text-align:right" onchange="_tankaEdit_('+gi+',\'qty\',this.value)"></td>'
       +'<td><input type="number" step="0.01" value="'+(m.price!=null&&m.price!==''?m.price:'')+'" style="width:82px;font-size:12.5px;text-align:right;font-weight:800;color:#0369a1" onchange="_tankaEdit_('+gi+',\'price\',this.value)"></td>'
+      +'<td class="r" style="white-space:nowrap">'+stdCell+'</td>'
+      +'<td class="r" style="white-space:nowrap">'+ratioCell+'</td>'
       +'<td style="font-size:11px;color:#64748b;white-space:nowrap">'+_escDiff(prev||'—')+'</td>'
-      +'<td style="font-size:11px">'+_escDiff(m.status||'')+'</td>'
       +'<td><button class="del-btn" onclick="_tankaDel_('+gi+')" title="削除">×</button></td>'
       +'</tr>';
   });
