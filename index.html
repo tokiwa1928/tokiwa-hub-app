@@ -12945,6 +12945,7 @@ function renderMaster(id){
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="addCustOrg()">＋ 新規取引先</button>
       <button class="btn" style="font-size:11px;padding:4px 10px;background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;font-weight:700" onclick="_custCodeBulkAssign_()" title="コード未設定の得意先へ C-#### を連番で自動採番（既存コードは変更しません）">🆔 コード一括採番</button>
       <button class="btn" style="font-size:11px;padding:4px 10px;background:#fff7ed;border-color:#fdba74;color:#9a3412;font-weight:700" onclick="_custAliasBulkAssign_()" title="呼称が未設定の取引先へ、取引先名から自動生成（株式会社などを除いた短い名前）。既存の呼称は変更しません">🏷 呼称を自動生成</button>
+      <button class="btn" style="font-size:11px;padding:4px 10px;background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6;font-weight:700" onclick="_custAliasExport_()" title="FileMakerなど外部の名前を「正しい正式名・呼称」に変換するための対応表をCSVで書き出します。Googleスプレッドシートに取り込んで使います（旧名称も含むので表記ゆれを吸収できます）">📤 名寄せ表を書き出し</button>
       <button class="btn" style="font-size:11px;padding:4px 10px;background:#ecfdf5;border-color:#6ee7b7;color:#065f46;font-weight:700" onclick="document.getElementById('cust-import-file').click()" title="得意先台帳のExcel/CSVを取込（得意先名・担当者・TEL/FAX等を自動マッピング）→ 現在の会社の得意先に追加">📥 Excel/CSV取込</button>
       <button class="btn" style="font-size:11px;padding:4px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportCustMasterCSV()" title="現在の取引先マスターをCSVで書き出し（Excelで開けます）">📤 CSV書き出し</button>
       <input type="file" id="cust-import-file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="importCustFile(this)">
@@ -38706,6 +38707,38 @@ function _custAliasBulkAssign_(silent){
     if(typeof renderMaster==='function') renderMaster('cust');
   }
   return todo.length;
+}
+// 📤 名寄せ表の書き出し（FileMaker等の外部の名前 → 正しい正式名/呼称 に変換するための対応表）
+//    CSVを保存 → Googleスプレッドシートへ取込 → ブリッジが参照する
+function _custAliasExport_(){
+  var rows=(DB.master&&DB.master.cust||[]).filter(function(r){ return r&&typeof r!=='string'&&r.org; });
+  if(!rows.length){ alert('取引先マスタが空です'); return; }
+  var byOrg={};
+  rows.forEach(function(r){
+    if(!byOrg[r.org]) byOrg[r.org]={ org:r.org, alias:'', code:'', type:'', oldNames:'', companyId:'', active:(r.active!==false) };
+    var g=byOrg[r.org];
+    if(r.alias) g.alias=r.alias;
+    if(r.code) g.code=r.code;
+    if(r.type) g.type=r.type;
+    if(r.oldNames) g.oldNames=r.oldNames;
+    if(r.companyId) g.companyId=r.companyId;
+    if(r.active===false) g.active=false;
+  });
+  var _coName=function(cid){ var c=(DB.companies||[]).find(function(x){return x.id===cid;}); return c?(c.name||cid):(cid||''); };
+  var _tName=function(t){ return t==='vendor'?'外注先':(t==='both'?'両方':'得意先'); };
+  var q=function(v){ v=String(v==null?'':v); return /[",\r\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
+  var lines=['正式名,呼称,コード,区分,旧名称,所属会社,状態'];
+  Object.keys(byOrg).sort(function(a,b){ return a.localeCompare(b,'ja'); }).forEach(function(k){
+    var g=byOrg[k];
+    lines.push([q(g.org), q(g.alias||_custAliasAuto_(g.org)), q(g.code), q(_tName(g.type)),
+                q(g.oldNames), q(_coName(g.companyId)), q(g.active?'有効':'無効')].join(','));
+  });
+  var blob=new Blob([String.fromCharCode(0xFEFF)+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  var d=new Date(), p=function(n){return String(n).padStart(2,'0');};
+  a.download='名寄せ表_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'.csv';
+  a.click();
+  if(typeof _toastMsg==='function') _toastMsg('📤 名寄せ表を書き出しました（'+(lines.length-1)+'社）');
 }
 // 得意先名→コード（完全一致・旧名称も見る）
 function _custCodeOf_(name){
