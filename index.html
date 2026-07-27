@@ -12395,6 +12395,218 @@ function _tankaVsStd_(m){
   if(!hit || !(hit.unit>0)) return { price:price, std:null };
   return { price:price, std:hit.unit, ratio:Math.round(price/hit.unit*1000)/10, label:hit.label };
 }
+// ═══════════════════════════════════════════════════════════
+// 📊 会社別 利益率（PROFIT-1）
+//   各社の売価実績を、村山基準の「工程別 原価」とぶつけて
+//   「この会社はだいたい何%以上の利益が出ているか」を出す。
+//   原価は 用紙＋印刷＋製版CTP＋製本 の4工程（合計＝製造原価合計 と検算済みのもの）を使う。
+//   ※作業別の行は用紙の銘柄を含まないため、ここでは使わない（原価が過小に出るため）
+// ═══════════════════════════════════════════════════════════
+var BP_WORKS=['用紙','印刷','製版・CTP','製本'];
+// 品名から品目カテゴリを決める（基準単価表を作ったときと同じ分け方・同じ順番）
+var BP_CATS=[
+  ['封筒',['封筒','長3','長３','長4','長４','長40','長４０','角2','角２','角20','洋長','窓付']],
+  ['名刺',['名刺']],
+  ['伝票・帳票',['伝票','帳票','複写','ノーカーボン','納品書','請求書','領収','送り状']],
+  ['冊子・要覧',['要覧','冊子','カタログ','報告書','議案','パンフ','会報','広報','綴じ','綴','ページ','記念誌','文集','計画書','白書','しおり','手引']],
+  ['チラシ・リーフ',['チラシ','ちらし','ビラ','リーフ','ポスター','折込','案内']],
+  ['ハガキ・カード',['ハガキ','はがき','葉書','カード','年賀','挨拶状']],
+  ['証・票・手帳',['証','票','手帳','受診','認定','申告','予診','名簿','台帳']],
+  ['シール・ラベル',['シール','ラベル','タグ']]
+];
+function _bpCat_(text){
+  var s=String(text||'');
+  for(var i=0;i<BP_CATS.length;i++){
+    for(var j=0;j<BP_CATS[i][1].length;j++){ if(s.indexOf(BP_CATS[i][1][j])>=0) return BP_CATS[i][0]; }
+  }
+  return 'その他';
+}
+// 数量の単位が入っていない実績用に、品名から単位を推測する
+function _bpUnitGuess_(text, cat){
+  var s=String(text||'');
+  if(/複写|ｾｯﾄ糊|セット糊|感圧|ノーカーボン|\d\s*枚綴/.test(s)) return 'セット';
+  if(cat==='伝票・帳票') return '冊';
+  if(cat==='冊子・要覧') return /部数|部$/.test(s)?'部':'冊';
+  return '枚';
+}
+// 仕様からサイズを拾う（基準単価表の仕様欄と突き合わせる用）
+function _bpSize_(text){
+  var s=_kanaNorm_(String(text||''));
+  var L=[['A3',['a3']],['A4',['a4']],['A5',['a5']],['B4',['b4']],['B5',['b5']],['B6',['b6']],
+         ['長3',['長3']],['長4',['長4']],['角2',['角2']],['ハガキ',['はがき','ハガキ','葉書']]];
+  for(var i=0;i<L.length;i++){ for(var j=0;j<L[i][1].length;j++){ if(s.indexOf(_kanaNorm_(L[i][1][j]))>=0) return L[i][0]; } }
+  return '';
+}
+// その品目カテゴリで、4工程を揃えて使える単位を決める。
+//   実績データの単位欄は会社ごとにまちまち（封筒を「部」と書く等）なので、
+//   品名から推測した単位を第一候補にし、無ければ村山でいちばん実績が多い単位に寄せる。
+function _bpUnitFor_(cat, guessed, bk){
+  var cnt={};
+  _stdRates_().forEach(function(r){
+    if((r.note||'').indexOf('村山 計算書(Lotus)')<0) return;
+    if(String(r.item||'')!==cat) return;
+    if(!r.b || r.b[bk]==null) return;
+    if(BP_WORKS.indexOf(r.work)<0) return;
+    var u=String(r.unitName||''); if(!u) return;
+    var n=parseInt(((r.note||'').match(/(\d+)件/)||[])[1]||'0',10);
+    cnt[u]=cnt[u]||{works:{},n:0};
+    cnt[u].works[r.work]=1; cnt[u].n+=n;
+  });
+  var keys=Object.keys(cnt);
+  if(!keys.length) return null;
+  if(guessed && cnt[guessed] && Object.keys(cnt[guessed].works).length>=2) return guessed;
+  keys.sort(function(a,b){
+    var wa=Object.keys(cnt[a].works).length, wb=Object.keys(cnt[b].works).length;
+    return (wb-wa) || (cnt[b].n-cnt[a].n);            // 工程が多く揃う単位・実績の多い単位を優先
+  });
+  return keys[0];
+}
+function _bpLookup_(work, text, qty, unitName, cat, size){
+  var bk=_stdBandOf_(qty);
+  var wantU=String(unitName||'');
+  var best=null, bestScore=-1;
+  _stdRates_().forEach(function(r){
+    if(r.work!==work) return;
+    if((r.note||'').indexOf('村山 計算書(Lotus)')<0) return;   // 4工程が揃っている出典だけ使う
+    if(!r.b || r.b[bk]==null) return;
+    if(String(r.item||'')!==cat) return;                       // 品目カテゴリが一致すること
+    var ru=String(r.unitName||'');
+    if(wantU && ru!==wantU) return;                            // 4工程で単位を揃える
+    var sp=String(r.spec||'');
+    var score=0;
+    if(sp && sp!=='（全体）'){
+      if(!size || sp.indexOf(size)<0) return;                  // サイズつきの行はサイズも一致すること
+      score+=100;
+    }
+    var n=parseInt(((r.note||'').match(/(\d+)件/)||[])[1]||'0',10);
+    score += Math.min(n,2000)/1000;                            // 実績件数の多い行を少し優先
+    if(score>bestScore){ bestScore=score; best=r; }
+  });
+  return best?{ unit:best.b[bk], row:best }:null;
+}
+function _bpCost_(text, unitName, qty){
+  var q=parseFloat(qty)||0;
+  if(q<=0) return null;
+  var cat=_bpCat_(text), size=_bpSize_(text);
+  //  実績側の単位欄は当てにならないので、品名からの推測を優先して村山の単位に合わせる
+  var u=_bpUnitFor_(cat, _bpUnitGuess_(text, cat), _stdBandOf_(q));
+  if(!u) return null;
+  var cost=0, hit=[], miss=[];
+  BP_WORKS.forEach(function(w){
+    var r=_bpLookup_(w, text, q, u, cat, size);
+    if(!r){ miss.push(w); return; }
+    cost += r.unit*q;
+    hit.push({ work:w, unit:r.unit, amt:r.unit*q, spec:(r.row.spec||'') });
+  });
+  if(hit.length<2) return null;      // 2工程も当たらないものは原価が信用できない
+  return { cost:cost, unitCost:cost/q, hit:hit, miss:miss, cat:cat, unit:u, size:size };
+}
+// 各社の売価実績を集める（① 単価マスタ ② 本体の案件データ）
+function _bpSamples_(){
+  var out=[];
+  var coName={}; (DB.companies||[]).forEach(function(c){ coName[c.id]=c.name||c.id; });
+  try{
+    var tq=JSON.parse(localStorage.getItem('tokiwa_quote_tools_v1')||'null');
+    ((tq&&tq.master)||[]).forEach(function(m){
+      var q=parseFloat(m.qty)||0, p=parseFloat(m.price)||0;
+      if(!(q>0&&p>0)) return;
+      out.push({ co:(m.company||'（会社未設定）'), text:((m.rawItem||m.item||'')+' '+(m.spec||'')),
+                 unit:(m.unit||''), qty:q, sell:p*q, src:'単価マスタ' });
+    });
+  }catch(e){}
+  (DB.projects||[]).forEach(function(r){
+    if(!r || r._testData || /^TEST-/.test(String(r.id||''))) return;   // 動作確認用のテストデータは対象外
+    var q=parseFloat(r.qty)||0, ex=parseFloat(r.exTax)||0;
+    if(!(q>=10&&ex>0)) return;      // 数量が1桁のもの（経費の記録など）は単価の比較にならないので除く
+    out.push({ co:(coName[r.companyId]||r.companyId||'（会社未設定）'),
+               text:((r.item||'')+' '+(r.spec||'')), unit:(r.unit||''), qty:q, sell:ex, src:'案件データ' });
+  });
+  return out;
+}
+function _bpPct_(sorted, p){
+  if(!sorted.length) return null;
+  var i=Math.min(sorted.length-1, Math.max(0, Math.round((sorted.length-1)*p)));
+  return sorted[i];
+}
+function renderProfitByCompany(){
+  var samples=_bpSamples_();
+  var byCo={}, byCat={}, nOk=0, nNg=0;
+  samples.forEach(function(s){
+    var c=_bpCost_(s.text, s.unit, s.qty);
+    if(!c || !(s.sell>0)){ nNg++; return; }
+    var rate=(s.sell-c.cost)/s.sell*100;
+    if(rate<-200 || rate>100) { nNg++; return; }     // 桁違いは弾く
+    nOk++;
+    (byCo[s.co]=byCo[s.co]||[]).push(rate);
+    var ck=c.cat+(s.qty<=300?'（〜300）':'（301〜）');
+    (byCat[ck]=byCat[ck]||[]).push(rate);
+  });
+  if(!nOk){
+    return '<div style="font-size:12px;color:#b45309;padding:8px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px">'
+      +'📊 <b>会社別の利益率</b>：まだ出せません。<br>'
+      +'① マスター＞💴基準単価 で <b>📥 計算書'+((typeof MURY_CALC_STAT!=='undefined')?MURY_CALC_STAT.calc:'')+'件から（工程別）</b> を取り込む'
+      +'（用紙・印刷・製版CTP・製本の4工程がそろって初めて原価が出せます）<br>'
+      +'② 各社の売価を <b>📚 前回単価の実績</b> に入れる（会社の欄を必ず選んでください）<br>'
+      +'※ 判定できなかった実績 '+nNg+' 件</div>';
+  }
+  var rows=Object.keys(byCo).map(function(co){
+    var a=byCo[co].slice().sort(function(x,y){ return x-y; });
+    return { co:co, n:a.length, p10:_bpPct_(a,0.10), p25:_bpPct_(a,0.25), med:_bpPct_(a,0.50), p75:_bpPct_(a,0.75) };
+  }).sort(function(a,b){ return b.n-a.n; });
+  var f=function(v){ return (v==null)?'—':((v>=0?'':'')+Math.round(v*10)/10+'%'); };
+  var h='<div class="sec" style="background:#f0fdf4;border:1px solid #86efac">'
+    +'<div class="st" style="color:#065f46">📊 会社別の利益率（各社の売価 − 村山基準の工程積み上げ原価）</div>'
+    +'<div style="font-size:11.5px;color:#475569;margin:.3rem 0 .5rem">'
+    +'村山基準の原価（用紙＋印刷＋製版CTP＋製本）で作ったとして、各社の実際の売価だと利益がどれだけ残るかです。'
+    +'<b>「8割以上の案件でこれ以上」＝下位20%の値</b>を目安にしてください。'
+    +'<br>対象 '+nOk+' 件（原価を当てられなかった実績 '+nNg+' 件は除外）'
+    +'／原価は<b>自社工賃込みの総製造原価</b>なので、ここでの利益＝営業利益に近い意味です</div>'
+    +'<div style="overflow-x:auto"><table class="m-tbl" style="font-size:12px"><thead><tr>'
+    +'<th>会社</th><th style="text-align:right">件数</th>'
+    +'<th style="text-align:right;background:#dcfce7">8割以上でこれ以上<br><span style="font-weight:400;font-size:10px">(下位20%)</span></th>'
+    +'<th style="text-align:right">下位25%</th><th style="text-align:right">中央値</th><th style="text-align:right">上位25%</th>'
+    +'</tr></thead><tbody>';
+  rows.forEach(function(r){
+    var col=(r.p10!=null&&r.p10<0)?'#dc2626':((r.p10!=null&&r.p10<10)?'#b45309':'#166534');
+    h+='<tr><td><b>'+_escHtml_(r.co)+'</b></td><td style="text-align:right">'+r.n+'</td>'
+      +'<td style="text-align:right;background:#dcfce7;font-weight:800;color:'+col+'">'+f(r.p10)+'</td>'
+      +'<td style="text-align:right">'+f(r.p25)+'</td>'
+      +'<td style="text-align:right;font-weight:700">'+f(r.med)+'</td>'
+      +'<td style="text-align:right;color:#64748b">'+f(r.p75)+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  var neg=rows.filter(function(r){ return r.p10!=null&&r.p10<0; });
+  if(neg.length){
+    h+='<div style="font-size:11.5px;color:#991b1b;margin-top:6px">⚠ '
+      +neg.map(function(r){return _escHtml_(r.co);}).join('・')
+      +' は下位2割の案件が<b>赤字</b>です。どの品目で出ているかは下の表で確認してください</div>';
+  }
+  // ── どの品目・どの数量帯で薄いか（対策を打つ場所を特定する）──
+  var crows=Object.keys(byCat).map(function(k){
+    var a=byCat[k].slice().sort(function(x,y){ return x-y; });
+    return { k:k, n:a.length, p25:_bpPct_(a,0.25), med:_bpPct_(a,0.50) };
+  }).filter(function(r){ return r.n>=3; }).sort(function(a,b){ return a.med-b.med; });
+  if(crows.length){
+    h+='<div style="margin-top:10px;font-size:11.5px;font-weight:700;color:#065f46">品目・数量帯ごと（利益の薄い順）</div>'
+      +'<div style="overflow-x:auto"><table class="m-tbl" style="font-size:11.5px"><thead><tr>'
+      +'<th>品目（数量）</th><th style="text-align:right">件数</th><th style="text-align:right">下位25%</th><th style="text-align:right">中央値</th>'
+      +'</tr></thead><tbody>';
+    crows.forEach(function(r){
+      var col=(r.med!=null&&r.med<0)?'#dc2626':((r.med!=null&&r.med<15)?'#b45309':'#166534');
+      h+='<tr><td>'+_escHtml_(r.k)+'</td><td style="text-align:right">'+r.n+'</td>'
+        +'<td style="text-align:right">'+f(r.p25)+'</td>'
+        +'<td style="text-align:right;font-weight:700;color:'+col+'">'+f(r.med)+'</td></tr>';
+    });
+    h+='</tbody></table></div>';
+  }
+  h+='<div style="font-size:11px;color:#78350f;margin-top:8px;padding:7px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">'
+    +'📌 <b>読むときの注意</b>：原価は<b>村山の基準</b>（自社工賃込み）で計算しています。'
+    +'<b>小ロットは版下・組付・刷版などの一式費用が効くので原価が高く出ます</b>。'
+    +'同じ版で刷るリピート品は実際にはもっと安く作れるので、赤字に見えても実態と違うことがあります。'
+    +'まずは<b>件数の多い品目</b>から、実際の作り方と突き合わせて確認してください</div>';
+  h+='</div>';
+  return h;
+}
 function renderTankaMaster(mp){
   var st=_tankaLoad_(); var list=st.master||[];
   var q=((document.getElementById('m-q-tanka')||{}).value||'').toLowerCase().trim();
@@ -12483,6 +12695,8 @@ function renderTankaMaster(mp){
       +'</tr>';
   });
   html+='</tbody></table></div></div>';
+  // 📊 会社別の利益率（各社の売価 vs 村山基準の積み上げ原価）
+  try{ html+=renderProfitByCompany(); }catch(e){}
   // 検索できるドロップダウン（得意先は取引先マスタから・旧社名も候補に出す）
   html+=_dlHtml_('dl-tanka-cust', _dlCustNames_().concat(_dlVals_(list,'cust')))
       + _dlHtml_('dl-tanka-item', _dlVals_(list,'rawItem').concat(_dlVals_(list,'item')))
