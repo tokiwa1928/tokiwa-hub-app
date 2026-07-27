@@ -13491,8 +13491,35 @@ var STD_BANDS=[
   {k:'10000',  label:'〜10,000'},
   {k:'999999', label:'10,000超'}
 ];
-var STD_WORKS=['印刷','製本','加工','データ作成','製版・CTP','封入・発送','用紙','その他'];
+// 「売価」＝工程ごとではなく、その品目のトータル売価の基準（見積の当たりを付けるのに使う）
+var STD_WORKS=['売価','印刷','製本','加工','データ作成','製版・CTP','封入・発送','用紙','その他'];
 function _stdRates_(){ if(!Array.isArray(DB.stdRates)) DB.stdRates=[]; return DB.stdRates; }
+// ── 村山の見積計算書（G:共有ドライブ／613件・859明細）を解析して作った基準単価のたたき台 ──
+//    数量10未満（一式もの）は単価の意味が変わるため除外し、数量帯ごとの中央値を採用。
+//    件数が少ない帯（売価は3件未満・工程は2件未満）は入れていない。
+var MURY_SEED=[{"work":"売価","item":"封筒","b":{"100":48.4,"300":27.9,"500":19.2,"1000":12.3,"3000":21.3,"5000":13.2,"10000":13.4,"999999":9.1},"n":241,"bandN":"100:3件 300:9件 500:45件 1000:78件 3000:56件 5000:17件 10000:18件 999999:15件"},{"work":"売価","item":"その他","b":{"100":780.75,"300":101.6,"500":20.6,"1000":17.9,"3000":14.8,"5000":15.3,"10000":6.6,"999999":5.6},"n":177,"bandN":"100:48件 300:27件 500:14件 1000:28件 3000:28件 5000:8件 10000:7件 999999:17件"},{"work":"売価","item":"証・票・手帳","b":{"100":456.4,"300":161.2,"500":88.9,"1000":35.3,"3000":12.2,"5000":8.5,"10000":10.4},"n":131,"bandN":"100:43件 300:17件 500:13件 1000:12件 3000:33件 5000:7件 10000:4件"},{"work":"売価","item":"冊子・要覧","b":{"100":980.0,"300":297.8,"500":115.2,"1000":117.0,"3000":58.0,"999999":6.53},"n":99,"bandN":"100:19件 300:34件 500:9件 1000:13件 3000:11件 999999:10件"},{"work":"売価","item":"チラシ・リーフ","b":{"300":185.3,"500":27.0,"1000":21.7,"3000":30.2,"10000":8.7,"999999":4.53},"n":56,"bandN":"300:7件 500:9件 1000:15件 3000:11件 10000:6件 999999:6件"},{"work":"売価","item":"ハガキ・カード","b":{"100":108.1,"300":76.0,"500":37.2,"1000":27.95,"3000":11.1},"n":42,"bandN":"100:11件 300:10件 500:4件 1000:6件 3000:10件"},{"work":"売価","item":"伝票・帳票","b":{"100":896.0,"300":195.0,"1000":23.4,"3000":70.0},"n":35,"bandN":"100:19件 300:6件 1000:5件 3000:4件"},{"work":"売価","item":"名刺","b":{"100":33.2,"300":32.0},"n":29,"bandN":"100:19件 300:5件"},{"work":"印刷","item":"その他","b":{"5000":12.13},"n":4,"bandN":"5000:2件"},{"work":"印刷","item":"冊子・要覧","b":{"3000":12.38},"n":3,"bandN":"3000:2件"},{"work":"加工","item":"冊子・要覧","b":{"3000":3.29},"n":2,"bandN":"3000:2件"},{"work":"加工","item":"その他","b":{"5000":3.24},"n":2,"bandN":"5000:2件"}];
+function _stdSeedMury_(){
+  var cur=_stdRates_();
+  var already=cur.filter(function(r){ return (r.note||'').indexOf('村山 見積計算書')>=0; }).length;
+  var msg='📥 村山の見積計算書から基準単価のたたき台を取り込みます。\n\n'
+    +'・元データ: 見積書 613件 / 明細 859行（G:共有ドライブ「1.見積書 原価計算書」）\n'
+    +'・数量帯ごとの中央値です（1式ものは除外・件数が少ない帯は入れていません）\n'
+    +'・追加する行数: '+MURY_SEED.length+'（売価8品目＋工程別4件）\n'
+    +(already?('\n⚠ すでに取り込んだ行が '+already+' 件あります。重複します。\n'):'')
+    +'\n取り込みますか？（あとで数字は手で直せます。「🔒確定」は付きません）';
+  if(!confirm(msg)) return;
+  var now=new Date().toISOString();
+  MURY_SEED.forEach(function(s){
+    var r={ id:'ST'+Date.now()+'-'+Math.floor(Math.random()*1000000), work:s.work, item:s.item, spec:'',
+            unitName:'部', b:JSON.parse(JSON.stringify(s.b)), confirmed:false,
+            note:'村山 見積計算書 '+s.n+'件の中央値（'+s.bandN+'）' };
+    r.updatedAt=r._updatedAt=now;
+    cur.push(r);
+  });
+  saveDB(); try{ saveToCloud(); }catch(e){}
+  renderStdRates(document.getElementById('master-panels'));
+  alert('✅ '+MURY_SEED.length+' 行を取り込みました。\n\n数字を確認して、良ければ各行の「🔒」を押して確定にしてください。');
+}
 function _stdBandOf_(qty){
   var q=parseFloat(qty)||0;
   for(var i=0;i<STD_BANDS.length;i++){ if(q<=parseFloat(STD_BANDS[i].k)) return STD_BANDS[i].k; }
@@ -13610,6 +13637,7 @@ function renderStdRates(mp){
       +'<option value="">すべての工程</option>'+STD_WORKS.map(function(w){return '<option'+(wf===w?' selected':'')+'>'+w+'</option>';}).join('')+'</select>'
     +'<input id="m-q-std" placeholder="工程・品目・仕様で検索…" style="width:200px;font-size:12px;padding:3px 6px" oninput="renderStdRates(document.getElementById(\'master-panels\'))" value="'+_escAttr_(q)+'">'
     +'<button class="add-btn" onclick="_stdAdd_(\''+(wf||'印刷')+'\')">＋ 行を追加</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700" onclick="_stdSeedMury_()" title="村山の見積計算書 613件・859明細を解析して作った基準単価のたたき台を取り込みます">📥 村山の見積計算書から取り込む</button>'
     +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportStdRatesCSV()">📤 CSV書き出し</button>'
     +'<span style="font-size:11px;color:#888;margin-left:auto">'+view.length+' / '+rows.length+' 行　確定 '+nConf+'</span>'
     +'</div>'
