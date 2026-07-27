@@ -66,8 +66,9 @@
     <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
       <button class="btn" onclick="saveNow()" title="この端末に保存（通常は自動保存されています）" style="background:#15803d;color:#fff;border-color:#15803d;font-weight:700">💾 保存</button>
       <span id="save-msg" style="font-size:11px;color:#15803d;font-weight:700"></span>
-      <button class="btn" onclick="printReport('fin')" title="この候補の分析（財務・評価）をA4で印刷/PDF">🖨 分析を印刷</button>
-      <button class="btn" onclick="printReport('dd')" title="この候補の質問事項・DD確認事項をA4で印刷/PDF">🖨 質問を印刷</button>
+      <button class="btn" onclick="printReport('both')" title="この候補の「分析」と「質問」をまとめて印刷（A4各1枚・1枚目=分析／2枚目=質問）" style="background:#1e40af;color:#fff;border-color:#1e40af;font-weight:700">🖨 まとめて印刷（分析＋質問）</button>
+      <button class="btn" onclick="printReport('fin')" title="この候補の分析（財務・評価）をA4 1枚で印刷/PDF">🖨 分析のみ</button>
+      <button class="btn" onclick="printReport('dd')" title="この候補の質問事項・DD確認事項をA4 1枚で印刷/PDF">🖨 質問のみ</button>
       <button class="btn" onclick="exportJson()" title="全データをJSONファイルに書き出し（他PCへの移動・バックアップ）">⬇ 書出</button>
       <button class="btn" onclick="document.getElementById('imp-file').click()" title="書き出したJSONを取り込み（同名候補は上書き）">⬆ 取込</button>
       <input type="file" id="imp-file" accept=".json" style="display:none" onchange="importJson(this)">
@@ -808,9 +809,28 @@ function _prDiff_(cur,prev){
   var d=Math.round((c-p)*10)/10, pc=(p!==0)?((c-p)/Math.abs(p)*100):null, col=d>=0?'#15803d':'#b91c1c';
   return '<div style="font-size:8px;color:'+col+'">'+(d>=0?'+':'')+d.toLocaleString()+(pc!=null?(' '+(pc>=0?'+':'')+pc.toFixed(1)+'%'):'')+'</div>';
 }
+// kind: 'fin'（分析）/ 'dd'（質問）/ 'both'（分析＋質問を続けて＝A4各1枚）
 function printReport(kind){
   var t=DB.targets.find(function(x){return x.id===SEL;});
   if(!t){ alert('印刷する候補を左で選んでください'); return; }
+  if(kind==='both'){
+    var p1=_prPageHTML_(t,'fin');
+    var p2=_prPageHTML_(t,'dd');
+    if(!p2){ if(!confirm('この候補には質問事項がありません。\n分析だけを印刷しますか？')) return; }
+    _prOpen_(t, '分析＋質問', p1+(p2||''));
+    return;
+  }
+  var one=_prPageHTML_(t, kind);
+  if(!one){ alert('この候補には質問事項がありません'); return; }
+  _prOpen_(t, (kind==='dd'?'質問':'分析'), one);
+}
+// 1ページ分のHTML（A4 1枚に収める枠でラップ）。質問が0件なら null
+function _prPageHTML_(t, kind){
+  var inner=_prContent_(t, kind);
+  if(inner===null) return null;
+  return '<div class="pr-page"><div class="pr-inner">'+inner+'</div></div>';
+}
+function _prContent_(t, kind){
   var c=calc(t);
   var head='<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:12px">'
     +'<div><div style="font-size:20px;font-weight:800">'+esc(t.name||'(無名)')+'</div><div style="font-size:11px;color:#555">'+esc(t.dealGroup||'')+'　'+esc(t.biz||'')+'　'+esc(t.location||'')+(t.url?'　'+esc(t.url):'')+'</div></div>'
@@ -842,7 +862,7 @@ function printReport(kind){
     if(t.memo) body+='<div style="font-size:12px;font-weight:800;margin:12px 0 4px;border-left:4px solid #1e40af;padding-left:6px">分析メモ</div><div style="font-size:10.5px;white-space:pre-wrap;line-height:1.6">'+esc(t.memo)+'</div>';
   } else {
     var dd=t.dd||[];
-    if(!dd.length){ alert('この候補には質問事項がありません'); return; }
+    if(!dd.length) return null;
     var order=DD_CATS.concat(['']);
     body+='<div style="font-size:11px;color:#555;margin-bottom:6px">状況: '+dd.filter(function(d){return d.st==='OK';}).length+'件OK ／ '+dd.filter(function(d){return d.st==='懸念';}).length+'件懸念 ／ '+dd.filter(function(d){return !d.st||d.st==='未確認';}).length+'件未確認（全'+dd.length+'件）</div>';
     order.forEach(function(cat){
@@ -857,14 +877,33 @@ function printReport(kind){
       body+='</table>';
     });
   }
+  return head+body;
+}
+// 印刷ウィンドウを開く。各ページはA4 1枚に必ず収まるよう、はみ出す分だけ自動で縮小する
+function _prOpen_(t, label, pagesHTML){
   var w=window.open('','_blank');
-  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(t.name||'MA')+' '+(kind==='dd'?'質問':'分析')+'</title><style>'
-    +'@page{size:A4 portrait;margin:0}*{box-sizing:border-box}body{font-family:"Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;color:#111;margin:0;padding:12mm;font-size:11px}'
+  var css='@page{size:A4 portrait;margin:0}*{box-sizing:border-box}'
+    +'html,body{margin:0;padding:0}'
+    +'body{font-family:"Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;color:#111;font-size:11px}'
+    +'.pr-page{width:210mm;height:297mm;padding:12mm;overflow:hidden;page-break-after:always;break-after:page;position:relative}'
+    +'.pr-page:last-child{page-break-after:auto;break-after:auto}'
+    +'.pr-inner{transform-origin:top left;width:100%}'
     +'.pr-t{width:100%;border-collapse:collapse;margin-bottom:4px}.pr-t th{background:#1f2937;color:#fff;font-size:9.5px;padding:3px 4px;border:.5px solid #999;text-align:center}'
     +'.pr-t td{border:.5px solid #bbb;padding:3px 5px;font-size:10px;vertical-align:top}.pr-t td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}'
-    +'</style></head><body>'+head+body+'</body></html>');
+    +'@media print{.pr-page{margin:0}}';
+  // 内容が1枚に入りきらない時だけ縮小（入る時は等倍のまま）
+  var fit=';(function(){var MM=3.7795275591;var maxH=(297-24)*MM;'
+    +'var pages=document.querySelectorAll(".pr-page");'
+    +'for(var i=0;i<pages.length;i++){var inner=pages[i].querySelector(".pr-inner");if(!inner)continue;'
+    +'inner.style.transform="";inner.style.width="100%";'
+    +'var h=inner.scrollHeight;'
+    +'if(h>maxH){var s=Math.max(0.45,maxH/h);inner.style.transform="scale("+s+")";inner.style.width=(100/s)+"%";}}'
+    +'})();';
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(t.name||'MA')+' '+esc(label)+'</title>'
+    +'<style>'+css+'</style></head><body>'+pagesHTML
+    +'<script>'+fit+'<\/script></body></html>');
   w.document.close();
-  setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 350);
+  setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 450);
 }
 // 空値かどうか（数値・真偽は意味あり＝空扱いしない）
 function _isEmptyVal_(v){
