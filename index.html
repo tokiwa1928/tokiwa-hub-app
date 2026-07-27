@@ -13226,6 +13226,113 @@ function _mtConflicts_(){
   return warn;
 }
 // ═══════════════════════════════════════════════════════════
+// 🏭 案件の資材メーカー（指定 / 自由）
+//   狙い: 同じ「ハートから仕入れた」でも、得意先の【指定】なのか、自社判断の【自由】なのかで意味が違う。
+//         ・指定 … 変更不可。安くても他社に替えられない
+//         ・自由 … 変更可。仕入ルール（安い順＋取扱範囲）で最安に切り替えられる
+//   project.mat = { mode:'指定'|'自由'|'', maker:'ハート', by:'得意先名など', note:'' }
+// ═══════════════════════════════════════════════════════════
+function _projMat_(r){ return (r && r.mat) || {}; }
+function _matSet_(pid, field, v){
+  var r=(DB.projects||[]).find(function(x){return x.id===pid;}); if(!r) return;
+  r.mat=r.mat||{}; r.mat[field]=v;
+  r._updatedAt=new Date().toISOString();
+  saveDB(); try{ saveToCloud(); }catch(e){}
+  renderProjects();
+}
+// 自由の案件で、仕入ルールから「本来ここに出せる」メーカーを求める（品名・仕様から封筒っぽい行を探す）
+function _matSuggest_(r){
+  var hay=((r.item||'')+' '+(r.spec||''));
+  var env=(DB.master&&DB.master.envelope)||[];
+  // 封筒マスタの中から最も確からしい1行を選ぶ（スコア方式）
+  //   ・封筒名がそのまま含まれる = 最優先
+  //   ・名前の語（サイズ/紙質+斤量）が「すべて」含まれる = 次点
+  //   ・1語しか合わない（例「長3」だけ）は誤判定のもとなので採用しない
+  var hit=null, best=0;
+  env.forEach(function(e){
+    var nm=String(e.nm||'').trim(); if(!nm) return;
+    var score=0;
+    if(hay.indexOf(nm)>=0){ score=100+nm.length; }
+    else{
+      var toks=nm.split(/\s+/).filter(Boolean);
+      var hits=toks.filter(function(tk){ return hay.indexOf(tk)>=0; });
+      if(toks.length>=2 && hits.length===toks.length) score=50+nm.length;
+      else if(hits.length>=2) score=20+hits.join('').length;
+      else return;
+    }
+    if(score>best){ best=score; hit=e; }
+  });
+  if(!hit) return null;
+  var ev=(typeof _supplyEval_==='function')?_supplyEval_(hit):null;
+  if(!ev || ev.noRules || !ev.pick) return null;
+  return { maker:ev.pick.maker, via:hit.nm, skipped:ev.skipped };
+}
+// 一覧に出す小バッジ（指定は赤・自由は緑。詳細を開かなくても分かるように）
+function _matBadge_(r){
+  var m=_projMat_(r);
+  if(!m.mode) return '';
+  var isSpec=(m.mode==='指定');
+  var mk=m.maker?('：'+m.maker):'';
+  return ' <span style="font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;white-space:nowrap;'
+    +(isSpec?'background:#fee2e2;color:#b91c1c':'background:#ecfdf5;color:#065f46')+'"'
+    +' title="'+(isSpec?('得意先の指定'+(m.by?('（'+String(m.by).replace(/"/g,'&quot;')+'）'):'')+'。他メーカーに替えられません'):'自由（自社判断）。安いメーカーへ切り替え可')+'">'
+    +(isSpec?'📌指定':'🆓自由')+_escDiff(mk)+'</span>';
+}
+function _matSpecHtml_(r){
+  var m=_projMat_(r);
+  var mode=m.mode||'';
+  var makers=(typeof _makerList_==='function')?_makerList_():[];
+  var sug=(mode!=='指定')?_matSuggest_(r):null;
+  var pid=String(r.id||'').replace(/'/g,"\\'");
+  var chip=function(label,val,color){
+    var on=(mode===val);
+    return '<button class="btn" style="font-size:10.5px;padding:3px 12px;border-radius:12px;'
+      +(on?('background:'+color+';color:#fff;border-color:'+color+';font-weight:700'):('color:'+color+';border-color:'+color))
+      +'" onclick="event.stopPropagation();_matSet_(\''+pid+'\',\'mode\',\''+(on?'':val)+'\')">'+label+'</button>';
+  };
+  var h='<div style="margin-top:10px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">'
+    +'<div style="background:#f8fafc;padding:6px 10px;font-size:11px;font-weight:700;color:#334155;border-bottom:1px solid #e5e7eb">🏭 資材メーカー（封筒・用紙）</div>'
+    +'<div style="padding:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap" onclick="event.stopPropagation()">'
+    + chip('📌 得意先の指定','指定','#b91c1c')
+    + chip('🆓 自由（自社判断）','自由','#0f766e')
+    + (mode? ('<select style="width:auto;font-size:11px;padding:3px 6px" onchange="_matSet_(\''+pid+'\',\'maker\',this.value)">'
+        +'<option value="">メーカー未設定</option>'
+        + makers.map(function(x){ return '<option'+((m.maker===x)?' selected':'')+'>'+_escDiff(x)+'</option>'; }).join('')
+        + ((m.maker && makers.indexOf(m.maker)<0)?('<option selected>'+_escDiff(m.maker)+'</option>'):'')
+      +'</select>') : '')
+    + (mode==='指定'? ('<input value="'+_escAttr_(m.by||'')+'" placeholder="指定元・経緯（例: 総務課の指定）" title="誰の指定か・いつからかを残しておくと引き継げます" style="font-size:11px;padding:3px 6px;min-width:200px;flex:1" onchange="_matSet_(\''+pid+'\',\'by\',this.value)">') : '')
+    +'</div>';
+  if(mode==='指定'){
+    h+='<div style="padding:0 10px 10px;font-size:11px;color:#b91c1c">📌 <b>得意先の指定</b>のため、他メーカーへの切り替えはできません（相見積の対象外）。</div>';
+  } else if(mode==='自由'){
+    if(sug){
+      var why=(sug.skipped&&sug.skipped.length)?('（'+sug.skipped.map(function(s){return s.maker+'は'+s.why;}).join('・')+'）'):'';
+      var same=(m.maker && m.maker===sug.maker);
+      h+='<div style="padding:0 10px 10px;font-size:11px;color:'+(same?'#0f766e':'#b45309')+'">'
+        +(same?'✅ ':'💡 ')+'仕入ルールでは <b>'+_escDiff(sug.maker)+'</b> に出せます'+_escDiff(why)
+        +'<span style="color:#94a3b8">（照合: '+_escDiff(sug.via)+'）</span>'
+        +(same?'':' <button class="btn" style="font-size:10px;padding:2px 8px;margin-left:4px" onclick="event.stopPropagation();_matSet_(\''+pid+'\',\'maker\',\''+String(sug.maker).replace(/'/g,"\\'")+'\')">このメーカーにする</button>')
+        +'</div>';
+    } else {
+      h+='<div style="padding:0 10px 10px;font-size:11px;color:#94a3b8">🆓 自由（自社判断）。安いメーカーへ切り替えられます。※仕入ルールから自動判定するには、封筒マスタの品名と一致する仕様が必要です</div>';
+    }
+  } else {
+    h+='<div style="padding:0 10px 10px;font-size:11px;color:#94a3b8">未設定です。<b>得意先の指定</b>か<b>自由</b>かを選ぶと、あとで価格を見直せる案件かどうかが分かります。</div>';
+  }
+  // メーカー別呼称（発注時にそのメーカーの言い方で伝える）
+  if(m.maker){
+    var terms=(typeof _makerTerms_==='function')?_makerTerms_():[];
+    var rel=terms.filter(function(x){ return x.m && x.m[m.maker]; }).slice(0,6);
+    if(rel.length){
+      h+='<div style="padding:0 10px 10px"><div style="font-size:10.5px;color:#78350f;font-weight:700;margin-bottom:3px">📖 '+_escDiff(m.maker)+' での呼び方（発注時はこの言い方で）</div>'
+        +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+        + rel.map(function(x){ return '<span style="font-size:10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:4px;padding:2px 7px" title="'+_escAttr_((x.spec?('実寸: '+x.spec):''))+'">'+_escDiff(x.std||'')+' → <b>'+_escDiff(x.m[m.maker])+'</b></span>'; }).join('')
+        +'</div></div>';
+    }
+  }
+  return h+'</div>';
+}
+// ═══════════════════════════════════════════════════════════
 // 💴 基準単価表（工程/作業 × 仕様 × 数量帯）
 //   狙い: 実原価の把握ではなく「この仕様のこの作業は、この数量ならこのくらい」という
 //         全社共通の【基準値】を持つこと。前回金額の振り返り・見直しの物差しにして、
@@ -41504,6 +41611,7 @@ function renderProjects(){
           <!-- 仕様タブ -->
           <div id="proj-tab-spec-${oi}" class="proj-tab-content" style="display:none;padding:14px">
             ${r.spec?`<div style="background:#fafafa;padding:10px 12px;border-radius:6px;font-size:13px;white-space:pre-wrap;line-height:1.7;color:#1a1a1a;border-left:3px solid #1e40af">${_escDiff(r.spec)}</div>`:'<div style="text-align:center;color:#888;padding:20px;font-size:12px">仕様未入力</div>'}
+            ${_matSpecHtml_(r)}
             <div style="margin-top:10px;display:flex;gap:6px;justify-content:flex-end">
               ${specBtn}
               ${outsourceSpecBtn}
@@ -41567,7 +41675,7 @@ function renderProjects(){
       <td style="font-size:11px;white-space:nowrap;line-height:1.35"><span style="white-space:nowrap">${r.orderDate?_ymdJP2_(r.orderDate).replace('<br>',''):'-'}</span></td>
       <td style="max-width:180px">${groupTag?`<span class="pj-cust-tag">${groupTag}</span>`:''}<span class="pj-cust" style="font-size:12px">${_escDiff(r.cust||'')}</span></td>
       <td style="max-width:260px">
-        <div class="pj-item" style="font-size:12px;font-weight:600">${(r.item||'').replace(/_x000d_/g,' ')}${r._provisional?` <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;white-space:nowrap" title="数量・金額・仕様が未確定（校正先行）">⚠未確定</span>`:''}</div>
+        <div class="pj-item" style="font-size:12px;font-weight:600">${(r.item||'').replace(/_x000d_/g,' ')}${r._provisional?` <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;white-space:nowrap" title="数量・金額・仕様が未確定（校正先行）">⚠未確定</span>`:''}${_matBadge_(r)}</div>
       </td>
       <td class="r" style="font-size:11px;white-space:nowrap;color:#7c3aed">${_unitP}</td>
       <td class="r" style="font-size:12px;white-space:nowrap">${r.exTax>0?fmt(r.exTax):''}</td>
