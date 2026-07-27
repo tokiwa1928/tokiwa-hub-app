@@ -1601,8 +1601,8 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-makerterms" onclick="swMaster('makerterms',this)" style="color:#b45309;border-color:#fcd34d;font-weight:700" title="メーカー別呼称の対訳（封筒・用紙）— 窓の号数はメーカーで違うので実寸で紐づけます。基準はハート表記">🏭 メーカー呼称</button>
     <button class="pill" id="mc-supplyrules" onclick="swMaster('supplyrules',this)" style="color:#0f766e;border-color:#5eead4;font-weight:700" title="仕入ルール — メーカーを安い順に並べ取扱範囲を登録すると、封筒の発注先が自動で決まります（相見積の手間をなくす）">🚚 仕入ルール</button>
     <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
-    <button class="pill" id="mc-costref" onclick="swMaster('costref',this)" title="参考原価マスタ（作業別の最低料金・単価・原価率%。見積の指針用・別管理）">参考原価</button>
-    <button class="pill" id="mc-tanka" onclick="swMaster('tanka',this)" style="color:#0369a1;border-color:#7dd3fc;font-weight:700" title="単価マスタ構築ツールの蓄積（得意先×品名×仕様の前回単価）を確認・修正">💴 単価マスタ</button>
+    <button class="pill" id="mc-stdrates" onclick="swMaster('stdrates',this)" style="color:#065f46;border-color:#6ee7b7;font-weight:700" title="基準単価表 — 工程×仕様×数量帯の「このくらい」という全社共通の基準値。前回金額の見直しの物差しにして確実に利益を出す">💴 基準単価</button>
+    <button class="pill" id="mc-tanka" onclick="swMaster('tanka',this)" title="実績データ（得意先×品名×仕様の前回単価）。基準単価表の集計元です">📚 前回単価の実績</button>
     <button class="pill" id="mc-stock" onclick="swMaster('stock',this)" title="リピート品（在庫品候補）— FM2020-26で繰り返し・仕様変更なしの受注。閑散期に見込み生産する候補">🔁 リピート品</button>
   </div>
   <div id="master-panels"></div>
@@ -3763,6 +3763,7 @@ let DB={
   makerTerms: [],       // メーカー別呼称の対訳（封筒/用紙。窓の号数がメーカーで異なるため実寸で紐づける）
   makerList: [],        // 対訳表の列に出すメーカー名（既定はハート/ムトウユニパック/キングコーポレーション/山櫻/ヤマガタ）
   supplyRules: [],      // 仕入ルール（メーカー別の優先順位＝安い順・取扱範囲）。発注先を自動判定して相見積の手間を省く
+  stdRates: [],         // 基準単価表（工程×仕様×数量帯）。全社共通の「この作業はこのくらい」の基準値＝利益の下限
   conf:{     // 会社設定
     name:'村山印刷有限会社',
     rep:'代表取締役 比留間 節子',
@@ -4102,7 +4103,7 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   if(!d.inquirySettings) d.inquirySettings={autoReply:true,autoReplyMessage:'',categories:['見積依頼','納品について','データ入稿','校正確認','クレーム','その他'],assignees:[]};
   if(!d.wikiArticles) d.wikiArticles=[];
   if(!d.templates) d.templates=[];
-  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],supplyRules:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
+  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],supplyRules:[],stdRates:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
   // AAAA-1: マスター番号 backfill (起動時に既存データに割り当て)
   if(typeof _backfillMasterNos_ === 'function') _backfillMasterNos_();
   // 移行による変更を永続化（しないと次回リロードで元に戻り、フラグだけ立って再実行もされない）
@@ -4375,6 +4376,15 @@ async function loadFromCloud() {
   // 対訳表の列（メーカー名）— 件数が多い側を採用（列の追加を消さない）
   if (Array.isArray(result.data.makerList)) {
     if(!Array.isArray(DB.makerList) || result.data.makerList.length >= DB.makerList.length) DB.makerList = result.data.makerList;
+  }
+  // 基準単価表（工程×仕様×数量帯）— id単位で新しい方を採用
+  if (result.data.stdRates) {
+    var _srtTs=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var _srtById={}, _srtOrder=[];
+    var _srtTake=function(r){ if(!r||!r.id) return; if(!(r.id in _srtById)){ _srtOrder.push(r.id); _srtById[r.id]=r; } else if(_srtTs(r)>_srtTs(_srtById[r.id])){ _srtById[r.id]=r; } };
+    (Array.isArray(DB.stdRates)?DB.stdRates:[]).forEach(_srtTake);
+    result.data.stdRates.forEach(_srtTake);
+    DB.stdRates = _srtOrder.map(function(id){ return _srtById[id]; });
   }
   // 仕入ルール（メーカー別の取扱範囲・優先順位）— id単位で新しい方を採用
   if (result.data.supplyRules) {
@@ -4937,6 +4947,7 @@ async function saveToCloud() {
     makerTerms: DB.makerTerms || [],
     makerList: DB.makerList || [],
     supplyRules: DB.supplyRules || [],
+    stdRates: DB.stdRates || [],
     calendarOrders: DB.calendarOrders || [],
     calendarOrdersDeleted: (DB.calendarOrdersDeleted || []).slice(-2000),
     calendarOrdersDeletedSig: (DB.calendarOrdersDeletedSig || []).slice(-2000),
@@ -12471,6 +12482,10 @@ function renderMaster(id){
     renderSupplyRules(mp);
     return;
   }
+  if(id==='stdrates'){
+    renderStdRates(mp);
+    return;
+  }
   if(id==='stock'){
     renderStockCandidates(mp);
     return;
@@ -13209,6 +13224,212 @@ function _mtConflicts_(){
     });
   });
   return warn;
+}
+// ═══════════════════════════════════════════════════════════
+// 💴 基準単価表（工程/作業 × 仕様 × 数量帯）
+//   狙い: 実原価の把握ではなく「この仕様のこの作業は、この数量ならこのくらい」という
+//         全社共通の【基準値】を持つこと。前回金額の振り返り・見直しの物差しにして、
+//         どの会社でも確実に利益を出せる下限を作る。（参考原価マスタの役割はここに吸収）
+//   DB.stdRates = [{id, work(工程), item(品目), spec(仕様), unitName(単位),
+//                   b:{ '100':単価, '300':単価, ... }, note, updatedAt, confirmed}]
+//   数量帯は STD_BANDS の上限値をキーにする（'100'=〜100、'999999'=10,000超）
+// ═══════════════════════════════════════════════════════════
+var STD_BANDS=[
+  {k:'100',    label:'〜100'},
+  {k:'300',    label:'〜300'},
+  {k:'500',    label:'〜500'},
+  {k:'1000',   label:'〜1,000'},
+  {k:'3000',   label:'〜3,000'},
+  {k:'5000',   label:'〜5,000'},
+  {k:'10000',  label:'〜10,000'},
+  {k:'999999', label:'10,000超'}
+];
+var STD_WORKS=['印刷','製本','加工','データ作成','製版・CTP','封入・発送','用紙','その他'];
+function _stdRates_(){ if(!Array.isArray(DB.stdRates)) DB.stdRates=[]; return DB.stdRates; }
+function _stdBandOf_(qty){
+  var q=parseFloat(qty)||0;
+  for(var i=0;i<STD_BANDS.length;i++){ if(q<=parseFloat(STD_BANDS[i].k)) return STD_BANDS[i].k; }
+  return '999999';
+}
+function _stdStamp_(r){ r.updatedAt=r._updatedAt=new Date().toISOString(); }
+function _stdAdd_(work){
+  var r={ id:'ST'+Date.now()+'-'+Math.floor(Math.random()*100000), work:work||'印刷', item:'', spec:'', unitName:'部', b:{}, note:'', confirmed:false };
+  _stdStamp_(r); _stdRates_().unshift(r); saveDB(); renderStdRates(document.getElementById('master-panels'));
+}
+function _stdEdit_(id,f,v){ var r=_stdRates_().find(function(x){return x.id===id;}); if(!r) return; r[f]=v; _stdStamp_(r); saveDB(); }
+function _stdEditRe_(id,f,v){ _stdEdit_(id,f,v); renderStdRates(document.getElementById('master-panels')); }
+function _stdSetBand_(id, bk, v){
+  var r=_stdRates_().find(function(x){return x.id===id;}); if(!r) return;
+  r.b=r.b||{};
+  var n=parseFloat(String(v).replace(/[,，]/g,''));
+  if(v===''||isNaN(n)) delete r.b[bk]; else r.b[bk]=n;
+  _stdStamp_(r); saveDB();
+}
+function _stdDel_(id){
+  var r=_stdRates_().find(function(x){return x.id===id;});
+  if(!confirm('基準単価「'+((r&&(r.work+' '+(r.item||'')))||'')+'」の行を削除しますか？')) return;
+  DB.stdRates=_stdRates_().filter(function(x){return x.id!==id;});
+  saveDB(); renderStdRates(document.getElementById('master-panels'));
+}
+// ── 実績サンプル（本体の過去実績＋単価マスタツールの蓄積）を、この行の条件で数量帯ごとに集計 ──
+//    行の「品目」「仕様」の語をすべて含む実績だけを対象にする（AND・部分一致）
+// 集計元＝①受注案件(DB.projects) ②見積(DB.estimates) ③旧履歴(DB.history) ④単価マスタ構築ツールの蓄積
+//   ※ _tierSamples_ は③④しか見ないため、実績の主力である①②をここで足している
+function _stdAllSamples_(){
+  var out=(typeof _tierSamples_==='function')? _tierSamples_().slice() : [];
+  (DB.projects||[]).forEach(function(r){
+    var q=parseFloat(r.qty)||0, ex=parseFloat(r.exTax)||0;
+    if(q>0&&ex>0) out.push({ hay:((r.item||'')+' '+(r.spec||'')), qty:q, unit:ex/q, src:'受注実績' });
+  });
+  (DB.estimates||[]).forEach(function(e){
+    var q=parseFloat(e.qty)||0, ex=parseFloat(e.exTax)||0;
+    if(q>0&&ex>0) out.push({ hay:((e.item||'')+' '+(e.spec||'')), qty:q, unit:ex/q, src:'見積' });
+  });
+  return out;
+}
+function _stdSamplesFor_(row){
+  var terms=[].concat(String(row.item||'').split(/[\s,、]+/), String(row.spec||'').split(/[\s,、]+/))
+    .map(function(s){return s.trim();}).filter(Boolean).map(function(s){return s.toLowerCase();});
+  var all=_stdAllSamples_();
+  var byBand={};
+  all.forEach(function(s){
+    if(!(s.qty>0&&s.unit>0)) return;
+    var hay=String(s.hay||'').toLowerCase();
+    if(terms.length && !terms.every(function(t){ return hay.indexOf(t)>=0; })) return;
+    var bk=_stdBandOf_(s.qty);
+    (byBand[bk]=byBand[bk]||[]).push(s.unit);
+  });
+  var out={};
+  Object.keys(byBand).forEach(function(bk){
+    var a=byBand[bk].slice().sort(function(x,y){return x-y;});
+    out[bk]={ n:a.length, med:Math.round(a[Math.floor(a.length/2)]*100)/100,
+              min:Math.round(a[0]*100)/100, max:Math.round(a[a.length-1]*100)/100 };
+  });
+  return out;
+}
+// 実績の中央値を基準値として一括採用（空欄のみ／全部 を選べる）
+function _stdApplyMedian_(id, onlyEmpty){
+  var r=_stdRates_().find(function(x){return x.id===id;}); if(!r) return;
+  var s=_stdSamplesFor_(r); var n=0;
+  r.b=r.b||{};
+  STD_BANDS.forEach(function(b){
+    var st=s[b.k]; if(!st) return;
+    if(onlyEmpty && r.b[b.k]!=null) return;
+    r.b[b.k]=st.med; n++;
+  });
+  if(!n){ alert('この条件に合う実績が見つかりませんでした。\n「品目」「仕様」の言葉を、実績の品名に含まれる言い方に合わせてみてください（例: 封筒 / 長3 / 名刺）'); return; }
+  _stdStamp_(r); saveDB(); renderStdRates(document.getElementById('master-panels'));
+}
+function _stdToggleConfirm_(id){
+  var r=_stdRates_().find(function(x){return x.id===id;}); if(!r) return;
+  r.confirmed=!r.confirmed; _stdStamp_(r); saveDB(); renderStdRates(document.getElementById('master-panels'));
+}
+// 見積などから: 工程×品目×数量 で基準単価を引く（確定行を優先）
+function stdRateLookup(work, text, qty){
+  var bk=_stdBandOf_(qty);
+  var hay=String(text||'').toLowerCase();
+  var cands=_stdRates_().filter(function(r){
+    if(work && r.work && r.work!==work) return false;
+    if(r.b==null || r.b[bk]==null) return false;
+    var terms=[].concat(String(r.item||'').split(/[\s,、]+/), String(r.spec||'').split(/[\s,、]+/))
+      .map(function(s){return s.trim().toLowerCase();}).filter(Boolean);
+    if(!terms.length) return false;
+    return terms.every(function(t){ return hay.indexOf(t)>=0; });
+  });
+  if(!cands.length) return null;
+  // 条件が細かい（語数が多い）行を優先、次に確定済みを優先
+  cands.sort(function(a,b){
+    var la=((a.item||'')+' '+(a.spec||'')).trim().length, lb=((b.item||'')+' '+(b.spec||'')).trim().length;
+    if(lb!==la) return lb-la;
+    return (b.confirmed?1:0)-(a.confirmed?1:0);
+  });
+  var hit=cands[0];
+  return { unit:hit.b[bk], band:bk, row:hit,
+           label:(hit.work||'')+' '+(hit.item||'')+(hit.spec?(' '+hit.spec):'') };
+}
+function renderStdRates(mp){
+  if(!mp) return;
+  var rows=_stdRates_();
+  var q=((document.getElementById('m-q-std')||{}).value||'').toLowerCase().trim();
+  var wf=window._stdWorkF_||'';
+  var view=rows.filter(function(r){
+    if(wf && r.work!==wf) return false;
+    if(!q) return true;
+    return ((r.work||'')+' '+(r.item||'')+' '+(r.spec||'')+' '+(r.note||'')).toLowerCase().indexOf(q)>=0;
+  });
+  var nConf=rows.filter(function(r){return r.confirmed;}).length;
+  var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">💴 基準単価表（工程 × 仕様 × 数量帯）'
+    +'<select onchange="window._stdWorkF_=this.value;renderStdRates(document.getElementById(\'master-panels\'))" style="width:auto;font-size:11px;padding:3px 6px">'
+      +'<option value="">すべての工程</option>'+STD_WORKS.map(function(w){return '<option'+(wf===w?' selected':'')+'>'+w+'</option>';}).join('')+'</select>'
+    +'<input id="m-q-std" placeholder="工程・品目・仕様で検索…" style="width:200px;font-size:12px;padding:3px 6px" oninput="renderStdRates(document.getElementById(\'master-panels\'))" value="'+_escAttr_(q)+'">'
+    +'<button class="add-btn" onclick="_stdAdd_(\''+(wf||'印刷')+'\')">＋ 行を追加</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportStdRatesCSV()">📤 CSV書き出し</button>'
+    +'<span style="font-size:11px;color:#888;margin-left:auto">'+view.length+' / '+rows.length+' 行　確定 '+nConf+'</span>'
+    +'</div>'
+    +'<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px">'
+    +'💡 <b>「この仕様のこの作業は、この数量ならこのくらい」</b>という全社共通の基準値をつくる表です。実原価を厳密に出すためではなく、'
+    +'<b>前回金額を振り返り・見直すための物差し</b>として使い、どの会社でも確実に利益が出る下限を決めます。<br>'
+    +'💡 <b>「品目」「仕様」に入れた言葉が過去実績の品名に含まれる行を集計</b>します（例: 品目「封筒」仕様「長3」→ 長3封筒の実績）。'
+    +'セルのグレーの数字が<b>実績の中央値</b>、その下の n は件数です。<b>📊採用</b>で基準値に取り込み、必要に応じて手で直してください。<br>'
+    +'🔒 見直しが済んだ行は<b>「確定」</b>にしておくと、見積で優先的に引き当てられます。'
+    +'</div>'
+    +'<div style="overflow-x:auto"><table class="m-tbl"><thead><tr>'
+    +'<th style="min-width:96px">工程</th>'
+    +'<th style="min-width:110px">品目</th>'
+    +'<th style="min-width:130px">仕様</th>'
+    +'<th style="min-width:54px">単位</th>'
+    + STD_BANDS.map(function(b){ return '<th style="min-width:78px;text-align:right">'+b.label+'</th>'; }).join('')
+    +'<th style="min-width:120px">備考</th>'
+    +'<th style="min-width:112px">実績から</th>'
+    +'<th style="min-width:56px">確定</th><th class="dx"></th>'
+    +'</tr></thead><tbody>';
+  if(!view.length){
+    html+='<tr><td colspan="'+(STD_BANDS.length+8)+'" style="text-align:center;color:#aaa;padding:1.6rem">'
+      +(q||wf?'該当なし':'まだ基準がありません。「＋ 行を追加」で、工程（製本など）と品目・仕様を入れて「📊 実績から」を押すと、過去実績の中央値がたたき台として入ります')+'</td></tr>';
+  }
+  view.forEach(function(r){
+    var s=_stdSamplesFor_(r);
+    html+='<tr'+(r.confirmed?' style="background:#f0fdf4"':'')+'>'
+      +'<td><select style="width:100%;font-size:11px" onchange="_stdEditRe_(\''+r.id+'\',\'work\',this.value)">'
+        +STD_WORKS.map(function(w){return '<option'+(r.work===w?' selected':'')+'>'+w+'</option>';}).join('')+'</select></td>'
+      +'<td><input value="'+_escAttr_(r.item||'')+'" placeholder="例: 封筒 / 名刺 / 冊子" title="実績の品名に含まれる言葉を入れてください（部分一致で集計します）" style="width:100%" onchange="_stdEditRe_(\''+r.id+'\',\'item\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(r.spec||'')+'" placeholder="例: 長3 クラフト / 4C 中綴じ" title="サイズ・色・加工など。ここに入れた言葉もすべて含む実績だけを集計します" style="width:100%" onchange="_stdEditRe_(\''+r.id+'\',\'spec\',this.value)"></td>'
+      +'<td><input value="'+_escAttr_(r.unitName||'部')+'" style="width:100%;font-size:11px" onchange="_stdEdit_(\''+r.id+'\',\'unitName\',this.value)"></td>'
+      + STD_BANDS.map(function(b){
+          var v=(r.b&&r.b[b.k]!=null)?r.b[b.k]:'';
+          var st=s[b.k];
+          var sub=st?('<div style="font-size:9px;color:#94a3b8;text-align:right;line-height:1.2" title="実績 '+st.n+'件：最小 '+st.min+' 〜 最大 '+st.max+'（中央値 '+st.med+'）">'+st.med+'<span style="color:#cbd5e1"> n'+st.n+'</span></div>'):'';
+          return '<td style="text-align:right">'
+            +'<input type="number" step="0.01" value="'+v+'" placeholder="—" style="width:100%;text-align:right;font-weight:700;'+(v!==''?'color:#065f46':'')+'" onchange="_stdSetBand_(\''+r.id+'\',\''+b.k+'\',this.value)">'
+            +sub+'</td>';
+        }).join('')
+      +'<td><input value="'+_escAttr_(r.note||'')+'" placeholder="根拠・条件" style="width:100%;font-size:11px" onchange="_stdEdit_(\''+r.id+'\',\'note\',this.value)"></td>'
+      +'<td style="white-space:nowrap">'
+        +'<button class="btn" style="font-size:10px;padding:2px 6px" title="実績の中央値を、空いているセルにだけ入れます" onclick="_stdApplyMedian_(\''+r.id+'\',true)">📊 空欄へ</button> '
+        +'<button class="btn" style="font-size:10px;padding:2px 6px" title="実績の中央値で全セルを入れ直します（手入力も上書き）" onclick="if(confirm(\'実績の中央値で全ての数量帯を入れ直します。手で直した値も上書きされます。よろしいですか？\'))_stdApplyMedian_(\''+r.id+'\',false)">全部</button>'
+      +'</td>'
+      +'<td style="text-align:center"><span style="cursor:pointer;font-size:14px" title="'+(r.confirmed?'確定済み（見積で優先的に使われます）':'未確定（見直し前）')+'" onclick="_stdToggleConfirm_(\''+r.id+'\')">'+(r.confirmed?'🔒':'⬜')+'</span></td>'
+      +'<td class="dx"><button class="del-btn" onclick="_stdDel_(\''+r.id+'\')">×</button></td>'
+      +'</tr>';
+  });
+  html+='</tbody></table></div>'
+    +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      +'<button class="btn btn-p" style="font-size:12px;padding:5px 14px" onclick="saveDB();alert(\'保存しました\')">保存</button>'
+      +'<span style="font-size:11px;color:#94a3b8">※ 集計元＝受注案件 '+((DB.projects||[]).filter(function(r){return (parseFloat(r.qty)||0)>0&&(parseFloat(r.exTax)||0)>0;}).length)+'件／見積 '+((DB.estimates||[]).filter(function(e){return (parseFloat(e.qty)||0)>0&&(parseFloat(e.exTax)||0)>0;}).length)+'件／過去実績・単価マスタツール '+((typeof _tierSamples_==='function')?_tierSamples_().length:0)+'件</span>'
+      +'<button class="btn" style="font-size:10.5px;padding:3px 9px;margin-left:auto;color:#78350f;border-color:#fcd34d" title="旧「参考原価マスタ」（作業別の原価率%）。役割はこの基準単価表に引き継ぎましたが、見積の原価率の自動計算では今も使われています。データは残っています" onclick="renderCostRefMaster(document.getElementById(\'master-panels\'))">📐 参考原価マスタ（旧・原価率）を開く</button>'
+    +'</div></div>';
+  mp.innerHTML=html;
+}
+function exportStdRatesCSV(){
+  var rows=_stdRates_();
+  if(!rows.length){ alert('基準単価表が空です'); return; }
+  var out=[['工程','品目','仕様','単位'].concat(STD_BANDS.map(function(b){return b.label;})).concat(['備考','確定'])];
+  rows.forEach(function(r){
+    out.push([r.work||'', r.item||'', r.spec||'', r.unitName||'']
+      .concat(STD_BANDS.map(function(b){ return (r.b&&r.b[b.k]!=null)?r.b[b.k]:''; }))
+      .concat([r.note||'', r.confirmed?'確定':'']));
+  });
+  _downloadCSV_(out, '基準単価表_'+_todayTag_()+'.csv');
 }
 // ═══════════════════════════════════════════════════════════
 // 🚚 仕入ルール（メーカー別の取扱範囲・優先順位）
