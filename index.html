@@ -8337,6 +8337,14 @@ function buildPanel(id,initData){
     <div id="pv-extra-${id}"></div>
     <div style="margin-top:6px"><button type="button" class="btn" style="font-size:11.5px;padding:4px 14px" onclick="addPrevCmp(${id})">＋ 前回比較を追加（別の過去実績と並べて比較）</button></div>
   </div>
+  <!-- 🧮 BUILDUP-1: 工程積み上げ — 基準単価表の作業別単価を仕様から拾って積み上げる -->
+  <div class="sec" style="background:#fffbeb;border:1px solid #fcd34d" id="bu-sec-${id}">
+    <div class="st" style="color:#92400e;display:flex;align-items:center;gap:8px;flex-wrap:wrap">🧮 工程積み上げ（基準単価から原価をつくる）
+      <button type="button" class="btn" style="font-size:11px;padding:3px 10px" onclick="renderBuildUp(${id},1)">🔄 仕様から作り直す</button>
+      <span style="font-size:11px;font-weight:400;color:#a16207">作業のチェックと単価は手で直せます。数量を刻みで動かしたときの単価・合計・増加額も出します</span>
+    </div>
+    <div id="bu-body-${id}"><div style="font-size:12px;color:#a16207;padding:6px">「🔄 仕様から作り直す」を押すと、品名・サイズ・数量から作業を並べて積み上げます。</div></div>
+  </div>
   <!-- 明細テーブル：数量パターン＋仕様違いを統合 -->
   <div style="overflow-x:auto" id="res-wrap-${id}"></div>
 
@@ -13824,6 +13832,297 @@ function _kanaNorm_(s){
     .replace(/[ァ-ヶ]/g, function(c){ return String.fromCharCode(c.charCodeAt(0)-0x60); })
     .toLowerCase();
 }
+// ═══════════════════════════════════════════════════════════
+// 🧮 工程積み上げ（BUILDUP-1）
+//   基準単価表の「作業ごとの単価」を仕様から拾って積み上げ、
+//   数量を50ずつ動かしたときの 単価／合計／増加額 を出す。
+//   ・1個あたりの行は 数量帯のあいだを補間する（対数で直線＝価格カーブの自然な形）
+//   ・一式の行は補間しない（数量帯ごとの段になる。実際に段で決まるため）
+// ═══════════════════════════════════════════════════════════
+function _buPoints_(r){
+  // 数量帯 → [数量, 単価] の点列。'999999'（10000超）は 20000 の点として扱う
+  var pts=[];
+  (STD_BANDS||[]).forEach(function(b){
+    var v=(r.b||{})[b.k];
+    if(v==null||!(v>0)) return;
+    var q=(b.k==='999999')?20000:parseFloat(b.k);
+    pts.push([q, parseFloat(v)]);
+  });
+  pts.sort(function(a,b){ return a[0]-b[0]; });
+  return pts;
+}
+function _buUnitAt_(r, qty){
+  var q=parseFloat(qty)||0;
+  if(q<=0) return 0;
+  if(String(r.unitName||'')==='式'){
+    // 一式は「数量に依らない」金額なので、数量帯ごとに変えず全体の中央値をそのまま使う。
+    // （帯ごとの値を使うと、数量を増やしたのに合計が下がる、という不自然な動きになる）
+    var vals=_buPoints_(r).map(function(p){ return p[1]; }).sort(function(a,b){ return a-b; });
+    if(!vals.length) return 0;
+    return vals[Math.floor(vals.length/2)];
+  }
+  var pts=_buPoints_(r);
+  if(!pts.length) return 0;
+  if(q<=pts[0][0]) return pts[0][1];
+  if(q>=pts[pts.length-1][0]) return pts[pts.length-1][1];
+  for(var i=0;i<pts.length-1;i++){
+    var a=pts[i], b=pts[i+1];
+    if(q>=a[0]&&q<=b[0]){
+      var la=Math.log(a[0]), lb=Math.log(b[0]), lq=Math.log(q);
+      var ua=Math.log(Math.max(a[1],0.0001)), ub=Math.log(Math.max(b[1],0.0001));
+      var t=(lb-la)?((lq-la)/(lb-la)):0;
+      return Math.exp(ua+(ub-ua)*t);
+    }
+  }
+  return pts[pts.length-1][1];
+}
+// 仕様の文字から、積み上げに使えそうな作業行を工程ごとに集める
+function _buCandidates_(text, unitName){
+  var hay=_kanaNorm_(String(text||''));
+  var wantU=_kanaNorm_(String(unitName||''));
+  var out=[];
+  _stdRates_().forEach(function(r){
+    if(!r.b||!Object.keys(r.b).length) return;
+    if(r.work==='売価') return;                    // 売価は積み上げに入れない
+    var ru=_kanaNorm_(String(r.unitName||''));
+    var isSet=(String(r.unitName||'')==='式');
+    // 印刷は「1通しあたり」で持っている。通し数＝数量とみなして使う（1面付の場合はこれで合う）
+    var isPass=(String(r.unitName||'')==='通し');
+    if(!isSet && !isPass && wantU && ru && ru!==wantU) return; // 単位が違う1個あたりの行は使わない
+    // 作業別の行（村山 計算書 作業別）は品名に関係なく候補にする。それ以外は品名との一致を見る
+    var isOps=((r.note||'').indexOf('作業別')>=0);
+    var hit=isOps;
+    if(!hit){
+      var terms=[String(r.item||''),String(r.spec||'')].join(' ').split(/[\s,、・\/（）()]+/)
+        .map(function(s){return _kanaNorm_(s.trim());}).filter(function(s){return s.length>=2;});
+      hit=terms.some(function(t){ return hay.indexOf(t)>=0; });
+    }
+    if(!hit) return;
+    out.push(r);
+  });
+  // 工程 → 作業名 で1本ずつに絞る（件数の多い＝実績の多い行を優先）
+  var pick={};
+  out.forEach(function(r){
+    var k=(r.work||'')+'|'+(r.item||'')+'|'+(r.unitName||'');
+    var n=parseInt(((r.note||'').match(/(\d+)件/)||[])[1]||'0',10);
+    if(!pick[k] || n>pick[k].n) pick[k]={r:r,n:n};
+  });
+  return Object.keys(pick).map(function(k){ return pick[k].r; });
+}
+// 見積タブから 品名・仕様・数量・単位 を読む
+function _buContext_(id){
+  var s=(typeof ts==='function')?ts(id):{};
+  var g=function(pfx){ var e=document.getElementById(pfx+'-'+id); return e?(e.value||''):''; };
+  var qty=parseFloat(g('qty'))||((s.qtyPats&&s.qtyPats[0]&&parseFloat(s.qtyPats[0].v))||0);
+  var name=g('pn-base')||((s.lines&&s.lines[0]&&s.lines[0].item)||'');
+  var size=g('finish-sel');
+  var unit=g('unit')|| (s.unit||'');
+  if(!unit){
+    // 数量の単位が入力に無い場合は品目から推測（封筒・チラシ=枚／冊子=冊／複写=セット）
+    var t=(s.cat||'')+' '+(s.sub||'')+' '+name;
+    unit = /冊子|要覧|カタログ|報告|パンフ|会報/.test(t) ? '冊'
+         : /複写|伝票|ノーカーボン|感圧/.test(t) ? 'セット'
+         : '枚';
+  }
+  return { qty:qty, name:name, size:size, unit:unit,
+           text:[name, size, s.cat, s.sub].filter(Boolean).join(' ') };
+}
+function _buState_(id){
+  window._buSel_=window._buSel_||{};
+  if(!window._buSel_[id]) window._buSel_[id]={ off:{}, ov:{}, step:50, cr:70 };
+  return window._buSel_[id];
+}
+// どの作業に最初からチェックを入れるか。
+//   ①仕様・品名にその作業の言葉が出てくるもの（無線綴じ・ミシン・二つ折 等）
+//   ②どの仕事にもほぼ必ず出る基本作業（版下・組付・刷版）
+//   ③品目に対応する印刷（封筒→封筒印刷／名刺→名刺印刷／その他→オフセット）
+//   用紙は見積の用紙行で別に計算しているので、二重計上しないよう初期は外す
+var BU_ALWAYS=['版下','組付','シルバーCTP'];
+var BU_OP_WORDS={
+  '天糊':['天糊','天のり','天ｾｯﾄ糊','天セット糊'], '天綴じ':['天とじ','天綴じ'],
+  '無線綴じ':['無線'], '無線綴じ（左）':['左無線'], '中綴じ':['中綴じ','中とじ'],
+  '左綴じ':['左とじ','左綴じ'], '左糊':['左糊','左のり'],
+  'ミシン':['ミシン','ﾐｼﾝ'], '穴あけ':['穴'], '折り':['折','おり'],
+  '化粧断ち':['化粧','断ち'], '小断ち':['小断ち'], '梱包・箱詰':['梱包','箱詰'],
+  '入紙':['入紙'], 'ナンバリング':['ナンバ','№','ナンバリング'],
+  '背クロス巻':['クロス','ｸﾛｽ'], '製袋加工':['製袋'], '角丸加工':['角丸'],
+  '折込・差込':['折込','差込'], 'PP・ラミネート':['ＰＰ','PP','ラミ'],
+  '封筒印刷':['封筒'], '名刺印刷':['名刺'], 'はがき印刷':['はがき','ハガキ','葉書'],
+  'シール印刷':['シール','ラベル'], 'カード印刷':['カード'], '特色':['特色'],
+  '訂正・差替':['訂正','差替'], 'データ支給':['データ支給','ﾃﾞｰﾀ支給'],
+  '断裁料':['断裁'], '予備紙':[]
+};
+function _buDefaultOn_(r, text){
+  var hay=_kanaNorm_(String(text||''));
+  var it=String(r.item||'');
+  if(r.work==='用紙') return false;                       // 用紙は見積の用紙行で計算するため外す
+  var words=BU_OP_WORDS[it];
+  if(words && words.length && words.some(function(w){ return hay.indexOf(_kanaNorm_(w))>=0; })) return true;
+  if(BU_ALWAYS.indexOf(it)>=0) return true;
+  if(it==='オフセット印刷（判・切）'){
+    return !/封筒|名刺|はがき|ハガキ|葉書|シール|ラベル/.test(String(text||''));
+  }
+  return false;
+}
+function _buInit_(id, ctx, rows){
+  var st=_buState_(id);
+  if(st.init) return st;
+  st.off={};
+  rows.forEach(function(r){ if(!_buDefaultOn_(r, ctx.text)) st.off[r.id]=true; });
+  // 同じ作業に「1個あたり」と「一式」の両方があるときは、1個あたりの方だけを使う（二重計上を防ぐ）
+  var hasPer={};
+  rows.forEach(function(r){
+    if(st.off[r.id]) return;
+    if(String(r.unitName||'')!=='式') hasPer[(r.work||'')+'|'+(r.item||'')]=true;
+  });
+  rows.forEach(function(r){
+    if(String(r.unitName||'')==='式' && hasPer[(r.work||'')+'|'+(r.item||'')]) st.off[r.id]=true;
+  });
+  st.init=1;
+  return st;
+}
+// 選ばれている作業で、ある数量のときの原価を積み上げる
+function _buSum_(rows, st, qty){
+  var per=0, set=0, detail=[];
+  rows.forEach(function(r){
+    if(st.off[r.id]) return;
+    var isSet=(String(r.unitName||'')==='式');
+    var u=(st.ov[r.id]!=null&&st.ov[r.id]!=='')?parseFloat(st.ov[r.id]):_buUnitAt_(r, qty);
+    if(!(u>0)) return;
+    var amt=isSet? u : u*qty;
+    if(isSet) set+=amt; else per+=amt;
+    detail.push({ r:r, unit:u, amt:amt, isSet:isSet });
+  });
+  return { per:per, set:set, total:per+set, detail:detail };
+}
+function _buFmt_(v, dec){
+  var n=parseFloat(v)||0;
+  return n.toLocaleString('ja-JP',{minimumFractionDigits:dec||0, maximumFractionDigits:dec||0});
+}
+function renderBuildUp(id, reset){
+  var box=document.getElementById('bu-body-'+id);
+  if(!box) return;
+  if(reset && window._buSel_) delete window._buSel_[id];
+  var ctx=_buContext_(id);
+  var rows=_buCandidates_(ctx.text, ctx.unit);
+  var st=_buInit_(id, ctx, rows);
+  if(!rows.length){
+    box.innerHTML='<div style="font-size:12px;color:#b45309;padding:6px">基準単価表に使える作業が見つかりません。'
+      +'マスター＞💴基準単価 で <b>📥 作業別単価</b> を取り込むと、天糊・無線綴じ・組付・版下などが自動で並びます。</div>';
+    return;
+  }
+  rows.sort(function(a,b){
+    var o={'用紙':1,'印刷':2,'製版・CTP':3,'製本':4,'加工':5};
+    return (o[a.work]||9)-(o[b.work]||9) || String(a.item).localeCompare(String(b.item),'ja');
+  });
+  var qty=ctx.qty||0;
+  var cur=_buSum_(rows, st, qty);
+
+  // ── 工程内訳（単価と金額を併記）──
+  var h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12px;margin-bottom:6px">'
+    +'<span>数量 <b>'+_buFmt_(qty)+'</b> '+_escHtml_(ctx.unit)+'</span>'
+    +'<span style="color:#64748b">'+_escHtml_(ctx.name||'（品名未入力）')+(ctx.size?(' / '+_escHtml_(ctx.size)):'')+'</span>'
+    +'<label style="margin-left:auto">刻み <select style="font-size:11px;padding:2px 4px" onchange="_buSetStep_('+id+',this.value)">'
+      +[50,100,250,500,1000].map(function(s){ return '<option value="'+s+'"'+(st.step===s?' selected':'')+'>'+s+'</option>'; }).join('')
+    +'</select></label>'
+    +'<label>原価率 <input type="number" value="'+st.cr+'" min="1" max="100" style="width:52px;font-size:11px;text-align:right" oninput="_buSetCr_('+id+',this.value)">%</label>'
+    +'</div>';
+  h+='<div style="overflow-x:auto"><table class="m-tbl" style="font-size:11.5px"><thead><tr>'
+    +'<th style="width:34px">使う</th><th style="width:80px">工程</th><th>作業</th>'
+    +'<th style="text-align:right;width:92px">単価</th><th style="text-align:right;width:56px">単位</th>'
+    +'<th style="text-align:right;width:96px">金額</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    var on=!st.off[r.id];
+    var isSet=(String(r.unitName||'')==='式');
+    var u=(st.ov[r.id]!=null&&st.ov[r.id]!=='')?parseFloat(st.ov[r.id]):_buUnitAt_(r, qty);
+    var amt=isSet?u:(u*qty);
+    var warn=((r.note||'').indexOf('⚠')>=0);
+    h+='<tr'+(on?'':' style="opacity:.45"')+'>'
+      +'<td style="text-align:center"><input type="checkbox"'+(on?' checked':'')+' onchange="_buToggle_('+id+',\''+r.id+'\')"></td>'
+      +'<td>'+_escHtml_(r.work||'')+'</td>'
+      +'<td>'+_escHtml_(r.item||'')+(r.spec?(' <span style="color:#94a3b8">'+_escHtml_(r.spec)+'</span>'):'')
+        +(warn?' <span title="'+_escAttr_(r.note||'')+'" style="color:#b45309">⚠</span>':'')+'</td>'
+      +'<td style="text-align:right"><input type="number" step="0.01" value="'+(Math.round(u*100)/100)+'" style="width:78px;text-align:right;font-size:11px" oninput="_buSetOv_('+id+',\''+r.id+'\',this.value)"></td>'
+      +'<td style="text-align:right;color:#64748b" title="'+(String(r.unitName||'')==='通し'?'1通しあたり。数量＝通し数とみなして計算しています':'')+'">'
+        +(isSet?'式':('/'+_escHtml_(r.unitName||'')))+'</td>'
+      +'<td style="text-align:right;font-weight:700">'+_buFmt_(amt)+'</td></tr>';
+  });
+  var sell=st.cr>0?Math.round(cur.total/(st.cr/100)):0;
+  h+='</tbody><tfoot>'
+    +'<tr style="background:#f8fafc;font-weight:700"><td colspan="3" style="text-align:right">原価合計</td>'
+      +'<td style="text-align:right">'+(qty>0?_buFmt_(cur.total/qty,2):'—')+'</td><td style="text-align:right;color:#64748b">/'+_escHtml_(ctx.unit)+'</td>'
+      +'<td style="text-align:right">'+_buFmt_(cur.total)+'</td></tr>'
+    +'<tr style="background:#eff6ff;font-weight:700;color:#1d4ed8"><td colspan="3" style="text-align:right">売価（原価÷'+st.cr+'%）</td>'
+      +'<td style="text-align:right">'+(qty>0?_buFmt_(sell/qty,2):'—')+'</td><td style="text-align:right;color:#64748b">/'+_escHtml_(ctx.unit)+'</td>'
+      +'<td style="text-align:right">'+_buFmt_(sell)+'</td></tr>'
+    +'</tfoot></table></div>';
+  h+='<div style="font-size:11px;color:#64748b;margin:4px 0 8px">'
+    +'内訳: 1'+_escHtml_(ctx.unit)+'あたり '+_buFmt_(cur.per)+'円分 ＋ 一式 '+_buFmt_(cur.set)+'円'
+    +'（一式があるので数量が増えるほど単価は下がります）<br>'
+    +'※ 初めは<b>仕様に出てくる作業＋版下・組付・刷版</b>だけにチェックが入ります。'
+    +'<b>用紙は見積の用紙行で計算しているので外してあります</b>（二重計上を防ぐため）。必要な作業はチェックで足してください</div>';
+
+  // ── 数量を刻みで動かした表（単価・合計・増加額）──
+  var step=st.step||50;
+  var start=Math.max(step, Math.floor((qty-step*5)/step)*step);
+  var ladder=[];
+  for(var i=0;i<11;i++) ladder.push(start+step*i);
+  if(qty>0 && ladder.indexOf(qty)<0){ ladder.push(qty); ladder.sort(function(a,b){return a-b;}); }
+  h+='<div style="overflow-x:auto"><table class="m-tbl" style="font-size:11.5px"><thead><tr>'
+    +'<th style="text-align:right">数量</th><th style="text-align:right">単価</th><th style="text-align:right">合計</th>'
+    +'<th style="text-align:right">増加額（合計）</th><th style="text-align:right">'+step+'ごとの単価</th>'
+    +'<th style="text-align:right">単価の増減</th>'
+    +'<th style="text-align:right;color:#1d4ed8">売価/単価</th><th style="text-align:right;color:#1d4ed8">売価/合計</th>'
+    +'</tr></thead><tbody>';
+  var prev=null;
+  ladder.forEach(function(q){
+    var s2=_buSum_(rows, st, q);
+    var u=q>0?(s2.total/q):0;
+    var dAmt=(prev!=null)?(s2.total-prev.total):null;
+    var dQty=(prev!=null)?(q-prev.q):null;
+    var dU=(prev!=null)?(u-prev.u):null;
+    var perStep=(dAmt!=null&&dQty)?(dAmt/dQty*step):null;   // この刻みぶん増やすと合計がいくら増えるか
+    var sv=st.cr>0?(s2.total/(st.cr/100)):0;
+    var isT=(qty>0&&q===qty);
+    h+='<tr'+(isT?' style="background:#fef9c3;font-weight:700"':'')+'>'
+      +'<td style="text-align:right">'+_buFmt_(q)+(isT?' ←今回':'')+'</td>'
+      +'<td style="text-align:right">'+_buFmt_(u,2)+'</td>'
+      +'<td style="text-align:right">'+_buFmt_(s2.total)+'</td>'
+      +'<td style="text-align:right;color:'+(dAmt!=null&&dAmt>0?'#166534':'#94a3b8')+'">'+(dAmt!=null?('+'+_buFmt_(dAmt)):'—')+'</td>'
+      +'<td style="text-align:right;color:#64748b">'+(perStep!=null?('+'+_buFmt_(perStep)):'—')+'</td>'
+      +'<td style="text-align:right;color:'+(dU!=null&&dU<0?'#0369a1':'#94a3b8')+'">'+(dU!=null?((dU>0?'+':'')+_buFmt_(dU,2)):'—')+'</td>'
+      +'<td style="text-align:right;color:#1d4ed8">'+(q>0?_buFmt_(sv/q,2):'—')+'</td>'
+      +'<td style="text-align:right;color:#1d4ed8">'+_buFmt_(sv)+'</td></tr>';
+    prev={q:q,total:s2.total,u:u};
+  });
+  h+='</tbody></table></div>';
+
+  // ── 前回単価（単価マスタ）との突き合わせ ──
+  try{
+    var tq=JSON.parse(localStorage.getItem('tokiwa_quote_tools_v1')||'null');
+    var list=((tq&&tq.master)||[]).filter(function(m){
+      var hay=_kanaNorm_((m.rawItem||m.item||'')+' '+(m.spec||''));
+      var key=_kanaNorm_(ctx.name||'');
+      return key.length>=2 && hay.indexOf(key)>=0 && parseFloat(m.price)>0;
+    }).slice(0,5);
+    if(list.length){
+      h+='<div style="margin-top:8px;font-size:11.5px"><b>📚 前回の売価（単価マスタ）</b>'
+        + list.map(function(m){
+            var q2=parseFloat(m.qty)||0, p=parseFloat(m.price)||0;
+            var s3=q2>0?_buSum_(rows, st, q2):null;
+            var cmp=(s3&&s3.total>0&&p>0)?(' ／ 積み上げ原価 '+_buFmt_(s3.total/q2,2)+'円 → 原価率 '+Math.round(s3.total/(p*q2)*1000)/10+'%'):'';
+            return '<div style="color:#334155">・'+_escHtml_(m.cust||'')+' '+_escHtml_(m.rawItem||m.item||'')
+              +' '+_buFmt_(q2)+_escHtml_(m.unit||'')+' @'+_buFmt_(p,2)+'円'+(m.year?('（'+_escHtml_(m.year)+'）'):'')+cmp+'</div>';
+          }).join('')
+        +'</div>';
+    }
+  }catch(e){}
+  box.innerHTML=h;
+}
+function _buToggle_(id, rid){ var st=_buState_(id); st.off[rid]=!st.off[rid]; renderBuildUp(id); }
+function _buSetOv_(id, rid, v){ var st=_buState_(id); st.ov[rid]=v; renderBuildUp(id); }
+function _buSetStep_(id, v){ var st=_buState_(id); st.step=parseInt(v,10)||50; renderBuildUp(id); }
+function _buSetCr_(id, v){ var st=_buState_(id); st.cr=Math.max(1,Math.min(100,parseFloat(v)||70)); renderBuildUp(id); }
 function stdRateLookup(work, text, qty, unitName){
   var bk=_stdBandOf_(qty);
   var hay=_kanaNorm_(text);
@@ -48099,6 +48398,10 @@ async function _autoSummarizeAttachments_(inqId){
 // JJJJ-2: HTML属性用エスケープ (値の中の ' " < > & を保護)
 function _escAttr_(s){
   return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+// 本文に文字列を出すとき用（属性は _escAttr_ を使う）
+function _escHtml_(s){
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // JJJJ-2/3: グローバルなマウスイベント委任でホバープレビュー
