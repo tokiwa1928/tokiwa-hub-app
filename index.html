@@ -4084,6 +4084,17 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
       _didMigrate=true;
     }
   }catch(e){}
+  // 🏷 呼称シード: 未設定の取引先へ、取引先名から自動で呼称を入れる（一度だけ・後から個別修正可）
+  try{
+    if(localStorage.getItem('_custAliasSeed_v1')!=='1' && d.master && Array.isArray(d.master.cust) && typeof _custAliasAuto_==='function'){
+      var _n=0;
+      d.master.cust.forEach(function(c){
+        if(c && typeof c==='object' && c.org && !c.alias){ c.alias=_custAliasAuto_(c.org); _n++; }
+      });
+      localStorage.setItem('_custAliasSeed_v1','1');
+      if(_n) _didMigrate=true;
+    }
+  }catch(e){}
   // 会社一覧をトキワ印刷を最上位に並べ替え
   if(d.companies && Array.isArray(d.companies)){
     var _priority = ['トキワ', '村山', '北上', 'アートエス', '津島', '中尾'];
@@ -12407,6 +12418,9 @@ function renderTankaMaster(mp){
       + TANKA_COMPANIES.map(function(c){ return '<option'+(coF===c?' selected':'')+'>'+c+'</option>'; }).join('')
     +'</select>'
     +'<span style="font-size:11px;color:#888">'+rows.length+' / '+list.length+' 件</span>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportTankaCSV()">📤 CSV書き出し</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e;font-weight:700" onclick="document.getElementById(\'tanka-csv-in\').click()" title="他社の売価をExcelで作って入れられます。得意先＋品名＋仕様が同じ行は前回単価を履歴に残して上書きします">📥 CSV取込</button>'
+    +'<input type="file" id="tanka-csv-in" accept=".csv,.txt" style="display:none" onchange="importTankaCSV(this)">'
     +'<a href="tools/tanka-master.html" style="font-size:11px;color:#1e40af;margin-left:auto;text-decoration:underline">🔧 取込ツールを開く →</a>'
     +'</div>'
     +'<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">'
@@ -12482,6 +12496,70 @@ function _tankaAdd_(){
 function _tankaDel_(i){
   if(!confirm('この単価マスタ行を削除しますか？')) return;
   var st=_tankaLoad_(); if(st.master) st.master.splice(i,1); _tankaSave_(st); renderMaster('tanka');
+}
+// ── 単価マスタ CSV 入出力（他社の売価をExcelで作って入れられるように）──
+function exportTankaCSV(){
+  var list=(_tankaLoad_().master)||[];
+  if(!list.length){ alert('単価マスタが空です'); return; }
+  // 最後の ID 列は取込のときの照合用（消さないでください）
+  var out=[['会社','得意先','品名','仕様','単位','数量','単価','年月','状態','出所','前回単価','ID(消さない)']];
+  list.forEach(function(m){
+    var prev=(m.prevPrices||[]).slice(-4).map(function(p){ return (p.year||p.at||'').toString().slice(0,7)+':'+p.price; }).join(' / ');
+    out.push([m.company||'', m.cust||'', m.rawItem||m.item||'', m.spec||'', m.unit||'',
+              m.qty||'', m.price||'', m.year||'', m.status||'', m.src||'', prev, m.id||'']);
+  });
+  _downloadCSV_(out, '単価マスタ_'+_todayTag_()+'.csv');
+}
+function importTankaCSV(input){
+  var f=input&&input.files&&input.files[0]; if(!f) return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    try{
+      var tbl=_csvParse_(String(rd.result||''));
+      if(!tbl.length){ alert('CSVが空です'); input.value=''; return; }
+      var head=tbl[0].map(function(h){ return String(h||'').replace(/^﻿/,'').trim(); });
+      var ci=function(n){ return head.indexOf(n); };
+      var iCo=ci('会社'), iCu=ci('得意先'), iIt=ci('品名'), iSp=ci('仕様'), iUn=ci('単位'),
+          iQt=ci('数量'), iPr=ci('単価'), iYr=ci('年月'), iSt=ci('状態'), iSr=ci('出所');
+      if(iIt<0||iPr<0){ alert('「品名」「単価」の列が見つかりません。\n📤CSV書き出しで作った形と同じにしてください'); input.value=''; return; }
+      var st=_tankaLoad_(); st.master=st.master||[];
+      var now=new Date().toISOString(), add=0, upd=0, lock=0, skip=0;
+      var key=function(c,i,s){ return [c,i,s].map(function(x){ return _kanaNorm_(String(x||'')); }).join('|'); };
+      var iID=head.findIndex(function(h){ return h.indexOf('ID')===0; });
+      var idx={}, byId={};
+      st.master.forEach(function(m){ idx[key(m.cust,m.rawItem||m.item,m.spec)]=m; if(m.id) byId[m.id]=m; });
+      for(var n=1;n<tbl.length;n++){
+        var row=tbl[n]; if(!row||!row.length) continue;
+        var it=String(row[iIt]||'').trim();
+        var pr=parseFloat(String(row[iPr]||'').replace(/[,¥\s]/g,''));
+        if(!it||!(pr>0)){ if(it||row[iPr]) skip++; continue; }
+        var cu=iCu>=0?String(row[iCu]||'').trim():'', sp=iSp>=0?String(row[iSp]||'').trim():'';
+        var rid=(iID>=0)?String(row[iID]||'').trim():'';
+        var k=key(cu,it,sp), ex=(rid&&byId[rid])||(rid?null:idx[k]);
+        var co=iCo>=0?String(row[iCo]||'').trim():'', yr=iYr>=0?String(row[iYr]||'').trim():'';
+        var un=iUn>=0?String(row[iUn]||'').trim():'', qt=iQt>=0?parseFloat(String(row[iQt]||'').replace(/,/g,''))||0:0;
+        var sr=iSr>=0?String(row[iSr]||'').trim():'CSV取込';
+        if(ex){
+          if(ex.status==='確定'){ (ex.prevPrices=ex.prevPrices||[]).push({price:pr,year:yr,src:sr,at:now,note:'取込(確定中のため未反映)'}); lock++; continue; }
+          ex.prevPrices=ex.prevPrices||[];
+          if(parseFloat(ex.price)!==pr) ex.prevPrices.push({price:ex.price,year:ex.year,src:ex.src,at:now});
+          ex.price=pr; if(qt) ex.qty=qt; if(un) ex.unit=un; if(sp) ex.spec=sp;
+          if(yr) ex.year=yr; if(co) ex.company=co; ex.src=sr||ex.src; ex.updatedAt=now; upd++;
+        } else {
+          var rec={ id:rid||('TM-C'+Date.now()+'-'+(add+1)), item:(cu?cu+' ':'')+it+(sp?' / '+sp:''), rawItem:it,
+                    spec:sp, unit:un, qty:qt, price:pr, cust:cu, year:yr, company:co,
+                    src:sr||'CSV取込', status:(iSt>=0?String(row[iSt]||'').trim():'')||'仮',
+                    prevPrices:[], createdAt:now, updatedAt:now };
+          st.master.push(rec); idx[k]=rec; byId[rec.id]=rec; add++;
+        }
+      }
+      _tankaSave_(st);
+      renderMaster('tanka');
+      alert('✅ CSV取込: 追加 '+add+' / 更新 '+upd+(lock?(' / 確定でスキップ '+lock):'')+(skip?(' / 品名か単価が空で飛ばした行 '+skip):''));
+    }catch(e){ alert('❌ CSV取込に失敗: '+e.message); }
+    input.value='';
+  };
+  rd.readAsText(f, 'utf-8');
 }
 // 封筒マスターの「規格・仕様(sp)」を サイズ/種類(紙質)/斤量/窓/糊/貼り方/その他 に分解・再構成
 //   spは見積の表示専用なので細列化しても照合は不変。封筒名(nm)は下の _envAutoName_ で自動生成する
@@ -12836,7 +12914,7 @@ function renderMaster(id){
     const grouped = {};
     custData.forEach((r,i) => {
       const org = typeof r === 'string' ? r : (r.org || '');
-      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '', companyId: (r.companyId||'COMP002'), quoteUndated:!!r.quoteUndated, needsAck:!!r.needsAck, sendMethod: r.sendMethod||'', depts: r.depts||'', oldNames: r.oldNames||'', code: r.code||'', addr: r.addr||'', labelUse:!!r.labelUse, active:(r.active!==false), successorOrg:r.successorOrg||'', oldDepts:r.oldDepts||'' };
+      if(!grouped[org]) grouped[org] = { items: [], type: r.type || 'customer', email: r.orgEmail || '', companyId: (r.companyId||'COMP002'), quoteUndated:!!r.quoteUndated, needsAck:!!r.needsAck, sendMethod: r.sendMethod||'', depts: r.depts||'', oldNames: r.oldNames||'', code: r.code||'', alias: r.alias||'', addr: r.addr||'', labelUse:!!r.labelUse, active:(r.active!==false), successorOrg:r.successorOrg||'', oldDepts:r.oldDepts||'' };
       grouped[org].items.push({ ...r, _idx: DB.master.cust.indexOf(r) });
       if(r.type) grouped[org].type = r.type;
       if(r.orgEmail) grouped[org].email = r.orgEmail;
@@ -12847,6 +12925,7 @@ function renderMaster(id){
       if(r.depts) grouped[org].depts = r.depts;
       if(r.oldNames) grouped[org].oldNames = r.oldNames;
       if(r.code) grouped[org].code = r.code;
+      if(r.alias) grouped[org].alias = r.alias;
     });
 
     html += `<div style="font-size:11px;color:#888;margin-bottom:.5rem">
@@ -12861,6 +12940,7 @@ function renderMaster(id){
       </select>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="addCustOrg()">＋ 新規取引先</button>
       <button class="btn" style="font-size:11px;padding:4px 10px;background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;font-weight:700" onclick="_custCodeBulkAssign_()" title="コード未設定の得意先へ C-#### を連番で自動採番（既存コードは変更しません）">🆔 コード一括採番</button>
+      <button class="btn" style="font-size:11px;padding:4px 10px;background:#fff7ed;border-color:#fdba74;color:#9a3412;font-weight:700" onclick="_custAliasBulkAssign_()" title="呼称が未設定の取引先へ、取引先名から自動生成（株式会社などを除いた短い名前）。既存の呼称は変更しません">🏷 呼称を自動生成</button>
       <button class="btn" style="font-size:11px;padding:4px 10px;background:#ecfdf5;border-color:#6ee7b7;color:#065f46;font-weight:700" onclick="document.getElementById('cust-import-file').click()" title="得意先台帳のExcel/CSVを取込（得意先名・担当者・TEL/FAX等を自動マッピング）→ 現在の会社の得意先に追加">📥 Excel/CSV取込</button>
       <button class="btn" style="font-size:11px;padding:4px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportCustMasterCSV()" title="現在の取引先マスターをCSVで書き出し（Excelで開けます）">📤 CSV書き出し</button>
       <input type="file" id="cust-import-file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="importCustFile(this)">
@@ -12877,6 +12957,7 @@ function renderMaster(id){
       <th style="min-width:84px">状態</th>
       <th style="min-width:92px">コード</th>
       <th style="min-width:200px">取引先名</th>
+      <th style="min-width:140px" title="フォルダ名・ファイル名に使う短い呼び方（例: 株式会社○○商事 → ○○商事）。空欄なら取引先名をそのまま使います">🏷 呼称</th>
       <th style="min-width:98px">区分</th>
       <th style="min-width:128px">所属会社</th>
       <th style="min-width:170px">代表メール</th>
@@ -12904,6 +12985,7 @@ function renderMaster(id){
         <td><input type="text" value="${(g.code||'').replace(/"/g,'&quot;')}" placeholder="例: C-022" title="${g.code?'':'コード未設定'}" style="width:100%;min-width:80px;font-family:monospace;${g.code?'':'background:#fdf6e8'}" onchange="updateCustOrgCode('${oq}',this.value)"></td>
         <td style="white-space:nowrap"><strong style="font-size:12.5px">${org || '（未設定）'}</strong>
           <button class="btn" style="font-size:10px;padding:1px 6px;margin-left:6px" onclick="renameCustOrg('${oq}')" title="社名変更（旧名称に自動記録・案件担当の紐づけも引き継ぎ）">✎ 社名変更</button></td>
+        <td><input type="text" value="${(g.alias||'').replace(/"/g,'&quot;')}" placeholder="${_custAliasAuto_(org).replace(/"/g,'&quot;')}" title="フォルダ名・ファイル名に使う短い呼び方。空欄なら取引先名をそのまま使います" style="width:100%;min-width:120px;${g.alias?'':'background:#f8fafc;color:#64748b'}" onchange="updateCustOrgAlias('${oq}',this.value)"></td>
         <td><select style="width:100%;font-size:11px;color:${tc};font-weight:700" onchange="updateCustOrgType('${oq}',this.value)">
             <option value="customer"${g.type==='customer'?' selected':''}>得意先</option>
             <option value="vendor"${g.type==='vendor'?' selected':''}>外注先</option>
@@ -13763,6 +13845,8 @@ function renderStdRates(mp){
     +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#b45309;color:#fff;border-color:#b45309;font-weight:700" onclick="_stdSeedMuryCalc_()" title="村山の旧Lotus見積計算書から、用紙・印刷・製版CTP・製本の工程別金額を数量帯ごとに集計したものです。工程別の物差しはこれが一番細かいです">📥 計算書'+(MURY_CALC_STAT?MURY_CALC_STAT.calc:0)+'件から（工程別）</button>'
     +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#be123c;color:#fff;border-color:#be123c;font-weight:700" onclick="_stdSeedMuryPdf_()" title="村山がお客様に出した御見積書PDFから、直近の売価水準を取り込みます。旧Lotus計算書より新しい価格です">📥 直近見積'+(MURY_PDF_STAT?MURY_PDF_STAT.ok:0)+'件から（売価）</button>'
     +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700" onclick="exportStdRatesCSV()">📤 CSV書き出し</button>'
+    +'<button class="btn" style="font-size:11px;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e;font-weight:700" onclick="document.getElementById(\'std-csv-in\').click()" title="書き出したCSVをExcelで直してから戻せます。工程＋品目＋仕様＋単位が同じ行は上書きします">📥 CSV取込</button>'
+    +'<input type="file" id="std-csv-in" accept=".csv,.txt" style="display:none" onchange="importStdRatesCSV(this)">'
     +'<span style="font-size:11px;color:#888;margin-left:auto">'+view.length+' / '+rows.length+' 行　確定 '+nConf+'</span>'
     +'</div>'
     +'<div style="font-size:11px;color:#666;margin:.4rem 0;padding:8px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px">'
@@ -13830,13 +13914,68 @@ function renderStdRates(mp){
 function exportStdRatesCSV(){
   var rows=_stdRates_();
   if(!rows.length){ alert('基準単価表が空です'); return; }
-  var out=[['工程','品目','仕様','単位'].concat(STD_BANDS.map(function(b){return b.label;})).concat(['備考','確定'])];
+  // 最後の ID 列は取込のときの照合用（消さないでください）。
+  // 同じ 工程＋品目＋仕様＋単位 の行が複数あり得る（標準価格表と直近見積など）ため、ID で1対1に戻す
+  var out=[['工程','品目','仕様','単位'].concat(STD_BANDS.map(function(b){return b.label;})).concat(['備考','確定','ID(消さない)'])];
   rows.forEach(function(r){
     out.push([r.work||'', r.item||'', r.spec||'', r.unitName||'']
       .concat(STD_BANDS.map(function(b){ return (r.b&&r.b[b.k]!=null)?r.b[b.k]:''; }))
-      .concat([r.note||'', r.confirmed?'確定':'']));
+      .concat([r.note||'', r.confirmed?'確定':'', r.id||'']));
   });
   _downloadCSV_(out, '基準単価表_'+_todayTag_()+'.csv');
+}
+// CSV取込（書き出したCSVをExcelで直してから戻せるように）
+//   工程＋品目＋仕様＋単位 が同じ行は上書き、無ければ追加。数量帯の空欄はその帯を消す扱い。
+function importStdRatesCSV(input){
+  var f=input&&input.files&&input.files[0]; if(!f) return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    try{
+      var tbl=_csvParse_(String(rd.result||''));
+      if(!tbl.length){ alert('CSVが空です'); input.value=''; return; }
+      var head=tbl[0].map(function(h){ return String(h||'').replace(/^﻿/,'').trim(); });
+      var ci=function(name){ return head.indexOf(name); };
+      var iW=ci('工程'), iI=ci('品目'), iS=ci('仕様'), iU=ci('単位'), iN=ci('備考'), iC=ci('確定');
+      var iID=head.findIndex(function(h){ return h.indexOf('ID')===0; });
+      if(iW<0||iI<0){ alert('「工程」「品目」の列が見つかりません。\n📤CSV書き出しで作った形と同じにしてください'); input.value=''; return; }
+      var bandCol=STD_BANDS.map(function(b){ return { k:b.k, i:ci(b.label) }; }).filter(function(x){ return x.i>=0; });
+      var cur=_stdRates_(), add=0, upd=0, skip=0, now=new Date().toISOString();
+      var key=function(w,i,s,u){ return [w,i,s,u].map(function(x){ return _kanaNorm_(String(x||'')); }).join(''); };
+      var idx={}, byId={};
+      cur.forEach(function(r){ idx[key(r.work,r.item,r.spec,r.unitName)]=r; if(r.id) byId[r.id]=r; });
+      for(var n=1;n<tbl.length;n++){
+        var row=tbl[n]; if(!row||!row.length) continue;
+        var w=String(row[iW]||'').trim(), it=String(row[iI]||'').trim();
+        if(!w&&!it){ continue; }
+        if(!it){ skip++; continue; }
+        var sp=iS>=0?String(row[iS]||'').trim():'', un=iU>=0?String(row[iU]||'').trim():'';
+        var b={};
+        bandCol.forEach(function(bc){
+          var v=parseFloat(String(row[bc.i]||'').replace(/[,¥\s]/g,''));
+          if(isFinite(v)&&v>0) b[bc.k]=v;
+        });
+        // ID があればそれで1対1に戻す（同じ工程・品目・仕様・単位の行が複数あっても潰れない）
+        var rid=(iID>=0)?String(row[iID]||'').trim():'';
+        var k=key(w,it,sp,un), ex=(rid&&byId[rid])||(rid?null:idx[k]);
+        if(ex){
+          ex.work=w; ex.item=it; ex.spec=sp; ex.unitName=un||ex.unitName; ex.b=b;
+          if(iN>=0) ex.note=String(row[iN]||'').trim();
+          if(iC>=0) ex.confirmed=/確定|1|true|○/i.test(String(row[iC]||''));
+          ex.updatedAt=ex._updatedAt=now; upd++;
+        } else {
+          var r2={ id:rid||('ST'+Date.now()+'-'+Math.floor(Math.random()*1000000)), work:w, item:it, spec:sp,
+                   unitName:un||'枚', b:b, note:(iN>=0?String(row[iN]||'').trim():''),
+                   confirmed:(iC>=0?/確定|1|true|○/i.test(String(row[iC]||'')):false) };
+          r2.updatedAt=r2._updatedAt=now; cur.push(r2); idx[k]=r2; byId[r2.id]=r2; add++;
+        }
+      }
+      saveDB(); try{ saveToCloud(); }catch(e){}
+      renderStdRates(document.getElementById('master-panels'));
+      alert('✅ CSV取込: 追加 '+add+' / 上書き '+upd+(skip?(' / 品目が空で飛ばした行 '+skip):''));
+    }catch(e){ alert('❌ CSV取込に失敗: '+e.message); }
+    input.value='';
+  };
+  rd.readAsText(f, 'utf-8');
 }
 // ═══════════════════════════════════════════════════════════
 // 🚚 仕入ルール（メーカー別の取扱範囲・優先順位）
@@ -38477,6 +38616,56 @@ function updateCustOrgCode(org, v){
   _custOrgSet_(org, 'code', v);
   if(typeof _toastMsg==='function') _toastMsg(v?('🔢 コード '+v+' を設定しました'):'コードを外しました');
   renderMaster('cust');
+}
+// ══ 🏷 呼称（フォルダ名・ファイル名に使う短い呼び方） ══
+// 正式名から機械的に呼称の候補を作る（法人格・敬称・記号を落とす）
+function _custAliasAuto_(name){
+  var s = String(name||'').trim();
+  if(!s) return '';
+  s = s.replace(/[㈱㈲]/g,'');
+  // 前後の法人格（株式会社/有限会社/合同会社/合資会社/合名会社/一般社団法人 …）
+  var kaku = '(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|社会福祉法人|医療法人社団|医療法人|学校法人|宗教法人|特定非営利活動法人|独立行政法人|国立大学法人|協同組合|農業協同組合)';
+  s = s.replace(new RegExp('^\\s*'+kaku+'\\s*'),'').replace(new RegExp('\\s*'+kaku+'\\s*$'),'');
+  s = s.replace(/^\s*[（(](株|有|同|資|名|社|財)[）)]\s*/,'').replace(/\s*[（(](株|有|同|資|名|社|財)[）)]\s*$/,'');
+  s = s.replace(/\s*(様|御中|さま)\s*$/,'');
+  s = s.replace(/[\/\\:*?"<>|]/g,'_');   // フォルダ名に使えない文字
+  s = s.replace(/\s+/g,' ').trim();
+  return s || String(name||'').trim();
+}
+// 実際に使う呼称（設定があればそれ、無ければ自動生成）
+function _custAliasOf_(name){
+  var n = String(name||'').trim(); if(!n) return '';
+  var rec = (DB.master && DB.master.cust || []).find(function(r){ return r && typeof r!=='string' && r.org===n && r.alias; });
+  return (rec && rec.alias) ? rec.alias : _custAliasAuto_(n);
+}
+function updateCustOrgAlias(org, v){
+  _custOrgSet_(org, 'alias', (v||'').trim());
+  if(typeof _toastMsg==='function') _toastMsg(v?('🏷 呼称を「'+v+'」にしました'):'呼称を外しました（取引先名を使います）');
+  renderMaster('cust');
+}
+// 未設定の呼称を今のマスタから一括自動生成
+function _custAliasBulkAssign_(silent){
+  var rows=(DB.master&&DB.master.cust||[]).filter(function(r){ return r&&typeof r!=='string'&&r.org; });
+  var orgs={};
+  rows.forEach(function(r){ if(!(r.org in orgs)) orgs[r.org]=''; if(r.alias) orgs[r.org]=r.alias; });
+  var names=Object.keys(orgs);
+  var todo=names.filter(function(n){ return !orgs[n]; });
+  if(!todo.length){ if(!silent) alert('呼称が未設定の取引先はありません（全'+names.length+'社に設定済み）'); return 0; }
+  if(!silent){
+    var sample=todo.slice(0,5).map(function(n){ return '　'+n+' → '+_custAliasAuto_(n); }).join('\n');
+    if(!confirm('呼称が未設定の '+todo.length+' 社に、取引先名から自動で呼称を入れます。\n（既に設定済みの呼称は変更しません／後から個別に直せます）\n\n例:\n'+sample+'\n\nよろしいですか？')) return 0;
+  }
+  todo.forEach(function(org){
+    var a=_custAliasAuto_(org);
+    rows.forEach(function(r){ if(r.org===org) r.alias=a; });
+  });
+  if(typeof saveDB==='function') saveDB();
+  if(!silent){
+    if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+    if(typeof _toastMsg==='function') _toastMsg('🏷 '+todo.length+'社の呼称を自動生成しました');
+    if(typeof renderMaster==='function') renderMaster('cust');
+  }
+  return todo.length;
 }
 // 得意先名→コード（完全一致・旧名称も見る）
 function _custCodeOf_(name){
