@@ -464,12 +464,240 @@ function renderDetail(){
     +'<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="st" style="border:none;margin:0;padding:0">09 質問事項・DD確認事項</div>'
     +'<div style="display:flex;gap:6px"><button class="btn" onclick="addDdStd(\''+id+'\')">＋ 標準質問を追加</button><button class="btn" onclick="addDd(\''+id+'\')">＋ 空欄で追加</button><button class="btn" onclick="stdDdMgr()" title="標準質問のひな型を編集（カテゴリ・追加・削除）">⚙ 標準質問を管理</button></div></div>'
     +'<div class="note" style="margin:6px 0">先方・FA・会計士に確認する項目。ステータスをクリックで 未確認→確認中→OK→懸念 と切替。回答は右にメモ。</div>'
-    +'<div id="ddbox-'+id+'"></div></div>';
+    +'<div id="ddbox-'+id+'"></div></div>'
+    // ── 10 面談記録（打合せの記録・録音・その場で各項目を更新）──
+    +'<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="st" style="border:none;margin:0;padding:0">10 面談・打合せ記録</div>'
+    +'<div style="display:flex;gap:6px"><button class="btn" onclick="_mtgAdd_(\''+id+'\')">＋ 面談を記録</button></div></div>'
+    +'<div class="note" style="margin:6px 0">打合せの内容をそのまま残せます。録音もできます（<b>相手の同意を得てから</b>／音声は<b>この端末内だけ</b>に保存されます）。記録から質問の回答・ステータス・分析メモをその場で更新できます。</div>'
+    +'<div id="mtgbox-'+id+'"></div></div>';
 
   renderDetailValsOnly();
   _ddRender_(t);
+  _mtgRender_(t);
   _yrsRender_(t);
   box.querySelectorAll('textarea.ta-grow').forEach(function(ta){ _taGrow_(ta); });   // 譲渡条件・メモを内容ぶんに拡張
+}
+// ═══════════════════════════════════════════════════════════
+// 🎙 面談・打合せ記録（記録＋録音＋その場で各項目を更新）
+//   ・記録本体は target.meetings[] に保存（他のデータと同じ）
+//   ・音声はサイズが大きいので localStorage には入れず IndexedDB（この端末内）に保存する
+//   ・録音は相手の同意が前提。クラウドにも外部AIにも送らない
+// ═══════════════════════════════════════════════════════════
+var REC_DB='ma_rec_v1', REC_ST='rec';
+function _recOpen_(){
+  return new Promise(function(res,rej){
+    var r=indexedDB.open(REC_DB,1);
+    r.onupgradeneeded=function(e){ var d=e.target.result; if(!d.objectStoreNames.contains(REC_ST)) d.createObjectStore(REC_ST); };
+    r.onsuccess=function(){ res(r.result); }; r.onerror=function(){ rej(r.error); };
+  });
+}
+function _recPut_(key, blob){
+  return _recOpen_().then(function(db){ return new Promise(function(res,rej){
+    var tx=db.transaction(REC_ST,'readwrite'); tx.objectStore(REC_ST).put(blob,key);
+    tx.oncomplete=function(){res(true)}; tx.onerror=function(){rej(tx.error)};
+  });});
+}
+function _recGet_(key){
+  return _recOpen_().then(function(db){ return new Promise(function(res,rej){
+    var tx=db.transaction(REC_ST,'readonly'); var q=tx.objectStore(REC_ST).get(key);
+    q.onsuccess=function(){res(q.result||null)}; q.onerror=function(){rej(q.error)};
+  });});
+}
+function _recDel_(key){
+  return _recOpen_().then(function(db){ return new Promise(function(res,rej){
+    var tx=db.transaction(REC_ST,'readwrite'); tx.objectStore(REC_ST).delete(key);
+    tx.oncomplete=function(){res(true)}; tx.onerror=function(){rej(tx.error)};
+  });});
+}
+function _mtgs_(t){ if(!Array.isArray(t.meetings)) t.meetings=[]; return t.meetings; }
+function _todayISO_(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function _mtgAdd_(id){
+  var t=_tById_(id); if(!t) return;
+  _mtgs_(t).unshift({ id:'MTG'+Date.now()+'-'+Math.floor(Math.random()*100000), date:_todayISO_(), place:'', theirs:'', ours:'',
+    raw:'', topics:'', decisions:'', todos:'', next:'', audioKey:'', audioName:'', audioSize:0, audioSec:0, open:true });
+  save(); _mtgRender_(t);
+}
+function _mtgSet_(id, mid, f, v){
+  var t=_tById_(id); if(!t) return;
+  var m=_mtgs_(t).find(function(x){return x.id===mid;}); if(!m) return;
+  m[f]=v; save();
+}
+function _mtgSetRe_(id, mid, f, v){ _mtgSet_(id,mid,f,v); var t=_tById_(id); if(t) _mtgRender_(t); }
+function _mtgDel_(id, mid){
+  var t=_tById_(id); if(!t) return;
+  var m=_mtgs_(t).find(function(x){return x.id===mid;});
+  if(!confirm('この面談記録を削除しますか？'+(m&&m.audioKey?'\n（録音も一緒に削除されます）':''))) return;
+  if(m&&m.audioKey){ _recDel_(m.audioKey).catch(function(){}); }
+  t.meetings=_mtgs_(t).filter(function(x){return x.id!==mid;});
+  save(); _mtgRender_(t);
+}
+function _mtgToggle_(id, mid){
+  var t=_tById_(id); if(!t) return;
+  var m=_mtgs_(t).find(function(x){return x.id===mid;}); if(!m) return;
+  m.open=!m.open; save(); _mtgRender_(t);
+}
+// ── 録音 ──
+var _REC={ rec:null, chunks:[], stream:null, mid:null, tid:null, t0:0, timer:null };
+function _mtgRecStart_(id, mid){
+  if(_REC.rec){ alert('すでに録音中です'); return; }
+  if(!navigator.mediaDevices || !window.MediaRecorder){ alert('このブラウザは録音に対応していません（Chrome推奨）'); return; }
+  if(!confirm('🎙 録音を開始します。\n\n・相手の同意を得てから録音してください\n・音声はこの端末の中だけに保存されます（クラウドやAIには送りません）\n\n開始しますか？')) return;
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+    var mr=new MediaRecorder(stream);
+    _REC={ rec:mr, chunks:[], stream:stream, mid:mid, tid:id, t0:Date.now(), timer:null };
+    mr.ondataavailable=function(e){ if(e.data && e.data.size) _REC.chunks.push(e.data); };
+    mr.onstop=function(){
+      var blob=new Blob(_REC.chunks, {type:(mr.mimeType||'audio/webm')});
+      var sec=Math.round((Date.now()-_REC.t0)/1000);
+      var key='rec-'+mid;
+      _recPut_(key, blob).then(function(){
+        var t=_tById_(_REC.tid);
+        var m=t?_mtgs_(t).find(function(x){return x.id===_REC.mid;}):null;
+        if(m){ m.audioKey=key; m.audioName='録音_'+(m.date||'')+'.webm'; m.audioSize=blob.size; m.audioSec=sec; save(); _mtgRender_(t); }
+      }).catch(function(err){ alert('録音の保存に失敗しました: '+err); });
+      try{ _REC.stream.getTracks().forEach(function(tr){ tr.stop(); }); }catch(e){}
+      if(_REC.timer) clearInterval(_REC.timer);
+      _REC={ rec:null, chunks:[], stream:null, mid:null, tid:null, t0:0, timer:null };
+    };
+    mr.start();
+    _REC.timer=setInterval(function(){
+      var el=document.getElementById('rectime-'+mid);
+      if(el){ var s=Math.round((Date.now()-_REC.t0)/1000); el.textContent='● 録音中 '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+    }, 500);
+    var t=_tById_(id); if(t) _mtgRender_(t);
+  }).catch(function(err){
+    alert('マイクを使えませんでした。ブラウザのマイク許可をご確認ください。\n('+err.name+')');
+  });
+}
+function _mtgRecStop_(){
+  if(!_REC.rec){ return; }
+  try{ _REC.rec.stop(); }catch(e){}
+}
+function _mtgPlay_(mid){
+  var m=null, t=null;
+  (DB.targets||[]).forEach(function(x){ (x.meetings||[]).forEach(function(y){ if(y.id===mid){ m=y; t=x; } }); });
+  if(!m||!m.audioKey) return;
+  _recGet_(m.audioKey).then(function(blob){
+    if(!blob){ alert('この端末に録音データが見つかりません（別の端末で録音した可能性があります）'); return; }
+    var el=document.getElementById('audio-'+mid);
+    if(el){ el.src=URL.createObjectURL(blob); el.style.display='block'; el.play().catch(function(){}); }
+  });
+}
+function _mtgDownload_(mid){
+  var m=null;
+  (DB.targets||[]).forEach(function(x){ (x.meetings||[]).forEach(function(y){ if(y.id===mid) m=y; }); });
+  if(!m||!m.audioKey) return;
+  _recGet_(m.audioKey).then(function(blob){
+    if(!blob){ alert('この端末に録音データが見つかりません'); return; }
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(m.audioName||'録音.webm');
+    document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },200);
+  });
+}
+function _mtgAudioDel_(id, mid){
+  if(!confirm('この録音を削除しますか？（面談記録の文章は残ります）')) return;
+  var t=_tById_(id); if(!t) return;
+  var m=_mtgs_(t).find(function(x){return x.id===mid;}); if(!m) return;
+  if(m.audioKey) _recDel_(m.audioKey).catch(function(){});
+  m.audioKey=''; m.audioName=''; m.audioSize=0; m.audioSec=0;
+  save(); _mtgRender_(t);
+}
+// ── 面談記録から各項目を更新 ──
+function _mtgToMemo_(id, mid){
+  var t=_tById_(id); if(!t) return;
+  var m=_mtgs_(t).find(function(x){return x.id===mid;}); if(!m) return;
+  var lines=[];
+  if(m.decisions) lines.push('【決定】'+m.decisions);
+  if(m.todos)     lines.push('【宿題】'+m.todos);
+  if(m.next)      lines.push('【次回】'+m.next);
+  if(!lines.length){ alert('分析メモに追記する内容（決定事項・宿題・次回）が空です'); return; }
+  var head='■ 面談 '+(m.date||'')+(m.place?('（'+m.place+'）'):'');
+  t.memo=(t.memo?(t.memo+'\n'):'')+head+'\n'+lines.join('\n');
+  save(); renderDetail();
+  alert('分析メモに追記しました');
+}
+function _mtgApplyStage_(id, mid, stage){
+  var t=_tById_(id); if(!t) return;
+  t.stage=stage; save(); renderDetail();
+}
+// 面談記録の中でDD質問の回答を直接編集
+function _mtgDdBox_(t, m){
+  var dd=t.dd||[];
+  if(!dd.length) return '<div class="note" style="margin:4px 0">質問がまだありません（上の「09 質問事項」で追加できます）</div>';
+  var stc={ '未確認':'#94a3b8','確認中':'#2563eb','OK':'#0f766e','懸念':'#b91c1c' };
+  return '<div style="max-height:260px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:6px;padding:6px;background:#fff">'
+    + dd.map(function(d,i){
+        var st=d.st||'未確認';
+        return '<div style="display:flex;gap:5px;align-items:center;margin-bottom:4px">'
+          +'<button onclick="cycleDd(\''+t.id+'\','+i+')" style="flex:0 0 52px;font-size:9.5px;font-weight:700;color:#fff;background:'+stc[st]+';border:none;border-radius:4px;padding:3px 2px;cursor:pointer">'+st+'</button>'
+          +'<span style="flex:1.4;font-size:11px;color:#334155;line-height:1.35">'+esc(d.q||'')+'</span>'
+          +'<input value="'+esc(d.note||'')+'" placeholder="この面談で聞けた回答" style="flex:1.6;font-size:11px;padding:3px 6px" oninput="setDd(\''+t.id+'\','+i+',\'note\',this.value)">'
+          +'</div>';
+      }).join('')
+    +'</div>';
+}
+function _mtgRender_(t){
+  var box=document.getElementById('mtgbox-'+t.id); if(!box) return;
+  var ms=_mtgs_(t);
+  if(!ms.length){ box.innerHTML='<div class="note">まだ記録がありません。「＋ 面談を記録」で追加してください。</div>'; return; }
+  box.innerHTML=ms.map(function(m){
+    var recording=(_REC.rec && _REC.mid===m.id);
+    var head='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8fafc;padding:6px 10px;border-bottom:1px solid #e2e8f0">'
+      +'<button class="btn" style="font-size:11px;padding:2px 8px" onclick="_mtgToggle_(\''+t.id+'\',\''+m.id+'\')">'+(m.open?'▼':'▶')+'</button>'
+      +'<input type="date" value="'+esc(m.date||'')+'" style="width:auto;font-size:11px;padding:2px 6px" onchange="_mtgSet_(\''+t.id+'\',\''+m.id+'\',\'date\',this.value)">'
+      +'<input value="'+esc(m.place||'')+'" placeholder="場所（先方/当社/オンライン）" style="width:180px;font-size:11px;padding:2px 6px" onchange="_mtgSet_(\''+t.id+'\',\''+m.id+'\',\'place\',this.value)">'
+      +(m.audioKey?('<span style="font-size:10px;color:#0f766e;font-weight:700" title="'+Math.round((m.audioSize||0)/1024)+'KB">🎙 録音あり '+Math.floor((m.audioSec||0)/60)+':'+String((m.audioSec||0)%60).padStart(2,'0')+'</span>'):'')
+      +'<button class="btn dan" style="font-size:10px;padding:2px 8px;margin-left:auto" onclick="_mtgDel_(\''+t.id+'\',\''+m.id+'\')">削除</button>'
+      +'</div>';
+    if(!m.open) return '<div style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;overflow:hidden">'+head+'</div>';
+    var body='<div style="padding:10px">'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">'
+        +'<div><label style="font-size:10.5px;color:#475569;font-weight:700">先方の出席者</label>'
+          +'<input value="'+esc(m.theirs||'')+'" placeholder="例: 代表 眞壁様・FA担当" style="width:100%;font-size:11.5px;padding:4px 7px" onchange="_mtgSet_(\''+t.id+'\',\''+m.id+'\',\'theirs\',this.value)"></div>'
+        +'<div><label style="font-size:10.5px;color:#475569;font-weight:700">当社の出席者</label>'
+          +'<input value="'+esc(m.ours||'')+'" placeholder="例: 本多・福永" style="width:100%;font-size:11.5px;padding:4px 7px" onchange="_mtgSet_(\''+t.id+'\',\''+m.id+'\',\'ours\',this.value)"></div>'
+      +'</div>'
+      // 録音
+      +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:7px 9px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin-bottom:8px">'
+        +'<span style="font-size:10.5px;font-weight:700;color:#78350f">🎙 録音</span>'
+        +(recording
+            ? ('<span id="rectime-'+m.id+'" style="font-size:11px;font-weight:800;color:#b91c1c">● 録音中 0:00</span>'
+               +'<button class="btn" style="font-size:11px;padding:3px 12px;background:#b91c1c;color:#fff;border-color:#b91c1c;font-weight:700" onclick="_mtgRecStop_()">■ 停止して保存</button>')
+            : ('<button class="btn" style="font-size:11px;padding:3px 12px" onclick="_mtgRecStart_(\''+t.id+'\',\''+m.id+'\')">● 録音を開始</button>'))
+        +(m.audioKey && !recording
+            ? ('<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_mtgPlay_(\''+m.id+'\')">▶ 再生</button>'
+               +'<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_mtgDownload_(\''+m.id+'\')">⬇ 保存</button>'
+               +'<button class="btn dan" style="font-size:10px;padding:3px 8px" onclick="_mtgAudioDel_(\''+t.id+'\',\''+m.id+'\')">録音を削除</button>')
+            : '')
+        +'<span style="font-size:10px;color:#92400e;margin-left:auto">相手の同意を得てから／音声はこの端末内だけに保存されます</span>'
+        +'<audio id="audio-'+m.id+'" controls style="display:none;width:100%;margin-top:4px"></audio>'
+      +'</div>'
+      // そのまま記録
+      +'<label style="font-size:10.5px;color:#475569;font-weight:700">打合せ内容（そのまま記録）</label>'
+      +'<textarea class="ta-grow" rows="6" style="width:100%;font-size:12px;overflow:hidden;resize:vertical;min-height:120px;line-height:1.6" placeholder="話した内容をそのまま書き留めてください（箇条書きでも会話の流れでも）" oninput="_taGrow_(this);_mtgSet_(\''+t.id+'\',\''+m.id+'\',\'raw\',this.value)">'+esc(m.raw||'')+'</textarea>'
+      // まとめ4項目
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">'
+        + [['topics','論点・確認したこと'],['decisions','決定事項'],['todos','宿題（誰が・いつまで）'],['next','次回（日時・議題）']].map(function(f){
+            return '<div><label style="font-size:10.5px;color:#475569;font-weight:700">'+f[1]+'</label>'
+              +'<textarea class="ta-grow" rows="2" style="width:100%;font-size:11.5px;overflow:hidden;resize:vertical;min-height:52px;line-height:1.5" oninput="_taGrow_(this);_mtgSet_(\''+t.id+'\',\''+m.id+'\',\''+f[0]+'\',this.value)">'+esc(m[f[0]]||'')+'</textarea></div>';
+          }).join('')
+      +'</div>'
+      // その場で更新
+      +'<div style="margin-top:10px;padding:8px 9px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">'
+        +'<div style="font-size:10.5px;font-weight:700;color:#0369a1;margin-bottom:5px">⚡ この面談の内容を反映する</div>'
+        +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+          +'<span style="font-size:10.5px;color:#475569">交渉ステータス:</span>'
+          +'<select style="width:auto;font-size:11px;padding:3px 6px" onchange="_mtgApplyStage_(\''+t.id+'\',\''+m.id+'\',this.value)">'
+            + STAGES.map(function(s){ return '<option'+((t.stage||'面談前')===s?' selected':'')+'>'+s+'</option>'; }).join('')
+          +'</select>'
+          +'<button class="btn" style="font-size:11px;padding:3px 10px" onclick="_mtgToMemo_(\''+t.id+'\',\''+m.id+'\')" title="決定事項・宿題・次回を分析メモに追記します">📝 分析メモに追記</button>'
+        +'</div>'
+        +'<div style="font-size:10.5px;color:#0369a1;font-weight:700;margin:6px 0 3px">質問の回答をここで更新（状況ボタンで 未確認→確認中→OK→懸念）</div>'
+        + _mtgDdBox_(t, m)
+      +'</div>'
+    +'</div>';
+    return '<div style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;overflow:hidden">'+head+body+'</div>';
+  }).join('');
+  box.querySelectorAll('textarea.ta-grow').forEach(function(ta){ _taGrow_(ta); });
 }
 // ── 02 複数年の横並び比較 ──
 function _yrs_(t){ if(!Array.isArray(t.years)) t.years=[]; return t.years; }
