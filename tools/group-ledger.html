@@ -394,7 +394,7 @@ var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nn
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
-var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['item','案件名'],['orderQty','受注数量'],['unit','単位'],['qty','製造数量'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
+var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['_billTo','💳請求先'],['item','案件名'],['orderQty','受注数量'],['unit','単位'],['qty','製造数量'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
 // 自社金額列を持つ会社（金額未入力の赤表示対象）
 var SELF_AMT_KEYS={murayama:1,nakao:1,yamauchi:1,tsushima:1};
 // 請求月は「YYYY年M月」表示（並び順は年月キーで正しく）
@@ -445,7 +445,61 @@ function _memoHtml_(c){
   else if(tags.length) html='<span title="'+esc(raw).replace(/"/g,'&quot;')+'">'+html+'</span>';
   return html;
 }
+// ═══ 請求先の自動変換（本体の取引先マスタと同じルール。BILLTO-4）═══
+//   市役所は「○○市××課」に納品して、請求と入札の本見積は「○○市長」宛、
+//   見積書（予算・随意契約）は「○○市 契約課」宛、というのが多いので自動で出す。
+//   設定は本体（マスター＞取引先）と共有（同じ端末の保存領域を読む）。
+function _blDB_(){ try{ return JSON.parse(localStorage.getItem('murayama_v15')||'null')||{}; }catch(e){ return {}; } }
+function _blConf_(){ var c=(_blDB_().conf)||{}; return {
+  auto:(c.billAutoChief!==false),
+  dept:(c.billQuoteDept==null?'契約課':String(c.billQuoteDept).trim()),
+  skip:String(c.billChiefSkip==null?'小学校、中学校、高等学校、高校、幼稚園、保育園、こども園、学園、大学、シルバー人材センター、社会福祉協議会、商工会、観光協会、国際交流協会、協会、財団、社団、法人、振興会、連合会、事業団、公社、組合、病院、医師会、歯科医師会、薬剤師会、自治会、町内会、消防団':c.billChiefSkip)
+        .split(/[、,]/).map(function(s){return s.trim();}).filter(Boolean)
+}; }
+function _blChief_(org){
+  var s=String(org||'').trim(); if(!s) return '';
+  if(/株式会社|有限会社|合同会社|合資会社|㈱|㈲|\(株\)|\(有\)|赤十字|協会|財団|社団|信用金庫|銀行/.test(s)) return '';
+  var m=s.match(/^(.{2,9}[市区町村])(.+)$/); if(!m) return '';
+  var pre=m[1], rest=m[2];
+  if(/[社会店堂園館]/.test(pre)) return '';
+  if(/^長/.test(rest)) return s;
+  if(!(/^(役所|役場)/.test(rest) || /([課部局室署場館所係掛班]|センター|ｾﾝﾀｰ|委員会)$/.test(rest.replace(/[\s　].*$/,'')) || /([課部局室署場館所係掛班]|センター|ｾﾝﾀｰ|委員会)$/.test(rest))) return '';
+  var cf=_blConf_();
+  for(var i=0;i<cf.skip.length;i++){ if(s.indexOf(cf.skip[i])>=0) return ''; }
+  return pre+'長';
+}
+function _blRule_(name){
+  var rules=(_blDB_().billRules)||[]; var hit=null;
+  rules.forEach(function(r){
+    if(!r||r.active===false||!r.from) return;
+    var ok=(r.kind==='contains')?(String(name).indexOf(r.from)>=0):(String(name).indexOf(r.from)===0);
+    if(ok && (!hit || String(r.from).length>String(hit.from).length)) hit=r;
+  });
+  return hit;
+}
+//  purpose: 'bill'=請求書・入札の本見積 / 'quote'=見積書(予算・随意契約)
+function blAddrFor(org, purpose){
+  var name=String(org||'').trim(); if(!name) return '';
+  var cust=((_blDB_().master||{}).cust)||[];
+  var cur=cust.find(function(r){ return r && typeof r!=='string' && r.org===name; });
+  var ind=(cur&&(purpose==='quote'?cur.quoteTo:cur.billTo))||'';
+  if(String(ind).trim()) return String(ind).trim();
+  var ru=_blRule_(name);
+  if(ru){ var t=(purpose==='quote'?ru.toQuote:ru.to); if(String(t||'').trim()) return String(t).trim(); }
+  var cf=_blConf_();
+  if(cf.auto){
+    var chief=_blChief_(name);
+    if(chief){
+      if(purpose!=='quote') return chief;
+      var city=String(chief).replace(/長$/,'');
+      return cf.dept?(city+' '+cf.dept):chief;
+    }
+  }
+  return name;
+}
 function getColVal(c,k){
+  if(k==='_billTo'){ var b=blAddrFor(c.customer,'bill'); return (b&&b!==String(c.customer||'').trim())?b:''; }
+  if(k==='_quoteTo'){ var q=blAddrFor(c.customer,'quote'); return (q&&q!==String(c.customer||'').trim())?q:''; }
   if(k==='multiPack') return (c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE')?'⚠ 複数梱包':'';
   if(k==='multiDest') return c.multiDest?'⚠ 複数納品先':'';
   if(k==='_vendor') return _vendVal_(c);
@@ -745,6 +799,12 @@ function render(){
       // 金額未入力(空/0)は赤セル：金額(トキワ)=全社、金額(自社)=自社金額列を持つ会社のみ
       if((k==='amtTokiwa' || (k==='amtSelf' && SELF_AMT_KEYS[c._key])) && !(toNum(v)>0)){ cls=' class="num" style="background:#fde8e4"'; cell=''; }
       if(k==='memo'){ cell=_memoHtml_(c); }
+      if(k==='_billTo' && v){
+        // 請求書・入札の本見積の宛名（納品先と違うときだけ出す）。見積(予算・随契)は下に小さく
+        var _q=getColVal(c,'_quoteTo');
+        cell='<b style="color:#92400e">'+esc(v)+'</b>'
+          + (_q?('<div style="font-size:9.5px;color:#0369a1" title="見積書（予算・随意契約）の宛先">見積: '+esc(_q)+'</div>'):'');
+      }
       if(k==='_arrival' && _mailArr_(c)){ cell='<b style="color:#0e7490">'+esc(v)+'</b> <span style="cursor:pointer" title="発送メールを確認（到着予定日の根拠）" onclick="showArrMail(\''+c.denpyo+'\')">📧</span>'; }
       else if(k==='_arrival' && v){ cell='<span style="color:#0e7490">'+esc(v)+'</span>'; }
       return '<td'+cls+'>'+cell+'</td>';
