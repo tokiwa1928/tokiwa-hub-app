@@ -12590,6 +12590,67 @@ function _bpLookup_(work, text, qty, unitName, cat, size){
   });
   return best?{ unit:best.b[bk], row:best }:null;
 }
+// 用紙の金額は「用紙マスタ／封筒マスタ」が正。計算書から作った用紙の行は参考値。
+//   封筒は完成品の1枚単価が封筒マスタにあるので、そちらを使う。
+//   それ以外（チラシ・冊子など）は 全紙単価 ÷ 面付 が要るが、面付は品名からは分からないため
+//   ここでは計算書の値を概算として使い、画面に「概算」と出す。
+// 半角カナ（ｸﾗﾌﾄ）を全角に直してから正規化する。
+//   _kanaNorm_ は全角カナ→ひらがなはするが半角カナはそのままなので、
+//   「ｸﾗﾌﾄ」と「クラフト」が別物になってしまう
+var _BP_HK_='ｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾊﾋﾌﾍﾎ', _BP_HKD_='ガギグゲゴザジズゼゾダヂヅデドバビブベボ';
+var _BP_HP_='ﾊﾋﾌﾍﾎ', _BP_HPP_='パピプペポ';
+var _BP_HAN_='ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｧｨｩｪｫｯｬｭｮｰ';
+var _BP_ZEN_='アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンァィゥェォッャュョー';
+function _bpKana_(s){
+  s=String(s||'');
+  var out='';
+  for(var i=0;i<s.length;i++){
+    var c=s[i], nx=s[i+1];
+    if(nx==='ﾞ'){ var k=_BP_HK_.indexOf(c); if(k>=0){ out+=_BP_HKD_[k]; i++; continue; } }
+    if(nx==='ﾟ'){ var k2=_BP_HP_.indexOf(c); if(k2>=0){ out+=_BP_HPP_[k2]; i++; continue; } }
+    var j=_BP_HAN_.indexOf(c);
+    out += (j>=0)?_BP_ZEN_[j]:c;
+  }
+  return _kanaNorm_(out);
+}
+function _bpEnvPaper_(text){
+  var size=_bpSize_(text);
+  if(!size) return null;
+  var kind='', wt='';
+  for(var i=0;i<BP_PAPER_KINDS.length;i++){
+    if(BP_PAPER_KINDS[i][1].some(function(k){ return String(text||'').indexOf(k)>=0; })){ kind=BP_PAPER_KINDS[i][0]; break; }
+  }
+  var mw=z2hLite(String(text||'')).match(/[<＜]\s*([0-9.]+)\s*[>＞]|([0-9]{2,3})\s*[Kkｇg]/);
+  wt=(mw&&(mw[1]||mw[2]))||'';
+  // 斤量の直前に書かれた紙名（例「(ｽｶｲ)<85>」→ スカイ、「ｸﾗﾌﾄ<85>」→ クラフト）。
+  // クラフトと色封筒では値段が違うので、紙名が読めたらそれを必ず一致させる
+  var pn='';
+  var mp=String(text||'').match(/[（(]?\s*([^,、（()\s<＜]{2,10})\s*[）)]?\s*[<＜]/);
+  if(mp) pn=_bpKana_(mp[1]);
+  var best=null, bestScore=-1;
+  ((DB.master&&DB.master.envelope)||[]).forEach(function(r){
+    if(r.active===false) return;
+    var sp=String(r.sp||r.nm||'');
+    var p=parseFloat(r.p)||0;
+    if(!p || sp.indexOf(size)<0) return;
+    var score=10;
+    if(wt){
+      var rw=z2hLite(sp).match(/([0-9.]{2,5})\s*[gｇ]?/);
+      if(!rw || rw[1]!==wt) return;              // 斤量が違う封筒は使わない
+      score+=50;
+    }
+    if(pn){
+      // 紙名が読めたときは、封筒マスタ側の紙名に含まれる（または逆）ことを必須にする
+      var spn=_bpKana_(sp);
+      if(spn.indexOf(pn)<0 && pn.indexOf(_bpKana_(String(r.nm||'').split(' ').pop()||''))<0) return;
+      score+=40;
+    } else if(kind){
+      if(sp.indexOf(kind)>=0) score+=30; else score-=10;
+    }
+    if(score>bestScore){ bestScore=score; best=r; }
+  });
+  return best?{ unit:parseFloat(best.p), src:'封筒マスタ', name:(best.nm||best.sp) }:null;
+}
 function _bpCost_(text, unitName, qty){
   var q=parseFloat(qty)||0;
   if(q<=0) return null;
@@ -12597,15 +12658,25 @@ function _bpCost_(text, unitName, qty){
   //  実績側の単位欄は当てにならないので、品名からの推測を優先して村山の単位に合わせる
   var u=_bpUnitFor_(cat, _bpUnitGuess_(text, cat), _stdBandOf_(q));
   if(!u) return null;
-  var cost=0, hit=[], miss=[];
+  var cost=0, hit=[], miss=[], paperSrc='';
   BP_WORKS.forEach(function(w){
+    if(w==='用紙'){
+      // 用紙の金額はマスタが正。封筒は封筒マスタの1枚単価を使う
+      var em=(cat==='封筒')?_bpEnvPaper_(text):null;
+      if(em){
+        cost += em.unit*q; paperSrc='封筒マスタ';
+        hit.push({ work:w, unit:em.unit, amt:em.unit*q, spec:em.name, src:'封筒マスタ' });
+        return;
+      }
+    }
     var r=_bpLookup_(w, text, q, u, cat, size);
     if(!r){ miss.push(w); return; }
+    if(w==='用紙') paperSrc='計算書(概算)';
     cost += r.unit*q;
-    hit.push({ work:w, unit:r.unit, amt:r.unit*q, spec:(r.row.spec||'') });
+    hit.push({ work:w, unit:r.unit, amt:r.unit*q, spec:(r.row.spec||''), src:(w==='用紙'?'計算書(概算)':'') });
   });
   if(hit.length<2) return null;      // 2工程も当たらないものは原価が信用できない
-  return { cost:cost, unitCost:cost/q, hit:hit, miss:miss, cat:cat, unit:u, size:size };
+  return { cost:cost, unitCost:cost/q, hit:hit, miss:miss, cat:cat, unit:u, size:size, paperSrc:paperSrc };
 }
 // 各社の売価実績を集める（① 単価マスタ ② 本体の案件データ）
 function _bpSamples_(){
@@ -12636,6 +12707,7 @@ function _bpPct_(sorted, p){
 }
 function renderProfitByCompany(){
   var samples=_bpSamples_();
+  var paperSrcCnt={};
   // 原価の時点補正: 原価の元データは計算書(〜2024年ごろ)、売価は直近。
   //   同じ品目で比べると直近売価は旧Lotus比 中央値117.7%だったので、既定で+18%して時点を合わせる。
   var adj=(window._bpAdj_==null)?118:window._bpAdj_;
@@ -12646,6 +12718,7 @@ function renderProfitByCompany(){
     var rate=(s.sell-c.cost*(adj/100))/s.sell*100;
     if(rate<-200 || rate>100) { nNg++; return; }     // 桁違いは弾く
     nOk++;
+    if(c.paperSrc) paperSrcCnt[c.paperSrc]=(paperSrcCnt[c.paperSrc]||0)+1;
     (byCo[s.co]=byCo[s.co]||[]).push(rate);
     var ck=c.cat+(s.qty<=300?'（〜300）':'（301〜）');
     (byCat[ck]=byCat[ck]||[]).push(rate);
@@ -12713,6 +12786,12 @@ function renderProfitByCompany(){
     });
     h+='</tbody></table></div>';
   }
+  var psTxt=Object.keys(paperSrcCnt).map(function(k){ return k+' '+paperSrcCnt[k]+'件'; }).join(' / ');
+  h+='<div style="font-size:11px;color:#334155;margin-top:8px;padding:7px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px">'
+    +'📄 <b>用紙代の出どころ</b>：'+(psTxt||'—')+'<br>'
+    +'封筒は<b>封筒マスタの1枚単価</b>（正）を使っています。それ以外は全紙単価÷面付が要りますが'
+    +'<b>面付は品名から分からない</b>ため、計算書からの<b>概算</b>です。'
+    +'正確な用紙代が要るときは<b>見積画面の用紙行</b>（用紙マスタのキロ単価・包み自動選定）で計算してください</div>';
   h+='<div style="font-size:11px;color:#78350f;margin-top:8px;padding:7px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">'
     +'📌 <b>読むときの注意</b>：原価は<b>村山の基準</b>（自社工賃込み）で計算しています。'
     +'<b>小ロットは版下・組付・刷版などの一式費用が効くので原価が高く出ます</b>。'
@@ -14538,7 +14617,9 @@ function renderStdRates(mp){
     +'<b>②直近見積(PDF)</b>＝いまの売価水準。<b>売価の基準はこちらを使ってください</b>／'
     +'<b>③計算書(旧Lotus)</b>＝<b>工程別（用紙・印刷・製版CTP・製本）の内訳が分かるのはこれだけ</b>。ただし2024年ごろまでの価格。<br>'
     +'⚠ 同じ品目で比べると<b>直近は旧Lotusより高い</b>（例: 長3封筒 1000枚 9.5円→12.3円＝129%／3000枚 8.7円→12.5円＝144%）。'
-    +'<b>③の売価をそのまま基準にすると安すぎます</b>。工程別は③、売価は②で組み立ててください。'
+    +'<b>③の売価をそのまま基準にすると安すぎます</b>。工程別は③、売価は②で組み立ててください。<br>'
+    +'📄 <b>用紙の金額は「用紙マスタ／封筒マスタ」が正です。</b>ここにある工程「用紙」の行は計算書から作った'
+    +'<b>参考値</b>なので、実際の見積では用紙マスタ（キロ単価・包み自動選定）と封筒マスタの1枚単価を使ってください。'
     +'</div>'
     +'<div style="overflow-x:auto"><table class="m-tbl"><thead><tr>'
     +'<th style="min-width:96px">工程</th>'
