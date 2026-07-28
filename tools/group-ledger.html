@@ -1540,7 +1540,9 @@ function _ns4Panel_(title, sub, list, co, iss, opt){
     +'<div class="iss">'+issTxt+'</div>'
     +'<div class="ttl"><u>'+esc2(title)+'</u>'+(sub?('<span class="sub">'+esc2(sub)+'</span>'):'')+'</div>'
     +(opt.rule?'<div class="trule"></div>':'')
-    +'<div class="hd"><div class="to">'+esc2(c0.customer||'')+'　御中</div>'+frBox+'</div>'
+    +'<div class="hd"><div class="to">'+esc2(opt.to||c0.customer||'')+'　御中'
+        +(opt.subTo?('<div style="font-size:8.5pt;font-weight:400;margin-top:1mm">納品先：'+esc2(opt.subTo)+'</div>'):'')
+        +'</div>'+frBox+'</div>'
     +(opt.lead?('<div class="lead">'+opt.lead+'</div>'):'')
     +'<table class="itm"><tr><th style="width:9mm">NO</th><th>品名・規格・図版</th><th style="width:20mm">単価</th><th style="width:22mm">数量</th><th style="width:26mm">金額</th></tr>'
     +_ns4Rows_(list, esc2, opt.pad||0)
@@ -1557,26 +1559,33 @@ function _ns4Panel_(title, sub, list, co, iss, opt){
 }
 function _ns4Set_(list, co, iss){
   var trio = list.length<=6 ? ' trio' : '';
-  var invPanel=_ns4Panel_('請　求　書','',list,co,iss,{rule:true,lead:'下記の通りご請求申し上げます。',grand:'ご請求金額',pad:5,note:'※単価は消費税抜きの単価です。消費税は10%で計算しております。',bank:(co.bank||'')});
+  // 宛名は用途で変える。納品先と違うときは納品先を併記する
+  var _dst=(list[0]&&list[0].customer)||'';
+  var _toB=(typeof blAddrFor==='function')?blAddrFor(_dst,'bill'):_dst;
+  var _ad=(_toB&&_toB!==_dst)?{to:_toB, subTo:_dst}:{};
+  var _mix=function(o){ var r={}; Object.keys(o||{}).forEach(function(k){ r[k]=o[k]; });
+    Object.keys(_ad).forEach(function(k){ r[k]=_ad[k]; }); return r; };
+  var invPanel=_ns4Panel_('請　求　書','',list,co,iss,_mix({rule:true,lead:'下記の通りご請求申し上げます。',grand:'ご請求金額',pad:5,note:'※単価は消費税抜きの単価です。消費税は10%で計算しております。',bank:(co.bank||'')}));
   _docState_.parts={
     trio: '<div class="ns4'+trio+'">'
-      +_ns4Panel_('納　品　書','控',list,co,iss,{})
-      +_ns4Panel_('納　品　書','',list,co,iss,{})
-      +_ns4Panel_('受　領　書','',list,co,iss,{receipt:true})
+      +_ns4Panel_('納　品　書','控',list,co,iss,_mix({}))
+      +_ns4Panel_('納　品　書','',list,co,iss,_mix({}))
+      +_ns4Panel_('受　領　書','',list,co,iss,_mix({receipt:true}))
       +'</div>'+_attachHtml_(),
     inv: '<div class="ns4">'+invPanel+'</div>'
   };
   return '<div class="ns4'+trio+'">'
-    +_ns4Panel_('納　品　書','控',list,co,iss,{})
-    +_ns4Panel_('納　品　書','',list,co,iss,{})
-    +_ns4Panel_('受　領　書','',list,co,iss,{receipt:true})
+    +_ns4Panel_('納　品　書','控',list,co,iss,_mix({}))
+    +_ns4Panel_('納　品　書','',list,co,iss,_mix({}))
+    +_ns4Panel_('受　領　書','',list,co,iss,_mix({receipt:true}))
     +'</div>'
     +'<div class="ns4 pbreak">'
     +invPanel
     +'</div>';
 }
 // 中尾印刷で作った伝票様式（村田材木店複写伝票参考）: A4横1票・明朝・中央タイトル二重下線
-function _nkSheet_(title, c, co, iss){
+function _nkSheet_(title, c, co, iss, opt){
+  opt=opt||{};
   var list=Array.isArray(c)?c:[c];
   var c0=list[0];
   var esc2=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
@@ -1604,7 +1613,7 @@ function _nkSheet_(title, c, co, iss){
     +'<div class="no">No.<b>'+esc2(noTxt)+'</b></div>'
     +'<div class="t"><span>'+esc2(title)+'</span></div>'
     +'<div class="hd">'
-      +'<div class="to"><div class="nm"><span>'+esc2(c0.customer||'')+'</span><i>御中</i></div>'
+      +'<div class="to"><div class="nm"><span>'+esc2((opt&&opt.to)||c0.customer||'')+'</span><i>御中</i></div>'
         +'<div class="msg">'+msg+'</div>'
         +'<div class="dt">'+wareki+(isQuote?'<span style="font-size:9pt">　（御見積有効期限：発行日より1ヶ月）</span>':'')+'</div></div>'
       +'<div class="fr"><div class="co">'+esc2(co.name)+'</div>'
@@ -1649,6 +1658,12 @@ function genDoc(type){
     _docState_.land=false;
     var _t1={ '納品書':'納　品　書', '受領書':'受　領　書', '請求書':'請　求　書', '見積書':'御　見　積　書' }[type];
     var _o1={ pad:5, rule:true };
+    // 宛名は用途で変える（自治体は 請求書・入札本見積＝市長／見積書(予算・随契)＝契約課）。
+    // 納品先と違うときは「納品先：○○」も併記して、どこに納めた分か分かるようにする。
+    var _dst=(list[0]&&list[0].customer)||'';
+    var _pp=(type==='見積書')?'quote':'bill';
+    var _to=(typeof blAddrFor==='function')?blAddrFor(_dst,_pp):_dst;
+    if(_to && _to!==_dst){ _o1.to=_to; _o1.subTo=_dst; }
     if(type==='納品書'){ _o1.lead='下記の通り納品いたしました。'; }
     if(type==='受領書'){ _o1.lead='下記の品を納品いたしました。'; _o1.receipt=true; }
     if(type==='請求書'){ _o1.lead='下記の通りご請求申し上げます。'; _o1.grand='ご請求金額';
@@ -1663,7 +1678,10 @@ function genDoc(type){
   // 3連（1ページに 控・納品書・受領書）は従来の中尾様式のまま
   if(type==='納品書3連'){
     _docState_.land=true;
-    _docState_.html=_nkSheet_('納　品　書（控）',list,co,iss)+_nkSheet_('納　品　書',list,co,iss)+_nkSheet_('受　領　書',list,co,iss)+_attachHtml_();
+    var _d3=(list[0]&&list[0].customer)||'';
+    var _t3=(typeof blAddrFor==='function')?blAddrFor(_d3,'bill'):_d3;
+    var _o3=(_t3&&_t3!==_d3)?{to:_t3}:{};
+    _docState_.html=_nkSheet_('納　品　書（控）',list,co,iss,_o3)+_nkSheet_('納　品　書',list,co,iss,_o3)+_nkSheet_('受　領　書',list,co,iss,_o3)+_attachHtml_();
     document.getElementById('doc-preview').innerHTML='<div style="transform:scale(.5);transform-origin:top left;width:200%">'+_docState_.html+'</div>';
     document.getElementById('doc-print-btn').style.display='';
     return;
