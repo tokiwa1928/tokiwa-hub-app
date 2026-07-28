@@ -3764,6 +3764,7 @@ let DB={
   makerTerms: [],       // メーカー別呼称の対訳（封筒/用紙。窓の号数がメーカーで異なるため実寸で紐づける）
   makerList: [],        // 対訳表の列に出すメーカー名（既定はハート/ムトウユニパック/キングコーポレーション/山櫻/ヤマガタ）
   supplyRules: [],      // 仕入ルール（メーカー別の優先順位＝安い順・取扱範囲）。発注先を自動判定して相見積の手間を省く
+  billRules: [],        // 請求先の変換ルール（例「豊川市」で始まる取引先 → 請求は「豊川市長」宛）
   stdRates: [],         // 基準単価表（工程×仕様×数量帯）。全社共通の「この作業はこのくらい」の基準値＝利益の下限
   conf:{     // 会社設定
     name:'村山印刷有限会社',
@@ -4115,7 +4116,7 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   if(!d.inquirySettings) d.inquirySettings={autoReply:true,autoReplyMessage:'',categories:['見積依頼','納品について','データ入稿','校正確認','クレーム','その他'],assignees:[]};
   if(!d.wikiArticles) d.wikiArticles=[];
   if(!d.templates) d.templates=[];
-  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],supplyRules:[],stdRates:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
+  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],supplyRules:[],billRules:[],stdRates:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
   // AAAA-1: マスター番号 backfill (起動時に既存データに割り当て)
   if(typeof _backfillMasterNos_ === 'function') _backfillMasterNos_();
   // 移行による変更を永続化（しないと次回リロードで元に戻り、フラグだけ立って再実行もされない）
@@ -4399,6 +4400,15 @@ async function loadFromCloud() {
     DB.stdRates = _srtOrder.map(function(id){ return _srtById[id]; });
   }
   // 仕入ルール（メーカー別の取扱範囲・優先順位）— id単位で新しい方を採用
+  // 請求先の変換ルール — id単位で新しい方を採用
+  if (result.data.billRules) {
+    var _brTs=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var _brById={}, _brOrder=[];
+    var _brTake=function(r){ if(!r||!r.id) return; if(!(r.id in _brById)){ _brOrder.push(r.id); _brById[r.id]=r; } else if(_brTs(r)>_brTs(_brById[r.id])){ _brById[r.id]=r; } };
+    (Array.isArray(DB.billRules)?DB.billRules:[]).forEach(_brTake);
+    result.data.billRules.forEach(_brTake);
+    DB.billRules = _brOrder.map(function(id){ return _brById[id]; });
+  }
   if (result.data.supplyRules) {
     var _srTs=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
     var _srById={}, _srOrder=[];
@@ -4959,6 +4969,7 @@ async function saveToCloud() {
     makerTerms: DB.makerTerms || [],
     makerList: DB.makerList || [],
     supplyRules: DB.supplyRules || [],
+    billRules: DB.billRules || [],
     stdRates: DB.stdRates || [],
     calendarOrders: DB.calendarOrders || [],
     calendarOrdersDeleted: (DB.calendarOrdersDeleted || []).slice(-2000),
@@ -13474,12 +13485,7 @@ function renderMaster(id){
     html += `</tbody></table></div>`;
     // 請求先の候補（取引先マスタの会社名から選べるように）
     html += _dlHtml_('dl-billto', _dlCustNames_());
-    var _nBill=((DB.master&&DB.master.cust)||[]).filter(function(r){ return r&&typeof r!=='string'&&String(r.billTo||'').trim(); }).length;
-    html += '<div style="font-size:11px;color:#334155;margin-top:6px;padding:7px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">'
-      + '💳 <b>請求先</b>：納品する相手と請求する相手が違うときに入れてください（空欄ならこの取引先へ請求）。'
-      + '<b>市役所は課ごとに納品して請求は別窓口、というケースが多い</b>ので、1件入れると同じ市の取引先へまとめて適用するか確認します。<br>'
-      + '入れると<b>請求書だけ宛名が変わり、納品書は納品先のまま</b>になります。現在 <b>'+_nBill+' 件</b>に設定済み。'
-      + '</div>';
+    html += _billPanelHtml_();
   } else if(id==='prod'){
     html+=`<table class="m-tbl"><thead><tr><th style="min-width:82px">状態</th><th>製品名</th><th>カテゴリ</th><th>標準仕様</th><th class="dx"></th></tr></thead><tbody>`;
     data.forEach((r,i)=>{const oi=DB.master.prod.indexOf(r);html+=`<tr${r.active===false?' style="opacity:.55;background:#fafafa"':''}>${_mstStateCell_('prod',oi,r.active)}<td><input type="text" list="dl-mst-prod-n" value="${r.n||''}" onchange="DB.master.prod[${oi}].n=this.value"></td><td><select onchange="DB.master.prod[${oi}].cat=this.value"><option${r.cat==='封筒'?' selected':''}>封筒</option><option${r.cat==='帳票'?' selected':''}>帳票</option><option${r.cat==='冊子'?' selected':''}>冊子</option><option${r.cat==='その他'?' selected':''}>その他</option></select></td><td><input type="text" list="dl-mst-prod-sp" value="${r.sp||''}" onchange="DB.master.prod[${oi}].sp=this.value"></td><td class="dx"><button class="del-btn" onclick="DB.master.prod.splice(${oi},1);renderMaster('prod')">×</button></td></tr>`;});
@@ -39544,7 +39550,56 @@ function updateCustOrgBillTo(org, v){
   renderMaster('cust');
   if(typeof _toastMsg==='function') _toastMsg('💳 '+others.length+' 件の請求先も「'+val+'」にしました');
 }
-// 取引先名 → 請求先名（設定が無ければその取引先自身）。旧社名も追いかける
+// ── 請求先の自動変換（BILLTO-2）──
+//   市役所は「○○市役所 △△課」に納品して、請求は「○○市長」宛、という形が多い。
+//   毎回入力しなくて済むよう、ルールで自動変換する。
+//   優先順: ①取引先ごとの個別設定 → ②変換ルール → ③首長名義への自動変換 → ④そのまま
+function _billRules_(){ if(!Array.isArray(DB.billRules)) DB.billRules=[]; return DB.billRules; }
+function _billConf_(){
+  if(!DB.conf) DB.conf={};
+  if(DB.conf.billAutoChief===undefined) DB.conf.billAutoChief=true;
+  // 自治体の名前が入っていても市長宛でないもの（学校・外郭団体など）は自動変換しない
+  if(DB.conf.billChiefSkip===undefined) DB.conf.billChiefSkip='小学校、中学校、高等学校、高校、幼稚園、保育園、こども園、学園、大学、'
+    +'センター、協会、財団、社団、法人、振興会、実行委員会、連合会、事業団、公社、組合、社会福祉協議会、商工会、'
+    +'教育委員会、議会、病院、医師会、歯科医師会、薬剤師会、自治会、町内会、消防団、シルバー';
+  return DB.conf;
+}
+// 「○○市役所 建設課」→「○○市」（部署が付いている自治体だけ。会社名の「村」等は拾わない）
+function _billCityOf_(org){
+  var m=String(org||'').trim().match(/^(.{2,9}[市区町村])(.+)$/);
+  return m?m[1]:'';
+}
+function _billChiefName_(org){
+  var s=String(org||'').trim();
+  if(!s) return '';
+  // ① 会社・法人は自治体ではない（「有限会社 田村設備」の「村」を市町村と読み違えないため）
+  if(/株式会社|有限会社|合同会社|合資会社|㈱|㈲|\(株\)|\(有\)|赤十字|協会|財団|社団|信用金庫|銀行/.test(s)) return '';
+  var c=_billCityOf_(s);
+  if(!c) return '';
+  if(/[社会店堂園館]/.test(c)) return '';                  // 前に社名が付いている形（日本赤十字社○○市…）
+  var rest=s.slice(c.length);
+  if(/^長/.test(rest)) return s;                           // すでに「○○市長」ならそのまま
+  // ② 自治体の部署らしい形のときだけ変換する（役所・役場・○○課／部／局／室）
+  if(!(/^(役所|役場)/.test(rest) || /[課部局室]$/.test(rest))) return '';
+  // ③ 学校・外郭団体などの除外語
+  var conf=_billConf_();
+  var skip=String(conf.billChiefSkip||'').split(/[、,]/).map(function(x){return x.trim();}).filter(Boolean);
+  for(var i=0;i<skip.length;i++){ if(s.indexOf(skip[i])>=0) return ''; }
+  return c+'長';
+}
+// 変換ルールを当てる（前方一致／含む）
+function _billRuleHit_(org){
+  var name=String(org||'').trim();
+  var hit=null;
+  _billRules_().forEach(function(r){
+    if(!r || r.active===false || !r.from || !r.to) return;
+    var ok=(r.kind==='contains') ? (name.indexOf(r.from)>=0) : (name.indexOf(r.from)===0);
+    if(!ok) return;
+    if(!hit || String(r.from).length>String(hit.from).length) hit=r;   // より具体的なルールを優先
+  });
+  return hit;
+}
+// 取引先名 → 請求先名。旧社名も追いかける
 function _custBillTo_(org){
   var name=String(org||'').trim();
   if(!name) return '';
@@ -39555,7 +39610,103 @@ function _custBillTo_(org){
     if(n2 && n2!==name) cur=arr.find(function(r){ return r && typeof r!=='string' && r.org===n2; });
   }
   var b=(cur&&cur.billTo)?String(cur.billTo).trim():'';
-  return b || name;
+  if(b) return b;                                   // ①個別設定
+  var rule=_billRuleHit_(name);
+  if(rule) return String(rule.to).trim();           // ②変換ルール
+  if(_billConf_().billAutoChief!==false){
+    var chief=_billChiefName_(name);
+    if(chief) return chief;                         // ③自治体は首長名義へ
+  }
+  return name;                                      // ④そのまま
+}
+// ── 請求先の変換ルール 画面（取引先マスタの下に出す）──
+function _billPanelHtml_(){
+  var conf=_billConf_(), rules=_billRules_();
+  var arr=((DB.master&&DB.master.cust)||[]).filter(function(r){ return r&&typeof r!=='string'&&r.org&&r.active!==false; });
+  var chg=arr.map(function(r){
+    var to=_custBillTo_(r.org);
+    return (to && to!==r.org) ? { from:r.org, to:to, why:_custBillWhy_(r.org) } : null;
+  }).filter(Boolean);
+  var nInd=arr.filter(function(r){ return String(r.billTo||'').trim(); }).length;
+  var h='<div class="sec" style="background:#fffbeb;border:1px solid #fcd34d;margin-top:10px">'
+    +'<div class="st" style="color:#92400e">💳 請求先の自動変換（納品先 → 請求書の宛名）</div>'
+    +'<div style="font-size:11.5px;color:#475569;margin:.3rem 0 .5rem">'
+    +'市役所は「○○市役所 △△課」に納品して、請求は「<b>○○市長</b>」宛、という形が多いので自動で変換します。'
+    +'納品書は納品先のまま、<b>請求書だけ宛名が変わります</b>。<br>'
+    +'優先順は ①取引先ごとの個別設定（上の表の💳欄） → ②下の変換ルール → ③首長名義への自動変換 です。'
+    +'</div>'
+    +'<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:5px 9px;background:#fff;border:1px solid #fcd34d;border-radius:6px">'
+    +'<input type="checkbox"'+(conf.billAutoChief!==false?' checked':'')+' onchange="_billSetAuto_(this.checked)" style="width:auto">'
+    +'自治体は自動で「○○市長／町長／村長／区長」宛にする</label>'
+    +'<div style="margin-top:6px;font-size:11.5px">除外する言葉（この語を含む取引先は自動変換しない）<br>'
+    +'<input value="'+_escAttr_(conf.billChiefSkip||'')+'" style="width:100%;max-width:620px;font-size:11.5px" '
+    +'placeholder="小学校、中学校、…" onchange="_billSetSkip_(this.value)"></div>';
+  // 変換ルール
+  h+='<div style="margin-top:10px;font-size:12px;font-weight:700;color:#92400e">変換ルール'
+    +' <button class="add-btn" onclick="_billRuleAdd_()">＋ ルールを追加</button></div>';
+  if(rules.length){
+    h+='<div style="overflow-x:auto"><table class="m-tbl" style="font-size:11.5px"><thead><tr>'
+      +'<th style="width:62px">状態</th><th style="width:96px">条件</th><th>この言葉が…</th>'
+      +'<th>請求先（この宛名にする）</th><th>メモ</th><th class="dx"></th></tr></thead><tbody>';
+    rules.forEach(function(r,i){
+      h+='<tr'+(r.active===false?' style="opacity:.5"':'')+'>'
+        +'<td><button class="use-btn" style="font-size:10px;padding:2px 6px" onclick="_billRuleSet_('+i+',\'active\','+(r.active===false)+')">'+(r.active===false?'⛔ 無効':'✅ 有効')+'</button></td>'
+        +'<td><select style="width:100%;font-size:11px" onchange="_billRuleSet_('+i+',\'kind\',this.value)">'
+          +'<option value="prefix"'+(r.kind!=='contains'?' selected':'')+'>で始まる</option>'
+          +'<option value="contains"'+(r.kind==='contains'?' selected':'')+'>を含む</option></select></td>'
+        +'<td><input value="'+_escAttr_(r.from||'')+'" placeholder="例: 豊川市" style="width:100%" onchange="_billRuleSet_('+i+',\'from\',this.value)"></td>'
+        +'<td><input list="dl-billto" value="'+_escAttr_(r.to||'')+'" placeholder="例: 豊川市長" style="width:100%;font-weight:700" onchange="_billRuleSet_('+i+',\'to\',this.value)"></td>'
+        +'<td><input value="'+_escAttr_(r.note||'')+'" style="width:100%;font-size:11px" onchange="_billRuleSet_('+i+',\'note\',this.value)"></td>'
+        +'<td class="dx"><button class="del-btn" onclick="_billRuleDel_('+i+')">×</button></td></tr>';
+    });
+    h+='</tbody></table></div>';
+  } else {
+    h+='<div style="font-size:11.5px;color:#a16207;padding:4px 0">ルールはまだありません。自治体は上のチェックだけで自動変換されます。'
+      +'それ以外（組合・団体など）で決まった請求先があるときに追加してください。</div>';
+  }
+  // プレビュー
+  h+='<div style="margin-top:10px;font-size:12px;font-weight:700;color:#92400e">いま変換される取引先（'+chg.length+' 件 ／ 個別設定 '+nInd+' 件）</div>';
+  if(chg.length){
+    h+='<div style="max-height:230px;overflow:auto;border:1px solid #fde68a;border-radius:6px;background:#fff">'
+      +'<table class="m-tbl" style="font-size:11.5px;margin:0"><thead><tr>'
+      +'<th>納品先（取引先）</th><th style="width:24px"></th><th>請求書の宛名</th><th style="width:110px">決まり方</th></tr></thead><tbody>';
+    chg.slice(0,300).forEach(function(c){
+      h+='<tr><td>'+_escHtml_(c.from)+'</td><td style="color:#94a3b8">→</td>'
+        +'<td style="font-weight:700;color:#92400e">'+_escHtml_(c.to)+'</td>'
+        +'<td style="font-size:10.5px;color:#64748b">'+_escHtml_(c.why)+'</td></tr>';
+    });
+    h+='</tbody></table></div>';
+    if(chg.length>300) h+='<div style="font-size:11px;color:#94a3b8">…ほか '+(chg.length-300)+' 件</div>';
+  } else {
+    h+='<div style="font-size:11.5px;color:#a16207">変換される取引先はありません。</div>';
+  }
+  h+='</div>';
+  return h;
+}
+function _billSetAuto_(v){ _billConf_().billAutoChief=!!v; saveDB(); try{ saveToCloud(); }catch(e){} renderMaster('cust'); }
+function _billSetSkip_(v){ _billConf_().billChiefSkip=String(v||''); saveDB(); try{ saveToCloud(); }catch(e){} renderMaster('cust'); }
+function _billRuleAdd_(){
+  _billRules_().unshift({ id:'BR'+Date.now()+'-'+Math.floor(Math.random()*100000), kind:'prefix', from:'', to:'', note:'', active:true, _updatedAt:new Date().toISOString() });
+  saveDB(); renderMaster('cust');
+}
+function _billRuleSet_(i, f, v){
+  var r=_billRules_()[i]; if(!r) return;
+  r[f]=v; r._updatedAt=r.updatedAt=new Date().toISOString();
+  saveDB(); try{ saveToCloud(); }catch(e){} renderMaster('cust');
+}
+function _billRuleDel_(i){
+  if(!confirm('この変換ルールを削除しますか？')) return;
+  _billRules_().splice(i,1); saveDB(); try{ saveToCloud(); }catch(e){} renderMaster('cust');
+}
+// その請求先がどうやって決まったか（画面の説明用）
+function _custBillWhy_(org){
+  var name=String(org||'').trim();
+  var arr=(DB.master&&DB.master.cust)||[];
+  var cur=arr.find(function(r){ return r && typeof r!=='string' && r.org===name; });
+  if(cur&&String(cur.billTo||'').trim()) return '個別設定';
+  if(_billRuleHit_(name)) return '変換ルール';
+  if(_billConf_().billAutoChief!==false && _billChiefName_(name)) return '自動（首長名義）';
+  return '';
 }
 // 請求先が納品先と違うか
 function _custBillDiff_(org){
