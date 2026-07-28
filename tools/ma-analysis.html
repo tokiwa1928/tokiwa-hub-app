@@ -72,6 +72,7 @@
       <button class="btn" onclick="exportJson()" title="全データをJSONファイルに書き出し（他PCへの移動・バックアップ）">⬇ 書出</button>
       <button class="btn" onclick="document.getElementById('imp-file').click()" title="書き出したJSONを取り込み（同名候補は上書き）">⬆ 取込</button>
       <input type="file" id="imp-file" accept=".json" style="display:none" onchange="importJson(this)">
+      <button class="btn" onclick="restorePrev()" title="入力が消えてしまったときに、1つ前の保存内容へ戻します（今の内容はさらに1つ前として残ります）">↩ 1つ前に戻す</button>
     </span>
   </div>
   <div class="sub">買収候補を入力すると、企業価値（純資産法・EV/EBITDA法・年買法）＋<b>修正営業利益（役員報酬等の引き直し）</b>ベースの評価、のれん、回収年数、統合シナジーを自動算出。<b>トキワ印刷案件／北上プリント案件</b>で分けて管理。データはこの端末内のみ保存。金額は<b>万円</b>。</div>
@@ -165,7 +166,23 @@ var KEY='ma_analysis_v1';
 var DB={ targets:[] };
 var SEL=null;
 function defBases(){ return { 'トキワ印刷案件':{name:'トキワ印刷（取得側）',sales:'',adjOp:'',cash:'',na:''}, '北上プリント案件':{name:'北上プリント（取得側）',sales:'',adjOp:'',cash:'',na:''} }; }
-function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }catch(e){} if(!DB.targets) DB.targets=[];
+function load(){
+  // 保存データが壊れて読めないときは _loadNG_ を立て、save() を止める。
+  // （読めないまま保存すると、空のデータで上書きして入力が消えてしまう）
+  window._loadNG_=false;
+  var s=null;
+  try{ s=localStorage.getItem(KEY); }catch(e){}
+  if(s){
+    try{ DB=JSON.parse(s); }
+    catch(e){
+      window._loadNG_=true;
+      try{ localStorage.setItem(KEY+'_broken_'+Date.now(), s); }catch(_e){}
+      alert('⚠ 保存データが読めませんでした（壊れている可能性）\n\n'
+        + '入力を失わないよう、この画面からの保存を止めています。\n'
+        + '「⬆取込」でバックアップのJSONから戻してください。');
+    }
+  }
+  if(!DB.targets) DB.targets=[];
   if(!DB.bases) DB.bases=defBases();
   DB.targets.forEach(function(t){ if(!t.dealGroup) t.dealGroup='トキワ印刷案件'; if(!Array.isArray(t.dd)) t.dd=[]; if(t.includeInModel===undefined) t.includeInModel=true; if(!t.stage) t.stage='面談前'; if(t.stageComment==null) t.stageComment='';
     // 旧3期入力(y1〜y3)→複数年配列(years)へ移行
@@ -178,7 +195,46 @@ function load(){ try{ var s=localStorage.getItem(KEY); if(s) DB=JSON.parse(s); }
     // 既存の年度: labelからym(YYYY-MM)を推定して月ピッカーに反映（R8.3期→2026-03）
     (t.years||[]).forEach(function(y){ if(!y.ym && y.label){ var m=String(y.label).match(/R(\d+)\.(\d+)期/); if(m){ y.ym=(2018+ +m[1])+'-'+('0'+m[2]).slice(-2); } } });
   }); }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){} }
+// 保存。入力が消える事故を防ぐため3つの守りを入れている（SAFE-1）
+//   ① 読込に失敗している状態では保存しない（空データで上書きしてしまうため）
+//   ② 直前の内容を「1つ前」として残す（誤って消えても戻せる）
+//   ③ 容量オーバー等は黙って捨てず、必ず知らせる
+function save(){
+  if(window._loadNG_){ console.warn('保存を中止: 読込に失敗しているため'); return false; }
+  var json;
+  try{ json=JSON.stringify(DB); }
+  catch(e){ alert('保存に失敗しました（データを文字列にできません）: '+e.message); return false; }
+  try{
+    var prev=localStorage.getItem(KEY);
+    if(prev && prev!==json){
+      localStorage.setItem(KEY+'_prev', prev);
+      localStorage.setItem(KEY+'_prev_at', new Date().toISOString());
+    }
+  }catch(e){}
+  try{ localStorage.setItem(KEY, json); return true; }
+  catch(e){
+    alert('⚠ 保存できませんでした（端末の保存容量オーバーの可能性）\n'+e.message
+      +'\n\n入力が失われる前に「⬇書出」でJSONに保存してください。');
+    return false;
+  }
+}
+// 1つ前の保存内容に戻す（誤って消えたときの復旧用）
+function restorePrev(){
+  var prev=null, at='';
+  try{ prev=localStorage.getItem(KEY+'_prev'); at=localStorage.getItem(KEY+'_prev_at')||''; }catch(e){}
+  if(!prev){ alert('1つ前の保存内容がありません。\n「⬆取込」でバックアップのJSONから戻してください。'); return; }
+  var n=0;
+  try{ n=(JSON.parse(prev).targets||[]).length; }
+  catch(e){ alert('1つ前の内容が壊れていて使えません'); return; }
+  if(!confirm('1つ前の保存内容に戻します。\n保存時刻: '+(at?at.replace('T',' ').slice(0,16):'不明')
+    +'\n候補件数: '+n+'件\n\n今の内容は「さらに1つ前」として残ります。よろしいですか？')) return;
+  try{
+    var now=localStorage.getItem(KEY);
+    localStorage.setItem(KEY, prev);
+    if(now) localStorage.setItem(KEY+'_prev', now);
+  }catch(e){ alert('戻せませんでした: '+e.message); return; }
+  location.reload();
+}
 // 💾 明示的な保存ボタン: 保存して「保存しました」を数秒表示
 function saveNow(){
   try{ localStorage.setItem(KEY, JSON.stringify(DB)); }
