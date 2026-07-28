@@ -145,6 +145,7 @@
   .nks table{ width:100%; border-collapse:collapse; table-layout:fixed; }
   .nks th,.nks td{ border:1.2px solid #111; font-size:12.5px; padding:0 8px; height:9.5mm; }
   .nks th{ font-weight:500; letter-spacing:.35em; text-align:center; height:8mm; }
+  .nks .pay{ margin-top:2.5mm; font-size:11px; letter-spacing:.02em; }
   .nks td.r{ text-align:right; font-family:'Roboto Mono',monospace; }
   .nks td.c{ text-align:center; }
   .nks .gokei td{ letter-spacing:.5em; }
@@ -1219,8 +1220,31 @@ function showArrMail(denpyo){
 var CO_NAMES={ murayama:'村山印刷有限会社', kitakami:'有限会社北上プリント', yamauchi:'ヤマウチ印刷株式会社', nakao:'中尾印刷株式会社', arteso:'有限会社アート・エス', tsushima:'株式会社津島プリント社' };
 var CO_INFO_KEY='ledger_co_info_v1', CO_FIELDS=[['zip','郵便番号'],['addr','住所'],['tel','TEL'],['fax','FAX'],['mail','メール'],['regno','登録番号'],['bank','振込先'],['rep','代表者']];
 function _coAll_(){ try{ return JSON.parse(localStorage.getItem(CO_INFO_KEY)||'{}'); }catch(e){ return {}; } }
-var CO_DEFAULTS={ nakao:{ zip:'442-0051', addr:'愛知県豊川市中央通3-22', tel:'0533-86-2046', fax:'0533-86-2107', mail:'info@nakaop.com', regno:'T4180301010115', bank:'豊川信用金庫　いなり支店　普通預金　0013728　中尾印刷株式会社' } };
-function coInfo(key){ var c=(_coAll_()[key])||{}; var dz=CO_DEFAULTS[key]||{}; var o={name:CO_NAMES[key]||''}; CO_FIELDS.forEach(function(f){ o[f[0]]=c[f[0]]||dz[f[0]]||''; }); return o; }
+var CO_DEFAULTS={
+  nakao:{ zip:'442-0051', addr:'愛知県豊川市中央通3-22', tel:'0533-86-2046', fax:'0533-86-2107', mail:'info@nakaop.com', regno:'T4180301010115', bank:'豊川信用金庫　いなり支店　普通預金　0013728　中尾印刷株式会社' },
+  murayama:{ zip:'208-0034', addr:'東京都武蔵村山市残堀2-1-1', tel:'042-560-2431', fax:'042-560-3697', mail:'info@murainp.com', regno:'T4012802005106', bank:'りそな銀行　村山支店　普通　0184732　口座名義 村山印刷有限会社', rep:'代表取締役 本多 亮' }
+};
+// 本体（Hub）の会社マスターからも補う。1箇所直せば帳票にも効くようにするため。
+//   このツールの入力（ledger_co_info_v1）＞ ここの既定 ＞ 本体マスター の順で使う。
+var LKEY2CODE={ murayama:'MU', kitakami:'KT', yamauchi:'YM', nakao:'NK', arteso:'AS', tsushima:'TS', tokiwa:'TK' };
+function _coFromHub_(key){
+  try{
+    var db=JSON.parse(localStorage.getItem('murayama_v15')||'null')||{};
+    var code=LKEY2CODE[key]; if(!code) return {};
+    var co=(db.companies||[]).find(function(c){ return c && c.code===code; }); if(!co) return {};
+    var ov=((db.conf||{}).companyProfiles||{})[co.id]||{};
+    var g=function(f){ var v=ov[f]; if(v==null||v==='') v=co[f]; return (v==null?'':v); };
+    var strip=function(v){ return String(v||'').replace(/^\s*(TEL|FAX)\s*/i,'').trim(); };
+    var banks=ov.banks||co.banks||'';
+    return { zip:String(g('zip')||'').replace(/^〒/,''), addr:g('addr'), tel:strip(g('tel')), fax:strip(g('fax')),
+             mail:g('email'), regno:g('regNo'), rep:g('rep'),
+             bank:(Array.isArray(banks)?banks.join('　／　'):String(banks||'')) };
+  }catch(e){ return {}; }
+}
+function coInfo(key){ var c=(_coAll_()[key])||{}; var dz=CO_DEFAULTS[key]||{}; var hub=_coFromHub_(key);
+  var o={name:CO_NAMES[key]||''};
+  CO_FIELDS.forEach(function(f){ o[f[0]]=c[f[0]]||dz[f[0]]||hub[f[0]]||''; });
+  return o; }
 function saveCoInfo(key){ var all=_coAll_(); var o={}; CO_FIELDS.forEach(function(f){ var el=document.getElementById('coi-'+f[0]); o[f[0]]=el?el.value:''; }); all[key]=o; try{ localStorage.setItem(CO_INFO_KEY,JSON.stringify(all)); }catch(e){} _docState_.co=coInfo(key); if(_docState_.type) genDoc(_docState_.type); }
 var _docState_={c:null, key:'', type:'', co:null, html:'', issueDate:''};
 // ── 複数選択（まとめ帳票用）──
@@ -1587,12 +1611,14 @@ function _nkSheet_(title, c, co, iss){
         +(co.zip?('〒'+esc2(co.zip)+'　'):'')+(co.addr?esc2(co.addr):'')+'<br>'
         +(co.tel?('電話 '+esc2(co.tel)):'')+(co.fax?('　FAX '+esc2(co.fax)):'')+'<br>'
         +(co.mail?('Mail '+esc2(co.mail)+'<br>'):'')
-        +(co.regno?('登録番号 '+esc2(co.regno)):'')+'</div>'
+        +(co.regno?('登録番号 '+esc2(co.regno)+'<br>'):'')+(co.rep?esc2(co.rep):'')+'</div>'
     +'</div>'
     +'<table><tr><th style="width:44%">品　名</th><th style="width:12%">数　量</th><th style="width:10%">単　位</th><th style="width:15%">単　価</th><th style="width:19%">金　額</th></tr>'
     +rows
     +'<tr class="gokei"><td colspan="4" class="c">合　　計</td><td class="r">'+(amt?Math.round(amt).toLocaleString():'')+'</td></tr></table>'
     +(tt.indexOf('受領')>=0?'<div class="rcv">受領日：＿＿＿＿＿＿＿＿　受領印<span class="seal"></span></div>':'')
+    // 請求書だけ お支払期限と振込先を出す（会社情報の振込先から）
+    +(tt.indexOf('請求')>=0?('<div class="pay">お支払期限：翌月末日　／　振込先：'+(co.bank?esc2(co.bank):'（未登録）')+'</div>'):'')
     +'</div>';
 }
 // 発行日の変更: 表示中の帳票があれば同じ種別で作り直す
@@ -1929,3 +1955,4 @@ function hubRefreshNow(){
 </script>
 </body>
 </html>
+
