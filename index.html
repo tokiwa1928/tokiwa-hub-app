@@ -13383,6 +13383,7 @@ function renderMaster(id){
       <th style="min-width:132px">取引先名</th>
       <th style="min-width:118px" title="フォルダ名・ファイル名に使う短い呼び方（例: 株式会社○○商事 → ○○商事）。空欄なら取引先名をそのまま使います">🏷 呼称</th>
       <th style="min-width:80px">区分</th>
+      <th style="min-width:130px" title="納品する相手と請求する相手が違う場合に入れます（例: 市役所の各課へ納品し、請求は会計課へ）。空欄ならこの取引先へ請求します。入れると請求書だけ宛名が変わります">💳 請求先<br><span style="font-weight:400;font-size:9px;color:#94a3b8">空欄＝同じ</span></th>
       <th style="min-width:104px">所属会社</th>
       <th style="min-width:140px">代表メール</th>
       <th style="min-width:190px" title="ラベル・帳票に差出人として出すときの住所。ここを直せばラベル側も自動で変わります（複数箇所を直す必要がありません）">住所</th>
@@ -13414,6 +13415,7 @@ function renderMaster(id){
             <option value="vendor"${g.type==='vendor'?' selected':''}>外注先</option>
             <option value="both"${g.type==='both'?' selected':''}>得意先/外注先</option>
           </select></td>
+        <td><input type="text" list="dl-billto" value="${(g.billTo||'').replace(/"/g,'&quot;')}" placeholder="空欄＝この取引先へ請求" title="納品する相手と請求する相手が違う場合に入れます。請求書だけ宛名が変わります" style="width:100%;min-width:120px;font-size:11.5px;${g.billTo?'background:#fef3c7;font-weight:700':''}" onchange="updateCustOrgBillTo('${oq}',this.value)"></td>
         <td>${_mgmtCust?`<select style="width:100%;font-size:11px" onchange="setCustOrgCompany('${oq}',this.value)">
               ${_coList.map(function(c){return '<option value="'+c.id+'"'+((g.companyId||'COMP002')===c.id?' selected':'')+'>'+(c.name||c.id)+'</option>';}).join('')}
             </select>`:`<span style="font-size:11px;color:#64748b">${_coName(g.companyId||'COMP002')}</span>`}</td>
@@ -13470,6 +13472,14 @@ function renderMaster(id){
       html += `</tbody></table></td></tr>`;
     });
     html += `</tbody></table></div>`;
+    // 請求先の候補（取引先マスタの会社名から選べるように）
+    html += _dlHtml_('dl-billto', _dlCustNames_());
+    var _nBill=((DB.master&&DB.master.cust)||[]).filter(function(r){ return r&&typeof r!=='string'&&String(r.billTo||'').trim(); }).length;
+    html += '<div style="font-size:11px;color:#334155;margin-top:6px;padding:7px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px">'
+      + '💳 <b>請求先</b>：納品する相手と請求する相手が違うときに入れてください（空欄ならこの取引先へ請求）。'
+      + '<b>市役所は課ごとに納品して請求は別窓口、というケースが多い</b>ので、1件入れると同じ市の取引先へまとめて適用するか確認します。<br>'
+      + '入れると<b>請求書だけ宛名が変わり、納品書は納品先のまま</b>になります。現在 <b>'+_nBill+' 件</b>に設定済み。'
+      + '</div>';
   } else if(id==='prod'){
     html+=`<table class="m-tbl"><thead><tr><th style="min-width:82px">状態</th><th>製品名</th><th>カテゴリ</th><th>標準仕様</th><th class="dx"></th></tr></thead><tbody>`;
     data.forEach((r,i)=>{const oi=DB.master.prod.indexOf(r);html+=`<tr${r.active===false?' style="opacity:.55;background:#fafafa"':''}>${_mstStateCell_('prod',oi,r.active)}<td><input type="text" list="dl-mst-prod-n" value="${r.n||''}" onchange="DB.master.prod[${oi}].n=this.value"></td><td><select onchange="DB.master.prod[${oi}].cat=this.value"><option${r.cat==='封筒'?' selected':''}>封筒</option><option${r.cat==='帳票'?' selected':''}>帳票</option><option${r.cat==='冊子'?' selected':''}>冊子</option><option${r.cat==='その他'?' selected':''}>その他</option></select></td><td><input type="text" list="dl-mst-prod-sp" value="${r.sp||''}" onchange="DB.master.prod[${oi}].sp=this.value"></td><td class="dx"><button class="del-btn" onclick="DB.master.prod.splice(${oi},1);renderMaster('prod')">×</button></td></tr>`;});
@@ -26809,10 +26819,15 @@ function showCreateInvoiceModal(type){
 function _fillInvoiceFromProject_(p){
   if(!p) return;
   document.getElementById('inv-projectId').value = p.id || '';
-  document.getElementById('inv-cust').value = p.cust || '';
+  // 請求先が納品先と違う場合は請求先を使う（案件に入っていれば優先、無ければ取引先マスタから）
+  var bill = String(p.billTo||'').trim() || ((typeof _custBillTo_==='function') ? _custBillTo_(p.cust) : (p.cust||''));
+  document.getElementById('inv-cust').value = bill || p.cust || '';
   document.getElementById('inv-item').value = p.item || '';
   document.getElementById('inv-subtotal').value = p.exTax || 0;
-  document.getElementById('inv-memo').value = (p.spec ? p.spec + '\n' : '') + '案件: ' + p.id;
+  var diff = (bill && bill!==String(p.cust||'').trim());
+  document.getElementById('inv-memo').value = (p.spec ? p.spec + '\n' : '')
+    + (diff ? ('納品先: ' + (p.cust||'') + '\n') : '') + '案件: ' + p.id;
+  if(diff && typeof _toastMsg==='function') _toastMsg('💳 請求先「'+bill+'」を入れました（納品先は '+(p.cust||'')+'）');
 }
 
 function submitInvoice(type){
@@ -39498,6 +39513,55 @@ function _custCodeOf_(name){
   return hit?hit.code:'';
 }
 function updateCustOrgOldNames(org, v){ _custOrgSet_(org, 'oldNames', (v||'').trim()); if(typeof _toastMsg==='function') _toastMsg('📛 旧名称を保存しました'); }
+// ── 請求先（BILLTO-1）──
+//   納品する相手と請求する相手が違うことがある（例: 豊川市の各課に納品し、請求は別の窓口へ）。
+//   ここに入れておくと、案件を作るたびに自動で請求先が入り、請求書だけ宛名が変わる。
+//   空欄＝取引先自身が請求先。
+function updateCustOrgBillTo(org, v){
+  var val=(v||'').trim();
+  _custOrgSet_(org, 'billTo', val);
+  if(typeof _toastMsg==='function') _toastMsg(val?('💳 請求先を「'+val+'」にしました'):'💳 請求先を解除しました（この取引先へ請求）');
+  // 市役所は「○○市××課」が課ごとに登録され、請求先は同じ、というケースが多いので
+  // 同じ市（＝先頭の「○○市」が同じ）の取引先へまとめて適用できるようにする
+  if(!val) return;
+  // 「豊川市 建設課」のように 市区町村＋部署 の形のときだけ。
+  // 「村山印刷有限会社」の「村」を市町村と読み違えないよう2文字以上を必須にする
+  var m=String(org||'').match(/^(.{2,9}[市区町村])(.+)$/);
+  if(!m) return;
+  var pre=m[1];
+  var arr=(DB.master&&DB.master.cust)||[];
+  var others=arr.filter(function(r){
+    return r && typeof r!=='string' && r.org && r.org!==org && r.active!==false
+      && String(r.org).indexOf(pre)===0 && String(r.billTo||'').trim()!==val;
+  });
+  if(!others.length) return;
+  if(!confirm('同じ「'+pre+'」の取引先が '+others.length+' 件あります。\n'
+    + others.slice(0,8).map(function(r){return '・'+r.org;}).join('\n')
+    + (others.length>8?('\n…ほか'+(others.length-8)+'件'):'')
+    + '\n\nこれらの請求先もまとめて「'+val+'」にしますか？\n（市役所は課ごとに納品して請求は同じ窓口、というケースが多いため）')) return;
+  others.forEach(function(r){ r.billTo=val; });
+  saveDB(); try{ saveToCloud(); }catch(e){}
+  renderMaster('cust');
+  if(typeof _toastMsg==='function') _toastMsg('💳 '+others.length+' 件の請求先も「'+val+'」にしました');
+}
+// 取引先名 → 請求先名（設定が無ければその取引先自身）。旧社名も追いかける
+function _custBillTo_(org){
+  var name=String(org||'').trim();
+  if(!name) return '';
+  var arr=(DB.master&&DB.master.cust)||[];
+  var cur=arr.find(function(r){ return r && typeof r!=='string' && r.org===name; });
+  if(!cur && typeof _custResolveOrg_==='function'){
+    var n2=_custResolveOrg_(name);
+    if(n2 && n2!==name) cur=arr.find(function(r){ return r && typeof r!=='string' && r.org===n2; });
+  }
+  var b=(cur&&cur.billTo)?String(cur.billTo).trim():'';
+  return b || name;
+}
+// 請求先が納品先と違うか
+function _custBillDiff_(org){
+  var b=_custBillTo_(org);
+  return (b && b!==String(org||'').trim()) ? b : '';
+}
 // 社名変更: 全レコードのorgを付け替え・旧名称に自動追記・案件担当マップのキーも移行（過去の見積書は変えない）
 // 旧社名 → 現在の社名 を解決する（旧名で来た問い合わせ・単価・実績を今の取引先に結び付ける）
 //   ①「無効」で残している旧名レコードの successorOrg を見る ②現行レコードの oldNames を見る
@@ -43269,7 +43333,12 @@ function renderProjects(){
       <td style="white-space:nowrap">${_quoteCell}</td>
       <td style="font-size:11px;white-space:nowrap">${_projDueCellHtml_(r)}</td>
       <td style="font-size:11px;white-space:nowrap;line-height:1.35"><span style="white-space:nowrap">${r.orderDate?_ymdJP2_(r.orderDate).replace('<br>',''):'-'}</span></td>
-      <td style="max-width:180px">${groupTag?`<span class="pj-cust-tag">${groupTag}</span>`:''}<span class="pj-cust" style="font-size:12px">${_escDiff(r.cust||'')}</span></td>
+      <td style="max-width:180px">${groupTag?`<span class="pj-cust-tag">${groupTag}</span>`:''}<span class="pj-cust" style="font-size:12px">${_escDiff(r.cust||'')}</span>${(function(){
+        // 請求先が納品先と違う場合だけ小さく出す（市役所などで請求窓口が別のとき）
+        var b=String(r.billTo||'').trim() || ((typeof _custBillDiff_==='function')?_custBillDiff_(r.cust):'');
+        if(!b || b===String(r.cust||'').trim()) return '';
+        return '<span class="pj-cust" style="font-size:10.5px;color:#b45309" title="請求書はこの宛名で出ます（納品先は '+_escAttr_(r.cust||'')+'）">💳 請求先: '+_escHtml_(b)+'</span>';
+      })()}</td>
       <td style="max-width:260px">
         <div class="pj-item" style="font-size:12px;font-weight:600">${(r.item||'').replace(/_x000d_/g,' ')}${r._provisional?` <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;white-space:nowrap" title="数量・金額・仕様が未確定（校正先行）">⚠未確定</span>`:''}${_matBadge_(r)}</div>
       </td>
