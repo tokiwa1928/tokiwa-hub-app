@@ -314,6 +314,8 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 #page-est .g2,#page-est .g3,#page-est .g4{gap:5px}
 #page-est .f{gap:1px}
 #page-est .f>label,#page-est .f label{font-size:10.5px;line-height:1.25}
+/* ラベルにバッジやボタンが入る欄があるため、ラベルの高さを揃えて入力欄の上下位置をそろえる */
+#page-est .f>label{ min-height:16px; align-items:center }
 #page-est input,#page-est select,#page-est textarea{padding:2px 6px;font-size:11.5px;min-height:0}
 #page-est input[type=number]{font-size:12.5px}
 #page-est textarea{line-height:1.25}
@@ -8124,7 +8126,8 @@ function buildPanel(id,initData){
       </div>
     </div>
     <div class="f"><label>見積番号</label><input id="estno-${id}" data-noclear></div>
-    <div style="grid-column:1/-1;display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:8px">
+    <!-- ラベルにバッジやボタンが入ると高さが変わるので、入力欄は下端で揃える（枠の高さを合わせる） -->
+    <div style="grid-column:1/-1;display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:8px;align-items:end">
     <div class="f"><label style="display:flex;align-items:center;gap:6px">得意先名 <span style="font-size:10px;color:#aaa">（発注元）</span><span id="cust-code-badge-${id}"></span></label><input id="cust-${id}" list="cust-dl-${id}" placeholder="自社に発注した相手" onchange="onCustChange(${id});updateDeliveryDefault(${id})"><datalist id="cust-dl-${id}">${custOpts}</datalist></div>
     <div class="f"><label>担当部署・窓口</label><input id="enduser-dept-${id}" list="enddept-dl-${id}" placeholder="例: ○○課" onchange="updateDeliveryDefault(${id})"><datalist id="enddept-dl-${id}"></datalist></div>
     <div class="f"><label style="display:flex;align-items:center;gap:6px">先方担当者名 <span style="font-size:10px;color:#aaa">（案件に記録・次回から自動）</span><button type="button" onclick="_showTantoHandover_()" style="font-size:10px;padding:1px 8px;border:1px solid #0369a1;background:#e0f2fe;color:#0369a1;border-radius:5px;cursor:pointer" title="担当者の引き継ぎ（案件を選んで一括変更）">⇄ 引き継ぎ</button></label><input id="cust-tanto-${id}" placeholder="例: 佐藤 様" onchange="_tantoOnChange_(${id})"></div>
@@ -10129,8 +10132,9 @@ function onCustChange(id){
   try{ // コード確定バッジ: マスタ由来かが一目で分かる
     var bd=document.getElementById('cust-code-badge-'+id);
     if(bd){ var cc=_custCodeOf_(custVal);
-      bd.innerHTML=cc?('<span style="background:#e1f5ee;color:#085041;font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 7px;font-family:monospace">'+cc+' ✓マスタ</span>')
-        :('<span style="background:#faeeda;color:#854f0b;font-size:10px;border-radius:4px;padding:1px 7px" title="マスタに無い名前です（マスターの得意先でコードを設定してください）">⚠ コード未設定</span>'); }
+      // バッジを押すとその場でコードを付けられる（マスタ画面へ行かなくて済む）
+      bd.innerHTML=cc?('<span onclick="_custAssignCode_('+id+')" style="background:#e1f5ee;color:#085041;font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 7px;font-family:monospace;cursor:pointer" title="クリックでコードを変更できます">'+cc+' ✓マスタ</span>')
+        :('<span onclick="_custAssignCode_('+id+')" style="background:#faeeda;color:#854f0b;font-size:10px;border-radius:4px;padding:1px 7px;cursor:pointer;font-weight:700" title="クリックすると、空いている番号を提案してコードを付けます（取引先マスタにも登録します）">⚠ コード未設定（クリックで付与）</span>'); }
   }catch(e){}
 
   // エンドユーザーdatalistをこの得意先のユーザーで更新
@@ -39517,6 +39521,46 @@ function _custAliasExport_(){
   if(typeof _toastMsg==='function') _toastMsg('📤 名寄せ表を書き出しました（'+(lines.length-1)+'社）');
 }
 // 得意先名→コード（完全一致・旧名称も見る）
+// ── 見積画面からその場でコードを付与する（CODE-1）──
+//   「⚠コード未設定」のバッジを押すと、空いている番号を提案して取引先マスタに登録する。
+//   マスタ画面へ移動しなくても済むようにするため。
+function _custNextCode_(){
+  var max=0, pre='C-';
+  ((DB.master&&DB.master.cust)||[]).forEach(function(r){
+    if(!r || typeof r==='string') return;
+    var m=String(r.code||'').match(/^([A-Za-z]*-?)(\d+)$/);
+    if(!m) return;
+    if(m[1]) pre=m[1];
+    var n=parseInt(m[2],10);
+    if(n>max) max=n;
+  });
+  return pre + String(max+1).padStart(3,'0');
+}
+function _custAssignCode_(id){
+  var el=document.getElementById('cust-'+id);
+  var org=el?String(el.value||'').trim():'';
+  if(!org){ alert('先に得意先名を入れてください'); return; }
+  var arr=(DB.master&&DB.master.cust)||[];
+  var cur=arr.find(function(r){ return r && typeof r!=='string' && r.org===org; });
+  var now=(cur&&cur.code)?String(cur.code):'';
+  var sug=now||_custNextCode_();
+  var v=prompt('「'+org+'」の取引先コードを入れてください。\n\n'
+    + (cur?'':'※この名前は取引先マスタにまだありません。コードを付けると同時に登録します。\n')
+    + '空いている番号を入れてあります（変更できます）', sug);
+  if(v===null) return;
+  v=String(v).trim();
+  var dup=arr.find(function(r){ return r && typeof r!=='string' && String(r.code||'')===v && r.org!==org; });
+  if(v && dup){ alert('コード「'+v+'」は「'+dup.org+'」で使用済みです'); return; }
+  if(!cur){
+    if(!Array.isArray(DB.master.cust)) DB.master.cust=[];
+    cur={ org:org, user:'', tel:'', note:'', code:v, type:'customer', active:true };
+    DB.master.cust.push(cur);
+  } else { cur.code=v; }
+  cur._updatedAt=cur.updatedAt=new Date().toISOString();
+  saveDB(); try{ saveToCloud(); }catch(e){}
+  if(typeof onCustChange==='function'){ try{ onCustChange(id); }catch(e){} }
+  if(typeof _toastMsg==='function') _toastMsg('🔢 '+org+' のコードを '+(v||'（未設定）')+' にしました');
+}
 function _custCodeOf_(name){
   name=String(name||'').trim(); if(!name) return '';
   var hit=(DB.master.cust||[]).find(function(r){ return r&&typeof r!=='string'&&r.org===name&&r.code; });
