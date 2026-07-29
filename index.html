@@ -1083,6 +1083,7 @@ setTimeout(_removeBootLoader_, 5000);
     <div class="tb-group" data-label="制作">
       <button class="tb-btn" data-page="proofing" onclick="swPage('proofing',this)" draggable="true" title="📸 校正BOX">📸 校正BOX</button>
       <button class="tb-btn" data-page="schedule" onclick="swPage('schedule',this)" draggable="true" title="🏭 工程管理">🏭 工程管理</button>
+      <button class="tb-btn" data-page="workbox" onclick="swPage('workbox',this)" draggable="true" title="🧰 作業BOX（今やる作業を工程別に）">🧰 作業BOX</button>
     </div>
 
     <!-- 【発注】グループ -->
@@ -2203,6 +2204,23 @@ setTimeout(_removeBootLoader_, 5000);
   <!-- 旧・案件スケジュール/テンプレートは工程進捗表に統合（非表示で互換維持） -->
   <div id="schedule-list" style="display:none"></div>
   <div id="schedule-templates" style="display:none"></div>
+</div>
+
+<!-- 作業BOXページ（WORKFLOW-2） -->
+<div class="page" id="page-workbox">
+  <div style="background:#f7f6f2;border:1px solid #d6d3ca;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#4a4842">
+    <div style="font-size:10px;letter-spacing:.14em;color:#8a867d;font-weight:700;margin-bottom:3px">WORK BOX</div>
+    <strong>🧰 作業BOX とは:</strong> 印刷のあとに続く作業（検品・数量カウント／ラベル／梱包／刷り直し／帳票発行／配送／消込）を工程別に並べた場所です。<b>個人あてではなくグループあて</b>なので、出勤している人・手が空いた人が<b>上から順に</b>取っていけます。順番は管理者が決めた優先順位です。
+    <div style="margin-top:5px">✅ を押すと「やった人」を選ぶだけ。工程進捗マトリクスが自動で埋まるので、二重入力はありません。</div>
+  </div>
+  <div class="rd-filter-panel" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+    <div id="wb-groups" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+    <input id="wb-q" placeholder="🔍 得意先/品名/案件番号で検索…" style="min-width:220px" oninput="renderWorkBox()">
+    <label style="font-size:11.5px;cursor:pointer;display:flex;align-items:center;gap:4px"><input type="checkbox" onchange="_wbToggleWait_(this.checked)"> 前工程待ちも表示</label>
+    <button class="btn" onclick="_wbGroupSettings_()" style="font-size:11.5px;margin-left:auto">⚙ グループ設定</button>
+    <button class="btn" onclick="renderWorkBox()" style="font-size:11.5px">🔄 更新</button>
+  </div>
+  <div id="wb-board"></div>
 </div>
 
 <!-- 校正BOXページ -->
@@ -3762,6 +3780,7 @@ let DB={
   outsourceOrders: [],  // 外注発注（社外・社内問わず）
   artesoCases: [],      // アート・エス案件管理（専用台帳・全社同期）
   leases: [],           // リース・サブスク契約経費管理（全社同期・会社スコープ）
+  workGroups: [],       // 作業グループ（工程 × メンバー。作業BOXの表示単位・全社同期）
   calendarOrders: [],   // カレンダー受注台帳（全カテゴリ・全社同期）
   makerTerms: [],       // メーカー別呼称の対訳（封筒/用紙。窓の号数がメーカーで異なるため実寸で紐づける）
   makerList: [],        // 対訳表の列に出すメーカー名（既定はハート/ムトウユニパック/キングコーポレーション/山櫻/ヤマガタ）
@@ -4121,7 +4140,7 @@ function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.par
   if(!d.inquirySettings) d.inquirySettings={autoReply:true,autoReplyMessage:'',categories:['見積依頼','納品について','データ入稿','校正確認','クレーム','その他'],assignees:[]};
   if(!d.wikiArticles) d.wikiArticles=[];
   if(!d.templates) d.templates=[];
-  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],calendarOrders:[],makerTerms:[],makerList:[],supplyRules:[],billRules:[],stdRates:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
+  DB=Object.assign({master:{paper:[],envelope:[],print:[],printOption:[],plate:[],data:[],bind:[],cust:[],prod:[]},history:[],projects:[],users:[],companies:[],systemUsers:[],intercoRequests:[],intercoOrders:[],quotations:[],outsourceOrders:[],artesoCases:[],leases:[],workGroups:[],calendarOrders:[],makerTerms:[],makerList:[],supplyRules:[],billRules:[],stdRates:[],inquiries:[],deliveryItems:[],drivers:[],inquirySettings:{},wikiArticles:[],templates:[],itemMaster:[],conf:{name:'',rep:'',addr:'',tel:'',appName:''}},d);
   // AAAA-1: マスター番号 backfill (起動時に既存データに割り当て)
   if(typeof _backfillMasterNos_ === 'function') _backfillMasterNos_();
   // 移行による変更を永続化（しないと次回リロードで元に戻り、フラグだけ立って再実行もされない）
@@ -4380,6 +4399,16 @@ async function loadFromCloud() {
     (Array.isArray(DB.leases)?DB.leases:[]).forEach(_lsTake);
     result.data.leases.forEach(_lsTake);
     DB.leases = _lsOrder.map(function(id){ return _lsById[id]; });
+  }
+
+  // 作業グループ（工程×メンバー・全社同期）— id単位で新しい方を採用
+  if (result.data.workGroups) {
+    var _wgTs=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var _wgById={}, _wgOrder=[];
+    var _wgTake=function(r){ if(!r||!r.id) return; if(!(r.id in _wgById)){ _wgOrder.push(r.id); _wgById[r.id]=r; } else if(_wgTs(r)>_wgTs(_wgById[r.id])){ _wgById[r.id]=r; } };
+    (Array.isArray(DB.workGroups)?DB.workGroups:[]).forEach(_wgTake);
+    result.data.workGroups.forEach(_wgTake);
+    DB.workGroups = _wgOrder.map(function(id){ return _wgById[id]; });
   }
 
   // メーカー別呼称の対訳（封筒/用紙・全社同期）— id単位で新しい方を採用
@@ -4971,6 +5000,7 @@ async function saveToCloud() {
     outsourceOrders: DB.outsourceOrders || [],
     artesoCases: DB.artesoCases || [],
     leases: DB.leases || [],
+    workGroups: DB.workGroups || [],
     makerTerms: DB.makerTerms || [],
     makerList: DB.makerList || [],
     supplyRules: DB.supplyRules || [],
@@ -5686,6 +5716,7 @@ var PAGE_HEADERS = {
   project:   { icon:'📁', title:'案件管理', desc:'受注案件として確定後の案件・進捗・タイムライン' },
   proofing:  { icon:'📸', title:'校正BOX', desc:'PDF校正・新旧比較・差分検出' },
   schedule:  { icon:'🏭', title:'工程管理', desc:'制作・印刷・加工・製本の工程進捗' },
+  workbox:   { icon:'🧰', title:'作業BOX', desc:'今やる作業を工程別に。優先順位の高いものから取る' },
   calendar:  { icon:'📅', title:'納品', desc:'月次カレンダーで納品予定を確認' },
   delivery:  { icon:'🚚', title:'配送', desc:'配送予定・納品書/領収書発行・ドライバー管理' },
   finance:   { icon:'📊', title:'決算・文書', desc:'各社の決算書分析・グループ7社比較・文書保管庫' },
@@ -6145,6 +6176,7 @@ function swPage(id,btn){
     companies: function(){ renderCompanies(); renderSystemUsers(); },
     schedule:  function(){ initSchedulePage(); },
     proofing:  function(){ initProofingPage(); },
+    workbox:   function(){ initWorkBoxPage(); },
     delivery:  function(){ initDeliveryPage(); },
     inquiry:   function(){ initInquiryPage(); },
     wiki:      function(){ initWikiPage(); },
@@ -17438,6 +17470,21 @@ function renderProcessBoard(){
   var remMap=_pbReminderMap_();
   // 工程列（受注＋版下→校了→色合わせ→ミシン出し→印刷→加工→納品）。各セルに日程が入る
   var COLS=[{k:'受注',ic:'📝'},{k:'用紙',ic:'📄'},{k:'版下',ic:'📐'},{k:'校了',ic:'🆗'},{k:'色合わせ',ic:'🎨'},{k:'ミシン出し',ic:'🪡'},{k:'印刷',ic:'🖨'},{k:'加工',ic:'✂'},{k:'納品',ic:'🚚'}];
+  // WORKFLOW-1: 印刷後の工程を差し込む。手加工/刷り直し/再検品/ラベルは、表示中に該当案件が
+  // 1件でもあるときだけ列を出す（無いときは列そのものを作らず、横に伸びすぎないようにする）
+  try{
+    if(typeof POST_STEPS_MID!=='undefined'){
+      var _need={};
+      shown.forEach(function(r){
+        if(!_usePostFlow_(r)) return;
+        POST_STEPS.forEach(function(s){ if(_postStepOn_(r,s.k)) _need[s.k]=1; });
+      });
+      var _ni=COLS.map(function(c){return c.k;}).indexOf('納品'); if(_ni<0) _ni=COLS.length;
+      var _mid=POST_STEPS_MID.filter(function(s){ return _need[s.k]; }).map(function(s){ return {k:s.k, ic:s.ic}; });
+      COLS.splice.apply(COLS, [_ni,0].concat(_mid));
+      POST_STEPS_END.forEach(function(s){ if(_need[s.k]) COLS.push({k:s.k, ic:s.ic}); });
+    }
+  }catch(e){}
   function md(d){ d=String(d||''); return d.length>=10? d.slice(5).replace('-','/') : d; }
   var BD='1px solid #b4b0a4';
   // ヘッダー（案件管理と同じ黒帯）
@@ -17556,6 +17603,22 @@ function renderProcessBoard(){
         td+='<td onclick="event.stopPropagation();'+clk2+'" title="校了・校数は校正BOXで管理（クリックで開く）" style="border:'+BD+';text-align:center;font-size:12.5px;font-weight:'+(pDone||latest?'700':'400')+';background:'+pbg+';color:'+pcol+';white-space:nowrap;cursor:pointer"><div>'+roundTxt+'</div>'+doneDateMeta+'<div style="margin-top:2px;line-height:1.35">'+prfMeta+'<br>'+pSpan2+'</div></td>';
         return;
       }
+      // WORKFLOW-1: 検品・再検品列＝良品数を入れる。定数不足なら刷り直し・再検品の列が自動で出る
+      if(c.k==='検品'||c.k==='再検品'){
+        var iv=r.steps[c.k]||'─';
+        var need=parseInt(r.qty)||0;
+        var ok=(c.k==='検品')?(parseInt(r.inspectOk)||0):(parseInt(r.reinspectOk)||0);
+        var short=Math.max(0,need-ok);
+        var iDone=(iv==='完了');
+        var iDate=r.stepDates[c.k]||'';
+        var iCol=iDone?'#15803d':(ok>0||iv==='不足あり')?'#b45309':'#cbd5e1';
+        var iBg=iDone?'#f0fdf4':(iv==='不足あり')?'#fef2f2':(ok>0)?'#fffbeb':'#fff';
+        var iTxt=iDone?(iDate?md(iDate):'完了'):(ok>0?(ok.toLocaleString()+'/'+need.toLocaleString()):'—');
+        var iSub=(ok>0&&short>0)?('<div style="font-size:9.5px;color:#b91c1c;font-weight:700;margin-top:1px">不足 '+short.toLocaleString()+'</div>')
+          :(ok>0?'<div style="font-size:9.5px;color:#15803d;margin-top:1px">定数OK</div>':'<div style="font-size:9.5px;color:#b9b5aa;margin-top:1px">良品数を入力</div>');
+        td+='<td onclick="event.stopPropagation();_pbInspect_('+oi+',\''+c.k+'\')" title="'+c.k+'：良品数を入力すると、定数不足分の刷り直し・再検品が自動で工程に出ます" style="border:'+BD+';text-align:center;font-size:12.5px;font-weight:600;color:'+iCol+';background:'+iBg+';cursor:pointer;white-space:nowrap">'+iTxt+iSub+'</td>';
+        return;
+      }
       var v=r.steps[c.k]||'─';
       var done=v==='完了'||v==='OK'||v==='納品済'||v==='発送済';
       var active=v&&v!=='─'&&v!=='未着手'&&!done;
@@ -17612,6 +17675,378 @@ function renderProcessBoard(){
   var remEl=document.getElementById('pb-rem-count');
   if(remEl){ var remTot=0; Object.keys(remMap).forEach(function(k){ remTot+=remMap[k]; }); remEl.textContent=remTot; remEl.style.background=remTot>0?'#f59e0b':'#cbd5e1'; }
 }
+// ═══ WORKFLOW-1: 検品（良品数カウント）→ 定数不足なら刷り直し・再検品を自動で工程に出す ═══
+function _pbInspect_(oi, step){
+  var r=(typeof oi==='number')?DB.projects[oi]:oi; if(!r) return;
+  step=step||'検品';
+  var need=parseInt(r.qty)||0;
+  var key=(step==='検品')?'inspectOk':'reinspectOk';
+  var cur=parseInt(r[key])||0;
+  var v=prompt('【'+step+'】'+(r.item||'')+'\n必要数（定数）: '+need.toLocaleString()+(r.unit?r.unit:'')
+    +'\n\n数えた良品数を入れてください。\n（定数に足りなければ、刷り直し・再検品が工程に自動で出ます）', cur?String(cur):String(need));
+  if(v===null) return;
+  v=String(v).replace(/[^0-9]/g,'');
+  if(v===''){ alert('数字で入れてください'); return; }
+  var ok=parseInt(v,10);
+  r[key]=ok;
+  r.steps=r.steps||{}; r.stepDates=r.stepDates||{};
+  var short=Math.max(0, need-ok);
+  var today=new Date().toISOString().slice(0,10);
+  if(short>0){
+    r.steps[step]='不足あり';
+    delete r.stepDates[step];
+    r.needReprint=true;
+    if(step==='検品') r.inspectShort=short; else r.reinspectShort=short;
+    alert('⚠ '+short.toLocaleString()+(r.unit||'')+' 不足しています。\n\n工程に「♻刷り直し」「🔎再検品」を出しました。\n作業BOXの刷り直しにも並びます。');
+  } else {
+    r.steps[step]='完了';
+    r.stepDates[step]=today;
+    if(step==='検品') r.inspectShort=0; else r.reinspectShort=0;
+  }
+  r.postFlow=true;
+  r._updatedAt=r.updatedAt=new Date().toISOString();
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  if(typeof renderProcessBoard==='function') try{ renderProcessBoard(); }catch(e){}
+  if(typeof renderWorkBox==='function') try{ renderWorkBox(); }catch(e){}
+  if(typeof renderProjects==='function') try{ renderProjects(); }catch(e){}
+}
+// ═════════════════════════════════════════════════════════════════
+// WORKFLOW-2: 作業BOX（校正BOXと同じ形の「今やる作業」置き場）
+//  ・個人に割り当てず、工程＝作業グループ。出勤している人・手が空いた人が上から取る
+//  ・並び順は管理者が決めた優先順位（▲▼／番号クリックで変更）
+//  ・✅を押すと「やった人」を記録して工程進捗マトリクスが埋まる（二重入力なし）
+// ═════════════════════════════════════════════════════════════════
+const WB_STEPS=['印刷','手加工','検品','刷り直し','再検品','ラベル','梱包','納品書','納品','請求','消込'];
+const WB_ICON={'印刷':'🖨','手加工':'✋','検品':'🔍','刷り直し':'♻','再検品':'🔎','ラベル':'🏷','梱包':'📦','納品書':'🧾','納品':'🚚','請求':'💳','消込':'✅'};
+function _wgSeed_(){
+  return [
+    {id:'WG-FIN',   name:'仕上げ班', steps:['手加工','検品','ラベル','梱包','再検品'], members:[], _updatedAt:new Date().toISOString()},
+    {id:'WG-PRINT', name:'印刷班',   steps:['印刷','刷り直し'],                        members:[], _updatedAt:new Date().toISOString()},
+    {id:'WG-OFFICE',name:'事務',     steps:['納品書','請求','消込'],                   members:[], _updatedAt:new Date().toISOString()},
+    {id:'WG-SHIP',  name:'配送',     steps:['納品'],                                   members:[], _updatedAt:new Date().toISOString()}
+  ];
+}
+function _wgList_(){
+  if(!Array.isArray(DB.workGroups) || !DB.workGroups.length){
+    DB.workGroups=_wgSeed_();
+    try{ saveDB(); }catch(e){}
+  }
+  return DB.workGroups;
+}
+function _wgOf_(step){ return _wgList_().find(function(g){ return (g.steps||[]).indexOf(step)>=0; })||null; }
+// 工程が完了しているか（校了は校正BOX連動、用紙は入荷判定）
+function _wbStepDone_(r,k){
+  var v=(r.steps&&r.steps[k])||'─';
+  if(k==='校了'){
+    var prfs=(DB.proofings||[]).filter(function(x){return x.projectId===r.id;});
+    var latest=prfs.length?prfs[prfs.length-1]:null;
+    if(latest && /校了|完了|approved|final/.test(String(latest.status||''))) return true;
+  }
+  if(k==='用紙') return /入荷|完了|受領|済/.test(v);
+  // 「不足あり」＝数えた結果が出ている（作業は済んだ）。検品列からは外し、刷り直しへ流す
+  if(v==='不足あり') return true;
+  return v==='完了'||v==='OK'||v==='納品済'||v==='発送済'||v==='貼付済'||v==='送付済'||v==='なし';
+}
+// 印刷までの前工程は、未設定(─)のまま運用されることが多いので飛ばして更に前を見る。
+// 印刷後の工程が未設定なら「まだやっていない」＝手前で止まっているとみなす（順番を飛ばさない）
+// ※校了は入れない（校了していない案件が印刷列に全部並んでしまうため）
+const WB_SKIPPABLE=['受注','用紙','版下','色合わせ','ミシン出し','加工'];
+// 着手できるか（手前の実質工程が完了している）
+function _wbReady_(r,k){
+  var steps=(typeof _procStepsFor_==='function')?_procStepsFor_(r):WB_STEPS;
+  var i=steps.indexOf(k); if(i<0) return false;
+  if(_wbStepDone_(r,k)) return false;
+  for(var j=i-1;j>=0;j--){
+    var pk=steps[j];
+    var pv=(r.steps&&r.steps[pk])||'─';
+    if(pv==='なし') continue;
+    if(_wbStepDone_(r,pk)) return true;
+    if(pv==='─' && WB_SKIPPABLE.indexOf(pk)>=0) continue;
+    return false;   // 手前が未着手/進行中 → まだ待ち
+  }
+  return true;      // 手前が全部「飛ばせる前工程」だけ → 着手可
+}
+function _wbPrio_(p){ var n=parseInt(p&&p.workPriority); return isNaN(n)?9999:n; }
+// 作業BOXの対象案件（会社スコープ・見積段階は除外・完了案件は除外）
+function _wbBase_(){
+  var q=String((document.getElementById('wb-q')||{}).value||'').trim().toLowerCase();
+  return (DB.projects||[]).filter(function(r){
+    if(!r||!r.id) return false;
+    if(typeof _itemVisibleByCompany_==='function' && !_itemVisibleByCompany_(r)) return false;
+    if(typeof _projStageOf_==='function' && _projStageOf_(r.status)==='quote') return false;
+    if(/失注|キャンセル/.test(String(r.status||''))) return false;
+    if(q){ var hay=((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    return true;
+  });
+}
+// ある工程の列に並ぶ案件（優先順位 → 納期 の順）
+function _wbCol_(step, base){
+  var showWait=!!window._wbShowWait_;
+  var arr=(base||_wbBase_()).filter(function(r){
+    var steps=(typeof _procStepsFor_==='function')?_procStepsFor_(r):[];
+    if(steps.indexOf(step)<0) return false;
+    if(_wbStepDone_(r,step)) return false;
+    return showWait ? true : _wbReady_(r,step);
+  });
+  arr.sort(function(a,b){
+    var pa=_wbPrio_(a), pb=_wbPrio_(b);
+    if(pa!==pb) return pa-pb;
+    var da=a.dueDate||'9999-12-31', db=b.dueDate||'9999-12-31';
+    return da<db?-1:da>db?1:0;
+  });
+  return arr;
+}
+window._wbGroup_=window._wbGroup_||'';      // '' = すべての工程
+window._wbShowWait_=false;                  // 前工程待ちも表示するか
+function _wbSetGroup_(id){ window._wbGroup_=id; renderWorkBox(); }
+function _wbToggleWait_(v){ window._wbShowWait_=!!v; renderWorkBox(); }
+// 表示する工程（グループ選択で絞る）
+function _wbVisibleSteps_(){
+  var gid=window._wbGroup_;
+  if(!gid) return WB_STEPS.slice();
+  var g=_wgList_().find(function(x){ return x.id===gid; });
+  if(!g) return WB_STEPS.slice();
+  return WB_STEPS.filter(function(k){ return (g.steps||[]).indexOf(k)>=0; });
+}
+// 注意書き（作業者に伝えたいこと）
+function _wbNotes_(r, step){
+  var out=[];
+  var hay=(r.spec||'')+' '+(r.item||'')+' '+(r.memo||'');
+  if(/ミシン/.test(hay)) out.push('🪡ミシン');
+  if(r.needHandwork) out.push('✋手作業あり');
+  if(/折/.test(hay)) out.push('折り');
+  if(/番号|ナンバ/.test(hay)) out.push('番号');
+  if((parseInt(r.inspectShort)||0)>0) out.push('⚠不足'+(parseInt(r.inspectShort)||0));
+  if(step==='請求'&&r.billMonthly) out.push('📅月末まとめ');
+  if(r.deliveryPlace) out.push('納品先:'+r.deliveryPlace);
+  return out;
+}
+function renderWorkBox(){
+  var box=document.getElementById('wb-board'); if(!box) return;
+  var groups=_wgList_();
+  var base=_wbBase_();
+  var steps=_wbVisibleSteps_();
+  var today=new Date().toISOString().slice(0,10);
+  var isAdmin=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.role==='admin');
+  function md(d){ d=String(d||''); return d.length>=10? d.slice(5).replace('-','/') : d; }
+  // グループチップ
+  var chipEl=document.getElementById('wb-groups');
+  if(chipEl){
+    var totalAll=WB_STEPS.reduce(function(s,k){ return s+_wbCol_(k,base).length; },0);
+    chipEl.innerHTML='<button class="btn" onclick="_wbSetGroup_(\'\')" style="font-size:11.5px;padding:4px 12px;'+(window._wbGroup_?'':'background:#211f1c;color:#fff;border-color:#211f1c')+'">すべて <b>'+totalAll+'</b></button>'
+      + groups.map(function(g){
+          var n=(g.steps||[]).reduce(function(s,k){ return s+(WB_STEPS.indexOf(k)>=0?_wbCol_(k,base).length:0); },0);
+          var on=(window._wbGroup_===g.id);
+          return '<button class="btn" onclick="_wbSetGroup_(\''+g.id+'\')" style="font-size:11.5px;padding:4px 12px;'+(on?'background:#211f1c;color:#fff;border-color:#211f1c':'')+'">'+_escHtml_(g.name)+' <b>'+n+'</b></button>';
+        }).join('');
+  }
+  var WB_LIMIT=40;   // 1列に出す上限（超えた分は件数だけ出す。黙って切らない）
+  var cols=steps.map(function(k){
+    var full=_wbCol_(k,base);
+    var list=full.slice(0,WB_LIMIT);
+    var g=_wgOf_(k);
+    var cards=list.map(function(r){
+      var oi=(DB.projects||[]).lastIndexOf(r);
+      var ready=_wbReady_(r,k);
+      var due=r.dueDate||'';
+      var late=due&&due<today;
+      var soon=due&&!late&&(new Date(due).getTime()-new Date(today).getTime())<=2*86400000;
+      var prio=parseInt(r.workPriority);
+      var prioTxt=isNaN(prio)?'–':prio;
+      var notes=_wbNotes_(r,k);
+      var qtyTxt=(parseInt(r.qty)||0)?((parseInt(r.qty)||0).toLocaleString()+(r.unit||'')):'';
+      var worker=(r.stepWorker&&r.stepWorker[k])||'';
+      return '<div style="border:1px solid '+(ready?'#d6d3ca':'#e7e5df')+';border-left:4px solid '+(late?'#b91c1c':soon?'#d97706':'#211f1c')+';border-radius:7px;background:'+(ready?'#fff':'#faf9f7')+';padding:7px 9px;margin-bottom:6px;'+(ready?'':'opacity:.72')+'">'
+        +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'
+          +'<span onclick="_wbSetPrio_(\''+r.id+'\')" title="優先順位（クリックで番号を入れる）" style="cursor:pointer;background:#211f1c;color:#fff;font-size:10.5px;font-weight:700;border-radius:4px;min-width:20px;text-align:center;padding:1px 5px">'+prioTxt+'</span>'
+          +(isAdmin?('<span style="display:inline-flex;flex-direction:column;line-height:.85">'
+            +'<span onclick="_wbMove_(\''+k+'\',\''+r.id+'\',-1)" title="優先順位を上げる" style="cursor:pointer;font-size:10px;color:#6f6c66">▲</span>'
+            +'<span onclick="_wbMove_(\''+k+'\',\''+r.id+'\',1)" title="優先順位を下げる" style="cursor:pointer;font-size:10px;color:#6f6c66">▼</span></span>'):'')
+          +'<span style="font-size:10.5px;color:#8a867d;font-family:monospace">'+_escHtml_(r.id||'')+'</span>'
+          +'<span style="margin-left:auto;font-size:10.5px;font-weight:700;color:'+(late?'#b91c1c':soon?'#b45309':'#4a4842')+'">'+(due?(md(due)+(late?' ⚠':soon?' ⏳':'')):'納期未定')+'</span>'
+        +'</div>'
+        +'<div onclick="_openProjFromBoard_('+oi+')" style="cursor:pointer;font-size:12.5px;font-weight:700;color:#211f1c;line-height:1.3">'+_escHtml_(r.item||'（品名未入力）')+'</div>'
+        +'<div style="font-size:11px;color:#6f6c66;margin-top:1px">'+_escHtml_(r.cust||'')+(qtyTxt?('　'+qtyTxt):'')+'</div>'
+        +(notes.length?('<div style="margin-top:3px;display:flex;gap:3px;flex-wrap:wrap">'+notes.map(function(n){ return '<span style="background:#f3f1ec;border:1px solid #e2dfd7;border-radius:4px;font-size:9.5px;padding:0 5px;color:#4a4842">'+_escHtml_(n)+'</span>'; }).join('')+'</div>'):'')
+        +(worker?('<div style="font-size:9.5px;color:#15803d;margin-top:2px">前回: '+_escHtml_(worker)+'</div>'):'')
+        +'<div style="margin-top:5px;display:flex;gap:5px;align-items:center">'
+          +(ready
+            ? '<button class="btn" onclick="_wbDone_(\''+k+'\',\''+r.id+'\')" style="font-size:11px;padding:3px 12px;background:#0f5132;color:#fff;border-color:#0f5132;font-weight:700">✅ 完了</button>'
+            : '<span style="font-size:10px;color:#a8a49b">前工程待ち</span>')
+          +(k==='検品'||k==='再検品' ? '<span style="font-size:9.5px;color:#8a867d">良品数を数えて入力</span>':'')
+        +'</div>'
+      +'</div>';
+    }).join('');
+    var head='<div style="background:#211f1c;color:#f5f3ee;border-radius:7px 7px 0 0;padding:6px 10px;display:flex;align-items:center;gap:6px;position:sticky;top:0;z-index:1">'
+      +'<span style="font-size:13px">'+(WB_ICON[k]||'•')+'</span>'
+      +'<span style="font-size:12px;font-weight:700;letter-spacing:.03em">'+k+'</span>'
+      +'<span style="margin-left:auto;background:'+(full.length?'#c9a227':'#4a4842')+';color:'+(full.length?'#211f1c':'#a8a49b')+';font-size:10.5px;font-weight:700;border-radius:9px;padding:0 7px">'+full.length+'</span>'
+      +'</div>'
+      +(g?('<div style="font-size:9.5px;color:#8a867d;padding:3px 10px;background:#f7f6f2;border-bottom:1px solid #e7e5df">'+_escHtml_(g.name)+((g.members||[]).length?('（'+_escHtml_((g.members||[]).join('・'))+'）'):'（メンバー未登録）')+'</div>'):'');
+    return '<div style="flex:0 0 250px;min-width:250px;border:1px solid #d6d3ca;border-radius:8px;background:#fbfaf8;display:flex;flex-direction:column;max-height:70vh">'
+      +head
+      +'<div style="padding:7px;overflow-y:auto;flex:1">'+(cards||'<div style="font-size:11px;color:#a8a49b;text-align:center;padding:14px 0">なし</div>')
+        +(full.length>list.length?('<div style="font-size:10.5px;color:#8a867d;text-align:center;padding:6px 0">他 '+(full.length-list.length)+' 件（検索で絞り込んでください）</div>'):'')+'</div>'
+      +'</div>';
+  }).join('');
+  box.innerHTML='<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px">'+cols+'</div>';
+}
+// 優先順位: ▲▼で入れ替え（その列を1..nで振り直す）
+function _wbMove_(step, pid, dir){
+  var col=_wbCol_(step);
+  var i=col.findIndex(function(p){ return p.id===pid; });
+  if(i<0) return;
+  var j=i+dir; if(j<0||j>=col.length) return;
+  var tmp=col[i]; col[i]=col[j]; col[j]=tmp;
+  var now=new Date().toISOString();
+  col.forEach(function(p,idx){ p.workPriority=idx+1; p._updatedAt=p.updatedAt=now; });
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  renderWorkBox();
+}
+// 優先順位を番号で直接指定
+function _wbSetPrio_(pid){
+  var p=(DB.projects||[]).find(function(x){ return x.id===pid; }); if(!p) return;
+  var v=prompt('優先順位を数字で入れてください（小さいほど先。空にすると未設定）\n\n'+(p.item||'')+' / '+(p.cust||''), p.workPriority||'');
+  if(v===null) return;
+  v=String(v).replace(/[^0-9]/g,'');
+  if(v==='') delete p.workPriority; else p.workPriority=parseInt(v,10);
+  p._updatedAt=p.updatedAt=new Date().toISOString();
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  renderWorkBox();
+}
+// ✅完了 → やった人を選ぶ（グループのメンバー。個人割当ではなく実績の記録）
+function _wbDone_(step, pid){
+  var p=(DB.projects||[]).find(function(x){ return x.id===pid; }); if(!p) return;
+  if(step==='検品'||step==='再検品'){ _pbInspect_(p, step); return; }
+  var g=_wgOf_(step);
+  var mems=(g&&g.members)||[];
+  var m=document.createElement('div');
+  m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;padding:16px 18px;min-width:300px;max-width:420px">'
+    +'<div style="font-size:10px;letter-spacing:.14em;color:#8a867d;font-weight:700">WHO DID IT</div>'
+    +'<div style="font-size:15px;font-weight:700;color:#211f1c;margin:2px 0 2px">'+(WB_ICON[step]||'')+' '+step+' 完了</div>'
+    +'<div style="font-size:11.5px;color:#6f6c66;margin-bottom:10px">'+_escHtml_(p.item||'')+'　'+_escHtml_(p.cust||'')+'</div>'
+    +'<div style="font-size:11px;color:#4a4842;margin-bottom:5px">やった人を選んでください</div>'
+    +'<div id="wb-who" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">'
+      +mems.map(function(n){ return '<button class="btn" onclick="_wbDoneWith_(\''+step+'\',\''+pid+'\',\''+String(n).replace(/'/g,"\\'")+'\')" style="font-size:12px;padding:5px 13px">'+_escHtml_(n)+'</button>'; }).join('')
+      +'<button class="btn" onclick="_wbDoneOther_(\''+step+'\',\''+pid+'\')" style="font-size:12px;padding:5px 13px">＋ 名前を入力</button>'
+    +'</div>'
+    +(mems.length?'':'<div style="font-size:10.5px;color:#b45309;margin-bottom:8px">※このグループのメンバーが未登録です。「⚙ グループ設定」で登録すると、次からボタンで選べます</div>')
+    +'<div style="display:flex;gap:6px;justify-content:flex-end">'
+      +'<button class="btn" onclick="_wbDoneWith_(\''+step+'\',\''+pid+'\',\'\')" style="font-size:11.5px">名前なしで完了</button>'
+      +'<button class="btn" onclick="this.closest(\'.proof-modal\').remove()" style="font-size:11.5px">やめる</button>'
+    +'</div></div>';
+  document.body.appendChild(m);
+}
+function _wbDoneOther_(step, pid){
+  var n=prompt('やった人の名前を入れてください（次から選べるようにグループに登録します）','');
+  if(n===null) return;
+  n=String(n).trim();
+  if(n){
+    var g=_wgOf_(step);
+    if(g){ g.members=g.members||[]; if(g.members.indexOf(n)<0){ g.members.push(n); g._updatedAt=g.updatedAt=new Date().toISOString(); } }
+  }
+  _wbDoneWith_(step, pid, n);
+}
+function _wbDoneWith_(step, pid, who){
+  var p=(DB.projects||[]).find(function(x){ return x.id===pid; }); if(!p) return;
+  p.steps=p.steps||{}; p.stepDates=p.stepDates||{}; p.stepWorker=p.stepWorker||{};
+  var opts=(typeof STEP_OPTS!=='undefined'&&STEP_OPTS[step])||['─','未着手','完了'];
+  p.steps[step]=(opts.indexOf('完了')>=0)?'完了':opts[opts.length-1];
+  p.stepDates[step]=new Date().toISOString().slice(0,10);
+  if(who) p.stepWorker[step]=who;
+  if(typeof POST_STEP_KEYS!=='undefined' && POST_STEP_KEYS.indexOf(step)>=0) p.postFlow=true;
+  if(step==='納品'){ p.steps['納品']='納品済'; if(!p.deliveredAt) p.deliveredAt=new Date().toISOString().slice(0,10); }
+  p._updatedAt=p.updatedAt=new Date().toISOString();
+  if(typeof _addAuditLog_==='function') try{ _addAuditLog_('update','project:'+p.id, step+' 完了'+(who?('（'+who+'）'):'')); }catch(e){}
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  var m=document.querySelector('.proof-modal'); if(m) m.remove();
+  renderWorkBox();
+  if(typeof renderProcessBoard==='function') try{ renderProcessBoard(); }catch(e){}
+  if(typeof renderProjects==='function') try{ renderProjects(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('✅ '+step+' 完了'+(who?('：'+who):''));
+}
+// ⚙ グループ設定（工程の担当グループとメンバー）
+function _wbGroupSettings_(){
+  var groups=_wgList_();
+  var m=document.createElement('div');
+  m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;z-index:9999;overflow-y:auto;padding:24px 12px';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;padding:16px 18px;width:100%;max-width:620px">'
+    +'<div style="font-size:10px;letter-spacing:.14em;color:#8a867d;font-weight:700">WORK GROUPS</div>'
+    +'<div style="font-size:15px;font-weight:700;color:#211f1c;margin:2px 0 3px">⚙ 作業グループ設定</div>'
+    +'<div style="font-size:11px;color:#6f6c66;margin-bottom:10px">「この人たちがこの作業を見る」という単位です。個人に割り当てるのではなく、グループで受けて優先順位の高いものから取ります。</div>'
+    +'<div id="wb-gs-body"></div>'
+    +'<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">'
+      +'<button class="btn" onclick="_wgAdd_()" style="font-size:11.5px">＋ グループ追加</button>'
+      +'<button class="btn" onclick="this.closest(\'.proof-modal\').remove();renderWorkBox()" style="font-size:11.5px;background:#211f1c;color:#fff;border-color:#211f1c">閉じる</button>'
+    +'</div></div>';
+  document.body.appendChild(m);
+  _wgRenderSettings_();
+}
+function _wgRenderSettings_(){
+  var el=document.getElementById('wb-gs-body'); if(!el) return;
+  el.innerHTML=_wgList_().map(function(g,i){
+    return '<div style="border:1px solid #d6d3ca;border-radius:8px;padding:9px 11px;margin-bottom:8px;background:#fbfaf8">'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
+        +'<input value="'+_escAttr_(g.name||'')+'" onchange="_wgSet_('+i+',\'name\',this.value)" placeholder="グループ名" style="font-size:12.5px;font-weight:700;flex:1">'
+        +'<button class="btn" onclick="_wgDel_('+i+')" style="font-size:10.5px;color:#991b1b;padding:2px 9px">削除</button>'
+      +'</div>'
+      +'<div style="font-size:10px;letter-spacing:.1em;color:#8a867d;font-weight:700;margin-bottom:3px">担当する工程</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:7px">'
+        +WB_STEPS.map(function(k){
+            var on=(g.steps||[]).indexOf(k)>=0;
+            return '<span onclick="_wgToggleStep_('+i+',\''+k+'\')" style="cursor:pointer;font-size:11px;border-radius:5px;padding:2px 8px;border:1px solid '+(on?'#0f5132':'#d6d3ca')+';background:'+(on?'#dcfce7':'#fff')+';color:'+(on?'#0f5132':'#8a867d')+';font-weight:'+(on?'700':'400')+'">'+(WB_ICON[k]||'')+' '+k+'</span>';
+          }).join('')
+      +'</div>'
+      +'<div style="font-size:10px;letter-spacing:.1em;color:#8a867d;font-weight:700;margin-bottom:3px">メンバー（✅を押したときに選ぶ名前）</div>'
+      +'<input value="'+_escAttr_((g.members||[]).join('、'))+'" onchange="_wgSetMembers_('+i+',this.value)" placeholder="例: 山田、鈴木、佐藤（読点・カンマ区切り）" style="font-size:12px;width:100%">'
+    +'</div>';
+  }).join('');
+}
+function _wgSave_(){
+  if(typeof saveDB==='function') saveDB();
+  if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  _wgRenderSettings_();
+}
+function _wgSet_(i, field, val){ var g=_wgList_()[i]; if(!g) return; g[field]=val; g._updatedAt=g.updatedAt=new Date().toISOString(); _wgSave_(); }
+function _wgToggleStep_(i, k){
+  var g=_wgList_()[i]; if(!g) return;
+  g.steps=g.steps||[];
+  var j=g.steps.indexOf(k);
+  if(j>=0) g.steps.splice(j,1);
+  else {
+    // 1つの工程は1グループに（どのグループが見るのか曖昧にしない）
+    _wgList_().forEach(function(o){ if(o!==g && Array.isArray(o.steps)){ var x=o.steps.indexOf(k); if(x>=0){ o.steps.splice(x,1); o._updatedAt=o.updatedAt=new Date().toISOString(); } } });
+    g.steps.push(k);
+  }
+  g._updatedAt=g.updatedAt=new Date().toISOString();
+  _wgSave_();
+}
+function _wgSetMembers_(i, val){
+  var g=_wgList_()[i]; if(!g) return;
+  g.members=String(val||'').split(/[、,\/･・\s]+/).map(function(s){return s.trim();}).filter(Boolean);
+  g._updatedAt=g.updatedAt=new Date().toISOString();
+  _wgSave_();
+}
+function _wgAdd_(){
+  var arr=_wgList_();
+  arr.push({id:'WG-'+Date.now(), name:'新しいグループ', steps:[], members:[], _updatedAt:new Date().toISOString()});
+  _wgSave_();
+}
+function _wgDel_(i){
+  var arr=_wgList_(); var g=arr[i]; if(!g) return;
+  if(!confirm('「'+(g.name||'')+'」を削除しますか？（担当していた工程はグループ未設定になります）')) return;
+  arr.splice(i,1);
+  _wgSave_();
+}
+function initWorkBoxPage(){ renderWorkBox(); }
+
 // 工程ボードのカードから案件を開く（見積フォーム編集画面）
 function _openProjFromBoard_(oi){
   if(typeof _openProjInEstForm_==='function'){ try{ _openProjInEstForm_(oi); return; }catch(e){} }
@@ -40226,6 +40661,45 @@ function _cancelDeleteProj_(oi){
   if(typeof _toastMsg==='function') _toastMsg('削除申請を取り消しました');
 }
 // PPPPPP-22 (#7): 各工程の状態選択肢
+// ═══ WORKFLOW-1: 印刷後の工程を実態に合わせる ═══
+// 「印刷完了」で終わりではなく、実際は
+//   印刷 → (手加工) → 検品・数量 → (不足なら 刷り直し → 再検品) → ラベル → 梱包
+//        → 納品書 → 配送・納品 → 請求 → 消込
+// まで続く。cond:true の工程は必要な案件だけ列が出る（普段は見えない）。
+const POST_STEPS_MID=[   // 加工のあと、納品の前
+  {k:'手加工', ic:'✋', cond:'handwork', desc:'手折り・差込などの手作業'},
+  {k:'検品',   ic:'🔍', desc:'検品・数量カウント（良品数を入力）'},
+  {k:'刷り直し',ic:'♻', cond:'reprint', desc:'定数不足分の刷り直し'},
+  {k:'再検品', ic:'🔎', cond:'reprint', desc:'刷り直し分の再検品'},
+  {k:'ラベル', ic:'🏷', cond:'label', desc:'梱包ラベルの貼付（梱包前）'},
+  {k:'梱包',   ic:'📦', desc:'梱包'},
+  {k:'納品書', ic:'🧾', desc:'納品書・領収書の発行'}
+];
+const POST_STEPS_END=[   // 納品のあと
+  {k:'請求',   ic:'💳', desc:'請求書の発行・送付（月末まとめ可）'},
+  {k:'消込',   ic:'✅', desc:'入金の消込'}
+];
+const POST_STEPS=POST_STEPS_MID.concat(POST_STEPS_END);
+const POST_STEP_KEYS=POST_STEPS.map(function(s){ return s.k; });
+function _postStepDef_(k){ return POST_STEPS.find(function(s){ return s.k===k; })||null; }
+// 定数不足が出ている（＝刷り直し・再検品が必要）
+function _reprintNeeded_(p){ return !!(p && (p.needReprint || (parseInt(p.inspectShort)||0)>0)); }
+// この案件で後工程を使うか。過去の完了案件は汚さない（postFlow を明示した案件は常に使う）
+function _usePostFlow_(p){
+  if(!p) return false;
+  if(p.postFlow===true) return true;
+  if(p.postFlow===false) return false;
+  return !/納品済|完了|失注|キャンセル/.test(String(p.status||''));
+}
+// 後工程の条件判定
+function _postStepOn_(p, k){
+  var d=_postStepDef_(k); if(!d) return false;
+  if(!d.cond) return true;
+  if(d.cond==='handwork') return !!(p && p.needHandwork);
+  if(d.cond==='reprint')  return _reprintNeeded_(p);
+  if(d.cond==='label')    return !(p && p.skipLabel);
+  return true;
+}
 var STEP_OPTS = {
   '版下':['─','未着手','進行中','完了'],
   '校了':['─','未送付','送付済','OK','再校'],
@@ -40233,7 +40707,17 @@ var STEP_OPTS = {
   '色合わせ':['─','未着手','合わせ中','完了'],
   '印刷':['─','未着手','印刷中','完了'],
   '加工':['─','未着手','進行中','完了','なし'],
-  '納品':['─','未着手','手配中','発送済','納品済']
+  '納品':['─','未着手','手配中','発送済','納品済'],
+  // 後工程（WORKFLOW-1）
+  '手加工':['─','未着手','作業中','完了'],
+  '検品':['─','未着手','検品中','完了','不足あり'],
+  '刷り直し':['─','未着手','印刷中','完了'],
+  '再検品':['─','未着手','検品中','完了'],
+  'ラベル':['─','未着手','作成済','貼付済','完了'],
+  '梱包':['─','未着手','作業中','完了'],
+  '納品書':['─','未着手','発行済','完了'],
+  '請求':['─','未着手','月末まとめ待ち','発行済','送付済','完了'],
+  '消込':['─','未着手','入金待ち','完了']
 };
 // トキワ印刷(COMP002)製造ルール: ミシンあり→印刷前に「ミシン出し」、色合わせは任意(p.needColorMatch)
 function _hasMishin_(p){ if(!p) return false; var hay=((p.spec||'')+' '+(p.item||'')+' '+((p.steps&&Object.keys(p.steps).join(' '))||'')); try{ if(p.items)hay+=' '+JSON.stringify(p.items); }catch(e){} return /ミシン/.test(hay); }
@@ -40250,6 +40734,13 @@ function _procStepsFor_(p){
   if(p.needColorMatch && !(p.repeatFrom||p.isRepeat)) insBeforePrint('色合わせ');
   // ミシン出し（ミシン×トキワ内製で自動。p.skipMishin で除外可）
   if(_hasMishin_(p) && p.companyId==='COMP002' && !p.skipMishin) insBeforePrint('ミシン出し');
+  // WORKFLOW-1: 印刷後の工程（手加工〜梱包・納品書／請求・消込）
+  if(typeof _usePostFlow_==='function' && _usePostFlow_(p)){
+    var ni=steps.indexOf('納品'); if(ni<0) ni=steps.length;
+    var mid=POST_STEPS_MID.filter(function(s){ return _postStepOn_(p,s.k); }).map(function(s){ return s.k; });
+    steps.splice.apply(steps, [ni,0].concat(mid));
+    POST_STEPS_END.forEach(function(s){ if(_postStepOn_(p,s.k) && steps.indexOf(s.k)<0) steps.push(s.k); });
+  }
   return steps;
 }
 // #7: 案件詳細の工程進捗を動的描画 (状態 + 内製/外製 + 開始/完了日時)
@@ -40262,7 +40753,15 @@ function _pdmRenderSteps_(r){
     var canMishin=_hasMishin_(r) && r.companyId==='COMP002';
     tog.innerHTML = (canMishin?'<label style="font-size:11px;margin-right:14px;cursor:pointer"><input type="checkbox" '+(!r.skipMishin?'checked':'')+' onchange="_pdmSetStepFlag_(\'skipMishin\',!this.checked)"> 🪡 ミシン出しを工程に入れる</label>':'')
       + '<label style="font-size:11px;cursor:pointer"><input type="checkbox" '+(r.needColorMatch?'checked':'')+' onchange="_pdmSetStepFlag_(\'needColorMatch\',this.checked)"> 🎨 色合わせあり（印刷前）</label>'
-      + (canMishin?'':'<span style="font-size:10px;color:#94a3b8;margin-left:8px">※ミシン出しはミシン加工×トキワ印刷内製のとき自動表示</span>');
+      + (canMishin?'':'<span style="font-size:10px;color:#94a3b8;margin-left:8px">※ミシン出しはミシン加工×トキワ印刷内製のとき自動表示</span>')
+      // WORKFLOW-1: 印刷後の工程の入り切り
+      + '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #d6d3ca">'
+        + '<span style="font-size:10px;letter-spacing:.1em;color:#8a867d;font-weight:700;margin-right:8px">印刷後の工程</span>'
+        + '<label style="font-size:11px;margin-right:14px;cursor:pointer"><input type="checkbox" '+(r.needHandwork?'checked':'')+' onchange="_pdmSetStepFlag_(\'needHandwork\',this.checked)"> ✋ 手加工あり（手折り・差込など）</label>'
+        + '<label style="font-size:11px;margin-right:14px;cursor:pointer"><input type="checkbox" '+(!r.skipLabel?'checked':'')+' onchange="_pdmSetStepFlag_(\'skipLabel\',!this.checked)"> 🏷 梱包ラベルあり</label>'
+        + '<label style="font-size:11px;cursor:pointer"><input type="checkbox" '+(r.billMonthly?'checked':'')+' onchange="_pdmSetStepFlag_(\'billMonthly\',this.checked)"> 💳 請求は月末まとめ</label>'
+        + '<div style="font-size:10px;color:#94a3b8;margin-top:3px">※検品で定数不足を入れると「♻刷り直し」「🔎再検品」が自動で工程に出ます</div>'
+      + '</div>';
   }
   grid.innerHTML = _procStepsFor_(r).map(function(step){
     var opts=(STEP_OPTS[step]||['─','未着手','進行中','完了']);
@@ -40513,6 +41012,8 @@ const PROC_OPTIONS={
   加工:['─','未着手','進行中','完了','なし'],
   納品:['─','未着手','手配中','発送済','納品済'],
 };
+// 後工程のクリック順（STEP_OPTS と合わせる。WORKFLOW-1）
+try{ POST_STEP_KEYS.forEach(function(k){ if(STEP_OPTS[k]) PROC_OPTIONS[k]=STEP_OPTS[k].slice(); }); }catch(e){}
 
 let projCnt=0;
 function nextProjNo(){
@@ -44670,6 +45171,8 @@ function editProjStep(oi, step){
     return v==='完了'||v==='OK'||v==='納品済'||v==='なし'||v==='─';
   });
   if(r.steps['納品']==='納品済') r.status='納品済';
+  // WORKFLOW-1: 後工程を一度でも触ったら、その案件は納品済になっても後工程を出し続ける
+  if(typeof POST_STEP_KEYS!=='undefined' && POST_STEP_KEYS.indexOf(step)>=0) r.postFlow=true;
   // 内製ジョブ（自社で対応する工程）の状態を連動
   if(typeof PB_STEP2JOBPROCS!=='undefined' && PB_STEP2JOBPROCS[step] && Array.isArray(DB.inhouseJobs)){
     var _newJobSt=(_nv==='完了'||_nv==='OK'||_nv==='納品済'||_nv==='発送済')?'完了':(_nv&&_nv!=='─'&&_nv!=='未着手')?'作業中':'待ち';
