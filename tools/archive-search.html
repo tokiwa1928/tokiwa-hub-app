@@ -58,14 +58,17 @@
   <div class="bar">
     <input id="q" class="search" placeholder="🔍 ファイル名・案件・得意先で検索（スペース区切りでAND）" oninput="render()">
     <label class="switch" id="nasSwitch" onclick="toggleNas()" title="NAS(旧データ)は最新でない可能性があるため、既定はオフ。オンにすると検索に含めます"><span class="track"><span class="knob"></span></span><span id="nasLbl">NAS(旧データ)検索 OFF</span></label>
-    <button class="btn" onclick="document.getElementById('imp').click()">⬆ 目録を取込</button>
+    <button class="btn" id="btn-folder" onclick="pickFolder()" title="目録フォルダを1回登録すると、次からこの画面を開いたときに自動で取込みます">📂 目録フォルダを登録</button>
+    <button class="btn sm" onclick="document.getElementById('imp').click()" title="フォルダ登録を使わず、目録ファイルを個別に選んで取込みます">⬆ 目録を取込</button>
     <button class="btn" onclick="pickExtract()" id="btn-extract">🔽 取り出しリスト書き出し（<span id="seln">0</span>）</button>
     <button class="btn sm" onclick="clearAll()" title="取り込んだ目録を全消去">🗑 目録クリア</button>
     <input type="file" id="imp" accept=".json" multiple style="display:none" onchange="importIdx(this)">
   </div>
+  <div id="autoline" style="margin:6px 0"></div>
   <div class="kpis" id="kpis"></div>
   <div class="wrap"><table id="tbl"></table></div>
   <div class="note">
+    ・<b>「📂目録フォルダを登録」を1回すると、次からこの画面を開いたときに自動で取込みます</b>（フォルダの中を再帰的に探して archive_index.json を全部読みます）。取込んだ目録は端末内に保存され、次回は即表示されます。<br>
     ・目録（archive_index.json）を「⬆目録を取込」で読み込むと、その中身をキーワードで探せます（複数得意先ぶん重ねてOK）。<br>
     ・チェックした行を「🔽取り出しリスト書き出し」でダウンロード → ローカルの取り出しエージェントが該当zipから1ファイルだけ解凍します。<br>
     ・<b>NAS(旧データ)検索は既定オフ</b>。旧データは最新でない可能性があるため、上のスイッチを<b>オンにした時だけ</b>アーカイブ（NAS）を検索します。<br>
@@ -120,15 +123,25 @@ function importIdx(inp){
         DB.indexes[ck]={ cust:d.cust||ck, generated:d.generated||'', zips:d.zips||[], files:d.files,
                          level:d.level||'file', _mem:big };
         add++;
+        // AUTOIDX-1: 手動取込ぶんも端末内(IndexedDB)に保存し、次回から自動で復元する
+        try{ cacheIndex(ck); }catch(e){}
       }catch(e){ alert('取込失敗（'+file.name+'）: '+e.message); }
       done++;
-      if(done===files.length){ save(); render(); if(add) alert('目録を取込みました（'+add+'件の得意先）'); }
+      if(done===files.length){ save(); render(); if(add) alert('目録を取込みました（'+add+'件の得意先）\n次に開いたときは自動で復元されます。'); }
     };
     fr.readAsText(file);
   });
   inp.value='';
 }
-function clearAll(){ if(!confirm('取り込んだ目録を全て消しますか？（zip実体は消えません）')) return; DB={indexes:{}}; SEL={}; save(); render(); }
+function clearAll(){
+  if(!confirm('取り込んだ目録を全て消しますか？（zip実体は消えません）\n※フォルダ登録も解除するので、次回は「📂目録フォルダを登録」からやり直しになります')) return;
+  DB={indexes:{}}; SEL={}; _bigList=[]; _dirHandle=null; save();
+  try{ localStorage.removeItem('tokiwa_arch_lastscan'); }catch(e){}
+  Promise.resolve().then(function(){ return idbClear(); }).catch(function(){}).then(function(){
+    render();
+    _line_(_box_('#fcd34d','#fffbeb','目録を消しました。<b>「📂目録フォルダを登録」</b>を押すと、また自動取込になります。'));
+  });
+}
 
 function _terms_(){ return (document.getElementById('q').value||'').toLowerCase().split(/\s+/).filter(Boolean); }
 function _filtered_(){
@@ -195,7 +208,199 @@ function pickExtract(){
   alert(keys.length+'件の取り出しリストを書き出しました。\nローカルの取り出しエージェントで実行してください。');
 }
 
-load(); render();
+// ═══════════════════════════════════════════════════════════════
+// AUTOIDX-1: 目録の自動取込
+//  ・取込んだ目録は IndexedDB に保存 → 次に開いたとき自動で復元（localStorage 5MB の制限を回避）
+//  ・「📂目録フォルダを登録」で選んだフォルダを覚えておき、開くたびに配下の
+//    archive_index.json を再帰的に探して最新を取り込む（更新も自動で反映）
+//  ・巨大な目録（六幸堂125万件など）は開くのに時間がかかるので自動では読まず、
+//    ワンクリックのボタンにする（黙って落とさない）
+// ═══════════════════════════════════════════════════════════════
+var IDB_NAME='tokiwa_archive_v1', IDB_STORE='idx', _idb=null;
+var AUTO_MAX_BYTES=12*1024*1024;   // これ超の目録ファイルは自動で開かない
+var DIR_KEY='__dir__';
+var _dirHandle=null, _bigList=[];
+
+function idbOpen(){
+  return new Promise(function(res,rej){
+    if(_idb) return res(_idb);
+    if(!window.indexedDB) return rej(new Error('IndexedDB非対応'));
+    var rq=indexedDB.open(IDB_NAME,1);
+    rq.onupgradeneeded=function(){ var d=rq.result; if(!d.objectStoreNames.contains(IDB_STORE)) d.createObjectStore(IDB_STORE,{keyPath:'key'}); };
+    rq.onsuccess=function(){ _idb=rq.result; res(_idb); };
+    rq.onerror=function(){ rej(rq.error); };
+  });
+}
+function idbPut(rec){ return idbOpen().then(function(d){ return new Promise(function(res,rej){ var t=d.transaction(IDB_STORE,'readwrite'); t.objectStore(IDB_STORE).put(rec); t.oncomplete=function(){res(1);}; t.onerror=function(){rej(t.error);}; }); }); }
+function idbAll(){ return idbOpen().then(function(d){ return new Promise(function(res,rej){ var t=d.transaction(IDB_STORE,'readonly'); var rq=t.objectStore(IDB_STORE).getAll(); rq.onsuccess=function(){res(rq.result||[]);}; rq.onerror=function(){rej(rq.error);}; }); }); }
+function idbClear(){ return idbOpen().then(function(d){ return new Promise(function(res,rej){ var t=d.transaction(IDB_STORE,'readwrite'); t.objectStore(IDB_STORE).clear(); t.oncomplete=function(){res(1);}; t.onerror=function(){rej(t.error);}; }); }); }
+
+function _line_(html){ var el=document.getElementById('autoline'); if(el) el.innerHTML=html||''; }
+function _box_(color,bg,html){ return '<div style="border:1px solid '+color+';background:'+bg+';border-radius:8px;padding:7px 11px;font-size:12px;color:#1e293b;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+html+'</div>'; }
+
+// 取込んだ目録を IndexedDB へ（大容量もここに入る）
+function cacheIndex(ck){
+  var ix=DB.indexes[ck]; if(!ix) return Promise.resolve();
+  return idbPut({ key:'idx:'+ck, cust:ix.cust, generated:ix.generated||'', zips:ix.zips||[],
+                  files:ix.files, level:ix.level||'file', savedAt:new Date().toISOString() })
+    .catch(function(e){ console.warn('目録の保存に失敗', ck, e); });
+}
+// 起動時: IndexedDB から復元
+function restoreCache(){
+  return idbAll().then(function(recs){
+    var n=0;
+    recs.forEach(function(r){
+      if(!r || String(r.key||'').indexOf('idx:')!==0) return;
+      var ck=r.key.slice(4);
+      DB.indexes[ck]={ cust:r.cust||ck, generated:r.generated||'', zips:r.zips||[], files:r.files||[], level:r.level||'file', _mem:false, _cached:true };
+      n++;
+    });
+    var dr=recs.find(function(r){ return r && r.key===DIR_KEY; });
+    if(dr && dr.handle){ _dirHandle=dr.handle; }
+    return n;
+  }).catch(function(e){ console.warn('目録の復元に失敗', e); return 0; });
+}
+
+// 📂 目録フォルダを登録（1回だけ。次回以降は自動）
+function pickFolder(){
+  if(!window.showDirectoryPicker){
+    alert('このブラウザはフォルダ登録に対応していません（Chromeでお使いください）。\n「⬆目録を取込」でファイルを選ぶ方法は使えます。');
+    return;
+  }
+  window.showDirectoryPicker({ id:'tokiwa-archive-index', mode:'read' }).then(function(dir){
+    _dirHandle=dir;
+    return idbPut({ key:DIR_KEY, handle:dir, name:dir.name, savedAt:new Date().toISOString() })
+      .then(function(){ return scanFolder(dir); });
+  }).catch(function(e){
+    if(e && (e.name==='AbortError')) return;
+    alert('フォルダの登録に失敗しました: '+(e&&e.message||e));
+  });
+}
+// 保存済みハンドルの権限確認 → あれば自動取込、無ければ許可ボタンを出す
+function autoFromFolder(){
+  if(!_dirHandle) return Promise.resolve(false);
+  if(!_dirHandle.queryPermission) return Promise.resolve(false);
+  return _dirHandle.queryPermission({mode:'read'}).then(function(st){
+    if(st==='granted') return scanFolder(_dirHandle).then(function(){ return true; });
+    // 権限の確認がブラウザ側で必要（クリック操作が要る）
+    _line_(_box_('#fcd34d','#fffbeb',
+      '<b>📂 '+esc(_dirHandle.name||'目録フォルダ')+'</b> を登録済みです。ブラウザの確認が必要なので、下を1回押すと自動で取込みます。'
+      +'<button class="btn" style="font-size:11.5px" onclick="allowFolder()">🔓 許可して自動取込</button>'));
+    return false;
+  }).catch(function(){ return false; });
+}
+function allowFolder(){
+  if(!_dirHandle || !_dirHandle.requestPermission) return;
+  _dirHandle.requestPermission({mode:'read'}).then(function(st){
+    if(st==='granted') return scanFolder(_dirHandle);
+    _line_(_box_('#fca5a5','#fef2f2','フォルダの読み取りが許可されませんでした。「📂目録フォルダを登録」からやり直してください。'));
+  });
+}
+
+// フォルダ配下の archive_index.json を再帰で探して取り込む
+function scanFolder(dir){
+  _line_(_box_('#bfdbfe','#eff6ff','🔍 目録ファイルを探しています…'));
+  var found=[];
+  function walk(h, path){
+    var it=h.values ? h.values() : null;
+    if(!it) return Promise.resolve();
+    function step(){
+      return it.next().then(function(res){
+        if(res.done) return;
+        var ent=res.value;
+        if(ent.kind==='directory') return walk(ent, path.concat(ent.name)).then(step);
+        if(/^archive_index.*\.json$/i.test(ent.name)){
+          found.push({ handle:ent, path:path.slice(), label:(path[path.length-1]||dir.name||ent.name) });
+        }
+        return step();
+      });
+    }
+    return step();
+  }
+  return walk(dir, []).then(function(){
+    if(!found.length){
+      _line_(_box_('#fca5a5','#fef2f2','このフォルダの中に archive_index.json が見つかりませんでした（サブフォルダも探しました）。目録を作った場所を選んでください。'));
+      return;
+    }
+    _bigList=[];
+    var okN=0, skipN=0, errN=0;
+    // 1つずつ順に処理（同時に開くとメモリを食うため）
+    return found.reduce(function(chain, it){
+      return chain.then(function(){
+        return it.handle.getFile().then(function(file){
+          if(file.size>AUTO_MAX_BYTES){   // 大容量は自動では開かない
+            _bigList.push({ handle:it.handle, label:it.label, size:file.size });
+            skipN++;
+            return;
+          }
+          return file.text().then(function(txt){
+            var d=JSON.parse(txt);
+            if(!d.files || !Array.isArray(d.files)) throw new Error('目録形式ではありません');
+            var ck=d.cust||it.label||it.handle.name;
+            DB.indexes[ck]={ cust:d.cust||ck, generated:d.generated||'', zips:d.zips||[], files:d.files, level:d.level||'file', _mem:false };
+            okN++;
+            return cacheIndex(ck);
+          });
+        }).catch(function(e){ errN++; console.warn('取込失敗', it.label, e); });
+      });
+    }, Promise.resolve()).then(function(){
+      try{ localStorage.setItem('tokiwa_arch_lastscan', new Date().toISOString()); }catch(e){}
+      render();
+      showAutoStatus(okN, skipN, errN);
+    });
+  });
+}
+// 大容量目録を必要なときだけ読む
+function loadBig(i){
+  var b=_bigList[i]; if(!b) return;
+  _line_(_box_('#bfdbfe','#eff6ff','⏳ '+esc(b.label)+'（'+fmtSize(b.size)+'）を読み込んでいます。件数が多いので少し時間がかかります…'));
+  b.handle.getFile().then(function(file){ return file.text(); }).then(function(txt){
+    var d=JSON.parse(txt);
+    if(!d.files || !Array.isArray(d.files)) throw new Error('目録形式ではありません');
+    var ck=d.cust||b.label;
+    DB.indexes[ck]={ cust:ck, generated:d.generated||'', zips:d.zips||[], files:d.files, level:d.level||'file', _mem:true };
+    b.loaded=true;
+    render();
+    showAutoStatus(null,null,null);
+  }).catch(function(e){
+    _line_(_box_('#fca5a5','#fef2f2','読み込みに失敗しました: '+esc(e&&e.message||String(e))));
+  });
+}
+function showAutoStatus(okN, skipN, errN){
+  var last='';
+  try{ var t=localStorage.getItem('tokiwa_arch_lastscan'); if(t) last=String(t).slice(0,16).replace('T',' '); }catch(e){}
+  var msg='<b>📂 '+esc((_dirHandle&&_dirHandle.name)||'目録フォルダ')+'</b> から自動取込済み';
+  if(okN!=null) msg+='（'+okN+'件の目録'+(errN?'／失敗 '+errN:'')+'）';
+  if(last) msg+=' <span style="color:#64748b;font-size:11px">最終取込 '+esc(last)+'</span>';
+  msg+='<button class="btn sm" style="font-size:11px" onclick="if(_dirHandle)scanFolder(_dirHandle)">🔄 最新に更新</button>';
+  var big='';
+  if(_bigList.length){
+    big='<div style="margin-top:5px;font-size:11.5px;color:#334155;width:100%">'
+      +'大容量の目録は自動では開きません（開くのに時間がかかるため）。必要な時に押してください：<br>'
+      +_bigList.map(function(b,i){
+          return '<button class="btn sm" style="font-size:11px;margin:3px 4px 0 0"'+(b.loaded?' disabled':'')+' onclick="loadBig('+i+')">'+(b.loaded?'✓ ':'▶ ')+esc(b.label)+'（'+fmtSize(b.size)+'）</button>';
+        }).join('')
+      +'</div>';
+  }
+  _line_(_box_('#86efac','#f0fdf4', msg+big));
+}
+
+// 起動: ①端末内キャッシュを即復元 → ②登録フォルダがあれば最新を自動取込
+load();
+render();
+restoreCache().then(function(n){
+  if(n){ render(); }
+  if(_dirHandle){
+    if(n) _line_(_box_('#86efac','#f0fdf4','<b>📂 '+esc(_dirHandle.name||'目録フォルダ')+'</b> の目録 '+n+'件を端末内から復元しました。最新を確認しています…'));
+    return autoFromFolder();
+  }
+  if(n){
+    _line_(_box_('#86efac','#f0fdf4','端末内に保存された目録 '+n+'件を自動で読み込みました。'
+      +'<button class="btn sm" style="font-size:11px" onclick="pickFolder()">📂 目録フォルダを登録して自動更新にする</button>'));
+  } else if(window.showDirectoryPicker){
+    _line_(_box_('#fcd34d','#fffbeb','目録がまだありません。<b>「📂目録フォルダを登録」を1回</b>押すと、以後この画面を開くだけで自動取込になります。'));
+  }
+});
 </script>
 </body>
 </html>
