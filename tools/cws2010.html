@@ -133,6 +133,7 @@
   </div>
   <div class="grp" style="position:relative;">
     <input type="text" id="search" size="28" placeholder="全項目を検索（客先/品名/伝票No/担当/日付…）">
+    <button id="qClear" type="button" title="検索ワードをクリア" style="display:none">✕検索</button>
     <div class="results" id="results"></div>
   </div>
   <div class="grp">
@@ -389,8 +390,17 @@ function render(){
   $('#rep-y').classList.toggle('on', /有/.test(rep));
   $('#rep-n').classList.toggle('on', /無/.test(rep)||rep==='');
   buildDetail(rec);
-  $('#pos').textContent = `${idx+1} / ${RECORDS.length}　(No.${get(rec,'伝票No')||'—'})`
-    + (DEDUP_INFO.removed>0 ? `　※重複${DEDUP_INFO.removed}件を除外` : '');
+  // 絞り込み中は「絞り込み内の位置 / 該当件数」を出す（←→はこの中だけを移動）
+  const _dedup=(DEDUP_INFO.removed>0 ? `　※重複${DEDUP_INFO.removed}件を除外` : '');
+  const _ids=(typeof _navSet==='function')?_navSet():null;
+  if(_ids){
+    const p=_ids.indexOf(idx);
+    $('#pos').textContent = `${p>=0?(p+1):'－'} / ${_ids.length}件 🔍　(No.${get(rec,'伝票No')||'—'})`+_dedup;
+    $('#pos').title = `絞り込み中（全${RECORDS.length}件中 ${_ids.length}件）。←→は絞り込みの中だけを移動します`;
+  } else {
+    $('#pos').textContent = `${idx+1} / ${RECORDS.length}　(No.${get(rec,'伝票No')||'—'})`+_dedup;
+    $('#pos').title = '';
+  }
   applyEditable();
 }
 
@@ -407,14 +417,47 @@ function applyEditable(){
 
 // ---- ナビ ----
 const go = i => { idx = Math.max(0,Math.min(RECORDS.length-1,i)); render(); window.scrollTo(0,0); };
-$('#first').onclick=()=>go(0);
-$('#last').onclick=()=>go(RECORDS.length-1);
-$('#prev').onclick=()=>go(idx-1);
-$('#next').onclick=()=>go(idx+1);
+// 検索・日付で絞り込み中は、←→ もその絞り込みの中だけを移動する
+function _navSet(){
+  const q=($('#search').value||'').trim();
+  const fy=document.getElementById('fYear');
+  const hasDate=fy && fy.value;
+  if(!q && !hasDate) return null;                    // 絞り込みなし＝全件ナビ
+  const ids=[];
+  for(let i=0;i<RECORDS.length;i++){
+    const r=RECORDS[i];
+    if(!_dateOk(r)) continue;
+    if(q && !_match(r,q)) continue;
+    ids.push(i);
+  }
+  return ids;
+}
+function navStep(dir){
+  const ids=_navSet();
+  if(!ids){ go(idx+dir); return; }
+  if(!ids.length) return;                            // 該当0件なら動かない
+  let p=ids.indexOf(idx);
+  if(p<0){                                           // 今の伝票が絞り込み外 → 一番近い該当へ
+    p = dir>0 ? ids.findIndex(i=>i>idx) : (()=>{ let k=-1; for(let j=0;j<ids.length;j++){ if(ids[j]<idx) k=j; } return k; })();
+    if(p<0) p = dir>0 ? 0 : ids.length-1;
+    go(ids[p]); return;
+  }
+  go(ids[Math.max(0,Math.min(ids.length-1,p+dir))]);
+}
+function navEnd(last){
+  const ids=_navSet();
+  if(!ids){ go(last?RECORDS.length-1:0); return; }
+  if(!ids.length) return;
+  go(last?ids[ids.length-1]:ids[0]);
+}
+$('#first').onclick=()=>navEnd(false);
+$('#last').onclick=()=>navEnd(true);
+$('#prev').onclick=()=>navStep(-1);
+$('#next').onclick=()=>navStep(1);
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'||e.target.isContentEditable) return;
-  if(e.key==='ArrowLeft') go(idx-1);
-  if(e.key==='ArrowRight') go(idx+1);
+  if(e.key==='ArrowLeft') navStep(-1);
+  if(e.key==='ArrowRight') navStep(1);
 });
 $('#jumpbtn').onclick=()=>{
   const q=$('#jump').value.trim(); if(!q) return;
@@ -541,8 +584,17 @@ function renderMonth(q){
   $('#monthview').style.display='block'; $('#monthbtn').textContent='伝票へ戻る';
 }
 // 入力するたびに、表示中のビュー（一覧 or 月次）を絞り込み再集計（全項目・部分一致）
-$('#search').addEventListener('input',function(){ if($('#monthview').style.display==='block') renderMonth(this.value); else renderList(this.value); });
-$('#search').addEventListener('keydown',function(e){ if(e.key==='Escape'){ this.value=''; if($('#monthview').style.display==='block') renderMonth(''); else renderList(''); } });
+function _qClearSync(){ var b=$('#qClear'); if(b) b.style.display = ($('#search').value.trim()?'':'none'); }
+$('#search').addEventListener('input',function(){ _qClearSync(); if($('#monthview').style.display==='block') renderMonth(this.value); else renderList(this.value); });
+$('#search').addEventListener('keydown',function(e){ if(e.key==='Escape'){ this.value=''; _qClearSync(); if($('#monthview').style.display==='block') renderMonth(''); else renderList(''); render(); } });
+// ✕検索: 検索ワードをクリア（伝票画面ならその場で全件ナビに戻る。一覧/月次なら全件で再表示）
+$('#qClear').addEventListener('click',function(){
+  $('#search').value=''; _qClearSync();
+  if($('#monthview').style.display==='block') renderMonth('');
+  else if($('#listview').style.display==='block') renderList('');
+  else render();   // 伝票画面: 件数表示（絞り込み中→全件）を更新
+  $('#search').focus();
+});
 // 日付フィルタ（年・月範囲）の配線
 function _reRenderActive(){ if($('#monthview').style.display==='block') renderMonth($('#search').value); else renderList($('#search').value); }
 ['fYear','fMonFrom','fMonTo'].forEach(function(id){ var el=document.getElementById(id); if(el) el.addEventListener('change', _reRenderActive); });
