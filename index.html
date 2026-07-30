@@ -1605,6 +1605,7 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="pill" id="mc-makerterms" onclick="swMaster('makerterms',this)" style="color:#b45309;border-color:#fcd34d;font-weight:700" title="メーカー別呼称の対訳（封筒・用紙）— 窓の号数はメーカーで違うので実寸で紐づけます。基準はハート表記">🏭 メーカー呼称</button>
     <button class="pill" id="mc-supplyrules" onclick="swMaster('supplyrules',this)" style="color:#0f766e;border-color:#5eead4;font-weight:700" title="仕入ルール — メーカーを安い順に並べ取扱範囲を登録すると、封筒の発注先が自動で決まります（相見積の手間をなくす）">🚚 仕入ルール</button>
     <button class="pill" id="mc-hinmoku" onclick="swMaster('hinmoku',this)" title="GEN由来の品目マスタ（品目コード付き・請求/発注/GEN連携用）">品目</button>
+    <button class="pill" id="mc-amtchk" onclick="swMaster('amtchk',this)" style="color:#7f1d1d;border-color:#fca5a5;font-weight:700" title="金額検算 — 単価×数量／小計／消費税／合計が合っているかを帳票全件でチェック">💰 金額検算</button>
     <button class="pill" id="mc-prodrate" onclick="swMaster('prodrate',this)" style="color:#155e75;border-color:#67e8f9;font-weight:700" title="製品単価表・階段チェック — 数量が増えたら単価↓・総額↑になっているか。他社の同等品との価格差も見られます">📶 階段チェック</button>
     <button class="pill" id="mc-meishi" onclick="swMaster('meishi',this)" style="color:#7c2d12;border-color:#fdba74;font-weight:700" title="名刺単価表 — 用紙×色数×1名あたり枚数。会社ごとの金額差をマトリクスで比較して揃えます">📇 名刺単価</button>
     <button class="pill" id="mc-stdrates" onclick="swMaster('stdrates',this)" style="color:#065f46;border-color:#6ee7b7;font-weight:700" title="基準単価表 — 工程×仕様×数量帯の「このくらい」という全社共通の基準値。前回金額の見直しの物差しにして確実に利益を出す">💴 基準単価</button>
@@ -13189,6 +13190,10 @@ function renderMaster(id){
     renderProductRates(mp);
     return;
   }
+  if(id==='amtchk'){
+    renderAmtAudit(mp);
+    return;
+  }
   if(id==='stock'){
     renderStockCandidates(mp);
     return;
@@ -15256,6 +15261,158 @@ function renderProductRates(mp){
       : '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#065f46">'
          +'<b>✓ この製品は全社で階段になっています</b>（数量が増えたら単価は下がり、総額は上がる）。</div>')
     +(cards||'<div style="border:1px dashed #d6d3ca;border-radius:8px;padding:22px;text-align:center;color:#8a867d;font-size:12px">この製品の登録がありません</div>');
+}
+
+// ═════════════════════════════════════════════════════════════════
+// AMTCHK-1: 金額検算（合計額がちゃんと合っているか）
+//  お客様に出す帳票で、次の4つが必ず成り立っていることを確認する:
+//   ① 各明細  単価 × 数量 = 金額
+//   ② 小計    Σ明細の金額 = 小計
+//   ③ 消費税  小計 × 税率 = 消費税（端数処理の違いは±1円まで許容）
+//   ④ 合計    小計 + 消費税 = 合計
+//  1円でも合っていない帳票は、お客様に出す前に見つける
+// ═════════════════════════════════════════════════════════════════
+function _amtTaxRate_(){
+  var c=(DB&&(DB.config||DB.settings))||{};
+  var r=parseFloat(c.taxRate);
+  if(!isNaN(r)&&r>0) return r>1?r/100:r;
+  return 0.10;
+}
+function _amtNum_(v){ var n=parseFloat(v); return isNaN(n)?null:n; }
+// 1件の帳票を検算する。{ng:[…], warn:[…]} を返す
+function _amtCheckDoc_(d, kind){
+  var ng=[], warn=[];
+  if(!d) return {ng:ng, warn:warn};
+  var rate=_amtTaxRate_();
+  var items=Array.isArray(d.items)?d.items:(Array.isArray(d.lines)?d.lines:null);
+  var sub=_amtNum_(d.subtotal), tax=_amtNum_(d.tax), tot=_amtNum_(d.total);
+  // ① 各明細 単価×数量=金額
+  var sumItems=null, missAmt=0;
+  if(items && items.length){
+    sumItems=0;
+    items.forEach(function(it,i){
+      var amt=_amtNum_(it.subtotal!=null?it.subtotal:(it.amt!=null?it.amt:it.amount));
+      var q=_amtNum_(it.qty), pr=_amtNum_(it.price!=null?it.price:it.unitPrice);
+      if(amt!=null) sumItems+=amt;
+      if(amt!=null && q!=null && pr!=null){
+        var want=q*pr;
+        if(Math.abs(want-amt)>1){
+          ng.push('明細'+(i+1)+'「'+String(it.item||'').slice(0,16)+'」単価×数量が金額と合わない（'
+            +pr+'×'+q+'='+Math.round(want).toLocaleString()+' ≠ '+Math.round(amt).toLocaleString()+'円／差 '+Math.round(amt-want).toLocaleString()+'円）');
+        }
+      } else if(amt==null){
+        missAmt++;
+        warn.push('明細'+(i+1)+'「'+String(it.item||'').slice(0,16)+'」金額が入っていない');
+      }
+    });
+    // 金額が入っていない明細があるうちは、小計との比較は意味がないので飛ばす
+    if(missAmt) sumItems=null;
+  }
+  // ② 小計 = Σ明細
+  if(sub!=null && sumItems!=null){
+    if(Math.abs(sub-sumItems)>1){
+      ng.push('小計が明細の合計と合わない（明細合計 '+Math.round(sumItems).toLocaleString()+' ≠ 小計 '+Math.round(sub).toLocaleString()+'円／差 '+Math.round(sub-sumItems).toLocaleString()+'円）');
+    }
+  } else if(sub==null && sumItems!=null){
+    warn.push('小計が入っていない（明細合計は '+Math.round(sumItems).toLocaleString()+'円）');
+  }
+  // ③ 消費税 = 小計 × 税率
+  if(sub!=null && tax!=null){
+    var wantTax=Math.round(sub*rate);
+    if(Math.abs(tax-wantTax)>1){
+      ng.push('消費税が合わない（'+Math.round(sub).toLocaleString()+'×'+Math.round(rate*100)+'% = '+wantTax.toLocaleString()+' ≠ '+Math.round(tax).toLocaleString()+'円／差 '+Math.round(tax-wantTax).toLocaleString()+'円）');
+    }
+  }
+  // ④ 合計 = 小計 + 消費税
+  if(tot!=null && sub!=null && tax!=null){
+    if(Math.abs(tot-(sub+tax))>1){
+      ng.push('合計が合わない（小計 '+Math.round(sub).toLocaleString()+' ＋ 税 '+Math.round(tax).toLocaleString()+' = '+Math.round(sub+tax).toLocaleString()+' ≠ 合計 '+Math.round(tot).toLocaleString()+'円／差 '+Math.round(tot-(sub+tax)).toLocaleString()+'円）');
+    }
+  } else if(tot!=null && sub!=null && tax==null){
+    var wantTax2=Math.round(sub*rate);
+    if(Math.abs(tot-(sub+wantTax2))>1 && Math.abs(tot-sub)>1){
+      warn.push('税額の欄が無く、合計が「小計」でも「小計＋税」でもない（小計 '+Math.round(sub).toLocaleString()+' / 合計 '+Math.round(tot).toLocaleString()+'円）');
+    }
+  }
+  return {ng:ng, warn:warn};
+}
+var AMT_TARGETS=[
+  {key:'invoices',  label:'請求書', icon:'💳'},
+  {key:'receipts',  label:'領収書', icon:'🧾'},
+  {key:'quotations',label:'見積書', icon:'📝'}
+];
+// 全帳票を一括検算
+function _amtAuditAll_(){
+  var out={ total:0, ngDocs:0, warnDocs:0, byKind:{}, rows:[] };
+  AMT_TARGETS.forEach(function(t){
+    var arr=Array.isArray(DB[t.key])?DB[t.key]:[];
+    var ngN=0, wnN=0;
+    arr.forEach(function(d){
+      if(typeof _isTestRec_==='function' && _isTestRec_(d)) return;   // サンプルは対象外
+      if(typeof _itemVisibleByCompany_==='function' && !_itemVisibleByCompany_(d)) return;
+      out.total++;
+      var r=_amtCheckDoc_(d, t.key);
+      if(r.ng.length||r.warn.length){
+        if(r.ng.length){ ngN++; out.ngDocs++; } else { wnN++; out.warnDocs++; }
+        out.rows.push({ kind:t.label, icon:t.icon, id:d.id||'', cust:d.cust||'',
+                        date:String(d.issuedAt||d.date||'').slice(0,10),
+                        total:_amtNum_(d.total), ng:r.ng, warn:r.warn });
+      }
+    });
+    out.byKind[t.label]={ n:arr.length, ng:ngN, warn:wnN };
+  });
+  // NGが多い順（NGあり→警告のみ）
+  out.rows.sort(function(a,b){ return (b.ng.length?1:0)-(a.ng.length?1:0); });
+  return out;
+}
+function renderAmtAudit(mp){
+  if(!mp) return;
+  var a=_amtAuditAll_();
+  var BD='1px solid #d6d3ca';
+  var rate=Math.round(_amtTaxRate_()*100);
+  var head='<div style="margin-bottom:10px">'
+    +'<div style="font-size:10px;letter-spacing:.14em;color:#8a867d;font-weight:700">AMOUNT AUDIT</div>'
+    +'<div style="font-size:15px;font-weight:700;color:#211f1c">💰 金額検算（合計が合っているか）</div>'
+    +'<div style="font-size:11.5px;color:#6f6c66;margin-top:2px">お客様に出す帳票で <b>単価×数量＝金額</b>／<b>Σ明細＝小計</b>／<b>小計×'+rate+'％＝消費税</b>／<b>小計＋税＝合計</b> の4つが成り立っているかを全件検算します（端数処理の違いは±1円まで許容）。</div>'
+    +'</div>';
+  var kpi='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
+    + AMT_TARGETS.map(function(t){
+        var k=a.byKind[t.label]||{n:0,ng:0,warn:0};
+        var col=k.ng?'#b91c1c':(k.warn?'#b45309':'#15803d');
+        return '<div style="border:1px solid #d6d3ca;border-radius:8px;padding:7px 13px;background:#fff;min-width:120px">'
+          +'<div style="font-size:10px;color:#8a867d;font-weight:700">'+t.icon+' '+t.label+'</div>'
+          +'<div style="font-size:17px;font-weight:700;color:'+col+'">'+(k.ng?('NG '+k.ng):(k.warn?('注意 '+k.warn):'✓ OK'))+'</div>'
+          +'<div style="font-size:10px;color:#8a867d">全'+k.n+'件</div></div>';
+      }).join('')
+    +'</div>';
+  if(!a.total){
+    mp.innerHTML=head+'<div style="border:1px dashed #d6d3ca;border-radius:8px;padding:26px;text-align:center;color:#8a867d;font-size:12.5px">'
+      +'検算できる帳票がまだありません。<br>請求書・領収書・見積書を作ると、ここで全件まとめて検算します。</div>';
+    return;
+  }
+  if(!a.rows.length){
+    mp.innerHTML=head+kpi+'<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 14px;font-size:12.5px;color:#065f46">'
+      +'<b>✓ '+a.total+'件すべて金額が合っています。</b>単価×数量・小計・消費税・合計のいずれにもズレはありません。</div>';
+    return;
+  }
+  var rows=a.rows.map(function(r){
+    var isNg=r.ng.length>0;
+    return '<div style="border:1px solid '+(isNg?'#fca5a5':'#fcd34d')+';border-left:4px solid '+(isNg?'#b91c1c':'#d97706')+';border-radius:7px;background:'+(isNg?'#fffafa':'#fffef7')+';padding:8px 11px;margin-bottom:7px">'
+      +'<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px">'
+        +'<span style="font-weight:700">'+r.icon+' '+_escHtml_(r.kind)+'</span>'
+        +'<span style="font-family:monospace;color:#6f6c66">'+_escHtml_(r.id)+'</span>'
+        +'<span style="color:#4a4842">'+_escHtml_(r.cust)+'</span>'
+        +(r.date?('<span style="font-size:10.5px;color:#8a867d">'+_escHtml_(r.date)+'</span>'):'')
+        +(r.total!=null?('<span style="margin-left:auto;font-weight:700">¥'+Math.round(r.total).toLocaleString()+'</span>'):'')
+      +'</div>'
+      +(r.ng.length?('<div style="margin-top:4px;font-size:11.5px;color:#7f1d1d">'+r.ng.map(function(x){ return '⚠ '+_escHtml_(x); }).join('<br>')+'</div>'):'')
+      +(r.warn.length?('<div style="margin-top:3px;font-size:11px;color:#92400e">'+r.warn.map(function(x){ return '・'+_escHtml_(x); }).join('<br>')+'</div>'):'')
+    +'</div>';
+  }).join('');
+  mp.innerHTML=head+kpi
+    +'<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#7f1d1d">'
+      +'<b>⚠ 金額が合っていない帳票 '+a.ngDocs+'件</b>'+(a.warnDocs?('／入力もれの注意 '+a.warnDocs+'件'):'')+'（検算対象 '+a.total+'件）。お客様に出す前に直してください。</div>'
+    +rows;
 }
 
 function renderStdRates(mp){
