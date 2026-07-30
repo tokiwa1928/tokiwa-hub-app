@@ -252,7 +252,9 @@ function restoreCache(){
     recs.forEach(function(r){
       if(!r || String(r.key||'').indexOf('idx:')!==0) return;
       var ck=r.key.slice(4);
-      DB.indexes[ck]={ cust:r.cust||ck, generated:r.generated||'', zips:r.zips||[], files:r.files||[], level:r.level||'file', _mem:false, _cached:true };
+      // 大きい目録は localStorage には入れない（IndexedDBにあるので _mem 扱いで十分）
+      DB.indexes[ck]={ cust:r.cust||ck, generated:r.generated||'', zips:r.zips||[], files:r.files||[], level:r.level||'file',
+                       _mem:(r.files||[]).length>MEM_THRESHOLD, _cached:true };
       n++;
     });
     var dr=recs.find(function(r){ return r && r.key===DIR_KEY; });
@@ -328,8 +330,9 @@ function scanFolder(dir){
     return found.reduce(function(chain, it){
       return chain.then(function(){
         return it.handle.getFile().then(function(file){
-          if(file.size>AUTO_MAX_BYTES){   // 大容量は自動では開かない
-            _bigList.push({ handle:it.handle, label:it.label, size:file.size });
+          if(file.size>AUTO_MAX_BYTES){   // 大容量は初回だけ手動（読み込み済みなら✓のまま）
+            var already=!!(DB.indexes[it.label] && (DB.indexes[it.label].files||[]).length);
+            _bigList.push({ handle:it.handle, label:it.label, size:file.size, loaded:already });
             skipN++;
             return;
           }
@@ -350,11 +353,11 @@ function scanFolder(dir){
     });
   });
 }
-// 大容量目録を必要なときだけ読む
+// 大容量目録を読む。一度読んだら端末内(IndexedDB)に保存し、次からは自動復元＝ボタン押しは初回だけ
 function loadBig(i){
-  var b=_bigList[i]; if(!b) return;
+  var b=_bigList[i]; if(!b) return Promise.resolve();
   _line_(_box_('#bfdbfe','#eff6ff','⏳ '+esc(b.label)+'（'+fmtSize(b.size)+'）を読み込んでいます。件数が多いので少し時間がかかります…'));
-  b.handle.getFile().then(function(file){ return file.text(); }).then(function(txt){
+  return b.handle.getFile().then(function(file){ return file.text(); }).then(function(txt){
     var d=JSON.parse(txt);
     if(!d.files || !Array.isArray(d.files)) throw new Error('目録形式ではありません');
     var ck=d.cust||b.label;
@@ -362,9 +365,16 @@ function loadBig(i){
     b.loaded=true;
     render();
     showAutoStatus(null,null,null);
+    return cacheIndex(ck);   // IndexedDBへ保存 → 次回からは開くだけで復元される
   }).catch(function(e){
     _line_(_box_('#fca5a5','#fef2f2','読み込みに失敗しました: '+esc(e&&e.message||String(e))));
   });
+}
+// まとめて全部読み込む（順番に。同時に開くとメモリを食うため）
+function loadAllBig(){
+  var todo=_bigList.map(function(b,i){ return b.loaded?null:i; }).filter(function(x){ return x!=null; });
+  if(!todo.length) return;
+  todo.reduce(function(chain,i){ return chain.then(function(){ return loadBig(i); }); }, Promise.resolve());
 }
 function showAutoStatus(okN, skipN, errN){
   var last='';
@@ -375,8 +385,13 @@ function showAutoStatus(okN, skipN, errN){
   msg+='<button class="btn sm" style="font-size:11px" onclick="if(_dirHandle)scanFolder(_dirHandle)">🔄 最新に更新</button>';
   var big='';
   if(_bigList.length){
+    var left=_bigList.filter(function(b){ return !b.loaded; }).length;
     big='<div style="margin-top:5px;font-size:11.5px;color:#334155;width:100%">'
-      +'大容量の目録は自動では開きません（開くのに時間がかかるため）。必要な時に押してください：<br>'
+      +(left
+        ? ('大きい目録が '+left+' 件あります。<b>一度読み込めば端末に保存され、次からは自動</b>です：'
+           +(left>1?' <button class="btn sm" style="font-size:11px;font-weight:700" onclick="loadAllBig()">▶▶ まとめて全部読み込む</button>':'')
+           +'<br>')
+        : '大きい目録もすべて読み込み済みです（端末に保存済み・次からは自動）：<br>')
       +_bigList.map(function(b,i){
           return '<button class="btn sm" style="font-size:11px;margin:3px 4px 0 0"'+(b.loaded?' disabled':'')+' onclick="loadBig('+i+')">'+(b.loaded?'✓ ':'▶ ')+esc(b.label)+'（'+fmtSize(b.size)+'）</button>';
         }).join('')
