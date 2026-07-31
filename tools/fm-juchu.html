@@ -65,6 +65,7 @@
     <button class="btn pri" onclick="newRec()">新規作成</button>
     <button class="btn g" onclick="saveRec()">💾 登録（Hubの案件になります）</button>
     <button class="btn" onclick="repeatFrom()">🔁 前回から複製</button>
+    <button class="btn" onclick="showReport()">📊 使われ方レポート</button>
     <span id="msg" style="font-size:11.5px;color:#0f766e;font-weight:700"></span>
   </div>
 
@@ -144,6 +145,19 @@
       <div class="f"><label>希望納期</label><input id="f-due" type="date"></div>
       <div class="f"><label>担当</label><input id="f-tanto"></div>
       <div class="f" style="grid-column:span 2"><label>社内メモ</label><input id="f-note"></div>
+    </div>
+  </div>
+
+  <div class="fm" id="report-box" style="display:none">
+    <h4>📊 使われ方レポート</h4>
+    <div style="font-size:11px;color:#64748b;margin-bottom:8px">
+      入力を楽にするための記録です。<b>誰が使ったかは記録しません</b>（氏名・端末名は取得せず、この端末の中だけに保存）。
+    </div>
+    <div id="report-body"></div>
+    <div class="bar" style="margin-top:8px">
+      <button class="btn" onclick="exportReport()">📥 レポートをCSVで出す</button>
+      <button class="btn" style="color:#b91c1c;border-color:#fca5a5" onclick="clearLog()">🗑 記録を消す</button>
+      <button class="btn" onclick="document.getElementById('report-box').style.display='none'">閉じる</button>
     </div>
   </div>
 
@@ -278,6 +292,7 @@ function saveRec(){
   REC.push(rec);
   try{ localStorage.setItem(KEY, JSON.stringify(REC)); }catch(e){ alert('保存に失敗: '+e.message); }
   document.getElementById('t-id').textContent='登録: '+rec.hub.id;
+  try{ logSave(rec); }catch(e){}
   document.getElementById('msg').textContent='✅ 登録しました（'+REC.length+'件目）';
   renderList();
 }
@@ -294,6 +309,98 @@ function renderList(){
   document.getElementById('tbl').innerHTML=h+'</tbody>';
 }
 function onInk(){ s('f-hot', inkFolder(g('f-ink'))); }
+
+/* ===== 使われ方の記録 =====
+   目的: どの項目が実際に使われているかを知り、使わない項目を削る・選択肢を直すため。
+   ※ 氏名・端末名は一切記録しない（人を評価するためのものではない） */
+var LOGKEY='fm_juchu_log_v1';
+var LOG=[]; var _t0=Date.now(); var _edits={};
+var FIELDLABEL={'f-denpyo':'伝票番号','f-date':'起票日','f-lotkind':'ロット区分','f-lotno':'ロットNO',
+ 'f-cust':'得意先','f-user':'ユーザー','f-item':'製品名','f-hinshu':'品種','f-lotset':'ロットセット数',
+ 'f-lotunit':'ロット契約単位','f-zan':'注残数','f-unit':'単位','f-price':'売価単価','f-paper':'紙質',
+ 'f-kikaku':'規格','f-w':'サイズ横','f-h':'サイズ縦','f-kiri':'切数','f-ink':'インキ','f-iro':'色数',
+ 'f-menu':'面付','f-bind':'製本加工','f-mishin':'横ミシン','f-memo':'備考','f-specchg':'仕様変更',
+ 'f-platechg':'版下変更','f-due':'希望納期','f-note':'社内メモ'};
+function _logFields(){ return Object.keys(FIELDLABEL); }
+function trackEdits(){
+  _logFields().forEach(function(k){
+    var el=document.getElementById(k); if(!el||el._tracked) return;
+    el._tracked=true;
+    el.addEventListener('change', function(){ _edits[k]=(_edits[k]||0)+1; });
+  });
+}
+function logSave(rec){
+  var filled={}, vals={};
+  _logFields().forEach(function(k){
+    var v=g(k); filled[k]=v?1:0;
+    if(v && ['f-lotkind','f-hinshu','f-unit','f-kikaku','f-kiri','f-ink','f-iro','f-menu','f-mishin','f-specchg','f-platechg'].indexOf(k)>=0) vals[k]=v;
+  });
+  LOG.push({ t:new Date().toISOString().slice(0,16), view:(document.body.className==='v-hub'?'Hub風':'FM風'),
+             secs:Math.round((Date.now()-_t0)/1000), filled:filled, vals:vals, edits:_edits,
+             repeat:(g('f-lotkind')==='リピート')?1:0 });
+  if(LOG.length>2000) LOG=LOG.slice(-2000);
+  try{ localStorage.setItem(LOGKEY, JSON.stringify(LOG)); }catch(e){}
+  _t0=Date.now(); _edits={};
+}
+function showReport(){
+  var box=document.getElementById('report-box'); box.style.display='block';
+  var n=LOG.length;
+  if(!n){ document.getElementById('report-body').innerHTML='<div style="padding:14px;color:#94a3b8">まだ記録がありません。何件か登録すると出ます。</div>'; return; }
+  var use={}, ed={}, valc={};
+  _logFields().forEach(function(k){ use[k]=0; ed[k]=0; });
+  var fm=0, hub=0, rep=0, secs=0;
+  LOG.forEach(function(r){
+    _logFields().forEach(function(k){ use[k]+=(r.filled&&r.filled[k])?1:0; ed[k]+=(r.edits&&r.edits[k])||0; });
+    if(r.view==='Hub風') hub++; else fm++;
+    rep+=r.repeat||0; secs+=r.secs||0;
+    Object.keys(r.vals||{}).forEach(function(k){ valc[k]=valc[k]||{}; valc[k][r.vals[k]]=(valc[k][r.vals[k]]||0)+1; });
+  });
+  var rows=_logFields().map(function(k){ return {k:k, l:FIELDLABEL[k], u:Math.round(use[k]*100/n), e:ed[k]}; });
+  var never=rows.filter(function(r){ return r.u===0; });
+  var often=rows.filter(function(r){ return r.e>=Math.max(2,n*0.3); });
+  var h='<div class="grid g4" style="margin-bottom:10px">'
+    +'<div class="f"><label>登録件数</label><b style="font-size:17px">'+n+'</b></div>'
+    +'<div class="f"><label>1件あたり平均</label><b style="font-size:17px">'+Math.round(secs/n)+'秒</b></div>'
+    +'<div class="f"><label>リピートの割合</label><b style="font-size:17px">'+Math.round(rep*100/n)+'%</b></div>'
+    +'<div class="f"><label>Hub風を使った割合</label><b style="font-size:17px">'+Math.round(hub*100/n)+'%</b>'
+    +'<span class="hint">FM風 '+fm+'件 / Hub風 '+hub+'件</span></div></div>';
+  if(never.length){
+    h+='<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:8px 11px;margin-bottom:8px">'
+      +'<b>一度も使われていない項目（'+never.length+'）</b> → 削れる可能性があります<br>'
+      +'<span style="color:#9a3412">'+never.map(function(r){ return r.l; }).join('、')+'</span></div>';
+  }
+  if(often.length){
+    h+='<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;padding:8px 11px;margin-bottom:8px">'
+      +'<b>何度も直している項目</b> → 選択肢が実態に合っていないかも<br>'
+      +'<span style="color:#1e40af">'+often.map(function(r){ return r.l+'('+r.e+'回)'; }).join('、')+'</span></div>';
+  }
+  h+='<div class="savedlist"><table><thead><tr><th>項目</th><th>使用率</th><th>修正回数</th><th>よく選ばれる値</th></tr></thead><tbody>';
+  rows.sort(function(a,b){ return a.u-b.u; }).forEach(function(r){
+    var vv=valc[r.k]?Object.keys(valc[r.k]).sort(function(a,b){ return valc[r.k][b]-valc[r.k][a]; }).slice(0,3)
+              .map(function(v){ return v+'('+valc[r.k][v]+')'; }).join('、'):'';
+    h+='<tr'+(r.u===0?' style="background:#fff7ed"':'')+'><td>'+r.l+'</td><td style="text-align:right">'+r.u+'%</td>'
+      +'<td style="text-align:right">'+r.e+'</td><td style="color:#475569">'+vv+'</td></tr>';
+  });
+  document.getElementById('report-body').innerHTML=h+'</tbody></table></div>';
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function exportReport(){
+  if(!LOG.length){ alert('記録がありません'); return; }
+  var n=LOG.length, use={}, ed={};
+  _logFields().forEach(function(k){ use[k]=0; ed[k]=0; });
+  LOG.forEach(function(r){ _logFields().forEach(function(k){
+    use[k]+=(r.filled&&r.filled[k])?1:0; ed[k]+=(r.edits&&r.edits[k])||0; }); });
+  var L=['項目,使用率(%),修正回数,登録件数'];
+  _logFields().forEach(function(k){ L.push([FIELDLABEL[k],Math.round(use[k]*100/n),ed[k],n].join(',')); });
+  var blob=new Blob([String.fromCharCode(0xFEFF)+L.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='使われ方レポート_'+new Date().toISOString().slice(0,10)+'.csv'; a.click();
+}
+function clearLog(){
+  if(!confirm('使われ方の記録を消します（登録した案件は消えません）。よろしいですか？')) return;
+  LOG=[]; try{ localStorage.removeItem(LOGKEY); }catch(e){}
+  showReport();
+}
 
 // 初期化
 (function(){
@@ -320,6 +427,8 @@ function onInk(){ s('f-hot', inkFolder(g('f-ink'))); }
   document.getElementById('f-ink').addEventListener('change', onInk);
   ['f-lotset'].forEach(function(k){ document.getElementById(k).addEventListener('input', calc); });
   try{ REC=JSON.parse(localStorage.getItem(KEY)||'[]'); }catch(e){ REC=[]; }
+  try{ LOG=JSON.parse(localStorage.getItem(LOGKEY)||'[]'); }catch(e){ LOG=[]; }
+  trackEdits();
   try{ var v=localStorage.getItem('fm_juchu_view'); if(v) setView(v); }catch(e){}
   newRec(); renderList();
 })();
