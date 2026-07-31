@@ -18094,6 +18094,25 @@ function _doAttachLabelToInquiry_(labelId, inqId){
   }
 }
 
+// 🧾 領収書の宛名: 自治体は請求書と同じく「○○市長」宛にする（豊川市役所 財務部市民税課 → 豊川市長）
+//    勝手に書き換えず、案内を出して1クリックで直せるようにする（個人宛の領収書もあるため）
+function _receiptChiefHint_(){
+  var inp=document.getElementById('receipt-to'), box=document.getElementById('receipt-to-hint');
+  if(!inp||!box) return;
+  var v=String(inp.value||'').replace(/\s*(様|御中)\s*$/,'').trim();
+  var to=(typeof _custBillTo_==='function' && v) ? String(_custBillTo_(v)||'').trim() : '';
+  if(to && to!==v){
+    box.style.display='block';
+    box.innerHTML='<span style="color:#b45309">請求書と同じ宛名は <b>'+_escHtml_(to)+'</b> です</span> '
+      +'<button class="btn" style="font-size:10px;padding:1px 8px;margin-left:4px" onclick="_receiptChiefApply_(\''+String(to).replace(/'/g,"\\'")+'\')">この宛名にする</button>';
+  } else { box.style.display='none'; box.innerHTML=''; }
+}
+function _receiptChiefApply_(to){
+  var inp=document.getElementById('receipt-to'); if(!inp) return;
+  inp.value=to+' 様';
+  _receiptChiefHint_();
+  if(typeof _toastMsg==='function') _toastMsg('🧾 宛名を「'+to+'」にしました');
+}
 function showReceiptInputModal(){
   let modal = document.getElementById('receipt-input-modal');
   if(!modal){
@@ -18110,7 +18129,10 @@ function showReceiptInputModal(){
         <button onclick="document.getElementById('receipt-input-modal').style.display='none'" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer">×</button>
       </div>
       <div style="padding:20px">
-        <div class="f"><label>宛名</label><input type="text" id="receipt-to" placeholder="○○株式会社 様" style="width:100%"></div>
+        <div class="f"><label>宛名</label>
+          <input type="text" id="receipt-to" list="dl-billto" placeholder="○○株式会社 様" style="width:100%" oninput="_receiptChiefHint_()">
+          <div id="receipt-to-hint" style="font-size:11px;margin-top:3px;display:none"></div>
+        </div>
         <div class="f"><label>金額（税込）</label><input type="number" id="receipt-amount" style="width:100%"></div>
         <div class="f"><label>但し書き</label><input type="text" id="receipt-for" value="印刷代として" style="width:100%"></div>
         <div class="f">
@@ -41095,8 +41117,25 @@ function _billConf_(){
 }
 // 「○○市役所 建設課」→「○○市」（部署が付いている自治体だけ。会社名の「村」等は拾わない）
 function _billCityOf_(org){
-  var m=String(org||'').trim().match(/^(.{2,9}[市区町村])(.+)$/);
-  return m?m[1]:'';
+  var s=String(org||'').trim();
+  if(!s) return '';
+  // ①「○○市役所」「○○町役場」の形は、役所/役場の直前までが自治体名。
+  //    こうしないと「豊川市役所 財務部市民税課」の“市民税課”の「市」を拾ってしまう。
+  var i=s.search(/役所|役場/);
+  if(i>0){
+    var head=s.slice(0,i).replace(/[\s　]+$/,'');
+    if(/[市区町村]$/.test(head) && head.length<=10) return head;
+  }
+  var m=s.match(/^(.{2,9}[市区町村])(.+)$/);
+  if(!m) return '';
+  var city=m[1];
+  // ② 自治体名に部署語が混ざったら最短一致で取り直す（豊川市財務部市民税課→豊川市）
+  //    ただし「武蔵村山市」のように地名自体が長い場合を壊さないよう、部署語を含む時だけ。
+  if(/[課部局室署係掛班税民]/.test(city)){
+    var m2=s.match(/^(.{2,9}?[市区町村])(.+)$/);
+    if(m2 && !/[課部局室署係掛班税民]/.test(m2[1])) city=m2[1];
+  }
+  return city;
 }
 function _billChiefName_(org){
   var s=String(org||'').trim();
