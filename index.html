@@ -22227,18 +22227,15 @@ function showOutsourceQuoteModal(inqId){
     ? _anonymizeBody_(inq.subject || '', inq)
     : (inq.subject || '');
 
-  var defaultMessage = '【外注見積依頼】\n\n' +
-    'いつもお世話になっております。\n' +
-    'トキワ印刷の' + (currentAuth?.userName || '担当') + 'です。\n\n' +
-    '下記案件のお見積りをお願いいたします。\n\n' +
-    '──────────────\n' +
-    '件名: ' + anonymizedSubject + '\n\n' +
-    '内容:\n' + anonymizedBody + '\n' +
-    '──────────────\n\n' +
-    '※ 上記はお客様情報を伏せた内容です。\n' +
-    'ご希望納期: \n' +
-    '回答期限: ' + new Date(Date.now() + 3*24*60*60*1000).toLocaleDateString('ja-JP') + ' まで\n\n' +
-    'ご検討のほどよろしくお願いいたします。';
+  // 依頼区分 (完全外注 / 部分外注) — 案件の発注形態(完全外製/部分外製)と同じ考え方
+  window._OQCTX_ = {
+    subj: anonymizedSubject,
+    body: anonymizedBody,
+    user: (currentAuth?.userName || '担当'),
+    limit: new Date(Date.now() + 3*24*60*60*1000).toLocaleDateString('ja-JP')
+  };
+  window._OQKIND_ = 'full';
+  var defaultMessage = _oqBuildMsg_();
 
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
@@ -22270,6 +22267,22 @@ function showOutsourceQuoteModal(inqId){
       '<div style="padding:14px 20px;background:#f59e0b;color:#fff;display:flex;justify-content:space-between"><div><strong>🤝 外注見積依頼</strong><div style="font-size:11px;opacity:0.85;margin-top:2px">複数の外注先に同時送信。お客様情報は自動匿名化済み</div></div><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>' +
       '<div style="overflow-y:auto;flex:1;padding:14px 20px">' +
         '<div style="background:#fef3c7;color:#78350f;padding:8px 12px;border-radius:6px;font-size:11px;margin-bottom:12px">🔒 <strong>自動匿名化済</strong>: 顧客名・会社名・連絡先・住所等は伏せられています。送信前に下のメッセージで確認できます</div>' +
+        // 依頼区分 (完全外注 / 部分外注)
+        '<div style="font-size:12px;font-weight:700;margin-bottom:6px">📐 依頼のしかた</div>' +
+        '<div style="display:flex;gap:6px;margin-bottom:8px">' +
+          '<button type="button" id="oq-kind-full" class="btn" onclick="_oqSetKind_(\'full\')" style="flex:1;text-align:left;font-size:12px;padding:8px 10px"><b>🤝 完全外注</b><div style="font-size:10.5px;color:#666;margin-top:2px">材料手配から納品まで一式でお願いする</div></button>' +
+          '<button type="button" id="oq-kind-part" class="btn" onclick="_oqSetKind_(\'part\')" style="flex:1;text-align:left;font-size:12px;padding:8px 10px"><b>🧩 部分外注</b><div style="font-size:10.5px;color:#666;margin-top:2px">工程を指定してその分だけお願いする</div></button>' +
+        '</div>' +
+        '<div id="oq-steps-box" style="display:none;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;margin-bottom:12px;background:#f9fafb">' +
+          '<div style="font-size:11px;font-weight:700;margin-bottom:5px">依頼する工程を選ぶ（案件管理の工程と同じ呼び方）</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+          ['用紙','版下','色合わせ','ミシン出し','印刷','加工','納品'].map(function(st){
+            return '<label style="display:inline-flex;align-items:center;gap:5px;background:#fff;border:1px solid #d1d5db;border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">' +
+              '<input type="checkbox" class="oq-step-cb" value="' + st + '" onchange="_oqRebuild_()">' + st + '</label>';
+          }).join('') +
+          '</div>' +
+          '<div style="font-size:10.5px;color:#666;margin-top:6px">選ばなかった工程は弊社で行う前提の文面になります（用紙・データは弊社支給）。</div>' +
+        '</div>' +
         // 外注先選択
         '<div style="font-size:12px;font-weight:700;margin-bottom:6px">📦 外注先を選択 (複数可)</div>' +
         '<div style="max-height:180px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px;padding:6px;margin-bottom:10px">' + vendorListHtml + '</div>' +
@@ -22288,6 +22301,60 @@ function showOutsourceQuoteModal(inqId){
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  _oqSetKind_('full');   // 既定は完全外注（従来どおりの文面）
+}
+
+// 外注見積依頼の区分: full=完全外注(一式) / part=部分外注(工程を指定)
+// 工程名は案件管理・工程管理と同じ呼び方に揃えている
+function _oqSteps_(){
+  return Array.from(document.querySelectorAll('.oq-step-cb')).filter(function(c){ return c.checked; })
+              .map(function(c){ return c.value; });
+}
+function _oqBuildMsg_(){
+  var c = window._OQCTX_ || {}, kind = window._OQKIND_ || 'full';
+  var steps = _oqSteps_();
+  var head, note;
+  if(kind === 'part'){
+    head = '下記案件のうち、次の工程についてお見積りをお願いいたします。';
+    note = '対象工程: ' + (steps.length ? steps.join(' / ') : '（未選択）') + '\n' +
+           '※ 上記以外の工程は弊社で行います。用紙・データは弊社支給です。\n\n';
+  }else{
+    head = '下記案件を一式（材料手配から納品まで）でお見積りをお願いいたします。';
+    note = '';
+  }
+  return '【外注見積依頼】\n\n' +
+    'いつもお世話になっております。\n' +
+    'トキワ印刷の' + (c.user || '担当') + 'です。\n\n' +
+    head + '\n\n' + note +
+    '──────────────\n' +
+    '件名: ' + (c.subj || '') + '\n\n' +
+    '内容:\n' + (c.body || '') + '\n' +
+    '──────────────\n\n' +
+    '※ 上記はお客様情報を伏せた内容です。\n' +
+    'ご希望納期: \n' +
+    '回答期限: ' + (c.limit || '') + ' まで\n\n' +
+    'ご検討のほどよろしくお願いいたします。';
+}
+function _oqRebuild_(){
+  var ta = document.getElementById('oq-message');
+  if(ta) ta.value = _oqBuildMsg_();
+}
+function _oqSetKind_(k){
+  window._OQKIND_ = k;
+  var f = document.getElementById('oq-kind-full'), p = document.getElementById('oq-kind-part');
+  var on = 'flex:1;text-align:left;font-size:12px;padding:8px 10px;background:#1a1a1a;color:#fff;border-color:#1a1a1a';
+  var off = 'flex:1;text-align:left;font-size:12px;padding:8px 10px';
+  if(f) f.style.cssText = (k === 'full' ? on : off);
+  if(p) p.style.cssText = (k === 'part' ? on : off);
+  // 選択中は説明文の色が沈むので、黒地のときだけ白寄せにする
+  [f, p].forEach(function(b){
+    if(!b) return;
+    var d = b.querySelector('div');
+    if(d) d.style.color = (b.style.background && b.style.background !== '') ? '#d1d5db' : '#666';
+  });
+  var box = document.getElementById('oq-steps-box');
+  if(box) box.style.display = (k === 'part' ? 'block' : 'none');
+  _oqRebuild_();
 }
 
 async function submitOutsourceQuote(inqId){
@@ -22308,7 +22375,13 @@ async function submitOutsourceQuote(inqId){
 
   if(!confirm('以下に外注見積依頼を一括送信します:\n\n📧 メール: ' + selectedVendors.filter(v => v.email).length + ' 件\n📲 LINE WORKS: ' + selectedLw.length + ' 件\n\n続行しますか?')) return;
 
-  var subject = '【外注見積依頼】' + (inq.subject || '案件') + ' (匿名化)';
+  var oqKind = window._OQKIND_ || 'full';
+  var oqSteps = (oqKind === 'part') ? _oqSteps_() : [];
+  if(oqKind === 'part' && oqSteps.length === 0){
+    alert('部分外注は、依頼する工程を1つ以上選んでください'); return;
+  }
+  var kindLabel = (oqKind === 'part') ? ('部分外注: ' + oqSteps.join('・')) : '完全外注';
+  var subject = '【外注見積依頼／' + kindLabel + '】' + (inq.subject || '案件') + ' (匿名化)';
   var sentMail = 0, sentLw = 0, failed = 0;
 
   // メール送信
@@ -22363,6 +22436,9 @@ async function submitOutsourceQuote(inqId){
     sentBy: currentAuth?.userName || '',
     vendors: selectedVendors.map(v => v.name),
     lwTargets: selectedLw,
+    kind: oqKind,          // full=完全外注 / part=部分外注
+    kindLabel: kindLabel,
+    steps: oqSteps,        // 部分外注のとき、依頼した工程
     message: message,
     sentMail: sentMail,
     sentLw: sentLw,
@@ -22381,7 +22457,7 @@ async function submitOutsourceQuote(inqId){
   inq.timeline.push({
     type: 'forward',
     date: new Date().toISOString(),
-    text: '🤝 外注見積依頼を一括送信 (メール ' + sentMail + ' 件 / LW ' + sentLw + ' 件 / 失敗 ' + failed + ' 件)\n対象: ' + selectedVendors.map(v=>v.name).join(', '),
+    text: '🤝 外注見積依頼を一括送信【' + kindLabel + '】(メール ' + sentMail + ' 件 / LW ' + sentLw + ' 件 / 失敗 ' + failed + ' 件)\n対象: ' + selectedVendors.map(v=>v.name).join(', '),
     by: currentAuth?.userName || ''
   });
   if(typeof _addAuditLog_ === 'function') _addAuditLog_('outsource_quote', 'inquiry:' + inqId, sentMail + 'mail / ' + sentLw + 'lw / ' + failed + 'failed');
