@@ -153,6 +153,11 @@
   body.uc td input.u-dead{ background:#fdf2f1; }
   body.uc td input.u-rare{ background:#fffaf0; }
   body.uc td input.u-low{ background:#fffdf0; }
+  .pastbar{ display:flex; align-items:center; gap:6px; margin:6px 0 2px; padding:6px 8px;
+            background:#faf9f7; border:1px solid var(--line); border-radius:8px; font-size:11.5px; }
+  .pastbar b{ font-size:11px; color:var(--sub); letter-spacing:.04em; }
+  #past-box{ margin-top:4px; max-height:230px; }
+  #past-tbl tr{ cursor:pointer; }
   .ulegend{ display:none; align-items:center; gap:10px; font-size:11px; color:var(--sub);
             margin:6px 0 2px; padding:5px 8px; background:#faf9f7;
             border:1px solid var(--line); border-radius:8px; }
@@ -201,6 +206,19 @@
     </table>
   </div>
 
+  <div class="pastbar" id="pastbar">
+    <b>過去実績</b>
+    <span id="past-n" class="hint">未取込</span>
+    <input type="file" id="past-file" accept=".json" style="display:none" onchange="importPast(this.files[0])">
+    <button class="fb gy" onclick="document.getElementById('past-file').click()">📁 取り込む</button>
+    <span style="width:12px"></span>
+    <input id="past-q" class="in w26" placeholder="伝票番号・製品名・得意先コードで過去を探す"
+           oninput="searchPast()" onkeydown="if(event.key==='Enter')searchPast()">
+    <button class="fb gy" onclick="searchPast()">探す</button>
+    <span id="past-msg" class="hint"></span>
+    <button class="fb rd" style="margin-left:auto" onclick="clearPast()">取込データを消す</button>
+  </div>
+  <div class="lst" id="past-box" style="display:none"><table id="past-tbl"></table></div>
   <div class="ulegend" id="ulegend">
     <b>過去2年の入力実績で色分け中</b>（2024・2025年の FileMaker 全 11,781 件）
     <span><i class="ukey" style="background:#fdf2f1;border-color:#c0392b"></i>1件も入力なし＝削除候補</span>
@@ -624,6 +642,136 @@ function toggleUsage(){
   if(b) b.textContent = on ? "色分けを消す" : "使用率で色分け";
 }
 
+// ===== 過去実績(FileMaker 2024/2025) =====
+// 件数が多く得意先名も含むので localStorage ではなく端末のIndexedDBに入れる。
+// 取り込んだデータは端末の中だけ。クラウドにも公開リポジトリにも出さない。
+var PASTDB = null;
+function pastOpen(cb, _retry){
+  if(PASTDB && PASTDB.objectStoreNames.contains('rows')){ cb(PASTDB); return; }
+  // 注意: IndexedDBのkeyPath/インデックスは識別子しか使えないため、
+  // 'f-denpyo' のようなハイフン入りのキーは指定できない。
+  // 検索は取込時に作る _s（1本の検索用文字列）をカーソルで走査して行う。
+  var rq = indexedDB.open('fm_juchu_past', 2);
+  rq.onupgradeneeded = function(e){
+    var db = e.target.result;
+    if(!db.objectStoreNames.contains('rows')) db.createObjectStore('rows', {autoIncrement:true});
+  };
+  rq.onsuccess = function(e){
+    var db = e.target.result;
+    if(!db.objectStoreNames.contains('rows')){
+      // 以前の不具合で中身のないDBが残っている場合は作り直す
+      db.close(); PASTDB = null;
+      if(_retry){ alert('この端末では過去実績の保存が使えません'); return; }
+      var del = indexedDB.deleteDatabase('fm_juchu_past');
+      del.onsuccess = function(){ pastOpen(cb, true); };
+      del.onerror   = function(){ alert('この端末では過去実績の保存が使えません'); };
+      return;
+    }
+    PASTDB = db; cb(db);
+  };
+  rq.onerror = function(){ alert('この端末では過去実績の保存が使えません'); };
+}
+// 検索用の文字列(伝票番号・製品名・得意先コード・ユーザー名をつないだもの)
+function _pastKey_(r){
+  return [r['f-denpyo'], r['f-item'], r['f-custcd'], r['f-user'], r['f-commcd'], r['f-selfcd']]
+         .filter(Boolean).join(' ');
+}
+function pastCount(){
+  pastOpen(function(db){
+    var tx = db.transaction('rows','readonly').objectStore('rows').count();
+    tx.onsuccess = function(){
+      var n = tx.result;
+      document.getElementById('past-n').textContent =
+        n ? (n.toLocaleString() + ' 件 取込済み') : '未取込';
+    };
+  });
+}
+function importPast(file){
+  if(!file) return;
+  var msg = document.getElementById('past-msg');
+  msg.textContent = '読み込み中…';
+  var rd = new FileReader();
+  rd.onload = function(){
+    var data;
+    try{ data = JSON.parse(rd.result); }
+    catch(e){ msg.textContent = '❌ JSONとして読めません'; return; }
+    var rows = data.rows || data;
+    if(!Array.isArray(rows)){ msg.textContent = '❌ 形式が違います'; return; }
+    pastOpen(function(db){
+      var tx = db.transaction('rows','readwrite'), st = tx.objectStore('rows');
+      st.clear();
+      rows.forEach(function(r){ r._s = _pastKey_(r); st.put(r); });
+      tx.oncomplete = function(){
+        msg.textContent = '✅ ' + rows.length.toLocaleString() + ' 件を取り込みました';
+        pastCount();
+      };
+      tx.onerror = function(){ msg.textContent = '❌ 保存に失敗しました（容量不足の可能性）'; };
+    });
+  };
+  rd.readAsText(file, 'utf-8');
+}
+function clearPast(){
+  if(!confirm('この端末に取り込んだ過去実績を消します。よろしいですか？\n（元のJSONファイルは残ります）')) return;
+  pastOpen(function(db){
+    var tx = db.transaction('rows','readwrite');
+    tx.objectStore('rows').clear();
+    tx.oncomplete = function(){ pastCount(); document.getElementById('past-box').style.display='none';
+      document.getElementById('past-msg').textContent = '消しました'; };
+  });
+}
+var PASTHIT = [];
+function searchPast(){
+  var q = (document.getElementById('past-q').value||'').trim();
+  var box = document.getElementById('past-box'), msg = document.getElementById('past-msg');
+  if(!q){ box.style.display='none'; msg.textContent=''; return; }
+  pastOpen(function(db){
+    var hits = [], cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
+    cur.onsuccess = function(e){
+      var c = e.target.result;
+      if(c && hits.length < 200){
+        var r = c.value;
+        var hay = r._s || _pastKey_(r);
+        if(hay.indexOf(q) >= 0) hits.push(r);
+        c.continue(); return;
+      }
+      PASTHIT = hits;
+      var h = '<thead><tr><th>伝票番号</th><th>起票日</th><th>得意先コード</th><th>製品名</th>'
+            + '<th>数量</th><th>単価</th><th>金額</th><th>納期</th></tr></thead><tbody>';
+      if(!hits.length){ h += '<tr><td colspan="8" style="padding:12px;color:#94a3b8">見つかりません</td></tr>'; }
+      hits.forEach(function(r,i){
+        h += '<tr onclick="usePast('+i+')">'
+          + '<td>'+(r['f-denpyo']||'')+'</td><td>'+(r['f-date']||'')+'</td>'
+          + '<td>'+(r['f-custcd']||'')+'</td><td>'+(r['f-item']||'')+'</td>'
+          + '<td style="text-align:right">'+(r['f-lotset']||'')+'</td>'
+          + '<td style="text-align:right">'+(r['f-price']||'')+'</td>'
+          + '<td style="text-align:right">'+(r['f-amt']||'')+'</td>'
+          + '<td>'+(r['f-due']||'')+'</td></tr>';
+      });
+      box.innerHTML = '<table id="past-tbl">'+h+'</tbody></table>';
+      box.style.display = 'block';
+      msg.textContent = hits.length ? (hits.length + '件'+(hits.length>=200?'以上':'')+'（行をクリックで流し込み）') : '';
+    };
+  });
+}
+// 過去1件を画面に流し込む(＝リピート)。伝票番号だけ空にして新規として起票する。
+function usePast(i){
+  var r = PASTHIT[i]; if(!r) return;
+  Object.keys(r).forEach(function(k){
+    if(k.charAt(0) === '_') return;
+    var el = document.getElementById(k); if(el) s(k, r[k]);
+  });
+  s('f-denpyo','');
+  s('f-lotno', r['f-denpyo']||'');
+  s('f-prevdate', r['f-date']||'');
+  s('f-date', new Date().toISOString().slice(0,10));
+  var sel=document.getElementById('f-lotkind'); if(sel) sel.value='リピート';
+  try{ calc(); }catch(e){}
+  try{ onInk(); }catch(e){}
+  document.getElementById('msg').textContent =
+    '過去実績（'+(r['f-denpyo']||'')+' / '+(r['f-date']||'')+'）から流し込みました。伝票番号と納期を入れてください。';
+  window.scrollTo(0,0);
+}
+
 function newRec(){
   ['f-denpyo','f-lotno','f-item','f-lotset','f-lotunit','f-zan','f-price','f-amt',
    'f-paper','f-w','f-h','f-bind','f-memo','f-due','f-note','f-hot'].forEach(function(k){ s(k,''); });
@@ -802,6 +950,7 @@ function clearLog(){
   fillDL('dl-cust', hc.orgs); fillDL('dl-user', hc.users);
   fillDL('dl-vendor', hubVendors());
   applyUsage();
+  pastCount();
   var _uc = null; try{ _uc = localStorage.getItem("fm_juchu_usage_color"); }catch(e){}
   if(_uc !== "0"){ document.body.classList.add("uc");
     var _b=document.getElementById("ucbtn"); if(_b) _b.textContent="色分けを消す"; }
