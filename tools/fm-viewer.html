@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>受注実績ビューア（FileMaker） | Tokiwa Hub Tools</title>
+<style>
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; color:#1a1a1a; background:#eceae4; font-size:13px; }
+  header{ background:#1a1a1a; color:#fff; padding:9px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1{ font-size:14px; margin:0; letter-spacing:.06em; }
+  header a{ color:#9ca3af; font-size:12px; text-decoration:none; }
+  .bar{ background:#fff; border-bottom:1.5px solid #1a1a1a; padding:8px 16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; position:sticky; top:0; z-index:5; }
+  .btn{ border:1px solid #cbd5e1; border-radius:7px; background:#fff; cursor:pointer; font-size:13px; padding:6px 12px; font-family:inherit; font-weight:700; }
+  .btn:hover{ background:#f1f5f9; }
+  .btn.nav{ font-size:18px; padding:4px 14px; }
+  .btn.primary{ background:#0891b2; border-color:#0891b2; color:#fff; }
+  .pos{ font-variant-numeric:tabular-nums; font-weight:700; }
+  input[type=text]{ padding:6px 9px; font-size:14px; border:1px solid #cbd5e1; border-radius:7px; font-family:inherit; }
+  .wrap{ display:grid; grid-template-columns:1fr 380px; gap:14px; padding:14px; align-items:start; max-width:1280px; margin:0 auto; }
+  @media(max-width:1000px){ .wrap{ grid-template-columns:1fr; } }
+  /* FileMaker風カード */
+  .fmcard{ background:#fff; border:1.5px solid #1a1a1a; border-radius:10px; overflow:hidden; }
+  .fmhd{ background:#e8eef6; padding:8px 14px; display:flex; align-items:baseline; gap:14px; border-bottom:1px solid #c7d2e0; flex-wrap:wrap; }
+  .fmhd .ttl{ font-size:17px; font-weight:800; color:#1e3a8a; letter-spacing:.1em; }
+  .sec{ padding:10px 14px; border-bottom:1px solid #eee; }
+  .sec h3{ margin:0 0 7px; font-size:11px; color:#64748b; letter-spacing:.1em; font-weight:800; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:6px 14px; }
+  .f{ display:flex; flex-direction:column; gap:1px; min-width:0; }
+  .f .k{ font-size:10px; color:#94a3b8; }
+  .f .v{ font-size:14px; font-weight:600; overflow-wrap:anywhere; min-height:18px; }
+  .f.big .v{ font-size:16px; }
+  .money .v{ font-variant-numeric:tabular-nums; }
+  table.p1{ width:100%; border-collapse:collapse; font-size:12px; }
+  table.p1 th, table.p1 td{ border:1px solid #d0cec8; padding:3px 6px; text-align:right; }
+  table.p1 th{ background:#f4f2ec; font-weight:700; }
+  table.p1 td.l, table.p1 th.l{ text-align:left; }
+  .side{ display:flex; flex-direction:column; gap:12px; }
+  .box{ background:#fff; border:1.5px solid #1a1a1a; border-radius:10px; padding:12px 14px; }
+  .box h3{ margin:0 0 8px; font-size:12px; }
+  textarea{ width:100%; box-sizing:border-box; font-family:inherit; font-size:13px; padding:7px 9px; border:1px solid #cbd5e1; border-radius:7px; resize:vertical; }
+  .cmp-row{ display:flex; justify-content:space-between; gap:8px; padding:3px 0; border-bottom:1px solid #f1f1f1; font-size:12px; }
+  .cmp-row .cl{ color:#64748b; flex:0 0 auto; }
+  .cmp-row .cv{ text-align:right; overflow-wrap:anywhere; }
+  .diff{ background:#fde8e4; }
+  .empty{ padding:40px; text-align:center; color:#94a3b8; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+  .fixchip{ display:inline-flex; align-items:center; gap:5px; background:#fef3c7; border:1px solid #fcd34d; border-radius:9px; padding:1px 8px; font-size:11px; margin:2px 2px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🗂 受注実績ビューア（FileMaker）</h1>
+  <a href="../index.html">← TOKIWA HUB</a>
+  <span style="margin-left:auto;font-size:11px;color:#9ca3af" id="src-info"></span>
+</header>
+<div class="bar">
+  <button class="btn" onclick="document.getElementById('file').click()">📂 実績データを開く</button>
+  <input type="file" id="file" accept=".json" style="display:none" onchange="loadFile(this.files[0])">
+  <span style="width:1px;height:20px;background:#e2e8f0"></span>
+  <button class="btn nav" onclick="go(-1)" title="前へ（←）">‹</button>
+  <span class="pos" id="pos">— / —</span>
+  <button class="btn nav" onclick="go(1)" title="次へ（→）">›</button>
+  <input type="text" id="jump" placeholder="伝票番号でジャンプ (例 a091247)" style="width:220px" onkeydown="if(event.key==='Enter')jumpTo()">
+  <button class="btn" onclick="jumpTo()">🔍 表示</button>
+  <label style="font-size:12px;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" id="only-fix" onchange="render()"> 修正依頼ありだけ</label>
+  <button class="btn" onclick="exportFixes()" title="修正依頼メモをまとめて書き出し">📤 修正依頼を書出</button>
+</div>
+<div class="wrap" id="wrap">
+  <div class="fmcard" id="card"><div class="empty">「📂 実績データを開く」から <b>FM実績_受注入力用.json</b> を選んでください。<br><span style="font-size:11px">※データはこのPC内だけで読み込まれ、外部には送信されません。</span></div></div>
+  <div class="side">
+    <div class="box">
+      <h3>📝 修正依頼メモ（この伝票）</h3>
+      <textarea id="fixnote" rows="4" placeholder="Web版で直すべき点・差異などを記入" oninput="saveFix()"></textarea>
+      <div style="font-size:11px;color:#94a3b8;margin-top:4px">この端末に保存されます。「📤 修正依頼を書出」で一覧化できます。</div>
+    </div>
+    <div class="box">
+      <h3>🔀 案件管理表との併記</h3>
+      <div id="cmp"><div style="font-size:12px;color:#94a3b8">HUB本体にログイン済みなら、同じ伝票番号の案件を突き合わせて表示します。</div></div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+<script>
+var HUB_DBKEY='murayama_v15';
+function hubLoad(){ try{ return JSON.parse(localStorage.getItem(HUB_DBKEY))||null; }catch(e){ return null; } }
+function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._t); t._t=setTimeout(function(){t.style.display='none';},2500); }
+
+// フィールドの日本語ラベル(FileMaker 受注入力の項目に対応)
+var LBL={
+  'f-denpyo':'伝票番号','f-no':'納品書No.','f-date':'受注日','f-zan':'残','f-lotno':'ロットNo.','f-prevdate':'前回起票日',
+  'f-custcd':'得意先コード','f-tantocd':'担当者','f-hinshu2':'品種','f-item':'品名',
+  'f-w':'巾(mm)','f-h':'天地(mm)','f-lotkind':'ロット種類','f-parts':'パーツ','f-specchg':'仕様変更','f-platechg':'版変更',
+  'f-lotunit':'ロット','f-unit':'単位','f-lotset':'ロットセット',
+  'p1-kind':'種類','p1-nm':'用紙','p1-sz':'サイズ','p1-ki':'斤量','p1-mn':'面付','p1-kom':'込み','p1-jit':'実数','p1-yob':'予備','p1-tot':'通し数','p1-up':'単価','p1-am':'金額',
+  'f-ink':'インク','f-inkb':'インクB','f-iro':'色数','f-kikaku':'規格','f-kiri':'断裁','f-menu':'メニュー','f-paper':'用紙',
+  'b-hako':'箱数','b-hakono':'箱No.',
+  'c-paper':'用紙','c-plate':'製版','c-print':'印刷','c-ship':'送料','c-work':'加工','c-pack':'梱包','c-labor':'工賃','c-total':'原価計',
+  'f-price':'売単価','f-amt':'売上金額','x-genka':'原価','x-arari':'粗利','x-arariritsu':'粗利率(%)'
+};
+function v(r,k){ var x=r[k]; return (x==null||x==='')?'':x; }
+function fld(r,k,cls){ return '<div class="f '+(cls||'')+'"><span class="k">'+esc(LBL[k]||k)+'</span><span class="v">'+esc(v(r,k))+'</span></div>'; }
+function yen(n){ var x=parseFloat(n); return isNaN(x)?esc(n):('¥'+Math.round(x).toLocaleString()); }
+
+var ROWS=[], idx=0;
+var FIXKEY='fmviewer_fixes_v1';
+function fixes(){ try{ return JSON.parse(localStorage.getItem(FIXKEY))||{}; }catch(e){ return {}; } }
+
+function loadFile(file){
+  if(!file) return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    try{
+      var d=JSON.parse(rd.result);
+      ROWS=d.rows||d.records||(Array.isArray(d)?d:[]);
+      document.getElementById('src-info').textContent=(d.src||'')+'　'+ROWS.length.toLocaleString()+'件';
+      idx=0; render();
+      toast('📂 '+ROWS.length.toLocaleString()+'件を読み込みました');
+    }catch(e){ toast('❌ 読み込み失敗: '+e.message); }
+  };
+  rd.readAsText(file,'utf-8');
+}
+function curList(){
+  if(!document.getElementById('only-fix').checked) return ROWS;
+  var fx=fixes();
+  return ROWS.filter(function(r){ return (fx[r['f-denpyo']]||'').trim(); });
+}
+function go(d){ var L=curList(); if(!L.length) return; idx=(idx+d+L.length)%L.length; render(); }
+function jumpTo(){
+  var q=document.getElementById('jump').value.trim().toLowerCase(); if(!q) return;
+  var L=curList();
+  var i=L.findIndex(function(r){ return String(r['f-denpyo']||'').toLowerCase()===q; });
+  if(i<0) i=L.findIndex(function(r){ return String(r['f-denpyo']||'').toLowerCase().indexOf(q)>=0; });
+  if(i<0){ toast('該当なし'); return; }
+  idx=i; render();
+}
+function render(){
+  var L=curList();
+  if(!L.length){ document.getElementById('card').innerHTML='<div class="empty">'+(ROWS.length?'修正依頼ありの伝票はありません':'データ未読み込み')+'</div>'; document.getElementById('pos').textContent='— / —'; return; }
+  if(idx>=L.length) idx=0;
+  var r=L[idx];
+  document.getElementById('pos').textContent=(idx+1).toLocaleString()+' / '+L.length.toLocaleString();
+  var same = String(r['f-denpyo']||'')===String(r['f-no']||'');
+  var card='<div class="fmhd">'
+    + '<span class="ttl">'+esc(v(r,'f-denpyo'))+'</span>'
+    + '<div class="f"><span class="k">納品書No.</span><span class="v"'+(same?'':' style="color:#c0261c"')+'>'+esc(v(r,'f-no'))+(same?'':' ⚠')+'</span></div>'
+    + '<div class="f"><span class="k">受注日</span><span class="v">'+esc(v(r,'f-date'))+'</span></div>'
+    + '<div class="f"><span class="k">得意先</span><span class="v">'+esc(v(r,'f-custcd'))+'</span></div>'
+    + '<div class="f"><span class="k">担当</span><span class="v">'+esc(v(r,'f-tantocd'))+'</span></div>'
+    + '</div>';
+  card+='<div class="sec"><h3>品名・仕様</h3><div class="grid">'
+    + fld(r,'f-item','big') + fld(r,'f-hinshu2') + fld(r,'f-w') + fld(r,'f-h')
+    + fld(r,'f-lotunit') + fld(r,'f-unit') + fld(r,'f-iro') + fld(r,'f-paper')
+    + fld(r,'f-kikaku') + fld(r,'f-parts') + fld(r,'f-platechg') + fld(r,'f-specchg')
+    + fld(r,'b-hako') + fld(r,'f-lotno') + fld(r,'f-prevdate')
+    + '</div></div>';
+  card+='<div class="sec"><h3>用紙・印刷</h3><table class="p1"><tr>'
+    + '<th class="l">種類</th><th class="l">用紙</th><th>サイズ</th><th>斤量</th><th>面付</th><th>実数</th><th>予備</th><th>通し数</th><th>単価</th><th>金額</th></tr><tr>'
+    + '<td class="l">'+esc(v(r,'p1-kind'))+'</td><td class="l">'+esc(v(r,'p1-nm'))+'</td><td>'+esc(v(r,'p1-sz'))+'</td><td>'+esc(v(r,'p1-ki'))+'</td>'
+    + '<td>'+esc(v(r,'p1-mn'))+'</td><td>'+esc(v(r,'p1-jit'))+'</td><td>'+esc(v(r,'p1-yob'))+'</td><td>'+esc(v(r,'p1-tot'))+'</td>'
+    + '<td>'+esc(v(r,'p1-up'))+'</td><td>'+esc(v(r,'p1-am'))+'</td></tr></table></div>';
+  var cm=[['c-paper','用紙'],['c-plate','製版'],['c-print','印刷'],['c-work','加工'],['c-ship','送料'],['c-pack','梱包'],['c-labor','工賃'],['c-total','原価計']];
+  card+='<div class="sec"><h3>原価内訳</h3><div class="grid">'
+    + cm.map(function(p){ return '<div class="f money"><span class="k">'+p[1]+'</span><span class="v">'+yen(v(r,p[0]))+'</span></div>'; }).join('')
+    + '</div></div>';
+  card+='<div class="sec" style="border-bottom:none;background:#fafafa"><h3>金額</h3><div class="grid">'
+    + '<div class="f big money"><span class="k">売単価</span><span class="v">'+esc(v(r,'f-price'))+'</span></div>'
+    + '<div class="f big money"><span class="k">売上金額</span><span class="v">'+yen(v(r,'f-amt'))+'</span></div>'
+    + '<div class="f money"><span class="k">原価</span><span class="v">'+yen(v(r,'x-genka'))+'</span></div>'
+    + '<div class="f money"><span class="k">粗利</span><span class="v">'+yen(v(r,'x-arari'))+'</span></div>'
+    + '<div class="f money"><span class="k">粗利率(%)</span><span class="v">'+esc(v(r,'x-arariritsu'))+'</span></div>'
+    + '</div></div>';
+  document.getElementById('card').innerHTML=card;
+  // 修正依頼メモ
+  document.getElementById('fixnote').value=fixes()[r['f-denpyo']]||'';
+  // 案件管理表との併記(HUBのcalendarOrdersで伝票番号一致を探す)
+  renderCompare(r);
+}
+function renderCompare(r){
+  var box=document.getElementById('cmp');
+  var db=hubLoad();
+  var den=String(r['f-denpyo']||'');
+  var hit=null;
+  if(db && Array.isArray(db.calendarOrders)){
+    hit=db.calendarOrders.find(function(x){ return String(x.denpyoNo||x.ref||'')===den; });
+  }
+  if(!hit){ box.innerHTML='<div style="font-size:12px;color:#94a3b8">同じ伝票番号（'+esc(den)+'）の案件はHUB側に見つかりませんでした。</div>'; return; }
+  var pairs=[['得意先', r['f-custcd'], hit.cust],['品名', r['f-item'], hit.product],['数量', r['f-lotunit'], hit.orderQty],['単価', r['f-price'], hit.orderPrice]];
+  box.innerHTML='<div style="font-size:11px;color:#64748b;margin-bottom:5px">FM実績 ↔ HUB（'+esc(den)+'）</div>'
+    + pairs.map(function(p){
+        var a=esc(p[1]==null?'':p[1]), b=esc(p[2]==null?'':p[2]);
+        return '<div class="cmp-row'+(String(p[1])!==String(p[2])?' diff':'')+'"><span class="cl">'+p[0]+'</span><span class="cv">'+a+' ／ '+b+'</span></div>';
+      }).join('');
+}
+function saveFix(){
+  var L=curList(); if(!L.length) return;
+  var den=L[idx]['f-denpyo']; var val=document.getElementById('fixnote').value;
+  var fx=fixes(); if(val.trim()) fx[den]=val; else delete fx[den];
+  try{ localStorage.setItem(FIXKEY, JSON.stringify(fx)); }catch(e){}
+}
+function exportFixes(){
+  var fx=fixes(); var keys=Object.keys(fx);
+  if(!keys.length){ toast('修正依頼メモはありません'); return; }
+  var lines=['伝票番号\t修正依頼'].concat(keys.map(function(k){ return k+'\t'+String(fx[k]).replace(/\n/g,' '); }));
+  var blob=new Blob([lines.join('\r\n')],{type:'text/tab-separated-values'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='修正依頼_'+(new Date().toISOString().slice(0,10).replace(/-/g,''))+'.tsv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+document.addEventListener('keydown', function(e){
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT') return;
+  if(e.key==='ArrowLeft') go(-1);
+  else if(e.key==='ArrowRight') go(1);
+});
+</script>
+<!-- HUB共通: 最新データに更新するフローティングボタン（自動挿入） -->
+<style>
+#hubRefreshBtn{position:fixed;right:16px;bottom:16px;z-index:99999;display:inline-flex;align-items:center;gap:6px;
+  padding:9px 14px;font-size:13px;font-weight:700;font-family:inherit;color:#0f172a;background:#fde68a;
+  border:1px solid #f59e0b;border-radius:22px;box-shadow:0 3px 10px rgba(0,0,0,.22);cursor:pointer;line-height:1;}
+#hubRefreshBtn:hover{background:#fcd34d;}
+#hubRefreshBtn:disabled{opacity:.6;cursor:default;}
+@media print{#hubRefreshBtn{display:none!important;}}
+</style>
+<button id="hubRefreshBtn" title="クラウドの最新データに更新します" onclick="hubRefreshNow()">🔄 更新</button>
+<script>
+function hubRefreshNow(){
+  var b=document.getElementById('hubRefreshBtn');
+  var reset=function(){ if(b){ b.disabled=false; b.textContent='🔄 更新'; } };
+  if(b){ b.disabled=true; b.textContent='⏳ 更新中…'; }
+  // 入力中のセルを先に確定(保存)してから取り込む。未確定の入力がクラウドの古い値で消えるのを防ぐ。
+  try{ var ae=document.activeElement; if(ae && ae.blur && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) ae.blur(); }catch(e){}
+  try{
+    // クラウド取込関数を持つツール（カレンダー受注台帳など）は、再読込せず最新だけ取り込む
+    if(typeof hubCloudPull==='function'){
+      Promise.resolve(hubCloudPull()).then(function(){
+        try{ if(typeof _hubCacheClear==='function') _hubCacheClear(); }catch(e){}
+        try{ if(typeof buildYears==='function') buildYears(); }catch(e){}
+        try{ if(typeof buildCats==='function') buildCats(); }catch(e){}
+        try{ if(typeof render==='function') render(); }catch(e){}
+        try{ if(typeof hubToast==='function') hubToast('🔄 最新データに更新しました'); }catch(e){}
+        reset();
+      }).catch(function(){ location.reload(); });
+      return;
+    }
+  }catch(e){}
+  // それ以外のページはページごと再読込（本体アプリは再読込でクラウドから取り直す）
+  location.reload();
+}
+</script>
+<!-- HUB共通: アプリ自動更新＋更新履歴（自動挿入 hubUpdateKit） -->
+<style>
+#hubLogBtn{position:fixed;right:16px;bottom:58px;z-index:99999;width:38px;height:38px;border-radius:50%;
+  border:1px solid #cbd5e1;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.18);cursor:pointer;font-size:17px;line-height:1;}
+#hubLogBtn:hover{background:#f1f5f9;}
+#hubLogPanel{position:fixed;right:16px;bottom:104px;z-index:99999;width:min(360px,calc(100vw - 32px));max-height:60vh;overflow:auto;
+  background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;display:none;font-size:12px;color:#0f172a;text-align:left;}
+#hubLogPanel h3{margin:0 0 8px;font-size:13px;}
+#hubLogPanel .d{font-weight:700;margin:10px 0 3px;color:#0369a1;}
+#hubLogPanel ul{margin:0 0 4px;padding-left:17px;}
+#hubLogPanel li{margin:2px 0;line-height:1.45;}
+#hubUpBanner{position:fixed;left:50%;transform:translateX(-50%);top:10px;z-index:100000;display:none;align-items:center;gap:10px;
+  background:#0f172a;color:#fff;padding:9px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:13px;}
+#hubUpBanner button{font-family:inherit;font-size:12px;font-weight:700;border-radius:7px;border:0;padding:5px 11px;cursor:pointer;background:#fde68a;color:#0f172a;}
+@media print{#hubLogBtn,#hubLogPanel,#hubUpBanner{display:none!important;}}
+</style>
+<button id="hubLogBtn" title="更新履歴を表示" onclick="hubToggleLog()">📋</button>
+<div id="hubLogPanel"></div>
+<div id="hubUpBanner"><span>🆕 新しい版があります（<b id="hubUpCnt">15</b>秒後に自動更新）</span><button onclick="hubDoUpdate()">今すぐ更新</button><button style="background:#334155;color:#fff" onclick="hubCancelUpdate()">後で</button></div>
+<script>
+(function(){
+  var BASE = location.pathname.indexOf('/tools/')>=0 ? '../' : './';
+  // ===== 更新履歴 =====
+  window.hubToggleLog=function(){
+    var p=document.getElementById('hubLogPanel');
+    if(p.style.display==='block'){ p.style.display='none'; return; }
+    p.style.display='block'; p.innerHTML='<h3>📋 更新履歴</h3>読み込み中…';
+    fetch(BASE+'changelog.json?ts='+Date.now(), {cache:'no-store'}).then(function(r){return r.json();}).then(function(list){
+      var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
+      p.innerHTML='<h3>📋 更新履歴</h3>'+list.map(function(e){
+        return '<div class="d">'+esc(e.date)+'</div><ul>'+e.items.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>';
+      }).join('');
+    }).catch(function(){ p.innerHTML='<h3>📋 更新履歴</h3>取得できませんでした'; });
+  };
+  // ===== アプリ本体の自動更新 =====
+  // service-worker.js の版番号を定期取得し、変わっていたら再読込して新しい版に切り替える。
+  var curVer=null, timer=null;
+  function fetchVer(){
+    return fetch(BASE+'service-worker.js?ts='+Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.text(); })
+      .then(function(t){ var m=t.match(/CACHE_VERSION\s*=\s*'([^']+)'/); return m?m[1]:null; })
+      .catch(function(){ return null; });
+  }
+  window.hubDoUpdate=function(){ try{ sessionStorage.setItem('hubJustUpdated','1'); }catch(e){} location.reload(); };
+  window.hubCancelUpdate=function(){ if(timer){ clearInterval(timer); timer=null; } var b=document.getElementById('hubUpBanner'); if(b) b.style.display='none'; };
+  function showBanner(){
+    var b=document.getElementById('hubUpBanner'); if(!b || b.style.display==='flex') return;
+    b.style.display='flex';
+    var n=15, c=document.getElementById('hubUpCnt'); c.textContent=n;
+    timer=setInterval(function(){
+      var ae=document.activeElement;
+      if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;   // 入力中はカウントを止める
+      n--; c.textContent=n;
+      if(n<=0){ clearInterval(timer); hubDoUpdate(); }
+    }, 1000);
+  }
+  function check(){
+    fetchVer().then(function(v){
+      if(!v) return;
+      if(curVer===null){ curVer=v; return; }
+      if(v===curVer) return;
+      // 新しい版を検知: 非表示タブは即時、表示中はバナー＋カウントダウンで自動更新
+      if(document.hidden){ hubDoUpdate(); } else { showBanner(); }
+    });
+  }
+  fetchVer().then(function(v){ curVer=v; });
+  setInterval(check, 180000);   // 3分ごとに版を確認
+  window.addEventListener('focus', check);
+  try{ if(sessionStorage.getItem('hubJustUpdated')){ sessionStorage.removeItem('hubJustUpdated'); } }catch(e){}
+})();
+</script>
+</body>
+</html>
