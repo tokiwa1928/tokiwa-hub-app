@@ -102,6 +102,7 @@
   </div>
 
   <datalist id="payee-list"></datalist>
+  <datalist id="memo-list"></datalist>
   <!-- 諸経費明細（変動） -->
   <div class="card lockable">
     <h2><span class="n">明細</span>諸経費等 明細（この月の変動分）</h2>
@@ -122,7 +123,11 @@
       <thead><tr><th style="width:34px">№</th><th style="width:96px">月日</th><th style="width:110px">金額</th><th style="width:110px">種類</th><th>支払先</th><th>備考</th><th style="width:34px"></th></tr></thead>
       <tbody></tbody>
     </table>
-    <div style="margin-top:6px"><button class="btn sm" onclick="addShokei()">＋ 行を追加</button></div>
+    <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn sm" onclick="addShokei()">＋ 行を追加</button>
+      <button class="btn sm p" onclick="registerMasters()" title="この月の明細に出てくる支払先・備考のうち、まだマスタに無いものをまとめて登録します">🏦 当月の支払先・備考をマスタ登録</button>
+      <span id="reg-status" style="font-size:11px;color:var(--muted)"></span>
+    </div>
     <div class="sumline">別紙計（諸経費等）<b id="betsushi">¥0</b></div>
   </div>
 
@@ -231,6 +236,16 @@
           </details>
         </div>
 
+        <!-- 備考マスタ -->
+        <div class="mblock">
+          <div class="mbh">📝 備考マスタ <span class="msub" id="memo-count"></span></div>
+          <div class="msub" style="margin-bottom:6px">明細の備考欄で選べる候補です。「当月の支払先・備考をマスタ登録」ボタンでこの月の分をまとめて登録できます。</div>
+          <details><summary class="msub">一括編集（1行1件のテキスト）</summary>
+            <textarea id="memo-master" rows="6" style="width:100%;margin-top:6px;padding:8px;border:1px solid #c9c6bf;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical"></textarea>
+            <div style="margin-top:4px"><button class="btn sm" onclick="saveMemoMaster()">テキストで保存</button></div>
+          </details>
+        </div>
+
         <div style="margin-top:4px"><button class="btn sm p" onclick="saveMaster()">💾 マスタ・定数を保存</button></div>
       </div>
     </details>
@@ -290,6 +305,7 @@ function load(){
   d.master=d.master||{};
   if(!Array.isArray(d.master.hoten)||!d.master.hoten.length) d.master.hoten=JSON.parse(JSON.stringify(DEFAULT_HOTEN));
   if(!Array.isArray(d.master.payees)||!d.master.payees.length) d.master.payees=DEFAULT_PAYEES.slice();
+  if(!Array.isArray(d.master.memos)) d.master.memos=[];
   if(d.master.kaikake==null) d.master.kaikake=-440000;
   if(d.master.jiyu==null) d.master.jiyu=75000;
   d.company=d.company||{ name:'村山印刷有限会社', addr:'東京都武蔵村山市残堀2-1-1', zip:'208-0034', rep:'本多　亮', to:'トキワ印刷株式会社' };
@@ -439,6 +455,47 @@ function collectPayees(){
   if(add.length){ DB.master.payees=(DB.master.payees||[]).concat(add); persist(); renderPayeeDatalist(); if(typeof renderPayeeList==='function') renderPayeeList(); }
   return add.length;
 }
+// ── 備考マスタ（選択式・当月分をボタンで登録） ──
+function renderMemoDatalist(){
+  var dl=document.getElementById('memo-list'); if(!dl) return;
+  var set={}, out=[];
+  (DB.master.memos||[]).forEach(function(p){ p=(p||'').trim(); if(p&&!set[p]){ set[p]=1; out.push(p); } });
+  dl.innerHTML=out.sort(function(a,b){return a.localeCompare(b,'ja');}).map(function(p){ return '<option value="'+esc(p)+'">'; }).join('');
+}
+// 当月の明細(諸経費＋固定)から、支払先・備考の未登録分をマスタへ登録
+function registerMasters(){
+  if(!Array.isArray(DB.master.payees)) DB.master.payees=[];
+  if(!Array.isArray(DB.master.memos)) DB.master.memos=[];
+  var pset={}; DB.master.payees.forEach(function(p){ pset[(p||'').trim()]=1; });
+  var mset={}; DB.master.memos.forEach(function(p){ mset[(p||'').trim()]=1; });
+  var addP=[], addM=[];
+  document.querySelectorAll('#shokei-tbl [data-k="payee"], #hoten-tbl [data-k="payee"]').forEach(function(el){
+    var v=(el.value||'').trim(); if(v && !pset[v]){ pset[v]=1; addP.push(v); }
+  });
+  document.querySelectorAll('#shokei-tbl [data-k="memo"], #hoten-tbl [data-k="memo"]').forEach(function(el){
+    var v=(el.value||'').trim(); if(v && !mset[v]){ mset[v]=1; addM.push(v); }
+  });
+  if(addP.length) DB.master.payees=DB.master.payees.concat(addP);
+  if(addM.length) DB.master.memos=DB.master.memos.concat(addM);
+  if(addP.length||addM.length){
+    persist(); renderPayeeDatalist(); renderMemoDatalist();
+    if(typeof renderPayeeList==='function') renderPayeeList();
+    if(typeof renderMemoMaster==='function') renderMemoMaster();
+  }
+  var msg='マスタ登録：支払先 +'+addP.length+'件 / 備考 +'+addM.length+'件'
+    +((addP.length||addM.length)?'（'+[].concat(addP,addM).slice(0,6).join('、')+(addP.length+addM.length>6?' …':'')+'）':'（新規なし）');
+  var st=document.getElementById('reg-status'); if(st) st.textContent=msg;
+  toast(msg);
+}
+function renderMemoMaster(){
+  var el=document.getElementById('memo-master'); if(el) el.value=(DB.master.memos||[]).join('\n');
+  var c=document.getElementById('memo-count'); if(c) c.textContent=(DB.master.memos||[]).length+'件';
+}
+function saveMemoMaster(){
+  var raw=document.getElementById('memo-master').value||'';
+  DB.master.memos=raw.split('\n').map(function(s){return s.trim();}).filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;});
+  persist(); renderMemoDatalist(); toast('備考マスタを保存しました（'+DB.master.memos.length+'件）');
+}
 function renderPayeeMaster(){
   var el=document.getElementById('payee-master'); if(el) el.value=(DB.master.payees||[]).join('\n');
 }
@@ -489,7 +546,7 @@ function moveMonthUI(){
   renderHoten();
   document.getElementById('kaikake').value=DB.master.kaikake;
   document.getElementById('jiyu').value=DB.master.jiyu;
-  renderPayeeDatalist(); renderPayeeMaster(); renderPayeeList();
+  renderPayeeDatalist(); renderPayeeMaster(); renderPayeeList(); renderMemoDatalist(); renderMemoMaster();
   // 比留さんの利子に完済日を補完（借入金返済と同じ日付・一回だけ実行）
   try{
     if(!localStorage.getItem('murayama_mig_hiru_v1')){
@@ -536,7 +593,7 @@ function renderHoten(){
       +'<td><select data-i="'+i+'" data-k="type">'+['借入金返済','利子','リース','その他'].map(function(o){return '<option'+(r.type===o?' selected':'')+'>'+o+'</option>';}).join('')+'</select></td>'
       +'<td><input data-i="'+i+'" data-k="payee" list="payee-list" value="'+esc(r.payee)+'"></td>'
       +'<td><input class="num" data-i="'+i+'" data-k="amount" type="number" value="'+(r.amount||0)+'"></td>'
-      +'<td><input data-i="'+i+'" data-k="memo" value="'+esc(r.memo)+'"></td>'
+      +'<td><input data-i="'+i+'" data-k="memo" list="memo-list" value="'+esc(r.memo)+'"></td>'
       +'<td><input data-i="'+i+'" data-k="paid" type="date" value="'+esc(r.paid)+'"></td>'
       +'<td class="c"><button class="btn sm" onclick="delHoten('+i+')">×</button></td>';
     tb.appendChild(tr);
@@ -602,7 +659,7 @@ function addShokei(r){
     +'<td><input class="num" data-k="amount" type="number" value="'+(r.amount||'')+'"></td>'
     +'<td><select data-k="type">'+['現金','普通預金','当座','その他'].map(function(o){return '<option'+(r.type===o?' selected':'')+'>'+o+'</option>';}).join('')+'</select></td>'
     +'<td><input data-k="payee" list="payee-list" value="'+esc(r.payee||'')+'"></td>'
-    +'<td><input data-k="memo" value="'+esc(r.memo||'')+'"></td>'
+    +'<td><input data-k="memo" list="memo-list" value="'+esc(r.memo||'')+'"></td>'
     +'<td class="c"><button class="btn sm" onclick="this.closest(\'tr\').remove();reindexShokei();calc()">×</button></td>';
   tb.appendChild(tr); reindexShokei(); calc();
   tb.oninput=function(){ calc(); };
