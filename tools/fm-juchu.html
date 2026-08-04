@@ -178,6 +178,18 @@
   body.uc td input.u-dead{ background:#fdf2f1; }
   body.uc td input.u-rare{ background:#fffaf0; }
   body.uc td input.u-low{ background:#fffdf0; }
+  .refbox{ display:none; margin:6px 0 2px; border:1px solid var(--line); border-radius:8px;
+           background:#faf9f7; overflow:hidden; }
+  body.refmode .refbox{ display:block; }
+  .refh{ display:flex; align-items:center; gap:8px; padding:5px 8px;
+         border-bottom:1px solid var(--line); font-size:11.5px; }
+  .reftbl{ max-height:190px; overflow:auto; }
+  .reftbl table{ border-collapse:collapse; width:100%; font-size:11px; }
+  .reftbl th,.reftbl td{ border-bottom:1px solid var(--line); padding:3px 7px; white-space:nowrap; text-align:left; }
+  .reftbl th{ background:var(--hd); color:var(--ink); font-weight:800; font-size:10.5px;
+              position:sticky; top:0; z-index:1; }
+  .reftbl tr:hover td{ background:#fff; }
+  .reftbl td.n{ text-align:right; font-variant-numeric:tabular-nums; }
   .laybar{ display:none; align-items:center; gap:8px; margin:6px 0 2px; padding:7px 10px;
            background:#1d4ed8; color:#fff; border-radius:8px; font-size:11.5px; }
   body.laymode .laybar{ display:flex; }
@@ -254,6 +266,10 @@
         <button class="fb pu" onclick="alert('外注入力はHubの外注発注にあります')">外注入力</button>
         <button class="fb gy" id="ucbtn" onclick="toggleUsage()">使用率で色分け</button>
         <button class="fb gy" id="laybtn" onclick="toggleLayout()">レイアウト編集</button>
+        <button class="fb gy" onclick="navGo(-1)" title="前のレコード">◀ 前</button>
+        <span class="hint" id="nav-pos" style="min-width:64px;text-align:center">–</span>
+        <button class="fb gy" onclick="navGo(1)" title="次のレコード">次 ▶</button>
+        <button class="fb gy" id="refbtn" onclick="toggleRef()">実績を見ながら</button>
       </div>
     </div>
     <table class="stampbox">
@@ -263,6 +279,16 @@
     </table>
   </div>
 
+  <div class="refbox" id="refbox">
+    <div class="refh">
+      <b>この得意先・製品の過去実績</b>
+      <span class="hint" id="ref-msg">得意先コードか製品名を入れると出ます</span>
+      <span style="margin-left:auto"></span>
+      <button class="fb gy" onclick="refresh_ref()">今の入力で探し直す</button>
+      <button class="fb gy" onclick="toggleRef()">閉じる</button>
+    </div>
+    <div class="reftbl" id="ref-tbl"></div>
+  </div>
   <div class="laybar" id="laybar">
     <b>レイアウト編集</b>
     <span>行や表を<b>つかんで入れ替え</b>／項目名を<b>クリックして書き換え</b>／入力欄と列は<b>右端をつまんで幅を変更</b>。この端末に保存されます。</span>
@@ -835,6 +861,7 @@ function runFind(){
         c.continue(); return;
       }
       PASTHIT = hits;
+      navSetFrom(hits, -1);
       _renderHits_(hits, cond.map(function(q){ return q[1]; }).join(' / '));
     };
   });
@@ -866,6 +893,7 @@ function pickPast(i){
 }
 function openPast(i){
   var r = PASTHIT[i]; if(!r) return;
+  if(NAVLIST !== PASTHIT){ navSetFrom(PASTHIT, i); } else { NAVIDX = i; _navShow_(); }
   FIND_ON = false;
   document.body.classList.remove('findmode');
   FIND_BAK = null;
@@ -1140,6 +1168,126 @@ function _lockInputs_(on){
   });
 }
 
+// ===== レコード送り（◀ 前 / 次 ▶）=====
+// 検索結果があればその中を、無ければ取り込んだ過去実績ぜんぶを順に送る。
+var NAVLIST = [], NAVIDX = -1;
+function _navShow_(){
+  var e = document.getElementById('nav-pos');
+  if(!e) return;
+  // まだどれも開いていないときは 0 ではなく – と出す
+  e.textContent = !NAVLIST.length ? '–'
+                : (NAVIDX < 0 ? ('– / ' + NAVLIST.length)
+                              : ((NAVIDX + 1) + ' / ' + NAVLIST.length));
+}
+function navSetFrom(list, idx){
+  NAVLIST = list || []; NAVIDX = (typeof idx === 'number') ? idx : -1;
+  _navShow_();
+}
+function navGo(d){
+  if(!NAVLIST.length){
+    // まだ何も選んでいないときは、取り込んだ実績を起票日順に読み込む
+    pastOpen(function(db){
+      var all = [], cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
+      cur.onsuccess = function(e){
+        var c = e.target.result;
+        if(c){ all.push(c.value); c.continue(); return; }
+        if(!all.length){ alert('先に📁から過去実績を取り込んでください'); return; }
+        all.sort(function(a,b){ return String(a['f-date']||'').localeCompare(String(b['f-date']||'')); });
+        PASTHIT = all; navSetFrom(all, d > 0 ? -1 : all.length);
+        navGo(d);
+      };
+    });
+    return;
+  }
+  var i = NAVIDX + d;
+  if(i < 0){ i = 0; }
+  if(i > NAVLIST.length - 1){ i = NAVLIST.length - 1; }
+  if(i === NAVIDX && NAVIDX >= 0){
+    var m = document.getElementById('msg');
+    if(m) m.textContent = (d > 0 ? '最後のレコードです' : '最初のレコードです');
+    return;
+  }
+  NAVIDX = i; _navShow_();
+  PASTHIT = NAVLIST;
+  openPast(NAVIDX);
+}
+
+// ===== 実績を見ながら入力 =====
+// いま入力中の得意先コード・製品名に近い過去実績を並べて出す。
+// 同じ品物を前回いくらで・どんな仕様で作ったかを見ながら打てるようにするため。
+var REF_ON = false;
+function toggleRef(){
+  REF_ON = !REF_ON;
+  document.body.classList.toggle('refmode', REF_ON);
+  var b = document.getElementById('refbtn');
+  if(b) b.textContent = REF_ON ? '実績を閉じる' : '実績を見ながら';
+  try{ localStorage.setItem('fm_juchu_ref_on', REF_ON ? '1' : '0'); }catch(e){}
+  if(REF_ON) refresh_ref();
+}
+function refresh_ref(){
+  if(!REF_ON) return;
+  var cust = (g('f-custcd') || '').trim();
+  var item = (g('f-item') || '').trim();
+  var msg = document.getElementById('ref-msg');
+  var box = document.getElementById('ref-tbl');
+  if(!cust && !item){
+    msg.textContent = '得意先コードか製品名を入れると出ます';
+    box.innerHTML = ''; return;
+  }
+  msg.textContent = '探しています…';
+  pastOpen(function(db){
+    var hits = [], cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
+    cur.onsuccess = function(e){
+      var c = e.target.result;
+      if(c && hits.length < 400){
+        var r = c.value, ok = true;
+        if(cust && String(r['f-custcd'] || '').indexOf(cust) < 0) ok = false;
+        if(ok && item && String(r['f-item'] || '').indexOf(item) < 0) ok = false;
+        if(ok) hits.push(r);
+        c.continue(); return;
+      }
+      // 新しい順（起票日の降順）に並べて、直近30件だけ出す
+      hits.sort(function(a,b){ return String(b['f-date']||'').localeCompare(String(a['f-date']||'')); });
+      var top = hits.slice(0, 30);
+      var h = '<table><thead><tr>'
+        + '<th>伝票番号</th><th>no</th><th>起票日</th><th>納期</th><th>製品名</th>'
+        + '<th>数量</th><th>単価</th><th>金額</th><th>用紙</th><th>色数</th><th>面付</th><th>切数</th>'
+        + '<th>原価計</th><th>粗利率</th></tr></thead><tbody>';
+      if(!top.length) h += '<tr><td colspan="14" style="padding:10px;color:#94a3b8">見つかりません</td></tr>';
+      top.forEach(function(r, i){
+        h += '<tr onclick="useRef(' + i + ')" style="cursor:pointer">'
+          + '<td>' + (r['f-denpyo'] || '') + '</td>'
+          + '<td>' + (r['f-no'] || '') + '</td>'
+          + '<td>' + (r['f-date'] || '') + '</td>'
+          + '<td>' + (r['f-due'] || '') + '</td>'
+          + '<td>' + (r['f-item'] || '') + '</td>'
+          + '<td class="n">' + (r['f-lotset'] || '') + '</td>'
+          + '<td class="n">' + (r['f-price'] || '') + '</td>'
+          + '<td class="n">' + (r['f-amt'] || '') + '</td>'
+          + '<td>' + (r['p1-kind'] || '') + '</td>'
+          + '<td class="n">' + (r['f-iro'] || '') + '</td>'
+          + '<td class="n">' + (r['p1-mn'] || '') + '</td>'
+          + '<td class="n">' + (r['p1-ki'] || '') + '</td>'
+          + '<td class="n">' + (r['x-genka'] || '') + '</td>'
+          + '<td class="n">' + (r['x-arariritsu'] || '') + '</td>'
+          + '</tr>';
+      });
+      box.innerHTML = h + '</tbody></table>';
+      REFHIT = top;
+      msg.textContent = hits.length
+        ? (hits.length + '件（新しい順に' + top.length + '件表示・行をクリックで流し込み）')
+        : '該当なし';
+      // レコード送りの対象にもする
+      navSetFrom(top, -1);
+    };
+  });
+}
+var REFHIT = [];
+function useRef(i){
+  PASTHIT = REFHIT; NAVIDX = i; _navShow_();
+  usePast(i);   // リピート起票（伝票番号は空にして今日の日付で起こす）
+}
+
 function newRec(){
   ['f-denpyo','f-lotno','f-item','f-lotset','f-lotunit','f-zan','f-price','f-amt',
    'f-w','f-h','f-bind','f-memo','f-due','f-note','f-hot'].forEach(function(k){ s(k,''); });
@@ -1324,6 +1472,12 @@ function clearLog(){
   document.getElementById('h-cust').textContent = hc.orgs.length
       ? ('Hubのマスタ '+hc.orgs.length+'社から選べます')
       : 'Hubのマスタが読めません（自由入力できます）';
+  ['f-custcd','f-item'].forEach(function(k){
+    var e = document.getElementById(k);
+    if(e) e.addEventListener('change', refresh_ref);
+  });
+  var _refOn = null; try{ _refOn = localStorage.getItem('fm_juchu_ref_on'); }catch(e){}
+  if(_refOn === '1'){ REF_ON = false; toggleRef(); }
   var _k1 = document.getElementById('k1-ink');
   if(_k1) _k1.addEventListener('change', onInk);
   ['f-lotset'].forEach(function(k){ document.getElementById(k).addEventListener('input', calc); });
