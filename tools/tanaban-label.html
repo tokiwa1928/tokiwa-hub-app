@@ -81,7 +81,9 @@
       </div>
     </div>
 
-    <h2 style="margin-top:16px">見出し</h2>
+    <h2 style="margin-top:16px">見出し
+      <label style="font-weight:400;font-size:12px;color:#555;margin-left:10px;cursor:pointer"><input type="checkbox" id="h-hide" onchange="render()" style="width:auto;vertical-align:middle"> 見出しを表示しない</label>
+    </h2>
     <input type="text" id="h-text" value="版No." oninput="render()">
     <div class="eltbox">
       <div class="row">
@@ -110,8 +112,25 @@
     </div>
 
     <div class="eltbox" style="margin-top:8px;background:#f0fdf4;border-color:#86efac">
-      <label style="font-weight:700;color:#166534">📋 まとめて複数作成（1行に1枚ぶんの番号）</label>
-      <textarea id="m-list" rows="4" placeholder="例）&#10;776&#10;777&#10;A-102, 名刺／トキワ商事&#10;（空欄なら上のメイン1件だけ。行ごとに1枚。「番号, 補助」でその行だけ補助を差し替え）" oninput="render()" style="width:100%;font-size:13px;font-family:inherit;padding:7px 9px;border:1px solid #86efac;border-radius:6px;resize:vertical"></textarea>
+      <label style="font-weight:700;color:#166534">📋 まとめて複数作成</label>
+      <div style="font-size:12px;color:#166534;margin:2px 0 6px">連番を自動生成 → 下の一覧に入ります（1行=1枚）</div>
+      <div class="row">
+        <div><label>種類</label>
+          <select id="seq-type" onchange="render()"><option value="num">数字 (0001〜)</option><option value="alpha">A〜Z</option><option value="hira">あ〜ん（ひらがな）</option><option value="kata">ア〜ン（カタカナ）</option></select>
+        </div>
+        <div><label>固定（前）</label><input type="text" id="seq-pre" placeholder="例: a" style="font-family:inherit"></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <div><label>開始</label><input type="text" id="seq-start" placeholder="例: 00001 / A / あ" style="font-family:inherit"></div>
+        <div><label>終了</label><input type="text" id="seq-end" placeholder="例: 10000 / Z / ん" style="font-family:inherit"></div>
+        <div><label>固定（後）</label><input type="text" id="seq-suf" placeholder="任意" style="font-family:inherit"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" onclick="genSeq(false)">↻ 連番を生成（置換）</button>
+        <button class="btn" onclick="genSeq(true)">＋ 一覧に追加</button>
+      </div>
+      <label style="margin-top:10px">一覧（直接編集も可・1行1枚。「番号, 補助」でその行だけ補助を差し替え）</label>
+      <textarea id="m-list" rows="5" placeholder="例）&#10;a00001&#10;a00002&#10;A-102, 名刺／トキワ商事" oninput="render()" style="width:100%;font-size:13px;font-family:inherit;padding:7px 9px;border:1px solid #86efac;border-radius:6px;resize:vertical"></textarea>
       <div class="hint" id="count-hint" style="margin-top:4px;color:#166534"></div>
     </div>
 
@@ -129,6 +148,7 @@
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="btn" onclick="render()">🔄 更新</button>
       <button class="btn primary" onclick="doPrint()">🖨 印刷（一覧は全件まとめて）</button>
+      <button class="btn" onclick="clearAll()" title="入力を初期状態に戻す">🧹 クリア</button>
     </div>
     <div class="hint" style="margin-top:8px">A4全面に1枚。両面ONで表・裏の2ページを同じ向きで出力します。印字はプリンタの端(約5mm)が欠ける場合があるので、帯や文字は端に寄せすぎないでください。</div>
   </div>
@@ -149,6 +169,7 @@ function readCfg(){
   return {
     orient:g('orient'), duplex:g('duplex'), bandpos:g('bandpos'), bandw:parseFloat(g('bandw'))||33,
     bandbg:g('bandbg'), fg:g('fg'),
+    hideH:document.getElementById('h-hide').checked,
     h:{text:g('h-text'), size:parseFloat(g('h-size'))||28, dir:g('h-dir')},
     m:{text:g('m-text'), size:parseFloat(g('m-size'))||180, dir:g('m-dir'), weight:g('m-weight')},
     s:{text:g('s-text'), size:parseFloat(g('s-size'))||16, dir:g('s-dir')},
@@ -191,12 +212,66 @@ function bandStyle(c, ps){
   return st;
 }
 function faceHtml(c, ps){
-  var inner = elHtml(c.h, c.fg) + elHtml(c.m, c.fg, c.m.weight) + elHtml(c.s, c.fg);
+  var inner = (c.hideH?'':elHtml(c.h, c.fg)) + elHtml(c.m, c.fg, c.m.weight) + elHtml(c.s, c.fg);
   return '<div class="lbl" style="width:'+ps.w+'mm;height:'+ps.h+'mm">'
     + '<div class="band" style="'+bandStyle(c,ps)+'">'+inner+'</div></div>';
 }
+// ─── 連番ジェネレータ ───
+var HIRA='あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん';
+var KATA='アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
+var SEQ_MAX=3000;   // ブラウザ保護のための上限
+function genSeq(append){
+  var type=document.getElementById('seq-type').value;
+  var pre=document.getElementById('seq-pre').value||'';
+  var suf=document.getElementById('seq-suf').value||'';
+  var s=(document.getElementById('seq-start').value||'').trim();
+  var e=(document.getElementById('seq-end').value||'').trim();
+  if(!s||!e){ toast('開始と終了を入力してください'); return; }
+  var tokens=[];
+  if(type==='num'){
+    var a=parseInt(s.replace(/[^0-9\-]/g,''),10), b=parseInt(e.replace(/[^0-9\-]/g,''),10);
+    if(isNaN(a)||isNaN(b)){ toast('数字を入力してください'); return; }
+    var pad=Math.max(s.replace(/[^0-9]/g,'').length, e.replace(/[^0-9]/g,'').length);
+    var step=a<=b?1:-1;
+    for(var n=a; step>0?n<=b:n>=b; n+=step){ tokens.push(String(Math.abs(n)).padStart(pad,'0')); if(tokens.length>SEQ_MAX) break; }
+  } else {
+    var seq = type==='alpha' ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' : (type==='hira'?HIRA:KATA);
+    var toU=function(x){ return type==='alpha'?x.toUpperCase():x; };
+    var i0=seq.indexOf(toU(s.charAt(0))), i1=seq.indexOf(toU(e.charAt(0)));
+    if(i0<0||i1<0){ toast('開始・終了はその種類の1文字で入力してください'); return; }
+    var st=i0<=i1?1:-1;
+    for(var i=i0; st>0?i<=i1:i>=i1; i+=st){ tokens.push(seq.charAt(i)); }
+  }
+  if(tokens.length>SEQ_MAX){ toast('多すぎます（上限'+SEQ_MAX+'）。範囲を分けてください'); return; }
+  var lines=tokens.map(function(t){ return pre+t+suf; });
+  if(tokens.length>300 && !confirm(tokens.length+'枚を生成します。よろしいですか？（印刷枚数が多くなります）')) return;
+  var ta=document.getElementById('m-list');
+  ta.value = append ? ((ta.value.trim()?ta.value.replace(/\s+$/,'')+'\n':'')+lines.join('\n')) : lines.join('\n');
+  toast(tokens.length+'枚ぶんを生成しました');
+  render();
+}
+
+// ─── 入力の記憶（前回のまま復元）＋クリア ───
+var STATE_KEY='tanaban_cfg_v1';
+var CTRL_IDS=['orient','duplex','bandpos','bandw','bandbg','fg','h-hide','h-text','h-size','h-dir','m-text','m-size','m-dir','m-weight','s-text','s-size','s-dir','m-list','seq-type','seq-pre','seq-start','seq-end','seq-suf'];
+function saveState(){
+  try{ var o={}; CTRL_IDS.forEach(function(id){ var el=document.getElementById(id); if(!el) return; o[id]=(el.type==='checkbox')?el.checked:el.value; }); localStorage.setItem(STATE_KEY, JSON.stringify(o)); }catch(e){}
+}
+function loadState(){
+  try{ var o=JSON.parse(localStorage.getItem(STATE_KEY)); if(!o) return; CTRL_IDS.forEach(function(id){ if(!(id in o)) return; var el=document.getElementById(id); if(!el) return; if(el.type==='checkbox') el.checked=!!o[id]; else el.value=o[id]; }); }catch(e){}
+}
+function clearAll(){
+  if(!confirm('入力内容を初期状態に戻します。よろしいですか？')) return;
+  try{ localStorage.removeItem(STATE_KEY); }catch(e){}
+  var defs={orient:'land',duplex:'on',bandpos:'right',bandw:'33',bandbg:'#000',fg:'#fff','h-text':'版No.','h-size':'28','h-dir':'h','m-text':'776','m-size':'180','m-dir':'s270','m-weight':'800','s-text':'','s-size':'16','s-dir':'h','m-list':'','seq-type':'num','seq-pre':'','seq-start':'','seq-end':'','seq-suf':''};
+  Object.keys(defs).forEach(function(id){ var el=document.getElementById(id); if(el) el.value=defs[id]; });
+  document.getElementById('h-hide').checked=false;
+  render(); toast('クリアしました');
+}
+
 function render(){
   var c=readCfg(), ps=pageSize(c.orient);
+  saveState();
   var items=buildItems(c);
   var sheets=c.duplex==='on'?2:1;
   // 件数表示
@@ -240,6 +315,7 @@ function doPrint(){
   window.addEventListener('afterprint',restore); setTimeout(restore,60000);
   window.print();
 }
+loadState();
 render();
 </script>
 <!-- HUB共通: 最新データに更新するフローティングボタン（自動挿入） -->
