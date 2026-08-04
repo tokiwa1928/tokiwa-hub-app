@@ -71,10 +71,14 @@
     </div>
     <div class="row" style="margin-top:6px" id="bind-row">
       <div style="flex:1;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 10px">
-        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;color:#1e3a8a;font-weight:700;margin:0">
-          <input type="checkbox" id="backflip" checked onchange="render()" style="width:auto"> 裏面を180°回転（長辺とじで表裏を揃える）
-        </label>
-        <div class="hint" style="margin-top:4px;color:#1e40af">🖨 プリンタの両面設定は必ず<b>「長辺とじ」</b>で印刷してください。表裏がまだ逆なときだけ、このチェックを外してください。</div>
+        <label style="color:#1e3a8a;font-weight:700">裏面の向き（表裏がピッタリ重なるものを選ぶ）</label>
+        <select id="backmode" onchange="render()" style="margin-top:3px">
+          <option value="rot">② 上下反転（180°）</option>
+          <option value="both">④ 上下左右とも反転</option>
+          <option value="mir">③ 左右反転のみ</option>
+          <option value="same">① 表と同じ</option>
+        </select>
+        <div class="hint" style="margin-top:4px;color:#1e40af">🖨 プリンタの両面は<b>「長辺とじ」</b>で印刷。まず②のまま印刷 → <b>頭は合うが左右がずれる</b>なら<b>④</b>、<b>頭が逆</b>なら①/③を試して、表裏がピッタリ重なるものを選んでください。</div>
       </div>
     </div>
     <div class="row" style="margin-top:6px">
@@ -183,7 +187,7 @@ function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.st
 function readCfg(){
   var g=function(id){ return document.getElementById(id).value; };
   return {
-    orient:g('orient'), duplex:g('duplex'), backflip:document.getElementById('backflip').checked, bandpos:g('bandpos'), bandw:parseFloat(g('bandw'))||33,
+    orient:g('orient'), duplex:g('duplex'), backmode:g('backmode')||'rot', bandpos:g('bandpos'), bandw:parseFloat(g('bandw'))||33,
     bandbg:g('bandbg'), fg:g('fg'), edge:(function(){var v=parseFloat(g('edge'));return isNaN(v)?5:v;})(),
     hideH:document.getElementById('h-hide').checked,
     h:{text:g('h-text'), size:parseFloat(g('h-size'))||28, dir:g('h-dir')},
@@ -229,14 +233,20 @@ function bandStyle(c, ps){
   else if(pos==='bottom'){ st+='left:0;bottom:0;width:'+ps.w+'mm;height:'+(ps.h*wpc)+'mm;'; }
   return st;
 }
-function faceHtml(c, ps, rot180){
-  var inner = (c.hideH?'':elHtml(c.h, c.fg)) + elHtml(c.m, c.fg, c.m.weight) + elHtml(c.s, c.fg);
+function swapLR(pos){ return pos==='right'?'left':(pos==='left'?'right':pos); }
+function faceHtml(c, ps, rot180, mirLR){
+  var cc = mirLR ? Object.assign({}, c, {bandpos:swapLR(c.bandpos)}) : c;   // 左右反転=帯を反対側へ(文字は反転しない)
+  var inner = (cc.hideH?'':elHtml(cc.h, cc.fg)) + elHtml(cc.m, cc.fg, cc.m.weight) + elHtml(cc.s, cc.fg);
   var rot = rot180 ? 'transform:rotate(180deg);' : '';
   return '<div class="lbl" style="width:'+ps.w+'mm;height:'+ps.h+'mm;'+rot+'">'
-    + '<div class="band" style="'+bandStyle(c,ps)+'">'+inner+'</div></div>';
+    + '<div class="band" style="'+bandStyle(cc,ps)+'">'+inner+'</div></div>';
 }
-// 両面で表裏の天地を揃えるため、裏面を180°回転するか（長辺とじ用・既定オン）
-function backRot180(c){ return c.duplex==='on' && c.backflip; }
+// 裏面の変換（表裏をピッタリ重ねるための回転/左右反転の組合せ）
+function backXform(c){
+  if(c.duplex!=='on') return {rot:false, mir:false};
+  var m=c.backmode||'rot';
+  return { rot:(m==='rot'||m==='both'), mir:(m==='mir'||m==='both') };
+}
 // 帯からはみ出す文字を自動で縮小して収める（指定ptは最大値・拡大はしない）。
 // root は実寸でレイアウト済み（画面上または一時可視化）であること。
 function fitBands(root){
@@ -297,7 +307,7 @@ function genSeq(append){
 
 // ─── 入力の記憶（前回のまま復元）＋クリア ───
 var STATE_KEY='tanaban_cfg_v1';
-var CTRL_IDS=['orient','duplex','backflip','bandpos','bandw','bandbg','fg','edge','h-hide','h-text','h-size','h-dir','m-text','m-size','m-dir','m-weight','s-text','s-size','s-dir','m-list','seq-type','seq-pre','seq-start','seq-end','seq-suf'];
+var CTRL_IDS=['orient','duplex','backmode','bandpos','bandw','bandbg','fg','edge','h-hide','h-text','h-size','h-dir','m-text','m-size','m-dir','m-weight','s-text','s-size','s-dir','m-list','seq-type','seq-pre','seq-start','seq-end','seq-suf'];
 function saveState(){
   try{ var o={}; CTRL_IDS.forEach(function(id){ var el=document.getElementById(id); if(!el) return; o[id]=(el.type==='checkbox')?el.checked:el.value; }); localStorage.setItem(STATE_KEY, JSON.stringify(o)); }catch(e){}
 }
@@ -310,7 +320,7 @@ function clearAll(){
   var defs={orient:'land',duplex:'on',bandpos:'right',bandw:'33',bandbg:'#000',fg:'#fff',edge:'5','h-text':'版No.','h-size':'28','h-dir':'h','m-text':'776','m-size':'180','m-dir':'v','m-weight':'800','s-text':'','s-size':'16','s-dir':'h','m-list':'','seq-type':'num','seq-pre':'','seq-start':'','seq-end':'','seq-suf':''};
   Object.keys(defs).forEach(function(id){ var el=document.getElementById(id); if(el) el.value=defs[id]; });
   document.getElementById('h-hide').checked=false;
-  document.getElementById('backflip').checked=true;
+  document.getElementById('backmode').value='rot';
   render(); toast('クリアしました');
 }
 
@@ -329,13 +339,14 @@ function render(){
   var pv=items[0];
   var scale = Math.min(420/(ps.w*3.7795), 300/(ps.h*3.7795));
   var bindRow=document.getElementById('bind-row'); if(bindRow) bindRow.style.display=(c.duplex==='on'?'':'none');
-  var br=backRot180(c);
-  var faces = c.duplex==='on' ? [['表',pv,false],['裏'+(br?'（180°回転）':''),pv,br]] : [['',pv,false]];
+  var bx=backXform(c);
+  var backCap='裏'+((bx.rot||bx.mir)?'（'+(bx.rot?'上下':'')+(bx.mir?'左右':'')+'反転）':'（表と同じ）');
+  var faces = c.duplex==='on' ? [['表',pv,false,false],[backCap,pv,bx.rot,bx.mir]] : [['',pv,false,false]];
   document.getElementById('pvrow').innerHTML = (items.length>1?'<div style="width:100%;font-size:12px;color:#166534;margin-bottom:4px">プレビューは1枚目のみ表示（全'+items.length+'枚）</div>':'')
     + faces.map(function(f){
     return '<div class="pvcol">'+(f[0]?'<div class="cap">'+f[0]+'面</div>':'')
       + '<div class="sheetwrap" style="width:'+(ps.w*3.7795*scale)+'px;height:'+(ps.h*3.7795*scale)+'px">'
-      + '<div style="transform:scale('+scale+');transform-origin:top left;width:'+(ps.w)+'mm;height:'+(ps.h)+'mm">'+faceHtml(f[1],ps,f[2])+'</div>'
+      + '<div style="transform:scale('+scale+');transform-origin:top left;width:'+(ps.w)+'mm;height:'+(ps.h)+'mm">'+faceHtml(f[1],ps,f[2],f[3])+'</div>'
       + '</div></div>';
   }).join('');
   fitBands(document.getElementById('pvrow'));   // はみ出す文字を帯内に自動縮小
@@ -347,12 +358,12 @@ function render(){
 function doPrint(){
   var c=readCfg(), ps=drawSize(c);
   var items=buildItems(c);
-  var br=backRot180(c);
-  // 各ラベルにつき、両面ONなら表・裏の2ページ（裏は必要なら180°回転して天地を揃える）
+  var bx=backXform(c);
+  // 各ラベルにつき、両面ONなら表・裏の2ページ（裏は選んだ向きに変換して表裏を揃える）
   var html='';
   items.forEach(function(cc){
-    if(c.duplex==='on'){ html += faceHtml(cc,ps,false) + faceHtml(cc,ps,br); }
-    else { html += faceHtml(cc,ps,false); }
+    if(c.duplex==='on'){ html += faceHtml(cc,ps,false,false) + faceHtml(cc,ps,bx.rot,bx.mir); }
+    else { html += faceHtml(cc,ps,false,false); }
   });
   var pa=document.getElementById('printArea');
   pa.innerHTML = html;
