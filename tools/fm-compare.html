@@ -77,7 +77,7 @@
 
 <div class="pane on" id="pane-cmp">
   <div class="cmpbar">
-    左のFileMakerの欄に<b>マウスを乗せる</b>と、右のHub案件入力の該当箇所が光ります。
+    左のFileMakerの欄に<b>マウスを乗せる</b>と、右のHub案件入力（本番の実画面）の該当箇所が光ります。右側は案件入力を開いてから使ってください。
     右に乗せれば左が光ります。<b>対応が無いものは「Hubに無い（追加候補）」</b>と出ます。
     <label style="margin-left:auto;display:flex;align-items:center;gap:5px;cursor:pointer">
       <input type="checkbox" id="dimoff" onchange="render()"> 対応しない欄を薄くする</label>
@@ -89,8 +89,10 @@
       <iframe id="fmfr" src="fm-juchu.html"></iframe>
     </div>
     <div class="side">
-      <div class="sh">右：Hub 案件入力の項目</div>
-      <div class="hublist" id="hublist"></div>
+      <div class="sh">右：Hub 案件入力（本番の実画面）
+        <button class="fb" style="padding:1px 8px;margin-left:8px" onclick="bindHub(true)">項目を紐付け直す</button>
+        <span id="hub-msg" class="mini"></span></div>
+      <iframe id="hubfr" src="../index.html"></iframe>
     </div>
   </div>
 </div>
@@ -148,15 +150,36 @@ function showTip(x, y, html){
 }
 function hideTip(){ document.getElementById('tip').style.display = 'none'; }
 
-function clearHit(){
-  document.querySelectorAll('.hf.hit').forEach(function(e){ e.classList.remove('hit'); });
-  var d = fmDoc(); if(!d) return;
+function fmDoc(){
+  try{ return document.getElementById('fmfr').contentDocument; }catch(e){ return null; }
+}
+function hubDoc(){
+  try{ return document.getElementById('hubfr').contentDocument; }catch(e){ return null; }
+}
+function unmark(d){
+  if(!d) return;
   d.querySelectorAll('.cmp-hit').forEach(function(e){
     e.classList.remove('cmp-hit'); e.style.outline = ''; e.style.background = '';
   });
 }
-function fmDoc(){
-  try{ return document.getElementById('fmfr').contentDocument; }catch(e){ return null; }
+function clearHit(){ unmark(fmDoc()); unmark(hubDoc()); }
+function mark(e, scroll){
+  if(!e) return;
+  e.classList.add('cmp-hit');
+  e.style.outline = '3px solid #1d4ed8';
+  e.style.background = '#e0edff';
+  if(scroll){ try{ e.scrollIntoView({block:'center'}); }catch(x){} }
+}
+// Hub側のidは cust-3 のようにタブ番号が付く。前方一致＋数字で実物を探す。
+function findHubEl(hid){
+  var d = hubDoc(); if(!d) return null;
+  var list = d.querySelectorAll('[id^="' + hid + '-"]');
+  var re = new RegExp('^' + hid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-\\d+$');
+  for(var i = 0; i < list.length; i++){
+    if(re.test(list[i].id) && list[i].offsetParent !== null) return list[i];
+  }
+  for(var j = 0; j < list.length; j++){ if(re.test(list[j].id)) return list[j]; }
+  return null;
 }
 // 左(FM)の欄に乗った → 右を光らせる
 function onFmHover(fid, ev){
@@ -166,9 +189,10 @@ function onFmHover(fid, ev){
   var h = '<span class="k">' + (r.label || fid) + '</span>（FMの列: ' + (r.col || '—') + '）<br>'
         + useTxt(r.use) + '<br>';
   if(hid && HUBBY[hid]){
-    h += '→ Hubの <span class="k">' + (HUBBY[hid].label || hid) + '</span> に入ります';
-    var el = document.querySelector('.hf[data-id="' + hid + '"]');
-    if(el){ el.classList.add('hit'); el.scrollIntoView({block:'center'}); }
+    var el = findHubEl(hid);
+    h += '→ Hubの <span class="k">' + (HUBBY[hid].label || hid) + '</span> に入ります'
+       + (el ? '' : '<br><span class="w">※右の画面にまだ出ていません（案件入力を開いてください）</span>');
+    mark(el, true);
   }else if(r.drop){
     h += '<span class="w">移さない</span>（過去2年で使われていないため）';
   }else{
@@ -186,17 +210,7 @@ function onHubHover(hid, ev){
     h += '← FileMakerの <span class="k">' + srcs.map(function(r){ return r.label; }).join(' / ') + '</span> が入ります<br>'
        + srcs.map(function(r){ return '　' + r.label + '：' + useTxt(r.use); }).join('<br>');
     var d = fmDoc();
-    if(d){
-      srcs.forEach(function(r, i){
-        var e = d.getElementById(r.id);
-        if(e){
-          e.classList.add('cmp-hit');
-          e.style.outline = '3px solid #1d4ed8';
-          e.style.background = '#e0edff';
-          if(i === 0) e.scrollIntoView({block:'center'});
-        }
-      });
-    }
+    if(d) srcs.forEach(function(r, i){ mark(d.getElementById(r.id), i === 0); });
   }else{
     h += '<span class="w">FileMakerに該当なし</span>（Hub側だけの項目）';
   }
@@ -204,22 +218,6 @@ function onHubHover(hid, ev){
 }
 
 function render(){
-  var dim = document.getElementById('dimoff').checked;
-  var box = document.getElementById('hublist');
-  var h = '';
-  HUB.forEach(function(x){
-    var srcs = hubToFm(x.id);
-    h += '<div class="hf' + (dim && !srcs.length ? ' dim' : '') + '" data-id="' + x.id + '">'
-      + '<span class="nm">' + (x.label || x.id) + '</span>'
-      + (srcs.length ? '<span class="mini" style="color:#3f6212">← ' + srcs.map(function(r){ return r.label; }).join(' / ') + '</span>' : '')
-      + '<span class="id">' + x.id + '</span></div>';
-  });
-  box.innerHTML = h;
-  box.querySelectorAll('.hf').forEach(function(e){
-    e.addEventListener('mouseenter', function(ev){ onHubHover(e.dataset.id, ev); });
-    e.addEventListener('mousemove', function(ev){ onHubHover(e.dataset.id, ev); });
-    e.addEventListener('mouseleave', function(){ hideTip(); clearHit(); });
-  });
   var add = FM.filter(function(r){ return !(MAP[r.id] || '') && !r.drop; }).length;
   document.getElementById('cmp-msg').textContent =
     'FM ' + FM.length + '項目 / Hub ' + HUB.length + '項目 / Hubに無い ' + add + '件';
@@ -244,6 +242,40 @@ function bindFm(){
   var msg = document.getElementById('cmp-msg');
   msg.textContent = msg.textContent + ' ／ 左画面に ' + n + '項目を紐付け';
 }
+// 右の実画面に、対応表にある項目だけマウス反応を付ける。
+// 案件入力は後から組み立てられるので、DOMの変化を見て何度でも貼り直す。
+var _hubBound = {};
+function bindHub(force){
+  var d = hubDoc(); if(!d) return;
+  if(force) _hubBound = {};
+  var n = 0, found = 0;
+  HUB.forEach(function(x){
+    var e = findHubEl(x.id); if(!e) return;
+    found++;
+    if(_hubBound[e.id]) { n++; return; }
+    _hubBound[e.id] = 1; n++;
+    e.addEventListener('mouseenter', function(ev){
+      onHubHover(x.id, { clientX: ev.clientX + hubLeft(), clientY: ev.clientY + hubTop() });
+    });
+    e.addEventListener('mousemove', function(ev){
+      onHubHover(x.id, { clientX: ev.clientX + hubLeft(), clientY: ev.clientY + hubTop() });
+    });
+    e.addEventListener('mouseleave', function(){ hideTip(); clearHit(); });
+  });
+  var m = document.getElementById('hub-msg');
+  if(m) m.textContent = ' 右画面で ' + found + ' / ' + HUB.length + ' 項目を認識';
+}
+function hubLeft(){ return document.getElementById('hubfr').getBoundingClientRect().left; }
+function hubTop(){  return document.getElementById('hubfr').getBoundingClientRect().top; }
+document.getElementById('hubfr').addEventListener('load', function(){
+  setTimeout(function(){ bindHub(true); }, 1200);
+  try{
+    var d = hubDoc();
+    new MutationObserver(function(){ clearTimeout(window._hubT); window._hubT = setTimeout(bindHub, 600); })
+      .observe(d.body, { childList:true, subtree:true });
+  }catch(e){}
+});
+
 function frameLeft(){ return document.getElementById('fmfr').getBoundingClientRect().left; }
 function frameTop(){  return document.getElementById('fmfr').getBoundingClientRect().top; }
 document.getElementById('fmfr').addEventListener('load', function(){ setTimeout(bindFm, 400); });
