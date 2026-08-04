@@ -367,7 +367,42 @@ var LEAD_TEXT={
 };
 var USE_LIST=['発注','見積依頼','サンプル送付','資料送付','校正送付','データ送付','納品','ご連絡','ご確認','お願い','その他'];
 var curType='order';
-var SCAN_PREFIX='faxdoc_scan_';   // 端末内スキャン保存キー接頭辞
+var SCAN_PREFIX='faxdoc_scan_';   // 旧: localStorage時代の接頭辞（移行のため参照）
+
+// ─── スキャン画像はIndexedDB(大容量)に保存。localStorageを圧迫して他機能の保存が
+//     失敗する問題を防ぐ。旧localStorage保存分は起動時にIDBへ移行して削除する。───
+var _scanIds = {};          // {id:true} 添付ありの索引（同期判定用）
+var _idbP = null;
+function idb(){
+  if(_idbP) return _idbP;
+  _idbP = new Promise(function(res){
+    try{
+      var r=indexedDB.open('tokiwaFax',1);
+      r.onupgradeneeded=function(){ r.result.createObjectStore('scans'); };
+      r.onsuccess=function(){ res(r.result); };
+      r.onerror=function(){ res(null); };
+    }catch(e){ res(null); }
+  });
+  return _idbP;
+}
+function idbPut(id,val){ return idb().then(function(db){ if(!db) throw new Error('IndexedDB不可'); return new Promise(function(res,rej){ var tx=db.transaction('scans','readwrite'); tx.objectStore('scans').put(val,id); tx.oncomplete=function(){ _scanIds[id]=true; res(true); }; tx.onerror=function(){ rej(tx.error); }; }); }); }
+function idbGet(id){ return idb().then(function(db){ if(!db) return null; return new Promise(function(res){ var tx=db.transaction('scans','readonly'); var q=tx.objectStore('scans').get(id); q.onsuccess=function(){ res(q.result||null); }; q.onerror=function(){ res(null); }; }); }); }
+function idbDel(id){ return idb().then(function(db){ if(!db) return; try{ var tx=db.transaction('scans','readwrite'); tx.objectStore('scans').delete(id); }catch(e){} delete _scanIds[id]; }); }
+function idbKeys(){ return idb().then(function(db){ if(!db) return []; return new Promise(function(res){ try{ var tx=db.transaction('scans','readonly'); var q=tx.objectStore('scans').getAllKeys(); q.onsuccess=function(){ res(q.result||[]); }; q.onerror=function(){ res([]); }; }catch(e){ res([]); } }); }); }
+// 旧localStorageのスキャンをIDBへ移して削除（localStorage解放）
+async function migrateScans(){
+  var moved=0;
+  try{
+    var keys=[]; for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k && k.indexOf(SCAN_PREFIX)===0) keys.push(k); }
+    for(var j=0;j<keys.length;j++){
+      var id=keys[j].slice(SCAN_PREFIX.length); var val=null; try{ val=localStorage.getItem(keys[j]); }catch(e){}
+      if(val){ try{ await idbPut(id,val); localStorage.removeItem(keys[j]); moved++; }catch(e){} }
+      else { try{ localStorage.removeItem(keys[j]); }catch(e){} }
+    }
+  }catch(e){}
+  try{ (await idbKeys()).forEach(function(k){ _scanIds[k]=true; }); }catch(e){}
+  if(moved>0){ hubToast('🧹 スキャン画像'+moved+'件を端末の大容量領域へ移動し、保存の空きを確保しました'); renderHist(); }
+}
 
 // 用件（FAX送付状のタイトル）チェックボックスを描画
 function initUses(){
@@ -639,10 +674,10 @@ function reprint(id){ loadDoc(id); setTimeout(doPrint,120); }
 function delDoc(id){
   if(!confirm('この履歴を削除しますか？')) return;
   hubSave(function(d){ d.faxDocs=(d.faxDocs||[]).filter(function(x){ return x.id!==id; }); });
-  try{ localStorage.removeItem(SCAN_PREFIX+id); }catch(e){}
+  idbDel(id); try{ localStorage.removeItem(SCAN_PREFIX+id); }catch(e){}
   renderHist();
 }
-// スキャン添付（端末内・縮小保存）
+// スキャン添付（端末内・縮小・IndexedDBに保存＝localStorageを圧迫しない）
 function attachScan(id){
   var inp=document.createElement('input'); inp.type='file'; inp.accept='image/*,.pdf';
   inp.onchange=function(){
@@ -651,32 +686,29 @@ function attachScan(id){
     var rd=new FileReader();
     rd.onload=function(){
       var src=rd.result;
+      var save=function(val){ idbPut(id,val).then(function(){ hubToast('📎 見積スキャンを添付しました（この端末に保存）'); renderHist(); }).catch(function(){ hubToast('⚠ 端末に保存できませんでした'); }); };
       if(file.type.indexOf('image')===0){
         var img=new Image();
         img.onload=function(){
           var mx=1200, sc=Math.min(1, mx/Math.max(img.width,img.height));
           var cv=document.createElement('canvas'); cv.width=img.width*sc; cv.height=img.height*sc;
           cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-          var jpg=cv.toDataURL('image/jpeg',0.7);
-          try{ localStorage.setItem(SCAN_PREFIX+id, jpg); hubToast('📎 見積スキャンを添付しました（この端末に保存）'); renderHist(); }
-          catch(e){ hubToast('⚠ 端末の保存容量が不足しています'); }
+          save(cv.toDataURL('image/jpeg',0.7));
         };
         img.src=src;
-      } else {
-        try{ localStorage.setItem(SCAN_PREFIX+id, src); hubToast('📎 添付しました'); renderHist(); }
-        catch(e){ hubToast('⚠ 容量不足。写真での添付を推奨'); }
-      }
+      } else { save(src); }
     };
     rd.readAsDataURL(file);
   };
   inp.click();
 }
 function viewScan(id){
-  var data; try{ data=localStorage.getItem(SCAN_PREFIX+id); }catch(e){}
-  if(!data) return;
-  var w=window.open('','_blank');
-  if(data.indexOf('application/pdf')>=0) w.location=data;
-  else w.document.write('<img src="'+data+'" style="max-width:100%">');
+  idbGet(id).then(function(data){
+    if(!data) return;
+    var w=window.open('','_blank'); if(!w) return;
+    if(data.indexOf('application/pdf')>=0) w.location=data;
+    else w.document.write('<img src="'+data+'" style="max-width:100%">');
+  });
 }
 // この件で連絡文を作成（見積書受領などの連絡文をクリップボードへ）
 function contactText(id){
@@ -716,7 +748,7 @@ async function scanToImages(dataUrl){
 }
 async function ocrQuote(id){
   var st=document.getElementById('ocr-st-'+id); if(st) st.textContent='';
-  var scan; try{ scan=localStorage.getItem(SCAN_PREFIX+id); }catch(e){}
+  var scan=await idbGet(id);
   if(!scan){ hubToast('先に「📎 見積スキャン添付」で見積書を添付してください'); return; }
   if(!confirm('🤖 添付した見積書をAIで読み取り、金額を自動で拾います。よろしいですか？')) return;
   try{
@@ -761,25 +793,26 @@ function renderHist(){
   if(!list.length){ box.innerHTML='<p class="muted">まだ履歴はありません。</p>'; return; }
   box.innerHTML=list.map(function(r){
     var bcls=(r.type==='order')?'b-order':(r.type==='quote')?'b-quote':'b-fax';
-    var scan; try{ scan=localStorage.getItem(SCAN_PREFIX+r.id); }catch(e){}
-    var isImg=scan&&scan.indexOf('image')>=0;
+    var hasScan=!!_scanIds[r.id];   // 添付有無は索引で同期判定（画像はIDBから非同期で読む）
     return '<div class="hist-item">'+
       '<div class="hh"><span class="badge '+bcls+'">'+esc(TYPE_LABEL[r.type])+'</span>'+
       '<b>'+esc(r.toName||'')+'</b>'+(r.toPerson?(' '+esc(r.toPerson)+'様'):'')+
       '<span class="muted">'+esc(r.issueDate||'')+'　No.'+esc(r.docNo||'')+'</span></div>'+
       '<div style="font-size:12px;color:#555">'+esc(r.subject||'（件名なし）')+'</div>'+
-      (scan?('<img class="scan-thumb" src="'+(isImg?scan:'')+'" onclick="viewScan(\''+r.id+'\')" title="スキャンを表示"'+(isImg?'':' style="display:none"')+'>'+(isImg?'':'<a href="#" onclick="viewScan(\''+r.id+'\');return false" style="font-size:12px">📎 添付PDFを開く</a>')):'')+
+      (hasScan?'<img class="scan-thumb" id="thumb-'+r.id+'" onclick="viewScan(\''+r.id+'\')" title="スキャンを表示" style="display:none">':'')+
       quoteBox(r)+
       '<div class="hist-act">'+
         '<button class="btn" onclick="loadDoc(\''+r.id+'\')">✏ 開く/編集</button>'+
         '<button class="btn" onclick="reprint(\''+r.id+'\')">🖨 再印刷</button>'+
         '<button class="btn" onclick="attachScan(\''+r.id+'\')">📎 見積スキャン添付</button>'+
-        (scan?'<button class="btn" style="background:#ecfeff;border-color:#67e8f9;color:#0e7490" onclick="ocrQuote(\''+r.id+'\')">🤖 金額を読み取る</button>':'')+
+        (hasScan?'<button class="btn" style="background:#ecfeff;border-color:#67e8f9;color:#0e7490" onclick="ocrQuote(\''+r.id+'\')">🤖 金額を読み取る</button>':'')+
         '<button class="btn" onclick="contactText(\''+r.id+'\')">✉ この件で連絡文を作成</button>'+
         '<button class="btn" style="color:#b91c1c" onclick="delDoc(\''+r.id+'\')">🗑</button>'+
       '</div>'+
       '<div id="ocr-st-'+r.id+'" class="muted" style="margin-top:4px"></div></div>';
   }).join('');
+  // サムネイルをIDBから非同期で読み込んで表示
+  list.forEach(function(r){ if(!_scanIds[r.id]) return; idbGet(r.id).then(function(data){ var im=document.getElementById('thumb-'+r.id); if(im&&data&&data.indexOf('image')===0){ im.src=data; im.style.display=''; } }); });
 }
 
 function clearForm(){
@@ -805,6 +838,7 @@ document.getElementById('issue-date').value=todayStr();
 setType('order');
 renderHist();
 renderPreview();
+migrateScans();   // 旧localStorageのスキャンをIndexedDBへ移し、保存の空きを確保
 </script>
 
 <style>
