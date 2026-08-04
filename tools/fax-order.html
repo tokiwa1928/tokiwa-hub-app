@@ -51,6 +51,18 @@
   .hist-act{ display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; }
   .hist-act button{ font-size:12px; padding:4px 10px; }
   .scan-thumb{ max-height:70px; border:1px solid #ccc; border-radius:4px; margin-top:6px; cursor:pointer; }
+  /* 宛先 検索ドロップダウン */
+  .combo{ position:absolute; left:0; right:0; top:100%; z-index:60; background:#fff; border:1px solid #cbd5e1; border-top:none; border-radius:0 0 8px 8px; box-shadow:0 8px 22px rgba(0,0,0,.16); max-height:280px; overflow:auto; display:none; }
+  .combo.on{ display:block; }
+  .combo .ci{ padding:7px 10px; cursor:pointer; font-size:13px; border-bottom:1px solid #f1f1ee; display:flex; align-items:center; gap:8px; }
+  .combo .ci:hover,.combo .ci.hl{ background:#eff6ff; }
+  .combo .ci .nm{ font-weight:600; }
+  .combo .ci .sb{ font-size:10px; font-weight:700; padding:1px 6px; border-radius:9px; }
+  .sb-shi{ background:#dcfce7; color:#166534; }
+  .sb-out{ background:#ede9fe; color:#5b21b6; }
+  .sb-cust{ background:#e0f2fe; color:#075985; }
+  .combo .ci .fx{ margin-left:auto; font-size:11px; color:#94a3b8; }
+  .combo .empty{ padding:10px; font-size:12px; color:#94a3b8; }
   #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
   /* 印刷レイアウト */
   #paper{ display:none; }
@@ -97,10 +109,10 @@
   <div class="sec">
     <div class="st">1. 宛先・発行元</div>
     <div class="row">
-      <div class="f" style="flex:2">
-        <label>宛先（相手先）※マスタから選択可</label>
-        <input id="to-name" list="mst-list" placeholder="○○株式会社" oninput="fillFax()">
-        <datalist id="mst-list"></datalist>
+      <div class="f" style="flex:2;position:relative">
+        <label>宛先（相手先）※仕入先・外注先・取引先・支払先から検索</label>
+        <input id="to-name" autocomplete="off" placeholder="社名の一部を入力して検索…" oninput="searchTo()" onfocus="searchTo()" onblur="hideToSoon()">
+        <div id="to-results" class="combo"></div>
       </div>
       <div class="f">
         <label>宛先 FAX</label>
@@ -330,15 +342,49 @@ function initFromCo(){
   });
   sel.innerHTML=html; sel.value=pick;
 }
-// 宛先マスタ（外注先＋得意先）を datalist に
-function initMaster(){
-  var d=db(); var seen={}, out=[];
-  (d.outsourceVendors||[]).forEach(function(v){ if(v&&v.name&&!seen[v.name]){ seen[v.name]=1; out.push({name:v.name,fax:v.fax||''}); } });
-  var cust=(d.master&&d.master.cust)||[];
-  cust.forEach(function(c){ var nm=(typeof c==='string')?c:(c&&c.org); if(nm&&!seen[nm]){ seen[nm]=1; out.push({name:nm,fax:(c&&c.fax)||''}); } });
-  window._MST=out;
-  document.getElementById('mst-list').innerHTML=out.map(function(o){ return '<option value="'+esc(o.name)+'">'; }).join('');
+// 宛先マスタを全ソースから集約（仕入先・外注先・取引先・支払先）
+var SRC_LABEL={ shi:'仕入先', out:'外注先', cust:'取引先' };
+function _addMst(map, name, fax, src){
+  name=(name||'').trim(); if(!name) return;
+  var cur=map[name];
+  if(!cur){ map[name]={ name:name, fax:fax||'', srcs:{} }; cur=map[name]; }
+  if(fax && !cur.fax) cur.fax=fax;          // FAXは持っている方を優先
+  cur.srcs[src]=1;
 }
+function initMaster(){
+  var d=db(); var map={};
+  // 仕入先: 仕入発注の仕入先名＋支払先マスタ
+  (d.purchaseOrders||[]).forEach(function(o){ if(o) _addMst(map, o.vendor||o.supplier||o.payee, o.fax||o.vendorFax||'', 'shi'); });
+  ((d.master&&d.master.payees)||[]).forEach(function(p){ _addMst(map, (typeof p==='string')?p:(p&&p.name), (p&&p.fax)||'', 'shi'); });
+  // 外注先
+  (d.outsourceVendors||[]).forEach(function(v){ if(v) _addMst(map, v.name, v.fax||'', 'out'); });
+  // 取引先（得意先＝相手先にもなり得る）
+  ((d.master&&d.master.cust)||[]).forEach(function(c){ var nm=(typeof c==='string')?c:(c&&c.org); _addMst(map, nm, (c&&c.fax)||'', 'cust'); });
+  window._MST=Object.keys(map).map(function(k){ return map[k]; })
+    .sort(function(a,b){ return a.name.localeCompare(b.name,'ja'); });
+}
+// 検索: 部分一致（社名・かな不問）で候補を表示
+function searchTo(){
+  var q=(document.getElementById('to-name').value||'').trim().toLowerCase();
+  var box=document.getElementById('to-results');
+  var all=window._MST||[];
+  var hits=q ? all.filter(function(o){ return o.name.toLowerCase().indexOf(q)>=0; }) : all;
+  window._toHits=hits;
+  if(!hits.length){ box.innerHTML='<div class="empty">'+(all.length?'該当なし（そのまま入力して使えます）':'マスタが空です。社名を直接入力してください')+'</div>'; box.classList.add('on'); return; }
+  box.innerHTML=hits.slice(0,60).map(function(o,i){
+    var srcs=Object.keys(o.srcs).map(function(s){ return '<span class="sb sb-'+s+'">'+SRC_LABEL[s]+'</span>'; }).join('');
+    return '<div class="ci" data-i="'+i+'" onmousedown="pickTo('+i+')"><span class="nm">'+esc(o.name)+'</span>'+srcs+(o.fax?'<span class="fx">FAX '+esc(o.fax)+'</span>':'')+'</div>';
+  }).join('')+(hits.length>60?'<div class="empty">ほか'+(hits.length-60)+'件…絞り込んでください</div>':'');
+  box.classList.add('on');
+}
+function pickTo(i){
+  var o=(window._toHits||[])[i]; if(!o) return;
+  document.getElementById('to-name').value=o.name;
+  var f=document.getElementById('to-fax'); f.value=o.fax||'';
+  hideTo();
+}
+function hideTo(){ document.getElementById('to-results').classList.remove('on'); }
+function hideToSoon(){ setTimeout(hideTo, 180); }   // クリック確定を待つ
 function fillFax(){
   var nm=document.getElementById('to-name').value.trim();
   var hit=(window._MST||[]).find(function(o){ return o.name===nm; });
