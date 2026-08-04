@@ -45,6 +45,7 @@
   .fb{ font-size:11.5px; font-weight:700; padding:3px 11px; border:1.4px solid #6b6a64;
        border-radius:6px; background:#fff; cursor:pointer; font-family:inherit; }
   .fb.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .fb.rd{ border-color:var(--red); color:var(--red); }
   table{ border-collapse:collapse; width:100%; }
   th,td{ border:1px solid var(--line2); padding:3px 6px; vertical-align:middle; }
   th{ background:var(--hd); font-size:10.5px; font-weight:800; position:sticky; top:0; z-index:1; }
@@ -77,6 +78,7 @@
       <option value="0.7">70%</option><option value="0.8" selected>80%</option>
       <option value="0.9">90%</option><option value="1">100%</option></select>
     <button class="fb" onclick="tab('map')">対応表を見る</button>
+    <button class="fb" onclick="tab('log')">変更記録</button>
     <span id="cmp-msg" class="mini"></span>
   </div>
   <div class="split">
@@ -111,6 +113,24 @@
   </div>
 </div>
 
+<div class="pane" id="pane-log">
+  <div class="tblwrap">
+    <div class="bar">
+      <button class="fb" onclick="tab('cmp')">← 画面に戻る</button>
+      <button class="fb" onclick="exportPlan()">反映指示書を書き出す（Markdown）</button>
+      <button class="fb" onclick="exportMap()">対応表を書き出す（JSON）</button>
+      <button class="fb rd" onclick="clearLog()">記録を消す</button>
+      <span class="cnt" id="log-cnt"></span>
+    </div>
+    <div style="font-size:11.5px;color:var(--sub);line-height:1.7;margin-bottom:8px">
+      この画面でやった判断（対応づけ・採用/見送り・メモ）と、左のFileMaker画面で直した内容
+      （項目名・並び順・幅）をすべて残しています。<b>あとで案件管理へ反映するときの指示書</b>として書き出せます。
+      記録はこの端末に保存されます。
+    </div>
+    <div id="logbox"></div>
+  </div>
+</div>
+
 <div id="tip"></div>
 
 <script>
@@ -128,6 +148,8 @@ function hubToFm(hid){ return FM.filter(function(r){ return MAP[r.id] === hid; }
 function tab(k){
   document.getElementById('pane-cmp').classList.toggle('on', k === 'cmp');
   document.getElementById('pane-map').classList.toggle('on', k === 'map');
+  document.getElementById('pane-log').classList.toggle('on', k === 'log');
+  if(k === 'log') renderLog();
 }
 // 表示倍率（両方の画面を縮めて、一度に見える量を増やす）
 var ZOOM = 0.8;
@@ -321,9 +343,10 @@ function opts(sel){
   return h;
 }
 function renderTable(){
-  var h = '<thead><tr><th style="width:150px">FileMakerの項目</th><th style="width:110px">FMの列</th>'
-        + '<th style="width:64px">実績</th><th style="width:76px">状態</th>'
-        + '<th>Hub案件入力のどこに入れるか</th><th style="width:120px">id</th></tr></thead><tbody>';
+  var h = '<thead><tr><th style="width:150px">FileMakerの項目</th><th style="width:96px">FMの列</th>'
+        + '<th style="width:58px">実績</th><th style="width:72px">状態</th>'
+        + '<th>Hub案件入力のどこに入れるか</th><th style="width:110px">決定</th>'
+        + '<th style="width:170px">メモ</th></tr></thead><tbody>';
   var n = 0;
   FM.forEach(function(r){
     var to = MAP[r.id] || '';
@@ -338,14 +361,160 @@ function renderTable(){
       + '<td class="n mini">' + (r.use === null || r.use === undefined ? '—' : (r.use < 0 ? '照合不可' : r.use + '%')) + '</td>'
       + '<td><span class="st ' + st + '">' + (st === 'ok' ? '対応あり' : (st === 'drop' ? '移さない' : 'Hubに無い')) + '</span></td>'
       + '<td><select onchange="pick(\'' + r.id + '\', this.value)">' + opts(to) + '</select></td>'
-      + '<td class="mini">' + r.id + '</td></tr>';
+      + '<td><select onchange="decide(\'' + r.id + '\', this.value)">' + decOpts(DEC[r.id] || '') + '</select></td>'
+      + '<td><input value="' + (NOTE[r.id] || '').replace(/"/g, '&quot;') + '" placeholder="なぜそうするか"'
+      + ' onchange="note(\'' + r.id + '\', this.value)" style="width:100%;font-size:11.5px;padding:2px 5px;'
+      + 'border:1.4px solid #7b8695;border-radius:5px"></td></tr>';
   });
   document.getElementById('tbl').innerHTML = h + '</tbody>';
   var add = FM.filter(function(x){ return !(MAP[x.id] || '') && !x.drop; }).length;
   document.getElementById('cnt').textContent = '表示 ' + n + '件 ／ 全 ' + FM.length + '件 ／ Hubに無い ' + add + '件';
 }
-function pick(id, v){ MAP[id] = v; save(); render(); }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(MAP)); }catch(e){} }
+function decOpts(sel){
+  var L = [['', '未定'], ['add', 'Hubに足す'], ['map', '既存に入れる'], ['skip', '見送り'], ['later', '保留']];
+  return L.map(function(x){
+    return '<option value="' + x[0] + '"' + (sel === x[0] ? ' selected' : '') + '>' + x[1] + '</option>';
+  }).join('');
+}
+var DECNAME = { '': '未定', add: 'Hubに足す', map: '既存に入れる', skip: '見送り', later: '保留' };
+
+function pick(id, v){
+  var was = MAP[id] || '';
+  if(was === v) return;
+  MAP[id] = v; save();
+  logAdd('対応づけ', (FMBY[id] ? FMBY[id].label : id)
+    + ' … ' + (was ? (HUBBY[was] ? HUBBY[was].label : was) : '（なし）')
+    + ' → ' + (v ? (HUBBY[v] ? HUBBY[v].label : v) : '（なし）'));
+  render();
+}
+function decide(id, v){
+  var was = DEC[id] || '';
+  if(was === v) return;
+  DEC[id] = v; save();
+  logAdd('決定', (FMBY[id] ? FMBY[id].label : id) + ' … ' + DECNAME[was] + ' → ' + DECNAME[v]);
+  render();
+}
+function note(id, v){
+  if((NOTE[id] || '') === v) return;
+  NOTE[id] = v; save();
+  logAdd('メモ', (FMBY[id] ? FMBY[id].label : id) + ' … ' + (v || '（消去）'));
+  renderLog();
+}
+var DKEY = 'fm_compare_dec_v1', NKEY = 'fm_compare_note_v1', LKEY = 'fm_compare_log_v1';
+var DEC = {}, NOTE = {}, LOG = [];
+try{ DEC  = JSON.parse(localStorage.getItem(DKEY) || '{}') || {}; }catch(e){ DEC = {}; }
+try{ NOTE = JSON.parse(localStorage.getItem(NKEY) || '{}') || {}; }catch(e){ NOTE = {}; }
+try{ LOG  = JSON.parse(localStorage.getItem(LKEY) || '[]') || []; }catch(e){ LOG = []; }
+function save(){
+  try{
+    localStorage.setItem(KEY, JSON.stringify(MAP));
+    localStorage.setItem(DKEY, JSON.stringify(DEC));
+    localStorage.setItem(NKEY, JSON.stringify(NOTE));
+    localStorage.setItem(LKEY, JSON.stringify(LOG));
+  }catch(e){}
+}
+function _now_(){
+  var d = new Date(), p = function(n){ return (n < 10 ? '0' : '') + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+       + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+// 判断を1件記録する（あとで案件管理へ反映するときの根拠になる）
+function logAdd(kind, text){
+  LOG.push({ t: _now_(), k: kind, m: text });
+  if(LOG.length > 2000) LOG = LOG.slice(-2000);
+  save(); renderLog();
+}
+function clearLog(){
+  if(!confirm('変更記録を消します。対応づけ・決定・メモは残ります。よろしいですか？')) return;
+  LOG = []; save(); renderLog();
+}
+// 左のFileMaker画面で直した内容（項目名・並び順・幅）も拾う
+function fmEdits(){
+  var o = { labels: null, layout: null, widths: null };
+  try{ o.labels = JSON.parse(localStorage.getItem('fm_juchu_labels_v1') || 'null'); }catch(e){}
+  try{ o.layout = JSON.parse(localStorage.getItem('fm_juchu_layout_v1') || 'null'); }catch(e){}
+  try{ o.widths = JSON.parse(localStorage.getItem('fm_juchu_widths_v1') || 'null'); }catch(e){}
+  return o;
+}
+function renderLog(){
+  var box = document.getElementById('logbox'); if(!box) return;
+  var e = fmEdits();
+  var nAdd = FM.filter(function(r){ return DEC[r.id] === 'add'; }).length;
+  var nSkip = FM.filter(function(r){ return DEC[r.id] === 'skip'; }).length;
+  var nMap = FM.filter(function(r){ return DEC[r.id] === 'map'; }).length;
+  var h = '<table><thead><tr><th style="width:130px">いつ</th><th style="width:90px">種類</th><th>内容</th></tr></thead><tbody>';
+  if(!LOG.length) h += '<tr><td colspan="3" style="padding:10px;color:#94a3b8">まだ記録がありません</td></tr>';
+  LOG.slice().reverse().forEach(function(x){
+    h += '<tr><td class="mini">' + x.t + '</td><td class="mini">' + x.k + '</td><td>' + x.m + '</td></tr>';
+  });
+  box.innerHTML = h + '</tbody></table>';
+  var le = e.labels ? Object.keys(e.labels).length : 0;
+  var lo = e.layout ? Object.keys(e.layout).length : 0;
+  var wi = e.widths ? Object.keys(e.widths).length : 0;
+  document.getElementById('log-cnt').textContent =
+    '記録 ' + LOG.length + '件 ／ Hubに足す ' + nAdd + ' ・既存に入れる ' + nMap + ' ・見送り ' + nSkip
+    + ' ／ FM画面の手直し: 項目名' + le + '・並び' + lo + '・幅' + wi;
+}
+// あとで案件管理へ反映するための指示書
+function exportPlan(){
+  var e = fmEdits();
+  var L = [];
+  L.push('# 案件入力への反映指示（' + _now_() + ' 時点）');
+  L.push('');
+  L.push('FileMaker受注入力 ' + FM.length + '項目 / Hub案件入力 ' + HUB.length + '項目 を突き合わせた結果です。');
+  L.push('実績は 2024・2025年の FileMaker 全11,781件から算出しています。');
+  L.push('');
+  function sec(title, filter){
+    var rows = FM.filter(filter);
+    L.push('## ' + title + '（' + rows.length + '件）');
+    if(!rows.length){ L.push(''); L.push('- なし'); L.push(''); return; }
+    L.push('');
+    L.push('| FileMakerの項目 | FMの列 | 実績 | Hubのどこへ | メモ |');
+    L.push('|---|---|---|---|---|');
+    rows.forEach(function(r){
+      var to = MAP[r.id] || '';
+      L.push('| ' + r.label + ' | ' + (r.col || '') + ' | '
+        + (r.use === null || r.use === undefined ? '—' : (r.use < 0 ? '照合不可' : r.use + '%')) + ' | '
+        + (to ? ((HUBBY[to] ? HUBBY[to].label : to) + '（' + to + '）') : '新しく足す') + ' | '
+        + (NOTE[r.id] || '') + ' |');
+    });
+    L.push('');
+  }
+  sec('Hubに足す項目', function(r){ return DEC[r.id] === 'add'; });
+  sec('既存の項目に入れる', function(r){ return DEC[r.id] === 'map'; });
+  sec('見送る項目', function(r){ return DEC[r.id] === 'skip'; });
+  sec('保留', function(r){ return DEC[r.id] === 'later'; });
+  sec('まだ決めていない項目', function(r){ return !DEC[r.id]; });
+
+  L.push('## FileMaker画面（受注入力ツール）で直した内容');
+  L.push('');
+  if(e.labels && Object.keys(e.labels).length){
+    L.push('### 項目名の変更');
+    Object.keys(e.labels).forEach(function(k){ L.push('- ' + k + ' → 「' + e.labels[k] + '」'); });
+    L.push('');
+  }
+  if(e.layout && Object.keys(e.layout).length){
+    L.push('### 並び順の変更');
+    Object.keys(e.layout).forEach(function(k){ L.push('- ' + k + ': ' + (e.layout[k] || []).join(' → ')); });
+    L.push('');
+  }
+  if(e.widths && Object.keys(e.widths).length){
+    L.push('### 幅の変更');
+    Object.keys(e.widths).forEach(function(k){ L.push('- ' + k + ': ' + e.widths[k] + 'px'); });
+    L.push('');
+  }
+  if(!(e.labels || e.layout || e.widths)) { L.push('- なし'); L.push(''); }
+
+  L.push('## 変更の履歴');
+  L.push('');
+  LOG.forEach(function(x){ L.push('- ' + x.t + '　[' + x.k + '] ' + x.m); });
+  L.push('');
+
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([L.join('\n')], { type: 'text/markdown;charset=utf-8' }));
+  a.download = '案件入力への反映指示_' + _now_().replace(/[^0-9]/g, '') + '.md';
+  a.click();
+}
 function setF(f, btn){
   FILTER = f;
   Array.prototype.forEach.call(document.querySelectorAll('.bar .fb'), function(b){ b.classList.remove('on'); });
@@ -358,10 +527,13 @@ function resetMap(){
 }
 function exportMap(){
   var out = FM.map(function(r){
-    return { fm: r.id, label: r.label, col: r.col, use: r.use, hub: MAP[r.id] || '', drop: !!r.drop };
+    return { fm: r.id, label: r.label, col: r.col, use: r.use, hub: MAP[r.id] || '',
+             decision: DEC[r.id] || '', note: NOTE[r.id] || '', drop: !!r.drop };
   });
   var a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify({ map: out }, null, 1)], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(
+      { at: _now_(), map: out, fmScreenEdits: fmEdits(), log: LOG }, null, 1)],
+      { type: 'application/json' }));
   a.download = 'fm_hub_map.json'; a.click();
 }
 try{
@@ -370,6 +542,7 @@ try{
 }catch(e){}
 setZoom(document.getElementById('zoomsel').value);
 render();
+renderLog();
 </script>
 </body>
 </html>
