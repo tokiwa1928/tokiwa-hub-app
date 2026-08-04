@@ -244,10 +244,22 @@ function mergeNewestById(localArr, cloudArr){
   return order.map(function(id){ return byId[id]; });
 }
 function ownColls(){ return HUB_OWN_COLLS; }
+// 容量対策: 端末保存が容量超過で失敗しても faxDocs(このツールの履歴) は必ず残す。
+// 大きい他コレクション(問い合わせ本文/履歴/バックアップ)を段階的に落として保存を通す。
+function _hubLite_(db){
+  var d=Object.assign({}, db);
+  if(Array.isArray(d.inquiries)) d.inquiries=d.inquiries.map(function(r){ if(!r||typeof r!=='object') return r; var o=Object.assign({},r); delete o.body; delete o.html; delete o.raw; return o; });
+  return d;
+}
 function hubSave(mutator){
   var db=hubLoad(); if(!db){ hubToast('❌ 本体データ未検出。先に本体アプリへログイン'); return false; }
   try{ mutator(db); }catch(e){ hubToast('❌ 変更失敗: '+e); return false; }
-  try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){ hubToast('⚠ 端末保存失敗・クラウドへ保存'); }
+  var ok=false;
+  try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); ok=true; }
+  catch(e){
+    try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(_hubLite_(db))); ok=true; hubToast('💾 端末は軽量化して保存（履歴は保持）'); }
+    catch(e2){ try{ var b=_hubLite_(db); b.inquiries=[]; b.history=[]; b.dailyBackups=[]; localStorage.setItem(HUB_DBKEY, JSON.stringify(b)); ok=true; hubToast('💾 端末を最小化して保存（履歴は保持）'); }catch(e3){ hubToast('⚠ 端末保存不可・クラウドへ保存します'); } }
+  }
   hubCloudPushSoon(); return true;
 }
 async function hubCloudFetch(){
@@ -521,8 +533,16 @@ function saveDoc(){
     if(i>=0) d.faxDocs[i]=rec; else d.faxDocs.unshift(rec);
   });
   window._editId=null;
-  hubToast('💾 履歴に保存しました');
   renderHist();
+  // 消失防止: 保存と同時にクラウドへ即時反映(自動更新で再読込されても残す)。完了までトーストで通知。
+  var auth=hubAuth();
+  if(auth && auth.loggedIn && auth.companyId){
+    hubToast('💾 保存中…クラウドへ反映しています');
+    Promise.resolve(hubCloudPush()).then(function(ok){ hubToast(ok?'✅ 履歴を保存しました（全社クラウドに反映）':'⚠ 端末には保存。クラウド反映は次回同期で再試行します'); })
+      .catch(function(){ hubToast('⚠ 端末には保存。クラウド反映は次回同期で再試行します'); });
+  } else {
+    hubToast('💾 履歴に保存しました（本体未ログインのため端末内のみ。ログインすると全社同期）');
+  }
 }
 function loadDoc(id){
   var r=faxDocs().find(function(x){ return x.id===id; }); if(!r) return;
