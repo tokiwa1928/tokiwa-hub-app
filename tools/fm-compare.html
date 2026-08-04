@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>項目つき合わせ（FileMaker ⇔ 案件入力）| Tokiwa Hub</title>
+<style>
+  :root{ --ink:#0d0d0d; --bg:#f1efea; --line:#b8b3a6; --line2:#8f97a3; --sub:#33393f;
+         --acc:#65a30d; --red:#c0392b; --hd:#e6e3db; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--ink);
+        font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; font-size:12.5px; }
+  .hubbar{ background:#0a0a0a; color:#fff; padding:9px 18px; display:flex; align-items:center; gap:12px; }
+  .hubbar .logo{ font-weight:800; font-size:13px; } .hubbar .logo b{ color:#a3e635; }
+  .hubbar .tname{ font-size:15px; font-weight:800; }
+  .hubbar .who{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+  .wrap{ margin:10px 14px 26px; background:#fff; border:1px solid var(--line);
+         border-radius:10px; padding:10px 14px; }
+  h2{ font-size:14px; margin:0 0 6px; border-left:3px solid var(--acc); padding-left:8px; }
+  .note{ font-size:11.5px; color:var(--sub); line-height:1.7; margin-bottom:8px; }
+  .bar{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px;
+        padding:6px 8px; background:#faf9f7; border:1px solid var(--line); border-radius:8px; }
+  .fb{ font-size:11.5px; font-weight:700; padding:3px 11px; border:1.4px solid #6b6a64;
+       border-radius:6px; background:#fff; cursor:pointer; font-family:inherit; }
+  .fb.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  table{ border-collapse:collapse; width:100%; }
+  th,td{ border:1px solid var(--line2); padding:3px 6px; vertical-align:middle; }
+  th{ background:var(--hd); font-size:10.5px; font-weight:800; position:sticky; top:0; z-index:1; }
+  td.n{ text-align:right; font-variant-numeric:tabular-nums; }
+  select{ font-family:inherit; font-size:12px; padding:2px 4px; width:100%;
+          border:1.4px solid #7b8695; border-radius:5px; background:#fff; }
+  .st{ font-size:10.5px; font-weight:800; padding:1px 7px; border-radius:10px; white-space:nowrap; }
+  .st.ok{ background:#e7f0dd; color:#3f6212; }
+  .st.add{ background:#e0edff; color:#1d4ed8; }
+  .st.drop{ background:#fdf2f1; color:var(--red); }
+  tr.dead td{ background:#fdf2f1; } tr.rare td{ background:#fffaf0; } tr.low td{ background:#fffdf0; }
+  .mini{ font-size:10.5px; color:var(--sub); }
+  .cnt{ font-size:11.5px; font-weight:800; margin-left:auto; }
+</style>
+</head>
+<body>
+<div class="hubbar"><span class="logo">TOKIWA <b>HUB</b></span>
+  <span class="tname">項目つき合わせ（開発用）</span><span class="who">FileMaker ⇔ 案件入力</span></div>
+<div style="height:3px;background:#65a30d"></div>
+
+<div class="wrap">
+  <h2>左＝FileMaker受注入力 ／ 右＝Hubの案件入力</h2>
+  <div class="note">
+    左のFileMakerの項目を、右のHub案件入力のどこに入れるかを決める表です。
+    <b>右が「（Hubに無い）」のものが、これから足す項目</b>です。
+    行の色は過去2年（11,781件）の入力実績：<b>赤=1件も無い</b>／橙=1%未満／黄=1〜10%。
+    実績が無い項目は移さない判断ができます。決めた対応は〔対応表を書き出す〕でJSONにして実装に使います。
+  </div>
+  <div class="bar">
+    <button class="fb on" onclick="setF('all',this)">すべて</button>
+    <button class="fb" onclick="setF('add',this)">Hubに無い＝要追加</button>
+    <button class="fb" onclick="setF('ok',this)">対応あり</button>
+    <button class="fb" onclick="setF('live',this)">実績あり(10%以上)だけ</button>
+    <button class="fb" onclick="setF('dead',this)">実績0件</button>
+    <span style="width:10px"></span>
+    <button class="fb" onclick="exportMap()">対応表を書き出す</button>
+    <button class="fb" onclick="resetMap()">一次案に戻す</button>
+    <span class="cnt" id="cnt"></span>
+  </div>
+  <table id="tbl"></table>
+</div>
+
+<script>
+var FM  = [{"id": "f-nofukuno", "label": "納品書No.", "use": 0.0, "col": "納品書番号", "to": "", "drop": true}, {"id": "f-lotno", "label": "前回伝票番号", "use": 68.5, "col": "前回伝票番号", "to": "", "drop": false}, {"id": "f-prevdate", "label": "前回起票日", "use": 100.0, "col": "前回起票日", "to": "", "drop": false}, {"id": "f-denpyo", "label": "伝票番号", "use": 100.0, "col": "伝票番号", "to": "", "drop": false}, {"id": "f-custcd", "label": "得意先", "use": 100.0, "col": "得意先コード", "to": "", "drop": false}, {"id": "f-cust", "label": "得意先", "use": -1, "col": "FMは得意先コードのみ(名称はマスタ参照)", "to": "cust", "drop": false}, {"id": "f-tantocd", "label": "担当者", "use": 98.3, "col": "担当者コード", "to": "", "drop": false}, {"id": "f-tanto", "label": "担当者", "use": -1, "col": "FMは担当者コードのみ(名称はマスタ参照)", "to": "", "drop": false}, {"id": "f-no", "label": "no", "use": 100.0, "col": "no", "to": "", "drop": false}, {"id": "f-user", "label": "ユーザー", "use": 62.1, "col": "ユーザー名", "to": "enduser", "drop": false}, {"id": "f-orderno", "label": "注文書No.", "use": 0.5, "col": "注文書No", "to": "", "drop": false}, {"id": "f-hinshu2", "label": "品種", "use": 100.0, "col": "品種", "to": "prod", "drop": false}, {"id": "f-item", "label": "品名", "use": 100.0, "col": "製品名", "to": "pn-name", "drop": false}, {"id": "f-selfcd", "label": "自社製品コード", "use": 3.0, "col": "自社製品コード", "to": "", "drop": false}, {"id": "f-commcd", "label": "共通製品コード", "use": 18.6, "col": "共通製品コード", "to": "", "drop": false}, {"id": "f-w", "label": "サイズ(mm) 横", "use": 73.5, "col": "サイズ横", "to": "finish-w", "drop": false}, {"id": "f-h", "label": "× 縦", "use": 73.5, "col": "サイズ縦", "to": "finish-h", "drop": false}, {"id": "f-lotkind", "label": "ロット区分", "use": 100.0, "col": "ロット区分", "to": "job-type", "drop": false}, {"id": "f-parts", "label": "パーツ数", "use": 75.0, "col": "パーツ数", "to": "", "drop": false}, {"id": "f-cover", "label": "表紙", "use": null, "col": "", "to": "", "drop": false}, {"id": "f-in1", "label": "(in)", "use": null, "col": "", "to": "", "drop": false}, {"id": "f-in2", "label": "(in)", "use": null, "col": "", "to": "", "drop": false}, {"id": "f-in3", "label": "(in)", "use": null, "col": "", "to": "", "drop": false}, {"id": "f-in4", "label": "(in)", "use": null, "col": "", "to": "", "drop": false}, {"id": "f-specchg", "label": "仕様変更", "use": 100.0, "col": "仕様変更", "to": "spec-change", "drop": false}, {"id": "f-platechg", "label": "版下変更", "use": 100.0, "col": "版下変更", "to": "plate-change", "drop": false}, {"id": "f-lotunit", "label": "ロット数量(契約単位)", "use": 99.9, "col": "ロット契約単位", "to": "", "drop": false}, {"id": "f-unit", "label": "ロット数量(契約単位)", "use": 100.0, "col": "単位", "to": "unit", "drop": false}, {"id": "f-lotset", "label": "ロット数量(セット数)", "use": 99.0, "col": "ロットセット数", "to": "qty", "drop": false}, {"id": "f-date", "label": "起票日", "use": 100.0, "col": "起票日", "to": "date", "drop": false}, {"id": "f-due", "label": "納期", "use": 100.0, "col": "納期", "to": "due", "drop": false}, {"id": "d-done", "label": "納品日", "use": 56.8, "col": "納品日", "to": "", "drop": false}, {"id": "f-zan", "label": "注残数", "use": 99.9, "col": "注残数", "to": "", "drop": false}, {"id": "p1-kind", "label": "用紙代", "use": 88.1, "col": "紙質1", "to": "", "drop": false}, {"id": "p1-mk", "label": "用紙代", "use": 8.7, "col": "メーカー1", "to": "", "drop": false}, {"id": "p1-nm", "label": "用紙代", "use": 67.5, "col": "品名1", "to": "", "drop": false}, {"id": "p1-th", "label": "用紙代", "use": -1, "col": "FMに厚さ列なし", "to": "", "drop": false}, {"id": "p1-sz", "label": "用紙代", "use": 59.9, "col": "サイズ1", "to": "", "drop": false}, {"id": "p1-ki", "label": "用紙代", "use": 70.5, "col": "切数1", "to": "", "drop": false}, {"id": "p1-mn", "label": "用紙代", "use": 75.9, "col": "面付1", "to": "pc-men", "drop": false}, {"id": "p1-kom", "label": "用紙代", "use": 75.5, "col": "版下1", "to": "", "drop": false}, {"id": "p1-jit", "label": "用紙代", "use": 75.9, "col": "実用数1", "to": "", "drop": false}, {"id": "p1-yob", "label": "用紙代", "use": 86.6, "col": "標準予備数_加減算済1", "to": "", "drop": false}, {"id": "p1-tot", "label": "用紙代", "use": 87.0, "col": "合計数1", "to": "", "drop": false}, {"id": "p1-up", "label": "用紙代", "use": 58.3, "col": "用紙単価1", "to": "", "drop": false}, {"id": "p1-am", "label": "用紙代", "use": 87.3, "col": "用紙代1", "to": "", "drop": false}, {"id": "k1-iro1", "label": "色", "use": null, "col": "", "to": "plate-colors", "drop": false}, {"id": "k1-iro2", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-ink", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-ura", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-han", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-nbk", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-ncb", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-nkb", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-nsh", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-nbn", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-nks", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-ncl", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-pc", "label": "色", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-hd", "label": "k1-hd", "use": null, "col": "", "to": "", "drop": false}, {"id": "k1-bk", "label": "k1-bk", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-ml", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-mc", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-mr", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-fil", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-an1", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-kpn", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-an2", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-ym1", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-ym2", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-yst", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-cym", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-tm1", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-tst", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-kch", "label": "横ミシン", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-kcs", "label": "w1-kcs", "use": null, "col": "", "to": "", "drop": false}, {"id": "w1-bk", "label": "w1-bk", "use": null, "col": "", "to": "", "drop": false}, {"id": "b-numdai", "label": "ナンバー台", "use": 1.1, "col": "ナンバー自", "to": "", "drop": false}, {"id": "b-numto", "label": "至", "use": 1.2, "col": "ナンバー至", "to": "", "drop": false}, {"id": "d-cart", "label": "カートン型式", "use": 62.2, "col": "カートン型式", "to": "", "drop": false}, {"id": "b-inbox", "label": "内装番号", "use": 10.6, "col": "内装備考", "to": "", "drop": false}, {"id": "f-bind", "label": "製本加工", "use": 35.2, "col": "製本加工", "to": "", "drop": false}, {"id": "f-memo", "label": "備考", "use": 28.8, "col": "備考", "to": "memo", "drop": false}, {"id": "d-cartn", "label": "カートン", "use": 67.8, "col": "カートン", "to": "pack-box", "drop": false}, {"id": "b-tsu", "label": "通", "use": -1, "col": "FMに列なし", "to": "", "drop": false}, {"id": "b-se1", "label": "背サイズ", "use": -1, "col": "FMに列なし", "to": "", "drop": false}, {"id": "b-se2", "label": "背サイズ", "use": null, "col": "", "to": "", "drop": false}, {"id": "b-se3", "label": "背サイズ", "use": null, "col": "", "to": "", "drop": false}, {"id": "b-fuku", "label": "複数", "use": -1, "col": "FMに列なし", "to": "", "drop": false}, {"id": "b-shu", "label": "種留", "use": -1, "col": "FMに列なし", "to": "", "drop": false}, {"id": "b-stkno", "label": "製品在庫用注文書番号", "use": -1, "col": "FMに列なし", "to": "", "drop": false}, {"id": "c-paper", "label": "用紙代", "use": 87.3, "col": "用紙代", "to": "", "drop": false}, {"id": "c-plate", "label": "版代", "use": 100.0, "col": "版代", "to": "", "drop": false}, {"id": "c-print", "label": "印刷代", "use": 60.8, "col": "印刷代", "to": "", "drop": false}, {"id": "c-ship", "label": "配送代", "use": 88.7, "col": "配送代", "to": "", "drop": false}, {"id": "c-work", "label": "加工代", "use": 100.0, "col": "加工賃", "to": "", "drop": false}, {"id": "c-pack", "label": "梱包代", "use": 88.7, "col": "梱包代", "to": "", "drop": false}, {"id": "c-labor", "label": "人件費", "use": 100.0, "col": "人件費", "to": "", "drop": false}, {"id": "c-stock", "label": "在庫原価", "use": 1.9, "col": "製品在庫原価", "to": "", "drop": false}, {"id": "f-price", "label": "売価単価", "use": 98.8, "col": "売価単価", "to": "pv-unitp", "drop": false}, {"id": "c-total", "label": "合計金額", "use": 100.0, "col": "合計金額", "to": "", "drop": false}, {"id": "c-unit", "label": "製品単価 (原単)", "use": null, "col": "", "to": "", "drop": false}, {"id": "f-amt", "label": "売価金額", "use": 99.9, "col": "売価金額", "to": "", "drop": false}, {"id": "f-hot", "label": "ホットフォルダ", "use": null, "col": "", "to": "", "drop": false}, {"id": "f-note", "label": "社内メモ", "use": -1, "col": "FMに列なし", "to": "", "drop": false}, {"id": "f-ordmemo", "label": "注意事項", "use": 3.9, "col": "注意事項", "to": "delivery-note", "drop": false}];
+var HUB = [{"id": "bid-mayor", "label": "宛先（市長名）"}, {"id": "bid-member", "label": "加盟（組合等）"}, {"id": "date", "label": "発行日"}, {"id": "date-pick", "label": "発行日"}, {"id": "estno", "label": "見積番号"}, {"id": "cust", "label": "得意先名 （発注元）"}, {"id": "enduser-dept", "label": "担当部署・窓口"}, {"id": "cust-tanto", "label": "先方担当者名 （案件に記録・次回から自動）"}, {"id": "relay", "label": "経由会社 （グループ会社が間に入る場合・例:"}, {"id": "enduser", "label": "エンドユーザー （最終客の会社）"}, {"id": "prod", "label": "品名 （下の3項目から自動生成・直接編集も可"}, {"id": "pn-base", "label": "品名 （下の3項目から自動生成・直接編集も可"}, {"id": "pn-name", "label": ""}, {"id": "pn-extra", "label": ""}, {"id": "qty", "label": "数量"}, {"id": "unit", "label": "単位"}, {"id": "valid", "label": "有効期限"}, {"id": "due", "label": "納期 （請書に記載・見積には出ません）"}, {"id": "erate", "label": "営業費率（%）"}, {"id": "job-type", "label": "案件区分"}, {"id": "spec-change", "label": "仕様"}, {"id": "plate-change", "label": "版下"}, {"id": "order-form", "label": "📦 発注形態 社内/社外/分離発注の基本方針"}, {"id": "paper-mode", "label": "用紙区分 工程連動・完全外製=自動で不要"}, {"id": "finish-sel", "label": "仕上がりサイズ 選択 または mm入力（用紙"}, {"id": "finish-w", "label": ""}, {"id": "finish-h", "label": ""}, {"id": "szunit-finish", "label": ""}, {"id": "expand-sel", "label": "展開サイズ 折り物の場合（A4→A3見開き等"}, {"id": "expand-w", "label": ""}, {"id": "expand-h", "label": ""}, {"id": "szunit-expand", "label": ""}, {"id": "spec", "label": "規格・仕様（見積書記載用）"}, {"id": "memo", "label": "備考・メモ"}, {"id": "pc-qty", "label": "数量"}, {"id": "pc-men", "label": "面付数"}, {"id": "pc-mode", "label": "色モード"}, {"id": "pc-sides", "label": "面"}, {"id": "pc-machine", "label": "デジタル機（既定=最安）"}, {"id": "trate", "label": ""}, {"id": "pv-qty", "label": "前回数量"}, {"id": "pv-unitp", "label": "前回単価"}, {"id": "pv-cr", "label": "原価率%（自動・編集可）"}, {"id": "pv-curve", "label": "数量カーブ（段階売価マスタ）"}, {"id": "deliv-target", "label": "納品先"}, {"id": "deliv-multi", "label": ""}, {"id": "deliv-other", "label": "納品先が複数ある"}, {"id": "deliv-multi-list", "label": "納品先が複数ある"}, {"id": "pack-unit", "label": "梱包単位"}, {"id": "pack-box", "label": "箱入れ"}, {"id": "pack-boxes", "label": "総箱数"}, {"id": "die-cut", "label": "抜き型"}, {"id": "die-cut-note", "label": "型番・備考"}, {"id": "delivery-note", "label": "納品先・備考"}, {"id": "pattern-name", "label": ""}];
+var KEY = 'fm_compare_map_v1';
+var MAP = {};
+try{ MAP = JSON.parse(localStorage.getItem(KEY) || 'null') || null; }catch(e){ MAP = null; }
+if(!MAP){ MAP = {}; FM.forEach(function(r){ MAP[r.id] = r.to; }); }
+
+var FILTER = 'all';
+function useClass(u){
+  if(u === null || u === undefined) return '';
+  if(u < 0) return '';
+  if(u === 0) return 'dead';
+  if(u < 1) return 'rare';
+  if(u < 10) return 'low';
+  return '';
+}
+function opts(sel){
+  var h = '<option value="">（Hubに無い）</option>';
+  HUB.forEach(function(x){
+    var nm = x.label ? (x.label + '  〔' + x.id + '〕') : x.id;
+    h += '<option value="' + x.id + '"' + (sel === x.id ? ' selected' : '') + '>' + nm + '</option>';
+  });
+  return h;
+}
+function render(){
+  var h = '<thead><tr>'
+    + '<th style="width:150px">FileMakerの項目</th><th style="width:110px">FMの列</th>'
+    + '<th style="width:64px">実績</th><th style="width:76px">状態</th>'
+    + '<th>Hub案件入力のどこに入れるか</th><th style="width:120px">id</th></tr></thead><tbody>';
+  var n = 0;
+  FM.forEach(function(r){
+    var to = MAP[r.id] || '';
+    var st = r.drop ? 'drop' : (to ? 'ok' : 'add');
+    if(FILTER === 'add'  && st !== 'add') return;
+    if(FILTER === 'ok'   && st !== 'ok')  return;
+    if(FILTER === 'dead' && !(r.use === 0)) return;
+    if(FILTER === 'live' && !(r.use !== null && r.use >= 10)) return;
+    n++;
+    var stTxt = st === 'ok' ? '対応あり' : (st === 'drop' ? '移さない' : 'Hubに無い');
+    h += '<tr class="' + useClass(r.use) + '">'
+      + '<td><b>' + r.label + '</b></td>'
+      + '<td class="mini">' + (r.col || '') + '</td>'
+      + '<td class="n mini">' + (r.use === null || r.use === undefined ? '—' : (r.use < 0 ? '照合不可' : r.use + '%')) + '</td>'
+      + '<td><span class="st ' + st + '">' + stTxt + '</span></td>'
+      + '<td><select onchange="pick(\'' + r.id + '\', this.value)">' + opts(to) + '</select></td>'
+      + '<td class="mini">' + r.id + '</td></tr>';
+  });
+  document.getElementById('tbl').innerHTML = h + '</tbody>';
+  var add = FM.filter(function(r){ return !(MAP[r.id] || '') && !r.drop; }).length;
+  document.getElementById('cnt').textContent =
+    '表示 ' + n + '件 ／ 全 ' + FM.length + '件 ／ Hubに無い ' + add + '件';
+}
+function pick(id, v){ MAP[id] = v; save(); render(); }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(MAP)); }catch(e){} }
+function setF(f, btn){
+  FILTER = f;
+  Array.prototype.forEach.call(document.querySelectorAll('.bar .fb'), function(b){ b.classList.remove('on'); });
+  if(btn) btn.classList.add('on');
+  render();
+}
+function resetMap(){
+  if(!confirm('一次案に戻します。よろしいですか？')) return;
+  MAP = {}; FM.forEach(function(r){ MAP[r.id] = r.to; }); save(); render();
+}
+function exportMap(){
+  var out = FM.map(function(r){
+    return { fm: r.id, label: r.label, col: r.col, use: r.use, hub: MAP[r.id] || '', drop: !!r.drop };
+  });
+  var blob = new Blob([JSON.stringify({ map: out }, null, 1)], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'fm_hub_map.json';
+  a.click();
+}
+render();
+</script>
+</body>
+</html>
