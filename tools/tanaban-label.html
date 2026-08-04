@@ -33,12 +33,15 @@
   .sheetwrap{ overflow:hidden; border:1px solid #ddd; }
   /* ラベル面(A4) */
   .lbl{ position:relative; background:#fff; overflow:hidden; box-sizing:border-box; }
+  /* 背景色(黒帯)を必ず印刷する: 「背景のグラフィック」オフでも黒が出るように強制 */
+  .lbl,.band,.el{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; color-adjust:exact !important; }
   .band{ position:absolute; box-sizing:border-box; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3mm; overflow:hidden; padding:6mm 2mm; }
   .el{ text-align:center; line-height:1.0; white-space:nowrap; }
   .el.vertical{ writing-mode:vertical-rl; text-orientation:upright; }
   .el.sideways{ /* 横倒し: 回転で実現(band側で回す) */ }
   #printArea{ display:none; }
   @media print{
+    *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
     body > *{ display:none !important; }
     #printArea{ display:block !important; }
     html, body{ background:#fff !important; margin:0; padding:0; }
@@ -78,6 +81,11 @@
       </div>
       <div><label>文字色</label>
         <select id="fg" onchange="render()"><option value="#fff">白</option><option value="#000">黒</option></select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <div style="flex:1"><label>フチ（ふちなし印刷ができないプリンタ向け）</label>
+        <select id="edge" onchange="render()"><option value="5">フチ5mm（推奨・コニカ227/367で確実）</option><option value="0">フチなし（全面・非対応機は印刷不可の場合あり）</option><option value="3">フチ3mm</option><option value="8">フチ8mm</option></select>
       </div>
     </div>
 
@@ -168,7 +176,7 @@ function readCfg(){
   var g=function(id){ return document.getElementById(id).value; };
   return {
     orient:g('orient'), duplex:g('duplex'), bandpos:g('bandpos'), bandw:parseFloat(g('bandw'))||33,
-    bandbg:g('bandbg'), fg:g('fg'),
+    bandbg:g('bandbg'), fg:g('fg'), edge:(function(){var v=parseFloat(g('edge'));return isNaN(v)?5:v;})(),
     hideH:document.getElementById('h-hide').checked,
     h:{text:g('h-text'), size:parseFloat(g('h-size'))||28, dir:g('h-dir')},
     m:{text:g('m-text'), size:parseFloat(g('m-size'))||180, dir:g('m-dir'), weight:g('m-weight')},
@@ -189,6 +197,8 @@ function buildItems(c){
   });
 }
 function pageSize(o){ return o==='port' ? {w:210,h:297} : {w:297,h:210}; }
+// 実際に描く領域（フチ分だけ内側に）
+function drawSize(c){ var f=pageSize(c.orient), m=c.edge||0; return { w:Math.max(20,f.w-2*m), h:Math.max(20,f.h-2*m) }; }
 // 要素1つのHTML(向き対応)
 function elHtml(e, fg, extraWeight){
   if(!e.text) return '';
@@ -253,7 +263,7 @@ function genSeq(append){
 
 // ─── 入力の記憶（前回のまま復元）＋クリア ───
 var STATE_KEY='tanaban_cfg_v1';
-var CTRL_IDS=['orient','duplex','bandpos','bandw','bandbg','fg','h-hide','h-text','h-size','h-dir','m-text','m-size','m-dir','m-weight','s-text','s-size','s-dir','m-list','seq-type','seq-pre','seq-start','seq-end','seq-suf'];
+var CTRL_IDS=['orient','duplex','bandpos','bandw','bandbg','fg','edge','h-hide','h-text','h-size','h-dir','m-text','m-size','m-dir','m-weight','s-text','s-size','s-dir','m-list','seq-type','seq-pre','seq-start','seq-end','seq-suf'];
 function saveState(){
   try{ var o={}; CTRL_IDS.forEach(function(id){ var el=document.getElementById(id); if(!el) return; o[id]=(el.type==='checkbox')?el.checked:el.value; }); localStorage.setItem(STATE_KEY, JSON.stringify(o)); }catch(e){}
 }
@@ -263,14 +273,14 @@ function loadState(){
 function clearAll(){
   if(!confirm('入力内容を初期状態に戻します。よろしいですか？')) return;
   try{ localStorage.removeItem(STATE_KEY); }catch(e){}
-  var defs={orient:'land',duplex:'on',bandpos:'right',bandw:'33',bandbg:'#000',fg:'#fff','h-text':'版No.','h-size':'28','h-dir':'h','m-text':'776','m-size':'180','m-dir':'s270','m-weight':'800','s-text':'','s-size':'16','s-dir':'h','m-list':'','seq-type':'num','seq-pre':'','seq-start':'','seq-end':'','seq-suf':''};
+  var defs={orient:'land',duplex:'on',bandpos:'right',bandw:'33',bandbg:'#000',fg:'#fff',edge:'5','h-text':'版No.','h-size':'28','h-dir':'h','m-text':'776','m-size':'180','m-dir':'s270','m-weight':'800','s-text':'','s-size':'16','s-dir':'h','m-list':'','seq-type':'num','seq-pre':'','seq-start':'','seq-end':'','seq-suf':''};
   Object.keys(defs).forEach(function(id){ var el=document.getElementById(id); if(el) el.value=defs[id]; });
   document.getElementById('h-hide').checked=false;
   render(); toast('クリアしました');
 }
 
 function render(){
-  var c=readCfg(), ps=pageSize(c.orient);
+  var c=readCfg(), ps=drawSize(c);
   saveState();
   var items=buildItems(c);
   var sheets=c.duplex==='on'?2:1;
@@ -294,10 +304,10 @@ function render(){
   // 印刷用@page
   var st=document.getElementById('page-style');
   if(!st){ st=document.createElement('style'); st.id='page-style'; document.head.appendChild(st); }
-  st.textContent='@media print{ @page{ size:'+(c.orient==='port'?'A4 portrait':'A4 landscape')+'; margin:0; } }';
+  st.textContent='@media print{ @page{ size:'+(c.orient==='port'?'A4 portrait':'A4 landscape')+'; margin:'+(c.edge||0)+'mm; } }';
 }
 function doPrint(){
-  var c=readCfg(), ps=pageSize(c.orient);
+  var c=readCfg(), ps=drawSize(c);
   var items=buildItems(c);
   // 各ラベルにつき、両面ONなら表裏の2ページ（同じ向き）
   var html='';
