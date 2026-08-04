@@ -77,12 +77,13 @@
   }
   #paper .doc{ width:190mm; min-height:277mm; margin:0 auto; padding:12mm 10mm; font-size:11.5pt; color:#000; page-break-after:always; }
   #paper .doc:last-child{ page-break-after:auto; }
-  #paper .title{ text-align:center; font-size:22pt; font-weight:800; letter-spacing:.4em; border-bottom:3px double #000; padding-bottom:6px; margin-bottom:14px; }
+  #paper .title{ text-align:center; margin:16px 0 14px; }
+  #paper .title .ul{ font-size:15pt; font-weight:800; border-bottom:1.5px solid #000; padding:0 6px 3px; display:inline-block; }
   #paper .meta{ text-align:right; font-size:10pt; margin-bottom:6px; }
   #paper .to{ font-size:15pt; font-weight:700; border-bottom:1px solid #000; padding-bottom:3px; display:inline-block; min-width:60%; }
-  #paper .from{ text-align:left; font-size:10pt; line-height:1.5; margin:10px 0 16px; }
+  /* 発行元: 右側に配置・中の文字は左揃え */
+  #paper .from{ width:74mm; margin:8px 0 14px auto; text-align:left; font-size:10pt; line-height:1.5; }
   #paper .from .from-name{ font-size:12.5pt; margin-bottom:2px; }
-  #paper .subj{ text-align:center; font-size:13pt; font-weight:700; margin:14px 0; }
   #paper .body{ font-size:11pt; line-height:1.9; margin-bottom:12px; white-space:pre-wrap; }
   #paper .kiline{ text-align:center; font-weight:700; margin:8px 0; }
   #paper table.pt{ width:100%; border-collapse:collapse; font-size:10.5pt; margin:8px 0; }
@@ -90,6 +91,8 @@
   #paper table.pt th{ background:#f0f0f0; }
   #paper table.pt td.r{ text-align:right; }
   #paper .note{ border:1px solid #000; min-height:70px; padding:8px; font-size:10.5pt; white-space:pre-wrap; margin-top:8px; }
+  /* 記入用の下線(通信欄・備考が空のとき) */
+  #paper .note.ruled{ background-image:repeating-linear-gradient(#fff 0, #fff 8.5mm, #9ca3af 8.5mm, #9ca3af calc(8.5mm + 0.2mm)); }
   #paper .closing{ text-align:right; margin-top:8px; }
 </style>
 </head>
@@ -106,7 +109,7 @@
 <main>
   <!-- 文書タイプ -->
   <div class="tabs">
-    <div class="tab act" data-type="order"  onclick="setType('order')">📦 発注書</div>
+    <div class="tab act" data-type="order"  onclick="setType('order')">📦 発注</div>
     <div class="tab"      data-type="quote"  onclick="setType('quote')">🧮 見積依頼</div>
     <div class="tab"      data-type="fax"    onclick="setType('fax')">📠 FAX送付状</div>
   </div>
@@ -162,6 +165,7 @@
     </div>
   </div>
 
+  <datalist id="unit-list"></datalist>
   <!-- 明細（発注/見積依頼） -->
   <div class="sec" id="sec-det">
     <div class="st" id="det-title">3. 明細</div>
@@ -326,8 +330,10 @@ var CO_PRESETS={
   nakao:{ name:'中尾印刷株式会社', rep:'本多 亮', zip:'〒442-0051', addr:'愛知県豊川市中央通３丁目２２', tel:'0533-86-2046', fax:'0533-86-2107' },
   kitakami:{ name:'有限会社北上プリント', rep:'代表取締役 本多 亮', zip:'〒024-0091', addr:'岩手県北上市大曲町2-13', tel:'0197-64-7082', fax:'0197-63-4543' }
 };
-var TYPE_LABEL={ order:'発注書', quote:'見積依頼書', fax:'FAX送付状' };
+var TYPE_LABEL={ order:'発注', quote:'見積依頼', fax:'FAX送付状' };
 var TYPE_TITLE={ order:'発 注 書', quote:'御 見 積 依 頼 書', fax:'ＦＡＸ 送 付 状' };
+var TYPE_TAG={ order:'発注', quote:'見積依頼', fax:'送付' };   // 件名の頭に自動で付く【 】タグ
+var UNIT_LIST=['枚','部','冊','セット','式','個','箱','ケース','本','巻','袋','台','名','連','R','kg','ｍ','点','組','ロール','パック'];
 var LEAD_TEXT={
   order:'拝啓　平素は格別のお引き立てを賜り、厚く御礼申し上げます。\nさて、下記の通り発注いたしますので、ご手配のほどよろしくお願い申し上げます。',
   quote:'拝啓　平素は格別のお引き立てを賜り、厚く御礼申し上げます。\nさて、下記の件につきましてお見積をお願い申し上げます。ご多用のところ恐縮ですが、よろしくお願いいたします。',
@@ -354,6 +360,16 @@ function onUseChange(){
 
 function db(){ return hubLoad()||{}; }
 function faxDocs(){ var d=db(); return Array.isArray(d.faxDocs)?d.faxDocs:[]; }
+
+// 単位マスタ: 既定リスト＋品目マスタ・過去の明細で使われた単位を統合
+function initUnits(){
+  var d=db(); var seen={}, out=[];
+  var add=function(u){ u=(u==null?'':String(u)).trim(); if(u&&!seen[u]){ seen[u]=1; out.push(u); } };
+  UNIT_LIST.forEach(add);
+  ((d.master&&d.master.hinmoku)||[]).forEach(function(h){ add(h&&(h.unit||h.tani)); });
+  faxDocs().forEach(function(r){ (r.rows||[]).forEach(function(x){ add(x&&x.unit); }); });
+  document.getElementById('unit-list').innerHTML=out.map(function(u){ return '<option value="'+esc(u)+'">'; }).join('');
+}
 
 // 発行元セレクトを描画（ログイン会社を既定選択）
 function initFromCo(){
@@ -434,7 +450,7 @@ function addRow(v){
   tr.innerHTML='<td><input class="c-name" value="'+esc(v.name||'')+'"></td>'+
     '<td><input class="c-spec" value="'+esc(v.spec||'')+'"></td>'+
     '<td><input class="c-qty" value="'+esc(v.qty||'')+'" oninput="calcRow(this)"></td>'+
-    '<td><input class="c-unit" value="'+esc(v.unit||'')+'"></td>'+
+    '<td><input class="c-unit" list="unit-list" value="'+esc(v.unit||'')+'"></td>'+
     '<td><input class="c-price r" value="'+esc(v.price||'')+'" oninput="calcRow(this)"></td>'+
     '<td class="r"><input class="c-amt r" value="'+esc(v.amt||'')+'" readonly style="background:#f7f7f5"></td>'+
     '<td style="text-align:center"><button class="delrow" onclick="this.closest(\'tr\').remove()">×</button></td>';
@@ -486,19 +502,18 @@ function docHtml(f){
   var co=CO_PRESETS[f.fromKey]||CO_PRESETS.tokiwa;
   var toLine=esc(f.toName||'（宛先）')+' 御中'+(f.toPerson?('　'+esc(f.toPerson)+' 様'):'');
   var h='<div class="doc">';
-  h+='<div class="title">'+esc(TYPE_TITLE[f.type])+'</div>';
   h+='<div class="meta">'+esc(jDate(f.issueDate))+'　　No. '+esc(f.docNo)+'</div>';
   h+='<div class="to">'+toLine+'</div>';
   if(f.toFax) h+='<div style="font-size:10pt">FAX：'+esc(f.toFax)+'</div>';
   h+='<div class="from"><div class="from-name"><b>'+esc(co.name)+'</b></div>'+esc(co.zip||'')+' '+esc(co.addr||'')+'<br>TEL '+esc(co.tel||'')+'　FAX '+esc(co.fax||'')+(f.fromPerson?('<br>担当：'+esc(f.fromPerson)):'')+'</div>';
-  if(f.subject) h+='<div class="subj">件名：'+esc(f.subject)+'</div>';
+  // 標題＝【種別タグ】＋件名（下線付き）。「件名：」の文字は付けない
+  h+='<div class="title"><span class="ul">【'+esc(TYPE_TAG[f.type])+'】'+(f.subject?('　'+esc(f.subject)):'')+'</span></div>';
   h+='<div class="body">'+esc(f.lead)+'</div>';
   h+='<div class="kiline">記</div>';
   if(f.type==='fax'){
     var uses=f.uses||[];
     var useCells=USE_LIST.map(function(u){ var on=uses.indexOf(u)>=0; return '<span style="margin-right:14px;'+(on?'font-weight:800':'')+'">'+(on?'☑':'□')+' '+esc(u)+'</span>'; }).join('');
     h+='<table class="pt"><tr><th style="width:22%">用件</th><td>'+useCells+'</td></tr>'+
-       '<tr><th>件名</th><td>'+esc(f.subject||'')+'</td></tr>'+
        '<tr><th>送信枚数（本紙含む）</th><td>'+esc(f.faxPages||'1')+' 枚</td></tr></table>';
   } else {
     var showAmt=(f.type==='order');
@@ -515,7 +530,7 @@ function docHtml(f){
     h+='</table>';
     if(f.deadline) h+='<div style="font-size:10.5pt">■ '+((f.type==='order')?'納期':'回答希望日')+'：'+esc(f.deadline)+'</div>';
   }
-  h+='<div style="font-size:10.5pt;margin-top:8px">【通信欄】</div><div class="note">'+esc(f.note||'')+'</div>';
+  h+='<div style="font-size:10.5pt;margin-top:8px">【通信欄・備考】</div><div class="note'+(f.note?'':' ruled')+'">'+esc(f.note||'')+'</div>';
   h+='<div class="closing">以上　敬具</div>';
   h+='</div>';
   return h;
@@ -736,6 +751,7 @@ function clearForm(){
 // 初期化
 initFromCo();
 initMaster();
+initUnits();
 initUses();
 document.getElementById('issue-date').value=todayStr();
 setType('order');
