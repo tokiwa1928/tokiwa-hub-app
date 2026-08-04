@@ -69,6 +69,11 @@
         <select id="duplex" onchange="render()"><option value="on">両面(表裏同じ)</option><option value="off">片面のみ</option></select>
       </div>
     </div>
+    <div class="row" style="margin-top:6px" id="bind-row">
+      <div style="flex:1"><label>両面のとじ方向（表裏の天地を揃える）</label>
+        <select id="bind" onchange="render()"><option value="long">長辺とじ</option><option value="short">短辺とじ</option></select>
+      </div>
+    </div>
     <div class="row" style="margin-top:6px">
       <div><label>帯の位置</label>
         <select id="bandpos" onchange="render()"><option value="right">右</option><option value="left">左</option><option value="top">上</option><option value="bottom">下</option><option value="full">全面</option></select>
@@ -175,7 +180,7 @@ function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.st
 function readCfg(){
   var g=function(id){ return document.getElementById(id).value; };
   return {
-    orient:g('orient'), duplex:g('duplex'), bandpos:g('bandpos'), bandw:parseFloat(g('bandw'))||33,
+    orient:g('orient'), duplex:g('duplex'), bind:g('bind')||'long', bandpos:g('bandpos'), bandw:parseFloat(g('bandw'))||33,
     bandbg:g('bandbg'), fg:g('fg'), edge:(function(){var v=parseFloat(g('edge'));return isNaN(v)?5:v;})(),
     hideH:document.getElementById('h-hide').checked,
     h:{text:g('h-text'), size:parseFloat(g('h-size'))||28, dir:g('h-dir')},
@@ -221,10 +226,17 @@ function bandStyle(c, ps){
   else if(pos==='bottom'){ st+='left:0;bottom:0;width:'+ps.w+'mm;height:'+(ps.h*wpc)+'mm;'; }
   return st;
 }
-function faceHtml(c, ps){
+function faceHtml(c, ps, rot180){
   var inner = (c.hideH?'':elHtml(c.h, c.fg)) + elHtml(c.m, c.fg, c.m.weight) + elHtml(c.s, c.fg);
-  return '<div class="lbl" style="width:'+ps.w+'mm;height:'+ps.h+'mm">'
+  var rot = rot180 ? 'transform:rotate(180deg);' : '';
+  return '<div class="lbl" style="width:'+ps.w+'mm;height:'+ps.h+'mm;'+rot+'">'
     + '<div class="band" style="'+bandStyle(c,ps)+'">'+inner+'</div></div>';
+}
+// 両面で表裏の天地を揃えるため、裏面を180°回転すべきか判定
+// 長辺とじ×横向き / 短辺とじ×縦向き のとき裏面が上下逆になる → 180°回転で補正
+function backRot180(c){
+  if(c.duplex!=='on') return false;
+  return (c.bind==='long' && c.orient==='land') || (c.bind==='short' && c.orient==='port');
 }
 // 帯からはみ出す文字を自動で縮小して収める（指定ptは最大値・拡大はしない）。
 // root は実寸でレイアウト済み（画面上または一時可視化）であること。
@@ -286,7 +298,7 @@ function genSeq(append){
 
 // ─── 入力の記憶（前回のまま復元）＋クリア ───
 var STATE_KEY='tanaban_cfg_v1';
-var CTRL_IDS=['orient','duplex','bandpos','bandw','bandbg','fg','edge','h-hide','h-text','h-size','h-dir','m-text','m-size','m-dir','m-weight','s-text','s-size','s-dir','m-list','seq-type','seq-pre','seq-start','seq-end','seq-suf'];
+var CTRL_IDS=['orient','duplex','bind','bandpos','bandw','bandbg','fg','edge','h-hide','h-text','h-size','h-dir','m-text','m-size','m-dir','m-weight','s-text','s-size','s-dir','m-list','seq-type','seq-pre','seq-start','seq-end','seq-suf'];
 function saveState(){
   try{ var o={}; CTRL_IDS.forEach(function(id){ var el=document.getElementById(id); if(!el) return; o[id]=(el.type==='checkbox')?el.checked:el.value; }); localStorage.setItem(STATE_KEY, JSON.stringify(o)); }catch(e){}
 }
@@ -296,7 +308,7 @@ function loadState(){
 function clearAll(){
   if(!confirm('入力内容を初期状態に戻します。よろしいですか？')) return;
   try{ localStorage.removeItem(STATE_KEY); }catch(e){}
-  var defs={orient:'land',duplex:'on',bandpos:'right',bandw:'33',bandbg:'#000',fg:'#fff',edge:'5','h-text':'版No.','h-size':'28','h-dir':'h','m-text':'776','m-size':'180','m-dir':'v','m-weight':'800','s-text':'','s-size':'16','s-dir':'h','m-list':'','seq-type':'num','seq-pre':'','seq-start':'','seq-end':'','seq-suf':''};
+  var defs={orient:'land',duplex:'on',bind:'long',bandpos:'right',bandw:'33',bandbg:'#000',fg:'#fff',edge:'5','h-text':'版No.','h-size':'28','h-dir':'h','m-text':'776','m-size':'180','m-dir':'v','m-weight':'800','s-text':'','s-size':'16','s-dir':'h','m-list':'','seq-type':'num','seq-pre':'','seq-start':'','seq-end':'','seq-suf':''};
   Object.keys(defs).forEach(function(id){ var el=document.getElementById(id); if(el) el.value=defs[id]; });
   document.getElementById('h-hide').checked=false;
   render(); toast('クリアしました');
@@ -316,12 +328,14 @@ function render(){
   // プレビュー(縮小) — 先頭の1枚（両面ならその表裏）を表示
   var pv=items[0];
   var scale = Math.min(420/(ps.w*3.7795), 300/(ps.h*3.7795));
-  var faces = c.duplex==='on' ? [['表',pv],['裏',pv]] : [['',pv]];
+  var bindRow=document.getElementById('bind-row'); if(bindRow) bindRow.style.display=(c.duplex==='on'?'':'none');
+  var br=backRot180(c);
+  var faces = c.duplex==='on' ? [['表',pv,false],['裏'+(br?'（180°回転）':''),pv,br]] : [['',pv,false]];
   document.getElementById('pvrow').innerHTML = (items.length>1?'<div style="width:100%;font-size:12px;color:#166534;margin-bottom:4px">プレビューは1枚目のみ表示（全'+items.length+'枚）</div>':'')
     + faces.map(function(f){
     return '<div class="pvcol">'+(f[0]?'<div class="cap">'+f[0]+'面</div>':'')
       + '<div class="sheetwrap" style="width:'+(ps.w*3.7795*scale)+'px;height:'+(ps.h*3.7795*scale)+'px">'
-      + '<div style="transform:scale('+scale+');transform-origin:top left;width:'+(ps.w)+'mm;height:'+(ps.h)+'mm">'+faceHtml(f[1],ps)+'</div>'
+      + '<div style="transform:scale('+scale+');transform-origin:top left;width:'+(ps.w)+'mm;height:'+(ps.h)+'mm">'+faceHtml(f[1],ps,f[2])+'</div>'
       + '</div></div>';
   }).join('');
   fitBands(document.getElementById('pvrow'));   // はみ出す文字を帯内に自動縮小
@@ -333,11 +347,12 @@ function render(){
 function doPrint(){
   var c=readCfg(), ps=drawSize(c);
   var items=buildItems(c);
-  // 各ラベルにつき、両面ONなら表裏の2ページ（同じ向き）
+  var br=backRot180(c);
+  // 各ラベルにつき、両面ONなら表・裏の2ページ（裏は必要なら180°回転して天地を揃える）
   var html='';
   items.forEach(function(cc){
-    var pages = c.duplex==='on' ? [cc,cc] : [cc];
-    html += pages.map(function(x){ return faceHtml(x,ps); }).join('');
+    if(c.duplex==='on'){ html += faceHtml(cc,ps,false) + faceHtml(cc,ps,br); }
+    else { html += faceHtml(cc,ps,false); }
   });
   var pa=document.getElementById('printArea');
   pa.innerHTML = html;
