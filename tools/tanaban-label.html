@@ -109,6 +109,12 @@
       </div>
     </div>
 
+    <div class="eltbox" style="margin-top:8px;background:#f0fdf4;border-color:#86efac">
+      <label style="font-weight:700;color:#166534">📋 まとめて複数作成（1行に1枚ぶんの番号）</label>
+      <textarea id="m-list" rows="4" placeholder="例）&#10;776&#10;777&#10;A-102, 名刺／トキワ商事&#10;（空欄なら上のメイン1件だけ。行ごとに1枚。「番号, 補助」でその行だけ補助を差し替え）" oninput="render()" style="width:100%;font-size:13px;font-family:inherit;padding:7px 9px;border:1px solid #86efac;border-radius:6px;resize:vertical"></textarea>
+      <div class="hint" id="count-hint" style="margin-top:4px;color:#166534"></div>
+    </div>
+
     <h2 style="margin-top:14px">補助（任意）</h2>
     <input type="text" id="s-text" placeholder="例: 得意先名・品名" oninput="render()">
     <div class="eltbox">
@@ -122,7 +128,7 @@
 
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="btn" onclick="render()">🔄 更新</button>
-      <button class="btn primary" onclick="doPrint()">🖨 印刷</button>
+      <button class="btn primary" onclick="doPrint()">🖨 印刷（一覧は全件まとめて）</button>
     </div>
     <div class="hint" style="margin-top:8px">A4全面に1枚。両面ONで表・裏の2ページを同じ向きで出力します。印字はプリンタの端(約5mm)が欠ける場合があるので、帯や文字は端に寄せすぎないでください。</div>
   </div>
@@ -145,8 +151,21 @@ function readCfg(){
     bandbg:g('bandbg'), fg:g('fg'),
     h:{text:g('h-text'), size:parseFloat(g('h-size'))||28, dir:g('h-dir')},
     m:{text:g('m-text'), size:parseFloat(g('m-size'))||180, dir:g('m-dir'), weight:g('m-weight')},
-    s:{text:g('s-text'), size:parseFloat(g('s-size'))||16, dir:g('s-dir')}
+    s:{text:g('s-text'), size:parseFloat(g('s-size'))||16, dir:g('s-dir')},
+    mList:g('m-list')
   };
+}
+// 複数作成: 各行 → 1枚ぶんの設定(メイン番号＋任意で補助を差し替え)を配列で返す
+function buildItems(c){
+  var lines=(c.mList||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
+  if(!lines.length){ return [c]; }   // リストが空なら単票(上のメイン)
+  return lines.map(function(ln){
+    var parts=ln.split(/[,、|｜\t]/).map(function(s){return s.trim();});
+    var cc=JSON.parse(JSON.stringify(c));
+    cc.m.text=parts[0]||'';
+    if(parts.length>1 && parts[1]) cc.s=Object.assign({}, c.s, {text:parts[1]});
+    return cc;
+  });
 }
 function pageSize(o){ return o==='port' ? {w:210,h:297} : {w:297,h:210}; }
 // 要素1つのHTML(向き対応)
@@ -178,10 +197,20 @@ function faceHtml(c, ps){
 }
 function render(){
   var c=readCfg(), ps=pageSize(c.orient);
-  // プレビュー(縮小)
+  var items=buildItems(c);
+  var sheets=c.duplex==='on'?2:1;
+  // 件数表示
+  var ch=document.getElementById('count-hint');
+  if(ch) ch.textContent = items.length>1
+    ? ('▶ '+items.length+'枚を一括作成（印刷は '+(items.length*sheets)+'ページ'+(c.duplex==='on'?'／2ページで1枚':'')+'）'
+        + ' — 例: '+items.slice(0,5).map(function(x){return x.m.text;}).join('、')+(items.length>5?' …':''))
+    : '';
+  // プレビュー(縮小) — 先頭の1枚（両面ならその表裏）を表示
+  var pv=items[0];
   var scale = Math.min(420/(ps.w*3.7795), 300/(ps.h*3.7795));
-  var faces = c.duplex==='on' ? [['表',c],['裏',c]] : [['',c]];
-  document.getElementById('pvrow').innerHTML = faces.map(function(f){
+  var faces = c.duplex==='on' ? [['表',pv],['裏',pv]] : [['',pv]];
+  document.getElementById('pvrow').innerHTML = (items.length>1?'<div style="width:100%;font-size:12px;color:#166534;margin-bottom:4px">プレビューは1枚目のみ表示（全'+items.length+'枚）</div>':'')
+    + faces.map(function(f){
     return '<div class="pvcol">'+(f[0]?'<div class="cap">'+f[0]+'面</div>':'')
       + '<div class="sheetwrap" style="width:'+(ps.w*3.7795*scale)+'px;height:'+(ps.h*3.7795*scale)+'px">'
       + '<div style="transform:scale('+scale+');transform-origin:top left;width:'+(ps.w)+'mm;height:'+(ps.h)+'mm">'+faceHtml(f[1],ps)+'</div>'
@@ -194,10 +223,19 @@ function render(){
 }
 function doPrint(){
   var c=readCfg(), ps=pageSize(c.orient);
-  var pages = c.duplex==='on' ? [c,c] : [c];
-  document.getElementById('printArea').innerHTML = pages.map(function(cc){ return faceHtml(cc,ps); }).join('');
-  var num=(c.m.text||c.h.text||'棚版').replace(/[\\/:*?"<>|]/g,'');
-  var old=document.title; document.title=(new Date().toISOString().slice(0,10).replace(/-/g,''))+'_棚版ラベル_'+num;
+  var items=buildItems(c);
+  // 各ラベルにつき、両面ONなら表裏の2ページ（同じ向き）
+  var html='';
+  items.forEach(function(cc){
+    var pages = c.duplex==='on' ? [cc,cc] : [cc];
+    html += pages.map(function(x){ return faceHtml(x,ps); }).join('');
+  });
+  document.getElementById('printArea').innerHTML = html;
+  var day=(new Date().toISOString().slice(0,10).replace(/-/g,''));
+  var title = items.length>1
+    ? day+'_棚版ラベル_'+items.length+'件'
+    : day+'_棚版ラベル_'+((items[0].m.text||items[0].h.text||'棚版').replace(/[\\/:*?"<>|]/g,''));
+  var old=document.title; document.title=title;
   var restore=function(){ document.title=old; window.removeEventListener('afterprint',restore); };
   window.addEventListener('afterprint',restore); setTimeout(restore,60000);
   window.print();
