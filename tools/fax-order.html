@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>送付状・発注書・見積依頼 | Tokiwa Hub Tools</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   :root{ --lime:#84cc16; --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; }
   *{ box-sizing:border-box; }
@@ -625,11 +626,71 @@ function contactText(id){
   var msg=r.toName+' 御中\n'+(r.toPerson?(r.toPerson+' 様\n'):'')+
     '\nお世話になっております。'+co.name+'です。\n'+
     '先日お送りした'+(r.type==='quote'?'見積依頼':(r.type==='order'?'発注':'ご連絡'))+'（No.'+r.docNo+'　件名：'+(r.subject||'')+'）の件です。\n'+
-    (r.type==='quote'?'御見積書を拝受いたしました。ありがとうございます。内容を確認のうえ、改めてご連絡いたします。\n':'ご確認のほどよろしくお願いいたします。\n')+
+    (r.type==='quote'?('御見積書を拝受いたしました。ありがとうございます。'+((r.quote&&r.quote.total!=null)?('（御見積合計 ¥'+Number(r.quote.total).toLocaleString()+'）'):'')+'内容を確認のうえ、改めてご連絡いたします。\n'):'ご確認のほどよろしくお願いいたします。\n')+
     (items?('\n【対象】\n'+items+'\n'):'')+
     '\nどうぞよろしくお願いいたします。\n'+co.name;
   try{ navigator.clipboard.writeText(msg); hubToast('✉ 連絡文をコピーしました（メール/LINE WORKSに貼付）'); }
   catch(e){ prompt('連絡文（コピーしてください）', msg); }
+}
+
+// ─── 見積書スキャンからAIで金額読み取り（ユーザー操作で都度実行）───
+function apiPost(action, post){
+  var u=new URL(HUB_GAS_URL); u.searchParams.set('action',action); u.searchParams.set('apiKey',HUB_API_KEY);
+  return fetch(u.toString(),{method:'POST',redirect:'follow',body:JSON.stringify(post)}).then(function(r){ return r.json(); });
+}
+// 端末保存のスキャン(dataURL)を画像配列(JPEG dataURL)へ。PDFはpdfjsで先頭数ページを画像化。
+async function scanToImages(dataUrl){
+  if(dataUrl.indexOf('application/pdf')>=0){
+    if(!window.pdfjsLib) throw new Error('PDF読み込み部品を取得できませんでした（オンラインで再試行してください）');
+    var bin=atob(dataUrl.split(',')[1]); var arr=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+    var doc=await pdfjsLib.getDocument({data:arr}).promise; var out=[];
+    for(var p=1;p<=Math.min(doc.numPages,3);p++){
+      var page=await doc.getPage(p); var vp=page.getViewport({scale:2});
+      var cv=document.createElement('canvas'); cv.width=vp.width|0; cv.height=vp.height|0;
+      await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+      out.push(cv.toDataURL('image/jpeg',0.85));
+    }
+    return out;
+  }
+  return [dataUrl];   // 画像はそのまま
+}
+async function ocrQuote(id){
+  var st=document.getElementById('ocr-st-'+id); if(st) st.textContent='';
+  var scan; try{ scan=localStorage.getItem(SCAN_PREFIX+id); }catch(e){}
+  if(!scan){ hubToast('先に「📎 見積スキャン添付」で見積書を添付してください'); return; }
+  if(!confirm('🤖 添付した見積書をAIで読み取り、金額を自動で拾います。よろしいですか？')) return;
+  try{
+    if(st) st.textContent='🤖 AI解析中…';
+    var images=await scanToImages(scan);
+    var prompt='これは弊社が受け取った「御見積書」です。次のJSONだけを出力してください。'
+      +'不明な項目はnull、金額はカンマ無しの数値（円）で。\n'
+      +'{"supplier":見積元の会社名,"quoteNo":見積番号,"date":見積日,'
+      +'"items":[{"name":品名,"qty":数量,"unit":単位,"unitPrice":単価,"amount":金額}],'
+      +'"subtotal":小計,"tax":消費税,"total":合計(税込),"validity":有効期限,"note":備考}';
+    var r=await apiPost('claudeVision',{ prompt:prompt, images:images, maxTokens:1500, model:'claude-sonnet-5' });
+    if(!r||!r.success) throw new Error((r&&r.error)||'AI呼び出しに失敗しました');
+    var txt=r.text||r.reply||r.result||''; var m=String(txt).match(/\{[\s\S]*\}/);
+    var q=JSON.parse(m?m[0]:txt);
+    q._readAt=new Date().toISOString();
+    hubSave(function(d){ var a=d.faxDocs||[]; var it=a.find(function(x){return x.id===id;}); if(it){ it.quote=q; hubStamp(it); } });
+    Promise.resolve(hubCloudPush());
+    if(st) st.textContent='';
+    renderHist();
+    hubToast('✅ 見積金額を読み取りました（内容を確認してください）');
+  }catch(e){ if(st) st.textContent='❌ '+e.message; }
+}
+// 読み取り結果の表示
+function quoteBox(r){
+  var q=r.quote; if(!q) return '';
+  var y=function(n){ return (n==null||n==='')?'—':('¥'+Number(n).toLocaleString()); };
+  var its=(q.items||[]).map(function(x){ return '<tr><td>'+esc(x.name||'')+'</td><td style="text-align:right">'+esc(x.qty||'')+(x.unit?esc(x.unit):'')+'</td><td style="text-align:right">'+y(x.unitPrice)+'</td><td style="text-align:right">'+y(x.amount)+'</td></tr>'; }).join('');
+  return '<div style="margin-top:6px;border:1px solid #a5f3fc;background:#ecfeff;border-radius:7px;padding:7px 9px;font-size:12px">'+
+    '<div style="font-weight:700;color:#0e7490">🤖 読み取った見積：'+esc(q.supplier||'（会社名不明）')+(q.quoteNo?('　No.'+esc(q.quoteNo)):'')+(q.date?('　'+esc(q.date)):'')+'</div>'+
+    (its?('<table style="width:100%;border-collapse:collapse;margin:4px 0;font-size:11px"><tr style="color:#64748b"><td>品名</td><td style="text-align:right">数量</td><td style="text-align:right">単価</td><td style="text-align:right">金額</td></tr>'+its+'</table>'):'')+
+    '<div style="text-align:right">小計 '+y(q.subtotal)+'　消費税 '+y(q.tax)+'　<b style="font-size:13px">合計 '+y(q.total)+'</b></div>'+
+    (q.validity?('<div style="color:#64748b">有効期限：'+esc(q.validity)+'</div>'):'')+
+    (q.note?('<div style="color:#64748b">備考：'+esc(q.note)+'</div>'):'')+
+    '</div>';
 }
 
 function renderHist(){
@@ -648,13 +709,16 @@ function renderHist(){
       '<span class="muted">'+esc(r.issueDate||'')+'　No.'+esc(r.docNo||'')+'</span></div>'+
       '<div style="font-size:12px;color:#555">'+esc(r.subject||'（件名なし）')+'</div>'+
       (scan?('<img class="scan-thumb" src="'+(isImg?scan:'')+'" onclick="viewScan(\''+r.id+'\')" title="スキャンを表示"'+(isImg?'':' style="display:none"')+'>'+(isImg?'':'<a href="#" onclick="viewScan(\''+r.id+'\');return false" style="font-size:12px">📎 添付PDFを開く</a>')):'')+
+      quoteBox(r)+
       '<div class="hist-act">'+
         '<button class="btn" onclick="loadDoc(\''+r.id+'\')">✏ 開く/編集</button>'+
         '<button class="btn" onclick="reprint(\''+r.id+'\')">🖨 再印刷</button>'+
         '<button class="btn" onclick="attachScan(\''+r.id+'\')">📎 見積スキャン添付</button>'+
+        (scan?'<button class="btn" style="background:#ecfeff;border-color:#67e8f9;color:#0e7490" onclick="ocrQuote(\''+r.id+'\')">🤖 金額を読み取る</button>':'')+
         '<button class="btn" onclick="contactText(\''+r.id+'\')">✉ この件で連絡文を作成</button>'+
         '<button class="btn" style="color:#b91c1c" onclick="delDoc(\''+r.id+'\')">🗑</button>'+
-      '</div></div>';
+      '</div>'+
+      '<div id="ocr-st-'+r.id+'" class="muted" style="margin-top:4px"></div></div>';
   }).join('');
 }
 
