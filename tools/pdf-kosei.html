@@ -66,6 +66,7 @@
     <button class="pk-sc" onclick="_pkJump('sec-rotate')">🔄 回転</button>
     <button class="pk-sc" onclick="_pkJump('sec-mentu')">🗂 面付</button>
     <button class="pk-sc" onclick="_pkJump('sec-size')">📐 校正枠</button>
+    <button class="pk-sc" onclick="_pkJump('sec-fuchi')">🖨 余白チェック</button>
     <button class="pk-sc" onclick="_pkJump('sec-cover')">📕 表紙</button>
     <button class="pk-sc" onclick="_pkJump('sec-3d')">📦 3D/照合</button>
   </div>
@@ -200,6 +201,37 @@
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
       <button class="btn btn-g" onclick="meImposeRun()">⬇ 面付してダウンロード</button>
       <span class="muted" id="me-status"></span>
+    </div>
+  </div>
+  <div class="sec" id="sec-fuchi">
+    <div class="st">🖨 複合機の余白チェック（一番上のファイルが対象）</div>
+    <div class="muted" style="margin-bottom:8px">複合機（bizhub等）は用紙の端 約4.2mm に印刷できません。校正紙を出したとき<b>白フチが出るか・データの端が欠けるか</b>を、印刷する前に確認できます。</div>
+    <div class="grid">
+      <div><label>出力する用紙</label>
+        <select id="fu-paper" onchange="fuchiCheck()">
+          <option value="auto">自動（データに合う定形）</option>
+          <option value="210x297">A4</option>
+          <option value="297x420">A3</option>
+          <option value="182x257">B5</option>
+          <option value="257x364">B4</option>
+          <option value="148x210">A5</option>
+          <option value="100x148">はがき</option>
+        </select>
+      </div>
+      <div><label>複合機の印刷できない縁 mm</label><input type="number" id="fu-edge" value="4.2" min="0" step="0.1" onchange="fuchiCheck()"></div>
+      <div><label>ページ</label><input type="number" id="fu-page" value="1" min="1" step="1" onchange="fuchiCheck()"></div>
+      <div style="display:flex;align-items:flex-end"><button class="btn btn-c" onclick="fuchiCheck()">🔍 チェック</button></div>
+    </div>
+    <div id="fu-result" style="margin-top:10px"></div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-top:8px">
+      <canvas id="fu-canvas" style="display:none;border:1px solid var(--line);border-radius:8px;background:#fff;max-width:420px"></canvas>
+      <div id="fu-legend" class="muted" style="display:none;font-size:12px;line-height:2">
+        <span style="background:#e5e7eb;border:1px solid #9ca3af;padding:1px 10px"></span> 用紙<br>
+        <span style="border:2px dashed #f59e0b;padding:1px 9px"></span> 複合機が印刷できる範囲<br>
+        <span style="border:2px solid #2563eb;padding:1px 9px"></span> PDFのページ<br>
+        <span style="background:#dcfce7;border:1px solid #16a34a;padding:1px 10px"></span> 実際に絵柄がある範囲<br>
+        <span style="background:#fecaca;border:1px solid #dc2626;padding:1px 10px"></span> 欠ける部分
+      </div>
     </div>
   </div>
   <div class="sec" id="sec-cover">
@@ -583,6 +615,136 @@ async function meImposeRun(){
     dl(res.bytes, files[0].name.replace(/\.pdf$/i,'')+'_面付_'+res.cols+'x'+res.rows+'_'+res.total+'面'+(o.mirror?'_裏':'')+'.pdf');
     st.textContent='✅ '+res.sheetCount+'シート × '+res.total+'面（'+res.cols+'×'+res.rows+(res.rotated?'/回転':'')+(o.mirror?'/裏':'')+'）';
   }catch(e){ st.textContent=''; toast('❌ 面付失敗: '+(e.message||e)); }
+}
+
+// ── 🖨 複合機の余白チェック ──
+// 複合機は用紙端 約4.2mm(既定)に印刷できない。校正紙で「白フチが出るか／端が欠けるか」を
+// 原寸(100%)と 用紙に合わせて縮小 の両方で判定する。絵柄の範囲はページを描画して実測する。
+var FU_PAPERS=[[210,297,'A4'],[297,420,'A3'],[182,257,'B5'],[257,364,'B4'],[148,210,'A5'],[100,148,'はがき']];
+function _fuR1(v){ return Math.round(v*10)/10; }
+function _fuTimeout(p, ms){ return Promise.race([p, new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('時間切れ。pdf.jsの部品(worker)が読み込めていません。ネットワークを確認して再実行してください')); }, ms); })]); }
+async function _fuInkBox(buf, pageNum){
+  var data=buf.slice(0);
+  var pdf=await _fuTimeout(pdfjsLib.getDocument({data:data}).promise, 20000);
+  if(pageNum>pdf.numPages) pageNum=pdf.numPages;
+  var page=await pdf.getPage(pageNum);
+  var vp1=page.getViewport({scale:1});
+  var sc=1200/Math.max(vp1.width,vp1.height);
+  var vp=page.getViewport({scale:sc});
+  var cv=document.createElement('canvas'); cv.width=Math.ceil(vp.width); cv.height=Math.ceil(vp.height);
+  var cx=cv.getContext('2d');
+  cx.fillStyle='#fff'; cx.fillRect(0,0,cv.width,cv.height);
+  await _fuTimeout(page.render({canvasContext:cx, viewport:vp}).promise, 20000);
+  var im=cx.getImageData(0,0,cv.width,cv.height).data;
+  var minX=cv.width, maxX=-1, minY=cv.height, maxY=-1;
+  for(var y=0;y<cv.height;y++){
+    for(var x=0;x<cv.width;x++){
+      var i=(y*cv.width+x)*4;
+      if(im[i]<245||im[i+1]<245||im[i+2]<245){
+        if(x<minX)minX=x; if(x>maxX)maxX=x;
+        if(y<minY)minY=y; if(y>maxY)maxY=y;
+      }
+    }
+  }
+  var pageWmm=vp1.width/MM, pageHmm=vp1.height/MM;
+  if(maxX<0) return { blank:true, pageW:pageWmm, pageH:pageHmm, pages:pdf.numPages, pageNum:pageNum };
+  var k=(vp1.width/MM)/cv.width;   // px→mm
+  return { blank:false, pages:pdf.numPages, pageNum:pageNum, pageW:pageWmm, pageH:pageHmm,
+           ink:{ left:minX*k, right:(cv.width-1-maxX)*k, top:minY*k, bottom:(cv.height-1-maxY)*k,
+                 w:(maxX-minX+1)*k, h:(maxY-minY+1)*k } };
+}
+function _fuPickPaper(pw, ph){
+  var v=document.getElementById('fu-paper').value;
+  function orient(a,b){ return (pw>=ph)?[Math.max(a,b),Math.min(a,b)]:[Math.min(a,b),Math.max(a,b)]; }
+  if(v!=='auto'){ var m=v.split('x'); var o=orient(+m[0],+m[1]); return {w:o[0],h:o[1],name:(FU_PAPERS.find(function(p){return (p[0]+'x'+p[1])===v;})||['','',v])[2]}; }
+  var best=null;
+  FU_PAPERS.forEach(function(p){
+    var o=orient(p[0],p[1]);
+    if(o[0]>=pw-0.5 && o[1]>=ph-0.5){ if(!best || o[0]*o[1]<best.w*best.h) best={w:o[0],h:o[1],name:p[2]}; }
+  });
+  if(!best){ var a3=orient(297,420); best={w:a3[0],h:a3[1],name:'A3（入りきりません）'}; }
+  return best;
+}
+async function fuchiCheck(){
+  if(!files.length){ toast('PDFを入れてください'); return; }
+  if(typeof pdfjsLib==='undefined'){ toast('pdf.js読込中。少し待って再実行してください'); return; }
+  var box=document.getElementById('fu-result');
+  box.innerHTML='<span class="muted">⏳ ページを描画して絵柄の範囲を実測しています…</span>';
+  try{
+    var pg=Math.max(1,parseInt(document.getElementById('fu-page').value)||1);
+    var edge=Math.max(0,parseFloat(document.getElementById('fu-edge').value)||0);
+    var r=await _fuInkBox(files[0].buf, pg);
+    var paper=_fuPickPaper(r.pageW, r.pageH);
+    var m=files[0].m || await measureFile(files[0].buf);
+    if(r.blank){
+      box.innerHTML='<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:9px 13px;font-size:13px">'+pg+'ページ目は白紙です（絵柄が見つかりません）。ページ番号を変えてください。</div>';
+      document.getElementById('fu-canvas').style.display='none';
+      document.getElementById('fu-legend').style.display='none';
+      return;
+    }
+    // ── 原寸(100%): ページを用紙の中央に置く ──
+    var offX=(paper.w-r.pageW)/2, offY=(paper.h-r.pageH)/2;   // ページが大きいと負
+    // 用紙上での絵柄の位置（各辺、用紙端から絵柄までの距離）
+    var pos={ left:offX+r.ink.left, right:(paper.w-(offX+r.pageW))+r.ink.right,
+              top:offY+r.ink.top,   bottom:(paper.h-(offY+r.pageH))+r.ink.bottom };
+    var cut={}, whiteA={}, cutAny=false;
+    ['top','bottom','left','right'].forEach(function(s){
+      cut[s]=Math.max(0, edge-pos[s]);                        // 絵柄が縁に入って欠けるmm
+      if(cut[s]>0.05) cutAny=true; else cut[s]=0;
+      whiteA[s]=Math.max(edge, pos[s]);                       // 紙端から見える白フチ
+    });
+    var overflow=(r.pageW>paper.w+0.5)||(r.pageH>paper.h+0.5);
+    // ── 用紙に合わせて縮小: 印刷できる範囲にページ全体を入れる ──
+    var sc=Math.min((paper.w-2*edge)/r.pageW,(paper.h-2*edge)/r.pageH);
+    var scPct=Math.round(Math.min(1,sc)*1000)/10;
+    var sFit=Math.min(1,sc);
+    var offX2=(paper.w-r.pageW*sFit)/2, offY2=(paper.h-r.pageH*sFit)/2;
+    var whiteB={ left:offX2+r.ink.left*sFit, right:offX2+r.ink.right*sFit,
+                 top:offY2+r.ink.top*sFit,  bottom:offY2+r.ink.bottom*sFit };
+    // ── 判定表示 ──
+    function four(o){ return '上'+_fuR1(o.top)+' / 下'+_fuR1(o.bottom)+' / 左'+_fuR1(o.left)+' / 右'+_fuR1(o.right)+'mm'; }
+    var verdict = cutAny
+      ? '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:9px 13px;font-size:13.5px;color:#7f1d1d"><b>⚠ 原寸で出すと端が欠けます</b>（欠け: '
+        +['top','bottom','left','right'].filter(function(s){return cut[s];}).map(function(s){return {top:'上',bottom:'下',left:'左',right:'右'}[s]+_fuR1(cut[s])+'mm';}).join('・')
+        +'）。校正紙は「用紙に合わせて縮小」で出すか、大きい用紙にしてください。</div>'
+      : '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:9px 13px;font-size:13.5px;color:#065f46"><b>✓ 原寸(100%)で欠けずに出せます</b>。白フチは最小 '
+        +_fuR1(Math.min(whiteA.top,whiteA.bottom,whiteA.left,whiteA.right))+'mm 出ます。</div>';
+    box.innerHTML=verdict
+      +'<div style="font-size:12.5px;margin-top:7px;line-height:1.9">'
+      +'<b>データ:</b> '+_fuR1(r.pageW)+'×'+_fuR1(r.pageH)+'mm（'+r.pageNum+'/'+r.pages+'ページ目'+(m&&m.hasTonbo?'・トンボ付き（外形で判定）':'')+'）　'
+      +'<b>絵柄:</b> '+_fuR1(r.ink.w)+'×'+_fuR1(r.ink.h)+'mm（端から 上'+_fuR1(r.ink.top)+' / 下'+_fuR1(r.ink.bottom)+' / 左'+_fuR1(r.ink.left)+' / 右'+_fuR1(r.ink.right)+'mm）　'
+      +'<b>用紙:</b> '+paper.name+' '+paper.w+'×'+paper.h+'mm（縁 '+edge+'mm）'
+      +(overflow?'<span style="color:#b91c1c;font-weight:700">　※データが用紙より大きい</span>':'')
+      +'<br>① <b>原寸(100%)</b>: 白フチ '+four(whiteA)+(cutAny?'　<span style="color:#b91c1c;font-weight:700">欠け '+['top','bottom','left','right'].filter(function(s){return cut[s];}).map(function(s){return {top:'上',bottom:'下',left:'左',right:'右'}[s]+_fuR1(cut[s]);}).join('・')+'mm</span>':'　欠けなし')
+      +'<br>② <b>用紙に合わせて縮小('+scPct+'%)</b>: 白フチ '+four(whiteB)+'　欠けなし'+(scPct<100?'　<span style="color:#92400e">※原寸ではないので寸法確認には使えません</span>':'')
+      +'</div>';
+    // ── プレビュー描画（原寸配置） ──
+    var cv=document.getElementById('fu-canvas'); cv.style.display='';
+    document.getElementById('fu-legend').style.display='';
+    var k=380/Math.max(paper.w,paper.h);
+    cv.width=Math.round(paper.w*k)+20; cv.height=Math.round(paper.h*k)+20;
+    var g=cv.getContext('2d');
+    g.clearRect(0,0,cv.width,cv.height);
+    var px=10, py=10;
+    function R(x,y,w,h){ return [px+x*k, py+y*k, w*k, h*k]; }
+    g.fillStyle='#e5e7eb'; g.strokeStyle='#9ca3af'; g.lineWidth=1;
+    g.fillRect.apply(g,R(0,0,paper.w,paper.h)); g.strokeRect.apply(g,R(0,0,paper.w,paper.h));
+    g.fillStyle='#fff'; g.fillRect.apply(g,R(edge,edge,paper.w-2*edge,paper.h-2*edge));
+    g.strokeStyle='#f59e0b'; g.setLineDash([5,3]); g.lineWidth=1.5;
+    g.strokeRect.apply(g,R(edge,edge,paper.w-2*edge,paper.h-2*edge)); g.setLineDash([]);
+    g.strokeStyle='#2563eb'; g.lineWidth=1.5;
+    g.strokeRect.apply(g,R(offX,offY,r.pageW,r.pageH));
+    var ix=offX+r.ink.left, iy=offY+r.ink.top;
+    g.fillStyle='rgba(22,163,74,.18)'; g.strokeStyle='#16a34a'; g.lineWidth=1;
+    g.fillRect.apply(g,R(ix,iy,r.ink.w,r.ink.h)); g.strokeRect.apply(g,R(ix,iy,r.ink.w,r.ink.h));
+    // 欠け（絵柄∩印刷不可帯）を赤で
+    g.fillStyle='rgba(220,38,38,.45)';
+    var ix2=ix+r.ink.w, iy2=iy+r.ink.h;
+    if(cut.left)   g.fillRect.apply(g,R(ix, iy, Math.min(edge-ix, r.ink.w), r.ink.h));
+    if(cut.right)  g.fillRect.apply(g,R(Math.max(paper.w-edge, ix), iy, ix2-Math.max(paper.w-edge,ix), r.ink.h));
+    if(cut.top)    g.fillRect.apply(g,R(ix, iy, r.ink.w, Math.min(edge-iy, r.ink.h)));
+    if(cut.bottom) g.fillRect.apply(g,R(ix, Math.max(paper.h-edge, iy), r.ink.w, iy2-Math.max(paper.h-edge,iy)));
+  }catch(e){ box.innerHTML='<span style="color:#b91c1c">❌ チェック失敗: '+(e.message||e)+'</span>'; }
 }
 
 // ── 📦 3Dプレビュー＋クイックチェック ──
