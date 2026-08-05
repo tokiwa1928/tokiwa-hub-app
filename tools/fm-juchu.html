@@ -754,7 +754,8 @@ function pastCount(){
     tx.onsuccess = function(){
       var n = tx.result;
       document.getElementById('past-n').textContent =
-        n ? (n.toLocaleString() + ' 件 取込済み') : '未取込';
+        n ? (n.toLocaleString() + ' 件 取込済み') : '未取込（📁取り込む から実績JSONを入れてください）';
+      if(n && REF_ON) refresh_ref();
     };
   });
 }
@@ -769,15 +770,34 @@ function importPast(file){
     catch(e){ msg.textContent = '❌ JSONとして読めません'; return; }
     var rows = data.rows || data;
     if(!Array.isArray(rows)){ msg.textContent = '❌ 形式が違います'; return; }
+    // 1万件超をまとめて入れるとブラウザが固まって見えるので、分けて入れて進み具合を出す
     pastOpen(function(db){
-      var tx = db.transaction('rows','readwrite'), st = tx.objectStore('rows');
-      st.clear();
-      rows.forEach(function(r){ r._s = _pastKey_(r); st.put(r); });
-      tx.oncomplete = function(){
-        msg.textContent = '✅ ' + rows.length.toLocaleString() + ' 件を取り込みました';
-        pastCount();
-      };
-      tx.onerror = function(){ msg.textContent = '❌ 保存に失敗しました（容量不足の可能性）'; };
+      try{
+        var cl = db.transaction('rows','readwrite').objectStore('rows').clear();
+        cl.onerror = function(){ msg.textContent = '❌ 前のデータを消せませんでした'; };
+      }catch(e){ msg.textContent = '❌ 取り込めません: ' + e; return; }
+      var i = 0, CH = 1000;
+      function step(){
+        if(i >= rows.length){
+          msg.textContent = '✅ ' + rows.length.toLocaleString() + ' 件を取り込みました';
+          pastCount(); refresh_ref();
+          return;
+        }
+        var tx = db.transaction('rows','readwrite'), st = tx.objectStore('rows');
+        var end = Math.min(i + CH, rows.length);
+        for(var k = i; k < end; k++){
+          var r = rows[k];
+          if(r && typeof r === 'object'){ r._s = _pastKey_(r); st.put(r); }
+        }
+        tx.oncomplete = function(){
+          i = end;
+          msg.textContent = '取り込み中… ' + i.toLocaleString() + ' / ' + rows.length.toLocaleString() + ' 件';
+          setTimeout(step, 0);
+        };
+        tx.onabort = function(){ msg.textContent = '❌ 取り込みが中断されました（' + ((tx.error && tx.error.name) || '原因不明') + '）'; };
+        tx.onerror = function(){ msg.textContent = '❌ 保存に失敗しました（' + ((tx.error && tx.error.name) || '容量不足の可能性') + '）'; };
+      }
+      step();
     });
   };
   rd.readAsText(file, 'utf-8');
@@ -1274,10 +1294,8 @@ function refresh_ref(){
   var item = (g('f-item') || '').trim();
   var msg = document.getElementById('ref-msg');
   var box = document.getElementById('ref-tbl');
-  if(!cust && !item){
-    msg.textContent = '得意先コードか製品名を入れると出ます';
-    box.innerHTML = ''; return;
-  }
+  // 得意先コードも製品名も空のときは、取り込んだ実績の直近ぶんを出す
+  var wide = (!cust && !item);
   msg.textContent = '探しています…';
   pastOpen(function(db){
     var hits = [], cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
@@ -1285,8 +1303,10 @@ function refresh_ref(){
       var c = e.target.result;
       if(c && hits.length < 400){
         var r = c.value, ok = true;
-        if(cust && String(r['f-custcd'] || '').indexOf(cust) < 0) ok = false;
-        if(ok && item && String(r['f-item'] || '').indexOf(item) < 0) ok = false;
+        if(!wide){
+          if(cust && String(r['f-custcd'] || '').indexOf(cust) < 0) ok = false;
+          if(ok && item && String(r['f-item'] || '').indexOf(item) < 0) ok = false;
+        }
         if(ok) hits.push(r);
         c.continue(); return;
       }
@@ -1318,9 +1338,10 @@ function refresh_ref(){
       });
       box.innerHTML = h + '</tbody></table>';
       REFHIT = top;
-      msg.textContent = hits.length
-        ? (hits.length + '件（新しい順に' + top.length + '件表示・行をクリックで流し込み）')
-        : '該当なし';
+      msg.textContent = !hits.length
+        ? (wide ? '取り込んだ実績がありません。📁取り込む から入れてください' : '該当なし')
+        : ((wide ? '取り込んだ実績の直近 ' : hits.length + '件のうち新しい順に ')
+           + top.length + '件を表示（得意先コードか製品名を入れると絞れます・行をクリックで流し込み）');
       // レコード送りの対象にもする
       navSetFrom(top, -1);
     };
