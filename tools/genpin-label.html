@@ -177,8 +177,8 @@
    <div id="nifuda-ui" style="display:none">
     <div class="st">台紙</div>
     <select id="n-preset" onchange="applyNifudaPreset()">
-      <option value="yamauchi">ヤマウチ印刷（緑枠・水色台紙 192×77・横5面）</option>
-      <option value="sumito">住友電装 御中（黒枠・黄色台紙 216×76・横5面）</option>
+      <option value="yamauchi">ヤマウチ印刷（緑枠・水色台紙 75×191・縦5面）</option>
+      <option value="sumito">住友電装 御中（黒枠・黄色台紙 75×215・縦5面）</option>
     </select>
     <div class="st">台紙・ラベルの寸法（mm）</div>
     <div class="row"><div><label>台紙 横</label><input id="n-tw" type="number" step="0.5" oninput="ndraw()"></div><div><label>台紙 縦</label><input id="n-th" type="number" step="0.5" oninput="ndraw()"></div></div>
@@ -735,8 +735,28 @@ async function nifudaPDF(){
   }catch(e){ alert('PDF作成に失敗: '+e.message); }
   area.style.cssText=''; area.className=daishi?'n-daishi':'';
 }
+// 注記の日本語は jsPDF の標準フォント(欧文のみ)では出ないため、HTMLを画像にして貼る
+async function nNoteImg(text,fsmm){
+  var d=document.createElement('div');
+  d.style.cssText='position:fixed;left:-99999px;top:0;display:inline-block;background:#fff;color:#666;'
+    +'font-size:'+fsmm+'mm;line-height:1.25;white-space:nowrap;font-family:"Yu Gothic","Meiryo",sans-serif';
+  d.textContent=text; document.body.appendChild(d);
+  try{
+    var cv=await html2canvas(d,{scale:4,backgroundColor:'#ffffff',logging:false});
+    return { url:cv.toDataURL('image/png'), w:(cv.width/4)/3.7795, h:(cv.height/4)/3.7795 };
+  } finally { document.body.removeChild(d); }
+}
+// 用紙幅に収めて注記を貼る（PDF部品が無い等で失敗しても線は出るので黙って諦める）
+async function nPutNote(pdf,text,x,y,maxW,fsmm){
+  if(!window.html2canvas) return 0;
+  try{
+    var im=await nNoteImg(text,fsmm), w=im.w, h=im.h;
+    if(w>maxW){ h=h*maxW/w; w=maxW; }
+    pdf.addImage(im.url,'PNG',x,y,w,h); return h;
+  }catch(e){ return 0; }
+}
 // 📏 位置合わせテスト: 台紙の外枠・ラベル枠・10cm目盛り・角の十字を印刷（普通紙に刷って台紙に重ねる）
-function nifudaTestPDF(){
+async function nifudaTestPDF(){
   if(!(window.jspdf&&window.jspdf.jsPDF)){ alert('PDF部品を読み込めませんでした'); return; }
   var pw=nOutW(), ph=nOutH(), p=nPos();
   var pdf=new window.jspdf.jsPDF({unit:'mm',format:[pw,ph],orientation:(pw>ph?'l':'p')});
@@ -757,15 +777,20 @@ function nifudaTestPDF(){
   // 角の十字（台紙の左上・右下）
   var cross=function(x,y){ pdf.line(x-4,y,x+4,y); pdf.line(x,y-4,x,y+4); };
   cross(ox,oy); cross(ox+nImgW(), oy+nImgH());
-  // 100mmの目盛り（原寸確認用）
-  var sx=Math.min(ox+2, pw-102), sy=Math.min(oy+nImgH()+6, ph-8);
-  if(sy<ph-2){
-    pdf.setLineWidth(0.3); pdf.line(sx,sy,sx+100,sy);
+  // 100mmの目盛り（原寸確認用）。用紙に入る向きで引く（75mm幅の台紙実寸では横に100mm取れない）
+  pdf.setLineWidth(0.3);
+  if(pw>=104){                                    // 横に引く
+    var sx=Math.max(2, Math.min(ox+2, pw-102)), sy=Math.min(oy+nImgH()+6, ph-6);
+    pdf.line(sx,sy,sx+100,sy);
     for(var mm=0;mm<=100;mm+=10){ pdf.line(sx+mm,sy,sx+mm,sy-(mm%50===0?3:1.8)); }
-    pdf.setFontSize(6); pdf.text('この線がちょうど100mmなら原寸です', sx, sy+3.5);
+    await nPutNote(pdf,'←この線がちょうど100mmなら原寸です→',sx,sy+1,pw-sx-2,2);
+  } else if(ph>=104){                             // 縦に引く（台紙実寸75×191mm等）
+    var vx=Math.max(4, Math.min(pw-3, ox+nImgW()-3)), vy=Math.max(2, Math.min(oy+6, ph-102));
+    pdf.line(vx,vy,vx,vy+100);
+    for(var mv=0;mv<=100;mv+=10){ pdf.line(vx,vy+mv,vx-(mv%50===0?3:1.8),vy+mv); }
+    await nPutNote(pdf,'↑この目盛りが100mmなら原寸↓',vx-30,vy+48,28,1.8);
   }
-  pdf.setFontSize(6);
-  pdf.text('位置合わせテスト（普通紙に印刷→台紙に重ねてズレを測り、上余白・左余白に入力）', 2, 4);
+  await nPutNote(pdf,'位置合わせテスト：普通紙に印刷→台紙に重ね、ズレを上余白・左余白に入力',1.5,0.8,pw-3,2);
   pdf.save('荷札_位置合わせテスト_'+pw+'x'+ph+'mm.pdf');
 }
 function nifudaInit(){ nInputsFromND(); ensureItems(); nrows(); document.getElementById('n-m-daishi').classList.toggle('pri',ND.mode==='daishi'); document.getElementById('n-m-full').classList.toggle('pri',ND.mode==='full'); }
