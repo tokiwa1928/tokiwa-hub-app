@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>現品票ラベル（トキワ・Nana C6I） | Tokiwa Hub Tools</title>
+<title>梱包ラベル・荷札作成 | Tokiwa Hub Tools</title>
+<!-- 荷札を原寸PDFで出すため（ヘッダー/フッター無し・用紙サイズ＝台紙） -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{ --ink:#211f1c; --line:#e2e0da; --bg:#f4f3f0; --teal:#0e7c86; }
   *{ box-sizing:border-box; }
@@ -215,7 +218,8 @@
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
       <button class="btn" onclick="nfillAll()">1面目を全部にコピー</button>
       <button class="btn" onclick="nclearAll()">全部消す</button>
-      <button class="btn pri" onclick="nifudaPrint()">🖨 印刷</button>
+      <button class="btn pri" onclick="nifudaPDF()">📄 PDFで保存（原寸・推奨）</button>
+      <button class="btn" onclick="nifudaPrint()">🖨 直接印刷</button>
     </div>
    </div><!-- /nifuda-ui -->
   </div>
@@ -636,9 +640,9 @@ function nifudaPreview(){
   var prev=document.getElementById('preview'); var daishi=ND.mode==='daishi';
   var ph=document.getElementById('n-paper-hint');
   if(ph) ph.innerHTML = ((ND.paper==='exact')
-    ? '🖨 EV-50側の用紙を <b>'+ND.tw+'×'+ND.th+'mm</b>（不定形/カスタム）に設定してください。'
-    : '🖨 A4で出力します。台紙をA4の<b>左上</b>に合わせてセットしてください。')
-    + '<br>⚠ <b>原寸で出すには印刷ダイアログの「倍率」を必ず<u>100%（実際のサイズ）</u>に</b>（「用紙に合わせる/Fit」だと数%縮みます）。ヘッダー・フッターはツール側でオフにしています。';
+    ? '📄 <b>「PDFで保存（原寸）」がおすすめ</b>です。用紙サイズ＝<b>'+ND.tw+'×'+ND.th+'mm</b> のPDFになるので、ヘッダー/フッターも入らず縮みません。作ったPDFをAcrobat等から <b>倍率100%（実際のサイズ）</b> でEV-50へ出してください。'
+      + '<br>🖨「直接印刷」する場合は、印刷ダイアログで<b>プリンタの「ユーザー定義（'+ND.tw+'×'+ND.th+'mm）」用紙を選択</b>し、<b>倍率100%・余白なし・ヘッダーとフッターのチェックを外す</b>。'
+    : '🖨 A4で出力します。台紙をA4の<b>左上</b>に合わせてセットし、<b>倍率100%・余白なし・ヘッダーとフッターのチェックを外す</b>。');
   var scale=Math.min(1,(prev.clientWidth-40)/(ND.tw*3.7795));
   prev.innerHTML='<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">荷札 台紙 '+ND.tw+'×'+ND.th+'mm（実寸の約'+Math.round(scale*100)+'%）'+(daishi?'・台紙モード（枠・固定文字は印刷しません）':'・全面モード')+'</div>'
     +'<div class="sheetprev'+(daishi?' n-daishi':'')+'" style="transform:scale('+scale+')">'+fittedSheetHTML()+'</div>'
@@ -649,7 +653,9 @@ function nifudaPrint(){
   // 用紙サイズ: EV-50等は台紙の実寸／A4は複合機用（どちらも原寸mmで配置）
   var st=document.getElementById('n-page-style');
   if(!st){ st=document.createElement('style'); st.id='n-page-style'; document.head.appendChild(st); }
-  st.textContent='@media print{ @page{ size:'+(ND.paper==='exact' ? (ND.tw+'mm '+ND.th+'mm') : 'A4 portrait')+'; margin:0; } }';
+  // 実寸モードは size を指定しない（Chromeが該当用紙を持たない場合A4に化けるため、
+  // 印刷ダイアログでプリンタの「ユーザー定義」用紙を選んでもらう）。A4モードのみ size 指定。
+  st.textContent='@media print{ @page{ '+(ND.paper==='exact' ? '' : 'size:A4 portrait; ')+'margin:0; } }';
   // 印刷エリアに実寸で描画（値は列幅に自動フィット）
   var area=document.getElementById('n-printarea');
   if(!area){ area=document.createElement('div'); area.id='n-printarea'; document.body.appendChild(area); }
@@ -662,6 +668,25 @@ function nifudaPrint(){
   var restore=function(){ document.body.classList.remove('n-printing'); document.title=old; window.removeEventListener('afterprint',restore); };
   window.addEventListener('afterprint',restore); setTimeout(restore,60000);
   setTimeout(function(){ window.print(); },60);
+}
+// 原寸PDFで保存（用紙サイズ＝台紙。ブラウザのヘッダー/フッターが入らず、縮小もされない）
+async function nifudaPDF(){
+  if(!(window.jspdf&&window.jspdf.jsPDF)||!window.html2canvas){ alert('PDF部品を読み込めませんでした（オンラインで再試行してください）'); return; }
+  var daishi=ND.mode==='daishi';
+  var area=document.getElementById('n-printarea');
+  if(!area){ area=document.createElement('div'); area.id='n-printarea'; document.body.appendChild(area); }
+  area.className=(daishi?'n-daishi ':'')+'pdfshot';
+  area.innerHTML='<div class="n-sheet" style="width:'+ND.tw+'mm;height:'+ND.th+'mm;background:#fff">'+nifudaLabelsHTML()+'</div>';
+  // 画面外で実寸表示 → 値の自動フィット → 画像化
+  area.style.cssText='display:block;position:fixed;left:-99999px;top:0;background:#fff';
+  fitVals(area);
+  try{
+    var cv=await html2canvas(area.querySelector('.n-sheet'),{scale:4,backgroundColor:'#ffffff',logging:false});
+    var pdf=new window.jspdf.jsPDF({unit:'mm',format:[ND.tw,ND.th],orientation:(ND.tw>ND.th?'l':'p')});
+    pdf.addImage(cv.toDataURL('image/jpeg',0.95),'JPEG',0,0,ND.tw,ND.th);
+    pdf.save((ND.preset==='sumito'?'住友電装':'ヤマウチ')+'_荷札_'+ND.tw+'x'+ND.th+'mm.pdf');
+  }catch(e){ alert('PDF作成に失敗: '+e.message); }
+  area.style.cssText=''; area.className=daishi?'n-daishi':'';
 }
 function nifudaInit(){ nInputsFromND(); ensureItems(); nrows(); document.getElementById('n-m-daishi').classList.toggle('pri',ND.mode==='daishi'); document.getElementById('n-m-full').classList.toggle('pri',ND.mode==='full'); }
 function switchKind(){
