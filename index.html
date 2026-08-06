@@ -26066,10 +26066,15 @@ function renderToolsPage(){
     if(window._toolStatusFilter_ !== '__all__' && status !== window._toolStatusFilter_) return '';
     var jsKey = key.replace(/'/g,"\\'");
     var open = t.internal ? ('openInternalTool(\''+t.internal+'\')') : ('window.open(\''+t.href+'\',\'_blank\',\'noopener\')');
-    // 会社名バッジは廃止（カードをすっきりさせる）。公開会社が限定されている場合のみ小さく✎印を出し設定変更できる
-    var scopeBadge = (isAdminCompany && comps.length)
-      ? '<span style="font-size:9.5px;color:#7c3aed;border:1px solid #c4b5fd;border-radius:4px;padding:1px 6px;cursor:pointer" onclick="event.stopPropagation();editToolCompanies('+i+')" title="公開先が限定されています: '+comps.map(compName).join('・').replace(/"/g,'&quot;')+'（クリックで変更）">🔒 限定 ✎</span>'
-      : '';
+    // 公開先（どの会社で使えるか）をタイル下部に表示。限定なし＝全社
+    var compNames = comps.map(compName).join('・');
+    var scopeBadge = comps.length
+      ? '<span style="font-size:9px;font-weight:700;color:#6d28d9;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:0 5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'+(isAdminCompany?'cursor:pointer':'')+'"'
+        + (isAdminCompany?(' onclick="event.preventDefault();event.stopPropagation();editToolCompanies('+i+')"'):'')
+        + ' title="このツールを使える会社: '+compNames.replace(/"/g,'&quot;')+(isAdminCompany?'（クリックで変更）':'')+'">'+comps.join('/')+(isAdminCompany?' ✎':'')+'</span>'
+      : (isAdminCompany
+          ? '<span style="font-size:9px;color:#94a3b8;border:1px solid #e2e8f0;border-radius:8px;padding:0 5px;cursor:pointer" onclick="event.preventDefault();event.stopPropagation();editToolCompanies('+i+')" title="全社が使えます（クリックで公開先を限定）">全社 ✎</span>'
+          : '<span style="font-size:9px;color:#b6bcc4">全社</span>');
     return '<div class="tool-card" draggable="true" data-key="'+key+'"'
       + ' ondragstart="_toolDragStart_(event,\''+jsKey+'\')" ondragover="_toolDragOver_(event)" ondrop="_toolDrop_(event,\''+jsKey+'\')" ondragend="_toolDragEnd_(event)"'
       + ' onclick="'+open+'" onmouseover="this.style.borderColor=\'#0891b2\'" onmouseout="this.style.borderColor=\'#e0ddd6\'"'
@@ -26078,9 +26083,9 @@ function renderToolsPage(){
       + ' style="position:relative;background:'+(_toolSel_()[key]?'#eff6ff':'#fff')+';border:1px solid '+(_toolSel_()[key]?'#0891b2':'#e0ddd6')+';border-radius:9px;padding:8px 6px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;aspect-ratio:1/1;text-align:center;overflow:hidden">'
       +   (isAdminCompany?('<input type="checkbox" class="tool-cb" data-key="'+key+'" onclick="event.stopPropagation();_toolSelToggle_(\''+jsKey+'\',this.checked)"'+(_toolSel_()[key]?' checked':'')+' style="position:absolute;left:5px;top:5px;width:13px;height:13px;cursor:pointer">'):'')
       +   (isAdminCompany?('<span onclick="event.preventDefault();event.stopPropagation();editToolStatus('+i+')" title="状態を変更（現在: '+status+'）" style="position:absolute;right:5px;top:4px;cursor:pointer;font-size:10px;color:#cbd5e1">✎</span>'):'')
-      +   '<span style="font-size:26px;line-height:1;cursor:grab" title="ドラッグで並べ替え/カテゴリ移動">'+t.icon+'</span>'
-      +   '<strong style="font-size:11px;line-height:1.3;width:100%;overflow-wrap:anywhere;word-break:break-word;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden">'+t.name+'</strong>'
-      +   (scopeBadge?('<span style="position:absolute;left:4px;bottom:4px">'+scopeBadge+'</span>'):'')
+      +   '<span style="font-size:26px;line-height:1;cursor:grab" title="ドラッグで移動（並べ替え／カテゴリ／運用中・試作の変更）">'+t.icon+'</span>'
+      +   '<strong style="font-size:11px;line-height:1.3;width:100%;overflow-wrap:anywhere;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">'+t.name+'</strong>'
+      +   (scopeBadge?('<span style="max-width:100%;overflow:hidden">'+scopeBadge+'</span>'):'')
       + '</div>';
   }
   // 状態(運用中/試作など)の見出し。カテゴリの中で「運用中」と「試作・検証中」を分けて並べる
@@ -26095,20 +26100,29 @@ function renderToolsPage(){
     var cardsIn = keysIn.map(buildCard).filter(Boolean);
     if(!cardsIn.length) return '';
     // 状態ごとに分けて描画（運用中＝左／試作・停止中＝右 の2カラム。縦長にならないように）
+    var cJs = cat.replace(/'/g,"\\'");
     var byG={live:[],wip:[],stop:[]};
     keysIn.forEach(function(k){ var c=buildCard(k); if(c) byG[_stGroup_(k)].push(c); });
+    var ST_OF={live:'運用中',wip:'試作',stop:'停止中'};
     var colHtml=function(gs){
-      return gs.filter(function(g){ return byG[g].length; }).map(function(g){
-        return _stHead_(g, byG[g].length)
-          + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px;align-items:start;margin-bottom:8px">'+byG[g].join('')+'</div>';
+      // 各状態ブロックをドロップ先にする（ここへ落とすとその状態に変わる）
+      return gs.map(function(g){
+        var st=ST_OF[g], stJs=st.replace(/'/g,"\\'");
+        return '<div ondragover="_toolDragOver_(event);this.style.background=\'#ecfeff\'" ondragleave="this.style.background=\'\'"'
+          + ' ondrop="this.style.background=\'\';_toolDropStatus_(event,\''+stJs+'\',\''+cJs+'\')"'
+          + ' title="ここにドラッグすると「'+st+'」に変わります" style="border-radius:8px;padding:2px;transition:background .1s;min-height:56px">'
+          + _stHead_(g, byG[g].length)
+          + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px;align-items:start;margin-bottom:8px">'
+          + (byG[g].length?byG[g].join(''):'<div style="grid-column:1/-1;font-size:10.5px;color:#cbd5e1;padding:8px;border:1px dashed #e2e8f0;border-radius:8px;text-align:center">ここにドラッグ</div>')
+          + '</div></div>';
       }).join('');
     };
-    var leftHtml=colHtml(['live']), rightHtml=colHtml(['wip','stop']);
+    var rightGroups=byG.stop.length?['wip','stop']:['wip'];
+    var leftHtml=colHtml(['live']), rightHtml=colHtml(rightGroups);
     var blocks = (leftHtml && rightHtml)
       ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">'
           + '<div>'+leftHtml+'</div><div>'+rightHtml+'</div></div>'
       : (leftHtml+rightHtml);
-    var cJs = cat.replace(/'/g,"\\'");
     var head = '<div style="display:flex;align-items:center;gap:8px;margin:0 0 7px">'
       + '<span style="font-size:13px;font-weight:800;color:#211f1c">📁 '+_escDiff(cat)+'</span>'
       + '<span style="font-size:11px;color:#94a3b8">('+cardsIn.length+')</span>'
@@ -26186,6 +26200,22 @@ function _toolDragOver_(e){ e.preventDefault(); try{ e.dataTransfer.dropEffect='
 function _toolDragEnd_(){ _toolDragKey_=null; }
 function _toolDrop_(e,targetKey){ e.preventDefault(); e.stopPropagation(); var src=_toolDragKey_||(e.dataTransfer&&e.dataTransfer.getData('text/plain')); _toolDragKey_=null; if(!src||src===targetKey) return; var ord=_toolCurrentOrder_(); var from=ord.indexOf(src), to=ord.indexOf(targetKey); if(from<0||to<0) return; ord.splice(to,0,ord.splice(from,1)[0]); _toolOrderSave_(ord); var m=_toolCatMap_(); m[src]=_toolCatOf_(targetKey); _toolCatSave_(m); renderToolsPage(); }
 function _toolDropCat_(e,cat){ e.preventDefault(); e.stopPropagation(); var src=_toolDragKey_||(e.dataTransfer&&e.dataTransfer.getData('text/plain')); _toolDragKey_=null; if(!src) return; var m=_toolCatMap_(); m[src]=cat; _toolCatSave_(m); renderToolsPage(); }
+// 状態のブロック（運用中/試作/停止中）にドラッグして落とすと、その状態に変更する
+function _toolDropStatus_(e,st,cat){
+  e.preventDefault(); e.stopPropagation();
+  var src=_toolDragKey_||(e.dataTransfer&&e.dataTransfer.getData('text/plain')); _toolDragKey_=null;
+  if(!src) return;
+  if(cat){ var m=_toolCatMap_(); m[src]=cat; _toolCatSave_(m); }          // 別カテゴリへ落とした場合も移動
+  var i=_toolKeyIdx_(src); var t=(i>=0)?TOOLS_REGISTRY[i]:null;
+  var cur=((DB&&DB.toolStatusOverride)||{})[src]||(t&&t.status);
+  if(cur!==st){
+    if(!DB.toolStatusOverride) DB.toolStatusOverride={};
+    DB.toolStatusOverride[src]=st; saveDB();
+    if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+    if(typeof _toastMsg==='function') _toastMsg('🏷 「'+((t&&t.name)||src)+'」を「'+st+'」にしました');
+  }
+  renderToolsPage();
+}
 // ツールのカテゴリ分け (端末保存)
 function _toolCatMap_(){ try{ return JSON.parse(localStorage.getItem('tokiwa_tool_cat')||'{}'); }catch(e){ return {}; } }
 function _toolCatSave_(m){ try{ localStorage.setItem('tokiwa_tool_cat', JSON.stringify(m)); }catch(e){} }
