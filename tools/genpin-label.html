@@ -75,6 +75,16 @@
   .n-tbl th{ background:#e6e3db; font-size:10.5px; }
   .n-tbl td input{ width:100%; border:none; padding:2px 4px; font-size:12px; }
   .n-tbl td.n input{ text-align:right; }
+  /* 荷札の印刷: このページから直接印刷（別窓を使わない）。ヘッダー/フッターを消し、原寸(mm)で出す */
+  #n-printarea{ display:none; }
+  @media print{
+    @page{ margin:0; }                       /* ブラウザのURL・日付・ページ番号を出さない */
+    html,body{ margin:0 !important; padding:0 !important; background:#fff !important; }
+    body.n-printing > *{ display:none !important; }
+    body.n-printing #n-printarea{ display:block !important; }
+    body.n-printing #n-printarea .n-sheet{ border:0 !important; margin:0 !important; }
+    body.n-printing *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+  }
 </style>
 </head>
 <body>
@@ -212,6 +222,8 @@
 
   <div id="preview"></div>
 </main>
+<!-- 荷札の印刷用（原寸mm・画面には出さない） -->
+<div id="n-printarea"></div>
 
 <script>
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
@@ -623,9 +635,10 @@ function nifudaPreview(){
   if(document.getElementById('f-kind').value!=='nifuda') return;
   var prev=document.getElementById('preview'); var daishi=ND.mode==='daishi';
   var ph=document.getElementById('n-paper-hint');
-  if(ph) ph.innerHTML = (ND.paper==='exact')
-    ? '🖨 EV-50側の用紙を <b>'+ND.tw+'×'+ND.th+'mm</b>（不定形/カスタム）に設定し、印刷は<b>「実際のサイズ・倍率100%・余白なし」</b>で。'
-    : '🖨 A4で出力します。台紙をA4の<b>左上</b>に合わせてセットしてください（倍率100%・余白なし）。';
+  if(ph) ph.innerHTML = ((ND.paper==='exact')
+    ? '🖨 EV-50側の用紙を <b>'+ND.tw+'×'+ND.th+'mm</b>（不定形/カスタム）に設定してください。'
+    : '🖨 A4で出力します。台紙をA4の<b>左上</b>に合わせてセットしてください。')
+    + '<br>⚠ <b>原寸で出すには印刷ダイアログの「倍率」を必ず<u>100%（実際のサイズ）</u>に</b>（「用紙に合わせる/Fit」だと数%縮みます）。ヘッダー・フッターはツール側でオフにしています。';
   var scale=Math.min(1,(prev.clientWidth-40)/(ND.tw*3.7795));
   prev.innerHTML='<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">荷札 台紙 '+ND.tw+'×'+ND.th+'mm（実寸の約'+Math.round(scale*100)+'%）'+(daishi?'・台紙モード（枠・固定文字は印刷しません）':'・全面モード')+'</div>'
     +'<div class="sheetprev'+(daishi?' n-daishi':'')+'" style="transform:scale('+scale+')">'+fittedSheetHTML()+'</div>'
@@ -633,15 +646,22 @@ function nifudaPreview(){
 }
 function nifudaPrint(){
   var daishi=ND.mode==='daishi';
-  var sheet=fittedSheetHTML();
-  var w=window.open('','_blank'); var base=document.querySelector('style').innerHTML;
-  // EV-50等は台紙の実寸で出力（用紙サイズ＝台紙）。A4は複合機用に左上へ配置。
-  var pageCss = ND.paper==='exact' ? '@page{size:'+ND.tw+'mm '+ND.th+'mm;margin:0}' : '@page{size:A4 portrait;margin:0}';
-  var css=base+pageCss+'body{margin:0;background:#fff}.n-sheet{border:0;margin:0}'
-    +'*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}';   // 台紙色・枠色を確実に印刷
-  var title=(ND.paper==='exact'?(ND.tw+'x'+ND.th+'mm_'):'A4_')+'荷札';
-  w.document.write('<html><head><meta charset="utf-8"><title>'+title+'</title><style>'+css+'</style></head><body class="'+(daishi?'n-daishi':'')+'">'+sheet+'</body></html>');
-  w.document.close(); setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} },350);
+  // 用紙サイズ: EV-50等は台紙の実寸／A4は複合機用（どちらも原寸mmで配置）
+  var st=document.getElementById('n-page-style');
+  if(!st){ st=document.createElement('style'); st.id='n-page-style'; document.head.appendChild(st); }
+  st.textContent='@media print{ @page{ size:'+(ND.paper==='exact' ? (ND.tw+'mm '+ND.th+'mm') : 'A4 portrait')+'; margin:0; } }';
+  // 印刷エリアに実寸で描画（値は列幅に自動フィット）
+  var area=document.getElementById('n-printarea');
+  if(!area){ area=document.createElement('div'); area.id='n-printarea'; document.body.appendChild(area); }
+  area.className = daishi ? 'n-daishi' : '';
+  area.innerHTML='<div class="n-sheet" style="width:'+ND.tw+'mm;height:'+ND.th+'mm">'+nifudaLabelsHTML()+'</div>';
+  area.style.display='block'; fitVals(area); area.style.display='';
+  var old=document.title;
+  document.title=(ND.paper==='exact'?(ND.tw+'x'+ND.th+'mm_'):'A4_')+'荷札';
+  document.body.classList.add('n-printing');
+  var restore=function(){ document.body.classList.remove('n-printing'); document.title=old; window.removeEventListener('afterprint',restore); };
+  window.addEventListener('afterprint',restore); setTimeout(restore,60000);
+  setTimeout(function(){ window.print(); },60);
 }
 function nifudaInit(){ nInputsFromND(); ensureItems(); nrows(); document.getElementById('n-m-daishi').classList.toggle('pri',ND.mode==='daishi'); document.getElementById('n-m-full').classList.toggle('pri',ND.mode==='full'); }
 function switchKind(){
