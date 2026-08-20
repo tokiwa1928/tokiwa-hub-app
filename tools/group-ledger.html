@@ -70,6 +70,10 @@
   select.stsel{ font-family:inherit; font-size:11.5px; font-weight:700; padding:1px 2px;
                 border:1px solid #c9c6bf; border-radius:5px; width:100%; min-width:76px; cursor:pointer; }
   select.stsel:disabled{ opacity:.6; cursor:progress; }
+  /* ふだんの状況表示。クリックすると選択欄に変わる */
+  .stchip{ display:inline-block; min-width:70px; text-align:center; font-size:11.5px; font-weight:700;
+           padding:1px 6px; border:1px solid #c9c6bf; border-radius:5px; cursor:pointer; }
+  .stchip:hover{ border-color:#1a1a1a; }
   tbody tr:nth-child(even){ background:#faf9f6 } tbody tr:hover{ background:#eef6fb }
   .rowred td{ color:var(--red); font-weight:700; }
   /* 左固定(チェック〜製造数量)・右固定(操作): 横スクロールしても残る */
@@ -255,7 +259,7 @@
         <button class="kt q" data-kind="quote" onclick="setKind('quote')">📝 見積 <b id="kt-n-q">0</b></button>
         <button class="kt o" data-kind="order" onclick="setKind('order')">📋 案件 <b id="kt-n-o">0</b></button>
       </span>
-      <input id="q" placeholder="🔍 伝票番号・顧客・案件で検索" style="flex:1;min-width:150px" oninput="render()">
+      <input id="q" placeholder="🔍 伝票番号・顧客・案件で検索" style="flex:1;min-width:150px" oninput="qInput()">
       <select id="f-status" onchange="render()"><option value="">状況：すべて</option></select>
       <button class="btn sm" onclick="loadList(true)" title="最新に更新">🔄</button>
       <button class="btn sm" onclick="openArrival()" title="プリントパック/グラフィックの発送メールから到着予定日(発送翌日)を取込">📧 到着予定日取込</button>
@@ -442,6 +446,9 @@ function _isQuoteRow_(c){
   if(ORDER_STATUS.indexOf(st)>=0) return false;
   return /^見積-/.test(String((c&&c.denpyo)||''));
 }
+// 検索は1文字ごとに描き直すと重いので、入力が止まってから描く
+var _qT_=null;
+function qInput(){ clearTimeout(_qT_); _qT_=setTimeout(render,250); }
 var KIND='';   // ''=すべて / 'quote'=見積 / 'order'=案件
 function setKind(k){
   KIND=k;
@@ -791,6 +798,24 @@ async function loadList(force){
     catch(e){ if(!ALLCASES) document.getElementById('status').textContent='読込失敗: '+e.message; }
   }
 }
+// 状況をクリックしたときだけ、そのセルを選択欄に差し替える（必要な1つだけ作る）
+function stEdit(el){
+  if(!el || el.querySelector('select')) return;
+  var id=el.getAttribute('data-id');
+  var c=(CASES||[]).find(function(x){ return x.id===id; }); if(!c) return;
+  var v=String(c.status||'');
+  var opts=STATUS_OPTS.slice(); if(v && opts.indexOf(v)<0) opts.push(v);
+  var sel=document.createElement('select'); sel.className='stsel';
+  opts.forEach(function(t){
+    var o=document.createElement('option'); o.value=t; o.textContent=(t===''?'—':t);
+    if(t===v) o.selected=true; sel.appendChild(o);
+  });
+  el.textContent=''; el.appendChild(sel);
+  sel.focus(); if(sel.showPicker){ try{ sel.showPicker(); }catch(e){} }
+  var closed=false;
+  sel.onchange=function(){ closed=true; chgStatus(id, sel.value, sel); };
+  sel.onblur=function(){ if(!closed) render(); };   // 変えずに離れたら元の表示に戻す
+}
 // 一覧の状況欄で選んだら、その場でシートに保存する。
 // 失敗したら元に戻す（画面だけ変わってシートが変わっていない、を防ぐ）
 async function chgStatus(id, v, el){
@@ -807,7 +832,7 @@ async function chgStatus(id, v, el){
     var r=await _apiT_('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{status:v}},20000);
     if(!(r&&r.success)) throw new Error((r&&r.error)||'保存できませんでした');
     buildStatusFilter();
-    renderKpis(_sortV_(filtered()));
+    render();   // 選択欄をふだんの表示に戻す（件数・色も更新）
   }catch(e){
     c.status=prev;
     render();
@@ -962,14 +987,13 @@ function render(){
       // 伝票番号の頭に「見積」の印を出して、案件（受注）と見分けやすくする。
       // 仮番号（見積-…）は番号自体に「見積」と入っているので印は付けない
       if(k==='denpyo' && isQ && !/^見積-/.test(String(v||''))){ cell='<span class="kbadge q">見積</span>'+cell; }
-      // 状況はその場で選べるようにする（選ぶと即シートへ保存）
+      // 状況はクリックしたときだけ選択欄にする。
+      // 400行ぶんの<select>を常に置くとDOMが2万要素を超え、検索の1文字ごとに
+      // 画面が固まっていたため、ふだんは軽い表示だけにしている
       if(k==='status'){
-        var _o=STATUS_OPTS.slice(); if(v && _o.indexOf(v)<0) _o.push(v);
         var _c=STATUS_COL[v]||['#fff','#1a1a1a'];
-        cell='<select class="stsel" style="background:'+_c[0]+';color:'+_c[1]+'"'
-           + ' onchange="chgStatus(\''+c.id+'\',this.value,this)" title="選ぶとその場で管理表に保存されます">'
-           + _o.map(function(o){ return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+(o===''?'—':esc(o))+'</option>'; }).join('')
-           + '</select>';
+        cell='<span class="stchip" data-id="'+c.id+'" onclick="stEdit(this)" title="クリックで変更"'
+           + ' style="background:'+_c[0]+';color:'+_c[1]+'">'+(v?esc(v):'—')+'</span>';
       }
       if(k==='_billTo' && v){
         // 請求書・入札の本見積の宛名（納品先と違うときだけ出す）。見積(予算・随契)は下に小さく。
