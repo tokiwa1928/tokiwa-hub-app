@@ -403,6 +403,16 @@
 var STATUS_OPTS=['','引き合い','見積提出','受注','失注','進行中','校正中','製版中','印刷中','加工中','納品済','中止'];
 // 受注以降＝トキワの伝票番号が要る状況。これ以外（見積段階）は伝票番号なしで保存できる
 var ORDER_STATUS=['受注','進行中','校正中','製版中','印刷中','加工中','納品済'];
+// 通信が返ってこないと、二重送信ガード(_saving_)が解除されず以後まったく保存できなくなる。
+// 必ず打ち切るようにして、いつまでも待たない・押せなくならないようにする
+function _apiT_(action, params, post, ms){
+  return Promise.race([
+    api(action, params||{}, post||{}),
+    new Promise(function(_,rj){ setTimeout(function(){
+      rj(new Error('応答がありません（通信のタイムアウト）。ネットワークかシートの状態を確認してください'));
+    }, ms||30000); })
+  ]);
+}
 // 見積段階の仮伝票番号。「見積-260820-01」形式で、この管理表の中で重ならない番号を作る
 function _tempDenpyo_(){
   var d=new Date();
@@ -723,10 +733,7 @@ async function chgStatus(id, v, el){
   c.status=v;
   try{
     // 通信が返ってこないと選択欄が無効のまま操作できなくなるので、20秒で打ち切る
-    var r=await Promise.race([
-      api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{status:v}}),
-      new Promise(function(_,rj){ setTimeout(function(){ rj(new Error('応答がありません（通信のタイムアウト）')); },20000); })
-    ]);
+    var r=await _apiT_('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{status:v}},20000);
     if(!(r&&r.success)) throw new Error((r&&r.error)||'保存できませんでした');
     buildStatusFilter();
     renderKpis(_sortV_(filtered()));
@@ -992,6 +999,7 @@ var editing=null;
 // openForm(id, true)   … その案件の内容を引用して「新規」入力（過去から引っ張る）
 // openForm()           … 空の新規入力
 function openForm(id, asCopy){
+  _saving_=false;   // 前回の保存が通信待ちのまま終わっていた場合の保険（押しても無反応になるのを防ぐ）
   var src=id?CASES.find(function(c){return c.id===id;}):null;
   editing=(src && !asCopy)?src:null; // asCopy時は新規扱い（保存で別案件になる）
   var g=function(f){ return src?(src[f]!=null?src[f]:''):''; };
@@ -1151,9 +1159,9 @@ async function saveCase(){
   try{
     var r;
     if(editing && editing._row){ // 編集＝該当行を上書き（元denpyoで行照合）
-      r=await api('sheetLedgerUpdate',{},{company:key,row:editing._row,denpyo:editing.denpyo,case:c});
+      r=await _apiT_('sheetLedgerUpdate',{},{company:key,row:editing._row,denpyo:editing.denpyo,case:c});
     } else {                     // 新規＝末尾に追加
-      r=await api('sheetLedgerAppend',{},{company:key,case:c});
+      r=await _apiT_('sheetLedgerAppend',{},{company:key,case:c});
     }
     if(!r.success){ alert('保存失敗: '+(r.error||'')+'\n（他の人がシートを編集した可能性。再読込してやり直してください）'); return; }
     closeForm(); await loadList(true);
