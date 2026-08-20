@@ -708,15 +708,21 @@ async function chgStatus(id, v, el){
   if(el){ el.disabled=true; el.style.background=col[0]; el.style.color=col[1]; }
   c.status=v;
   try{
-    var r=await api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{status:v}});
+    // 通信が返ってこないと選択欄が無効のまま操作できなくなるので、20秒で打ち切る
+    var r=await Promise.race([
+      api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{status:v}}),
+      new Promise(function(_,rj){ setTimeout(function(){ rj(new Error('応答がありません（通信のタイムアウト）')); },20000); })
+    ]);
     if(!(r&&r.success)) throw new Error((r&&r.error)||'保存できませんでした');
-    if(el) el.disabled=false;
     buildStatusFilter();
     renderKpis(_sortV_(filtered()));
   }catch(e){
     c.status=prev;
     render();
     alert('状況を保存できませんでした：\n'+e.message+'\n\n（行がずれた可能性があります。🔄で読み直してからやり直してください）');
+  }finally{
+    // 成否にかかわらず必ず操作できる状態に戻す
+    if(el) el.disabled=false;
   }
 }
 function buildStatusFilter(){ var set={}; CASES.forEach(function(c){ if(c.status) set[c.status]=1; }); document.getElementById('f-status').innerHTML='<option value="">状況：すべて</option>'+Object.keys(set).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join(''); }
