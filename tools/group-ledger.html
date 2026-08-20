@@ -50,6 +50,10 @@
   .rz:hover{ background:rgba(14,116,144,.35); }
   tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; vertical-align:top; white-space:normal; word-break:break-word; max-width:240px; }
   tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; white-space:nowrap; }
+  /* 一覧の「状況」欄。行の高さを変えないよう小さめに */
+  select.stsel{ font-family:inherit; font-size:11.5px; font-weight:700; padding:1px 2px;
+                border:1px solid #c9c6bf; border-radius:5px; width:100%; min-width:76px; cursor:pointer; }
+  select.stsel:disabled{ opacity:.6; cursor:progress; }
   tbody tr:nth-child(even){ background:#faf9f6 } tbody tr:hover{ background:#eef6fb }
   .rowred td{ color:var(--red); font-weight:700; }
   /* 左固定(チェック〜製造数量)・右固定(操作): 横スクロールしても残る */
@@ -391,9 +395,15 @@
     </div>
   </div>
 </div>
-<datalist id="status-list"><option value="進行中"><option value="校正中"><option value="製版中"><option value="印刷中"><option value="加工中"><option value="納品済"><option value="中止"></datalist>
+<datalist id="status-list"><option value="引き合い"><option value="見積提出"><option value="受注"><option value="失注"><option value="進行中"><option value="校正中"><option value="製版中"><option value="印刷中"><option value="加工中"><option value="納品済"><option value="中止"></datalist>
 
 <script>
+// 一覧の「状況」欄で直接選べる中身。ここに足せば選択肢が増えます
+var STATUS_OPTS=['','引き合い','見積提出','受注','失注','進行中','校正中','製版中','印刷中','加工中','納品済','中止'];
+// 状況ごとの色（見積＝黄／受注＝緑／失注・中止＝赤／納品済＝青）
+var STATUS_COL={'見積提出':['#fef3c7','#92400e'],'引き合い':['#fef3c7','#92400e'],
+                '受注':['#dcfce7','#166534'],'失注':['#fee2e2','#991b1b'],'中止':['#fee2e2','#991b1b'],
+                '納品済':['#e0f2fe','#075985']};
 var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
@@ -686,6 +696,29 @@ async function loadList(force){
     catch(e){ if(!ALLCASES) document.getElementById('status').textContent='読込失敗: '+e.message; }
   }
 }
+// 一覧の状況欄で選んだら、その場でシートに保存する。
+// 失敗したら元に戻す（画面だけ変わってシートが変わっていない、を防ぐ）
+async function chgStatus(id, v, el){
+  var c=(CASES||[]).find(function(x){ return x.id===id; });
+  if(!c) return;
+  if(!c._row || !c._key){ alert('この行はシート更新に未対応です'); render(); return; }
+  var prev=c.status||'';
+  if(v===prev) return;
+  var col=STATUS_COL[v]||['#fff','#1a1a1a'];
+  if(el){ el.disabled=true; el.style.background=col[0]; el.style.color=col[1]; }
+  c.status=v;
+  try{
+    var r=await api('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{status:v}});
+    if(!(r&&r.success)) throw new Error((r&&r.error)||'保存できませんでした');
+    if(el) el.disabled=false;
+    buildStatusFilter();
+    renderKpis(_sortV_(filtered()));
+  }catch(e){
+    c.status=prev;
+    render();
+    alert('状況を保存できませんでした：\n'+e.message+'\n\n（行がずれた可能性があります。🔄で読み直してからやり直してください）');
+  }
+}
 function buildStatusFilter(){ var set={}; CASES.forEach(function(c){ if(c.status) set[c.status]=1; }); document.getElementById('f-status').innerHTML='<option value="">状況：すべて</option>'+Object.keys(set).sort().map(function(v){return '<option>'+esc(v)+'</option>';}).join(''); }
 function buildDenpyoList(){ var set={}; CASES.forEach(function(c){ if(c.denpyo) set[c.denpyo]=1; }); document.getElementById('denpyo-list').innerHTML=Object.keys(set).sort().map(function(v){return '<option value="'+esc(v)+'">';}).join(''); }
 // 社名マスタ：全社の受注実績から重複なしの顧客名を集める（全社データ取得後はそちらを優先）
@@ -825,6 +858,15 @@ function render(){
       // 金額未入力(空/0)は赤セル：金額(トキワ)=全社、金額(自社)=自社金額列を持つ会社のみ
       if((k==='amtTokiwa' || (k==='amtSelf' && SELF_AMT_KEYS[c._key])) && !(toNum(v)>0)){ cls=' class="num" style="background:#fde8e4"'; cell=''; }
       if(k==='memo'){ cell=_memoHtml_(c); }
+      // 状況はその場で選べるようにする（選ぶと即シートへ保存）
+      if(k==='status'){
+        var _o=STATUS_OPTS.slice(); if(v && _o.indexOf(v)<0) _o.push(v);
+        var _c=STATUS_COL[v]||['#fff','#1a1a1a'];
+        cell='<select class="stsel" style="background:'+_c[0]+';color:'+_c[1]+'"'
+           + ' onchange="chgStatus(\''+c.id+'\',this.value,this)" title="選ぶとその場で管理表に保存されます">'
+           + _o.map(function(o){ return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+(o===''?'—':esc(o))+'</option>'; }).join('')
+           + '</select>';
+      }
       if(k==='_billTo' && v){
         // 請求書・入札の本見積の宛名（納品先と違うときだけ出す）。見積(予算・随契)は下に小さく。
         // 行の高さが変わらないよう折り返さず、はみ出しは…で切る（全文はマウスを乗せると出る）
