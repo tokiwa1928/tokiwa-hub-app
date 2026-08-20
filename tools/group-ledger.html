@@ -1641,6 +1641,9 @@ function openDocsSel(){
 }
 function openDocs(id){
   _docsFromSel=false;
+  // 見積書の宛名の選択は案件ごとに既定（得意先名のまま）へ戻す。
+  // 前の案件で「市長宛」にしたまま次の案件に持ち越さないため
+  var _qs=document.getElementById('doc-qto'); if(_qs) _qs.value='asis';
   var c=(CASES||[]).find(function(x){return x.id===id;}); if(!c) return;
   openDocsList([c]);
 }
@@ -1899,6 +1902,7 @@ function genDoc(type){
     else if(_isQ){ _to=quoteAddrFor(_dst); }
     else { _to=(typeof blAddrFor==='function')?blAddrFor(_dst,'bill'):_dst; }
     if(_to && _to!==_dst){ _o1.to=_to; if(!_isQ || _qMode==='chief') _o1.subTo=_dst; }
+    _docState_.toName=_to||_dst;   // PDFのファイル名に使う宛名
     if(type==='納品書'){ _o1.lead='下記の通り納品いたしました。'; }
     if(type==='受領書'){ _o1.lead='下記の品を納品いたしました。'; _o1.receipt=true; }
     if(type==='請求書'){ _o1.lead='下記の通りご請求申し上げます。'; _o1.grand='ご請求金額';
@@ -2001,6 +2005,27 @@ function _pmsg_(t){
   var e=document.getElementById('pmsg'); if(!e){ e=document.createElement('div'); e.id='pmsg'; e.style.cssText='position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#0f172a;color:#fff;padding:9px 18px;border-radius:8px;font-size:13px;z-index:100000;box-shadow:0 6px 20px rgba(0,0,0,.3)'; document.body.appendChild(e); }
   e.textContent=t; e.style.display=''; clearTimeout(e._t); e._t=setTimeout(function(){ e.style.display='none'; }, 3500);
 }
+// 宛名の敬称。法人・団体らしければ御中、そうでなければ様。
+// PDFのファイル名だけに使う目安なので、外れても書類の中身には影響しない
+function _honor_(name){
+  var s=String(name||''); if(!s) return '';
+  if(/株式会社|有限会社|合同会社|合資会社|㈱|㈲|会社|法人|組合|協会|財団|社団|学校|学園|大学|高校|高等|中学|小学|幼稚園|保育園|こども園|市$|町$|村$|区$|県$|府$|庁|役所|課$|係$|部$|センター|病院|医院|クリニック|寺|神社|教会|会$|団$|社$|店$|堂$|舎$|寮$|工業|産業|商会|商店|事務所|銀行|信用金庫|新聞|印刷|製作所|工場|連区|委員会|事業団|公社|振興会|連合会|の会|図書館|博物館|美術館|公民館|市長$|町長$|村長$/.test(s)) return '御中';
+  var t=s.replace(/[\s　・]/g,'');
+  return (t.length<=6)?'様':'御中';
+}
+// PDFのファイル名：日付_宛名敬称_品名_帳票名
+function _docFileName_(type){
+  var d=String(_docState_.issueDate||'').replace(/[^0-9]/g,'');
+  if(d.length!==8){ var n=new Date(); d=''+n.getFullYear()+('0'+(n.getMonth()+1)).slice(-2)+('0'+n.getDate()).slice(-2); }
+  var list=(_docState_.list&&_docState_.list.length)?_docState_.list:[_docState_.c].filter(Boolean);
+  var c0=list[0]||{};
+  var to=String(_docState_.toName||c0.customer||'').trim();
+  var item=String(c0.item||'').trim();
+  if(list.length>1) item+=' ほか'+(list.length-1)+'件';
+  var nm={'見積書':'お見積書'}[type]||type||'帳票';
+  var parts=[d, to?(to+_honor_(to)):'', item, nm].filter(function(x){ return x; });
+  return parts.join('_').replace(/[\\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120);
+}
 function printDoc(part){
   var _html=_docState_.html, _logType=_docState_.type, _which=null;
   if(part && _docState_.parts && _docState_.parts[part]){
@@ -2018,20 +2043,25 @@ function printDoc(part){
       _logPrint_(_logType);
     }).catch(function(e){
       _pmsg_('エージェント印刷に失敗→ダイアログで印刷します');
-      _dialogPrint_(_html); _logPrint_(_logType);
+      _dialogPrint_(_html, _docFileName_(_logType)); _logPrint_(_logType);
     });
     return;
   }
-  _dialogPrint_(_html); _logPrint_(_logType);
+  _dialogPrint_(_html, _docFileName_(_logType)); _logPrint_(_logType);
 }
-function _dialogPrint_(_html){
+function _dialogPrint_(_html, _fname){
   // 納品書系(中尾様式)=A4横 / 請求書・領収書=A4縦（@pageを動的に切替）
   var os=document.getElementById('doc-orient'); if(!os){ os=document.createElement('style'); os.id='doc-orient'; document.head.appendChild(os); }
   os.textContent='@media print{ @page{ size:A4 '+(_docState_.land?'landscape':'portrait')+'; margin:0; } }';
   document.getElementById('doc-print').innerHTML=_docState_.land?_html:(_docState_.raw?_html:('<div class="dsheet">'+_html+'</div>'));
   document.body.classList.add('printing-doc');
+  // ブラウザは「PDFに保存」の初期ファイル名にページのタイトルを使うので、
+  // 印刷の間だけ 日付_宛名御中_品名_帳票名 に差し替える
+  var _t0=document.title;
+  if(_fname) document.title=_fname;
   window.print();
   document.body.classList.remove('printing-doc');
+  setTimeout(function(){ document.title=_t0; }, 1500);
 }
 function _logPrint_(_logType){
   var _plist=(_docState_.list&&_docState_.list.length)?_docState_.list:[_docState_.c];
