@@ -50,6 +50,22 @@
   .rz:hover{ background:rgba(14,116,144,.35); }
   tbody td{ padding:3px 8px; border-bottom:1px solid #1a1a1a; border-right:1px solid #1a1a1a; vertical-align:top; white-space:normal; word-break:break-word; max-width:240px; }
   tbody td.num{ text-align:right; font-family:'Roboto Mono',monospace; white-space:nowrap; }
+  /* 見積／案件の切替。押している方だけ色が付く */
+  .kindtabs{ display:inline-flex; gap:3px; }
+  .kindtabs .kt{ font-family:inherit; font-size:12px; font-weight:700; padding:3px 10px;
+                 border:1.4px solid #c9c6bf; background:#fff; color:#5b5a55; border-radius:7px; cursor:pointer; white-space:nowrap; }
+  .kindtabs .kt b{ font-size:11px; opacity:.8; margin-left:2px; }
+  .kindtabs .kt:hover{ background:#f4f3f0; }
+  .kindtabs .kt.on{ background:#1a1a1a; border-color:#1a1a1a; color:#fff; }
+  .kindtabs .kt.q.on{ background:#92400e; border-color:#92400e; }
+  .kindtabs .kt.o.on{ background:#166534; border-color:#166534; }
+  /* 見積段階の行は左に黄色の帯を出して、案件（受注）と一目で見分ける */
+  tbody tr.rowquote td.stk-_sel{ box-shadow:inset 4px 0 0 #d97706; }
+  tbody tr.rowquote td{ background:#fffdf5; }
+  /* 伝票番号の横に出す区分の印 */
+  .kbadge{ display:inline-block; font-size:9.5px; font-weight:800; padding:0 5px; border-radius:8px;
+           margin-right:4px; vertical-align:1px; }
+  .kbadge.q{ background:#fef3c7; color:#92400e; }
   /* 一覧の「状況」欄。行の高さを変えないよう小さめに */
   select.stsel{ font-family:inherit; font-size:11.5px; font-weight:700; padding:1px 2px;
                 border:1px solid #c9c6bf; border-radius:5px; width:100%; min-width:76px; cursor:pointer; }
@@ -234,6 +250,11 @@
     </div>
     <div class="tbsep"></div>
     <div class="tbgrp" style="flex:1;min-width:240px">
+      <span id="kindtabs" class="kindtabs">
+        <button class="kt on" data-kind="" onclick="setKind('')">すべて <b id="kt-n-all">0</b></button>
+        <button class="kt q" data-kind="quote" onclick="setKind('quote')">📝 見積 <b id="kt-n-q">0</b></button>
+        <button class="kt o" data-kind="order" onclick="setKind('order')">📋 案件 <b id="kt-n-o">0</b></button>
+      </span>
       <input id="q" placeholder="🔍 伝票番号・顧客・案件で検索" style="flex:1;min-width:150px" oninput="render()">
       <select id="f-status" onchange="render()"><option value="">状況：すべて</option></select>
       <button class="btn sm" onclick="loadList(true)" title="最新に更新">🔄</button>
@@ -409,6 +430,26 @@
 var STATUS_OPTS=['','引き合い','見積提出','受注','失注','進行中','校正中','製版中','印刷中','加工中','納品済','中止'];
 // 受注以降＝トキワの伝票番号が要る状況。これ以外（見積段階）は伝票番号なしで保存できる
 var ORDER_STATUS=['受注','進行中','校正中','製版中','印刷中','加工中','納品済'];
+// 見積段階の状況
+var QUOTE_STATUS=['引き合い','見積依頼','見積提出','失注'];
+// この行は見積か案件か。
+//   ・状況が見積段階（引き合い〜失注）→ 見積
+//   ・伝票番号が仮番号（見積-…）→ 見積
+//   ・それ以外（受注以降の状況、または本番の伝票番号がある）→ 案件
+function _isQuoteRow_(c){
+  var st=String((c&&c.status)||'').trim();
+  if(QUOTE_STATUS.indexOf(st)>=0) return true;
+  if(ORDER_STATUS.indexOf(st)>=0) return false;
+  return /^見積-/.test(String((c&&c.denpyo)||''));
+}
+var KIND='';   // ''=すべて / 'quote'=見積 / 'order'=案件
+function setKind(k){
+  KIND=k;
+  [].forEach.call(document.querySelectorAll('#kindtabs .kt'),function(b){
+    b.classList.toggle('on', (b.dataset.kind||'')===k);
+  });
+  render();
+}
 // 通信が返ってこないと、二重送信ガード(_saving_)が解除されず以後まったく保存できなくなる。
 // 必ず打ち切るようにして、いつまでも待たない・押せなくならないようにする
 function _apiT_(action, params, post, ms){
@@ -864,6 +905,8 @@ function filtered(){
   var q=(document.getElementById('q').value||'').toLowerCase().trim(), qs=q?q.split(/\s+/):[];
   var fs=document.getElementById('f-status').value, wk=weekRange(), today=ymd(new Date());
   return CASES.filter(function(c){
+    if(KIND==='quote' && !_isQuoteRow_(c)) return false;
+    if(KIND==='order' &&  _isQuoteRow_(c)) return false;
     if(fs && c.status!==fs) return false;
     if(deliveryMode){ var d=parseD(c.deliveryDate); if(!d) return false; if(deliveryMode==='today'&&ymd(d)!==today) return false; if(deliveryMode==='week'&&(d<wk[0]||d>wk[1])) return false; }
     if(qs.length){ var hay=[c.denpyo,c.customer,c.item,c.memo].join(' ').toLowerCase(); for(var i=0;i<qs.length;i++){ if(hay.indexOf(qs[i])<0) return false; } }
@@ -907,6 +950,7 @@ function render(){
   document.getElementById('thead').innerHTML=h1;
   document.getElementById('tbody').innerHTML=shown.map(function(c){
     var red=(c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE'||c.multiDest||c.deliverTo);
+    var isQ=_isQuoteRow_(c);
     var tds=COLS.map(function(col){ var k=col[0], v=getColVal(c,k);
       var cls=(/金額|単価|利益/.test(col[1])&&v!=='')?' class="num"':'';
       if(STKL[k]) cls=' class="stk stk-'+k+(k===STK_LAST?' stk-end':'')+'"';   // 左固定列
@@ -915,6 +959,9 @@ function render(){
       // 金額未入力(空/0)は赤セル：金額(トキワ)=全社、金額(自社)=自社金額列を持つ会社のみ
       if((k==='amtTokiwa' || (k==='amtSelf' && SELF_AMT_KEYS[c._key])) && !(toNum(v)>0)){ cls=' class="num" style="background:#fde8e4"'; cell=''; }
       if(k==='memo'){ cell=_memoHtml_(c); }
+      // 伝票番号の頭に「見積」の印を出して、案件（受注）と見分けやすくする。
+      // 仮番号（見積-…）は番号自体に「見積」と入っているので印は付けない
+      if(k==='denpyo' && isQ && !/^見積-/.test(String(v||''))){ cell='<span class="kbadge q">見積</span>'+cell; }
       // 状況はその場で選べるようにする（選ぶと即シートへ保存）
       if(k==='status'){
         var _o=STATUS_OPTS.slice(); if(v && _o.indexOf(v)<0) _o.push(v);
@@ -941,9 +988,13 @@ function render(){
     var selTd='<td class="stk stk-_sel" style="text-align:center"><input type="checkbox" class="selck" data-id="'+c.id+'"'+(SEL.has(c.id)?' checked':'')+' onchange="selChg(this)"></td>';
     var opsTd='<td class="stk stk-_ops" style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・見積書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button> <button class="btn sm" title="現品ラベル（A4横40面・案件から差し込み）" onclick="openLabel(\''+c.id+'\')">🏷</button></td>';
     var delTd='<td class="stkR" style="white-space:nowrap;text-align:center"><button class="btn sm" title="この案件を削除" style="color:#c0261c;border-color:#e3a69f" onclick="delRow(\''+c.id+'\')">🗑</button></td>';
-    return '<tr class="'+(red?'rowred':'')+'">'+selTd+opsTd+tds+delTd+'</tr>';
+    return '<tr class="'+(red?'rowred ':'')+(isQ?'rowquote':'')+'">'+selTd+opsTd+tds+delTd+'</tr>';
   }).join('');
   _applyColgroup_();
+  // 見積／案件の件数（この会社の全件が対象。切替ボタンの数字）
+  var _nq=0; (CASES||[]).forEach(function(c){ if(_isQuoteRow_(c)) _nq++; });
+  var _sn=function(id,n){ var e=document.getElementById(id); if(e) e.textContent=n; };
+  _sn('kt-n-all',(CASES||[]).length); _sn('kt-n-q',_nq); _sn('kt-n-o',(CASES||[]).length-_nq);
   renderKpis(V);
   var more=V.length>DISPLAY_CAP?('　（先頭'+DISPLAY_CAP+'件を表示。フィルタで絞込）'):'';
   document.getElementById('status').textContent=COMPANY+'：'+CASES.length+'件 / 絞込 '+V.length+'件'+more;
