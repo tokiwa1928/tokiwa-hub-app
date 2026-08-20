@@ -347,6 +347,7 @@
       <div class="fsec">
         <div class="fsec-h"><span class="no">02</span><span class="ttl">日程・状況</span></div>
         <div class="fgrid">
+          <div class="s2"><label>見積日 <span style="font-weight:400;color:#0e7490;font-size:10px">（見積を出した日）</span></label><input id="f-quoteDate" type="date"></div>
           <div class="s2"><label>受注日</label><input id="f-orderDate" type="date"></div>
           <div class="s2"><label>希望納期（＝各社の到着予定日）</label><input id="f-hopeDate" type="date"></div>
           <div class="s2"><label>納品日</label><input id="f-deliveryDate" type="date"></div>
@@ -419,7 +420,7 @@ var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nn
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
-var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['_billTo','💳請求先'],['item','案件名'],['orderQty','受注数量'],['unit','単位'],['qty','製造数量'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
+var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['_billTo','💳請求先'],['item','案件名'],['orderQty','受注数量'],['unit','単位'],['qty','製造数量'],['_quoteDate','見積日'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
 // 自社金額列を持つ会社（金額未入力の赤表示対象）
 var SELF_AMT_KEYS={murayama:1,nakao:1,yamauchi:1,tsushima:1};
 // 請求月は「YYYY年M月」表示（並び順は年月キーで正しく）
@@ -459,7 +460,8 @@ function _arrVal_(c){
 function _memoHtml_(c){
   var raw=String(c.memo||'');
   if(!raw) return '';
-  var body=raw.replace(/【複数梱包】|【複数納品先】/g,'');
+  // 見積日は専用列で出すので、備考のタグ表示からは外す（二重に見えるため）
+  var body=raw.replace(/【複数梱包】|【複数納品先】/g,'').replace(/【見積日[:：][^】]*】/g,'');
   var tags=[];
   body=body.replace(/【([^】]{1,30})】/g, function(_,t){ tags.push(t); return ' '; }).replace(/\s+/g,' ').trim();
   var html=tags.map(function(t){
@@ -548,6 +550,7 @@ function getColVal(c,k){
   if(k==='_arrival') return _arrVal_(c);
   if(k==='_docout') return _docoutVal_(c);
   if(k==='orderQty') return _orderQtyTag_(c.memo);
+  if(k==='_quoteDate') return _quoteDateTag_(c.memo);
   if(k==='billMonth') return monthLabel(c.billMonth);
   var v=c[k]; return (v==null?'':v);
 }
@@ -996,8 +999,9 @@ function openForm(id, asCopy){
   document.getElementById('f-id').value=editing?editing.id:'';
   ['denpyo','customer','item','qty','unit','orderDate','hopeDate','deliveryDate','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','memo','billMonth'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=g(f); });
   document.getElementById('f-status2').value=g('status');
-  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
+  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
   var _oqEl=document.getElementById('f-orderQty'); if(_oqEl) _oqEl.value=_orderQtyTag_(src&&src.memo);
+  var _qdEl=document.getElementById('f-quoteDate'); if(_qdEl) _qdEl.value=_quoteDateTag_(src&&src.memo);
   var _oqCk=document.getElementById('f-oqSame'); if(_oqCk){ _oqCk.checked=!(_oqEl&&_oqEl.value&&toNum(_oqEl.value)>0); if(_oqEl) _oqEl.disabled=_oqCk.checked; }
   ['f-amtSelf','f-amtTokiwa','f-profit'].forEach(function(x){ var el=document.getElementById(x); if(el) delete el.dataset.auto; }); // 復元値は手入力扱い（自動クリア対象外）
   document.getElementById('f-multiPack').checked=(src&&(src.multiPack===true||src.multiPack==='true'||src.multiPack==='TRUE'));
@@ -1135,10 +1139,11 @@ async function saveCase(){
     billMonth:document.getElementById('f-billMonth').value };
   // 複数梱包・納品先はシートに専用列が無いため備考に畳んで保存（情報を失わない・重複防止）
   var mp=document.getElementById('f-multiPack').checked, md=document.getElementById('f-multiDest').checked;
-  var memo=(document.getElementById('f-memo').value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
+  var memo=(document.getElementById('f-memo').value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
   var oq=(document.getElementById('f-orderQty').value||'').trim().replace(/,/g,'');
   if(document.getElementById('f-oqSame').checked || !(toNum(oq)>0)) oq='';   // チェックON・空・0は「製造数量と同じ」＝タグ保存しない
-  var pre=''; if(oq) pre+='【受注数:'+oq+'】'; if(mp) pre+='【複数梱包】'; if(md) pre+='【複数納品先】';
+  var qd=(document.getElementById('f-quoteDate').value||'').trim();
+  var pre=''; if(qd) pre+='【見積日:'+qd+'】'; if(oq) pre+='【受注数:'+oq+'】'; if(mp) pre+='【複数梱包】'; if(md) pre+='【複数納品先】';
   c.memo=(pre?pre+' ':'')+memo;
   // 対象会社キー（編集時は元レコードの会社、新規時は選択中の会社）
   var key = (editing && editing._key) ? editing._key : NAMEKEY[COMPANY];
@@ -1582,6 +1587,8 @@ function openDocsList(list){
 function closeDocs(){ document.getElementById('doc-modal').style.display='none'; }
 // 受注数量(中尾)を備考タグ【受注数:N】から取得。無ければ通常の数量(製造/トキワ)。
 function _orderQtyTag_(memo){ var m=String(memo==null?'':memo).match(/【受注数[:：]\s*([0-9,]+)】/); var n=m?m[1].replace(/,/g,''):''; return (n&&Number(n)>0)?n:''; } // 0は「製造数量と同じ」扱い（誤入力防御）
+// 見積日。シートに専用列が無いので、受注数量などと同じく備考タグ【見積日:2026-08-20】で持つ
+function _quoteDateTag_(memo){ var m=String(memo==null?'':memo).match(/【見積日[:：]\s*([0-9]{4}[-\/][0-9]{1,2}[-\/][0-9]{1,2})】/); return m?m[1].replace(/\//g,'-'):''; }
 function _docQty_(c){ var oq=_orderQtyTag_(c&&c.memo); return (oq!=='')?oq:((c&&c.qty!=null)?c.qty:''); }
 function _qtyDisp_(c){ var q=_docQty_(c); var n=Number(String(q).replace(/,/g,'')); return (q!==''&&!isNaN(n))?n.toLocaleString():String(q||''); }
 // 帳票金額: 受注数量が指定されていれば 単価×受注数量(＝相手＝中尾の売上)。無ければ従来。
