@@ -462,18 +462,107 @@ function renderMemoDatalist(){
   (DB.master.memos||[]).forEach(function(p){ p=(p||'').trim(); if(p&&!set[p]){ set[p]=1; out.push(p); } });
   dl.innerHTML=out.sort(function(a,b){return a.localeCompare(b,'ja');}).map(function(p){ return '<option value="'+esc(p)+'">'; }).join('');
 }
+
+// ── 支払先マスタ: 表記ゆれの統合と、入力時のマスタ照合 ──────────────
+// マスタが増え続けていた原因は registerMasters が完全一致でしか照合せず、
+// 表記が1文字違うだけで別の支払先として登録されていたこと。
+// 統合ルール（旧表記 → 正しい表記）。全端末で1回だけ適用する。
+var PAYEE_MERGE = {
+  'ＮＴＴドコモ'      : 'NTTドコモ',        // 全角/半角の違いだけ
+  'ジェーシービー'    : 'JCB',
+  '青山税理士事務所'  : '青山税理士法人',
+  '武蔵村山市事務所'  : '武蔵村山市役所',
+  'りそな銀行村山支店': 'りそな銀行',
+  '村山郵便局'        : '郵便局',
+  '武蔵村山三ツ藤郵便局': '郵便局'
+};
+// 照合用の正規化: 空白・括弧・全角英数・法人格の表記ゆれを吸収する
+function normPayee(s){
+  return String(s==null?'':s)
+    .replace(/[\s　]/g,'')
+    .replace(/[（）()]/g,'')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })
+    .replace(/㈱/g,'株式会社').replace(/㈲/g,'有限会社')
+    .replace(/[ー－―‐]/g,'-')
+    .toUpperCase();
+}
+// 全端末で1回だけ、既存データの支払先を統合ルールで書き換える（消さずに名前を直すだけ）
+function migMergePayees(){
+  try{
+    if(localStorage.getItem('murayama_payee_merge_v1')==='1') return;
+    var n=0;
+    var fix=function(v){ var t=String(v==null?'':v).trim(); return (PAYEE_MERGE[t]!=null)?PAYEE_MERGE[t]:t; };
+    (DB.master.hoten||[]).forEach(function(r){ var a=fix(r.payee); if(a!==r.payee){ r.payee=a; n++; } });
+    var ms=DB.months||{};
+    Object.keys(ms).forEach(function(k){
+      ((ms[k]||{}).shokei||[]).forEach(function(r){ var a=fix(r.payee); if(a!==r.payee){ r.payee=a; n++; } });
+    });
+    // マスタ側: 統合先に寄せて重複を除く
+    var seen={}, out=[];
+    (DB.master.payees||[]).forEach(function(p){
+      var a=fix(p); var k=normPayee(a);
+      if(a && !seen[k]){ seen[k]=1; out.push(a); }
+    });
+    var before=(DB.master.payees||[]).length;
+    DB.master.payees=out;
+    localStorage.setItem('murayama_payee_merge_v1','1');
+    persist();
+    if(before!==out.length || n) console.log('[支払先統合] マスタ '+before+'→'+out.length+'件 / 明細 '+n+'箇所を書換');
+  }catch(e){ console.warn('[支払先統合] 失敗', e); }
+}
+// 入力された支払先をマスタと照合する。
+//   ① 完全一致 → そのまま
+//   ② 表記ゆれで一致 → マスタの表記にそろえる
+//   ③ 似ているものがある → 候補を出して選ばせる
+//   ④ 無い → マスタに登録するか尋ねる
+function checkPayeeInput(el){
+  if(!el) return;
+  var v=(el.value||'').trim(); if(!v) return;
+  var list=(DB.master.payees||[]);
+  if(list.indexOf(v)>=0) return;                       // ①
+  var nv=normPayee(v);
+  var exact=list.filter(function(p){ return normPayee(p)===nv; })[0];
+  if(exact){                                            // ②
+    el.value=exact; try{ calc(); }catch(e){}
+    toast('マスタの表記にそろえました：'+exact);
+    return;
+  }
+  var cand=list.filter(function(p){                     // ③ 部分一致(2文字以上)
+    var np=normPayee(p);
+    return nv.length>=2 && np.length>=2 && (np.indexOf(nv)>=0 || nv.indexOf(np)>=0);
+  }).slice(0,5);
+  var NL=String.fromCharCode(10);
+  if(cand.length){
+    if(confirm('マスタに似た支払先があります。'+NL+NL
+      + '入力: '+v+NL
+      + '候補: '+cand.join(' / ')+NL+NL
+      + 'OK = 「'+cand[0]+'」にそろえる'+NL
+      + 'キャンセル = 入力したまま進む')){
+      el.value=cand[0]; try{ calc(); }catch(e){}
+      return;
+    }
+  }
+  if(confirm('「'+v+'」はマスタにありません。'+NL+'新しい支払先としてマスタに登録しますか？')){  // ④
+    DB.master.payees=(DB.master.payees||[]).concat([v]);
+    persist(); renderPayeeDatalist();
+    try{ renderPayeeList(); renderPayeeMaster(); }catch(e){}
+    toast('支払先を登録しました：'+v);
+  }
+}
+
 // 当月の明細(諸経費＋固定)から、支払先・備考の未登録分をマスタへ登録
 function registerMasters(){
   if(!Array.isArray(DB.master.payees)) DB.master.payees=[];
   if(!Array.isArray(DB.master.memos)) DB.master.memos=[];
-  var pset={}; DB.master.payees.forEach(function(p){ pset[(p||'').trim()]=1; });
-  var mset={}; DB.master.memos.forEach(function(p){ mset[(p||'').trim()]=1; });
+  // 表記ゆれ(全角半角・㈱・空白)を吸収して照合する。完全一致だけだとマスタが際限なく増える
+  var pset={}; DB.master.payees.forEach(function(p){ pset[normPayee(p)]=1; });
+  var mset={}; DB.master.memos.forEach(function(p){ mset[normPayee(p)]=1; });
   var addP=[], addM=[];
   document.querySelectorAll('#shokei-tbl [data-k="payee"], #hoten-tbl [data-k="payee"]').forEach(function(el){
-    var v=(el.value||'').trim(); if(v && !pset[v]){ pset[v]=1; addP.push(v); }
+    var v=(el.value||'').trim(); var k=normPayee(v); if(v && !pset[k]){ pset[k]=1; addP.push(v); }
   });
   document.querySelectorAll('#shokei-tbl [data-k="memo"], #hoten-tbl [data-k="memo"]').forEach(function(el){
-    var v=(el.value||'').trim(); if(v && !mset[v]){ mset[v]=1; addM.push(v); }
+    var v=(el.value||'').trim(); var k=normPayee(v); if(v && !mset[k]){ mset[k]=1; addM.push(v); }
   });
   if(addP.length) DB.master.payees=DB.master.payees.concat(addP);
   if(addM.length) DB.master.memos=DB.master.memos.concat(addM);
@@ -543,6 +632,7 @@ function moveMonthUI(){
   document.getElementById('co-tel').value=DB.company.tel||'';
   document.getElementById('co-fax').value=DB.company.fax||'';
   document.getElementById('co-regno').value=DB.company.regno||'';
+  migMergePayees();   // 支払先の表記ゆれを統合(全端末で1回だけ)
   renderHoten();
   document.getElementById('kaikake').value=DB.master.kaikake;
   document.getElementById('jiyu').value=DB.master.jiyu;
@@ -663,6 +753,7 @@ function addShokei(r){
     +'<td class="c"><button class="btn sm" onclick="this.closest(\'tr\').remove();reindexShokei();calc()">×</button></td>';
   tb.appendChild(tr); reindexShokei(); calc();
   tb.oninput=function(){ calc(); };
+  tb.onfocusout=function(e){ if(e.target && e.target.getAttribute && e.target.getAttribute('data-k')==='payee') checkPayeeInput(e.target); };
 }
 function reindexShokei(){ Array.from(document.querySelectorAll('#shokei-tbl tbody .idx')).forEach(function(td,i){ td.textContent=i+1; }); }
 
