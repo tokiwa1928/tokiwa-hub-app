@@ -849,6 +849,140 @@ async function chgStatus(id, v, el){
     if(el) el.disabled=false;
   }
 }
+
+// ── 複数パターンの見積をまとめて登録 ──────────────────────────────
+// 同じ顧客名・案件名で「標準／簡易／数量違い」などの案を一度に作る。
+// 顧客名と案件名をそろえて作るので、そのまま各行の「採用」で受注に確定できる。
+var _patBase_ = null;
+function openPatterns(id){
+  var c = (CASES||[]).find(function(x){ return x.id===id; }) || {};
+  _patBase_ = c;
+  var old = document.getElementById('pat-modal'); if(old) old.remove();
+  var m = document.createElement('div');
+  m.id = 'pat-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:24px 12px;overflow:auto';
+  var h = '';
+  h += '<div style="background:#fff;border-radius:10px;max-width:880px;width:100%;padding:16px 18px;font-size:13px">';
+  h +=   '<div style="font-weight:700;font-size:15px;margin-bottom:4px">📑 複数パターンの見積をまとめて作る</div>';
+  h +=   '<div style="color:#666;font-size:11.5px;margin-bottom:10px">顧客名・案件名をそろえて作るので、あとから各行の「採用」で1案だけ受注にできます。</div>';
+  h +=   '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">';
+  h +=     '<label style="flex:1;min-width:200px">顧客名<input id="pat-cust" style="width:100%;padding:5px 8px;border:1px solid #c9c6bf;border-radius:6px" value="' + esc(c.customer||'') + '"></label>';
+  h +=     '<label style="flex:1;min-width:200px">案件名<input id="pat-item" style="width:100%;padding:5px 8px;border:1px solid #c9c6bf;border-radius:6px" value="' + esc(c.item||'') + '"></label>';
+  h +=     '<label style="width:90px">単位<input id="pat-unit" style="width:100%;padding:5px 8px;border:1px solid #c9c6bf;border-radius:6px" value="' + esc(c.unit||'枚') + '"></label>';
+  h +=   '</div>';
+  h +=   '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>';
+  h +=     '<th style="border:1px solid #e5e3dc;padding:4px">案の名前</th>';
+  h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:90px">数量</th>';
+  h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:100px">単価(自社)</th>';
+  h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:100px">単価(トキワ)</th>';
+  h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:230px">金額(自社) ／ (トキワ) ／ 利益</th>';
+  h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:34px"></th>';
+  h +=   '</tr></thead><tbody id="pat-body"></tbody></table>';
+  h +=   '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+  h +=     '<button class="btn sm" onclick="patAddRow()">＋ 案を追加</button>';
+  h +=     '<span style="flex:1"></span>';
+  h +=     '<button class="btn sm" onclick="patClose()">閉じる</button>';
+  h +=     '<button class="btn sm p" id="pat-save" onclick="savePatterns()" style="font-weight:700">まとめて作成</button>';
+  h +=   '</div>';
+  h += '</div>';
+  m.innerHTML = h;
+  document.body.appendChild(m);
+  patAddRow({ name:'標準', qty:c.qty, us:c.unitSelf, ut:c.unitTokiwa });
+  patAddRow({});
+}
+function patClose(){ var m=document.getElementById('pat-modal'); if(m) m.remove(); }
+function patAddRow(v){
+  v = v || {};
+  var tb = document.getElementById('pat-body'); if(!tb) return;
+  var tr = document.createElement('tr');
+  var td = 'border:1px solid #e5e3dc;padding:3px';
+  var ip = 'width:100%;padding:4px 6px;border:1px solid #d9d6cf;border-radius:5px;font-family:inherit';
+  var h = '';
+  h += '<td style="' + td + '"><input data-k="name" placeholder="標準／簡易／1000枚版 など" style="' + ip + '" value="' + esc(v.name||'') + '"></td>';
+  h += '<td style="' + td + '"><input data-k="qty" type="number" style="' + ip + ';text-align:right" value="' + esc(v.qty==null?'':v.qty) + '" oninput="patCalc()"></td>';
+  h += '<td style="' + td + '"><input data-k="us" type="number" step="any" style="' + ip + ';text-align:right" value="' + esc(v.us==null?'':v.us) + '" oninput="patCalc(this)"></td>';
+  h += '<td style="' + td + '"><input data-k="ut" type="number" step="any" style="' + ip + ';text-align:right" value="' + esc(v.ut==null?'':v.ut) + '" oninput="patCalc()"></td>';
+  h += '<td style="' + td + ';text-align:right;color:#334155" data-k="calc">—</td>';
+  h += '<td style="' + td + ';text-align:center"><button class="btn sm" onclick="patDelRow(this)">×</button></td>';
+  tr.innerHTML = h;
+  tb.appendChild(tr);
+  patCalc();
+}
+function patDelRow(btn){ var tr=btn.closest('tr'); if(tr) tr.remove(); patCalc(); }
+// 金額＝数量×単価、利益＝金額(自社)−金額(トキワ)。
+// 自社単価を入れてトキワ単価が空なら、既定として自社×0.7を入れる(あとから手で直せる)。
+var PAT_TOKIWA_RATE = 0.7;
+function patCalc(srcEl){
+  Array.prototype.forEach.call(document.querySelectorAll('#pat-body tr'), function(tr){
+    var g = function(k){ return tr.querySelector('[data-k="' + k + '"]'); };
+    var q = toNum(g('qty').value), us = toNum(g('us').value), ut = toNum(g('ut').value);
+    if(srcEl && srcEl === g('us') && us && !g('ut').value){
+      g('ut').value = Math.round(us * PAT_TOKIWA_RATE * 100) / 100;
+      ut = toNum(g('ut').value);
+    }
+    var as = (q && us) ? Math.round(q * us) : '';
+    var at = (q && ut) ? Math.round(q * ut) : '';
+    g('calc').textContent = (as === '' && at === '') ? '—'
+      : ((as === '' ? '—' : as.toLocaleString()) + ' ／ ' + (at === '' ? '—' : at.toLocaleString())
+         + ' ／ ' + ((as || 0) - (at || 0)).toLocaleString());
+  });
+}
+async function savePatterns(){
+  var cust = (document.getElementById('pat-cust').value || '').trim();
+  var item = (document.getElementById('pat-item').value || '').trim();
+  var unit = (document.getElementById('pat-unit').value || '').trim();
+  if(!cust || !item){ alert('顧客名と案件名を入れてください'); return; }
+  var rows = [];
+  Array.prototype.forEach.call(document.querySelectorAll('#pat-body tr'), function(tr){
+    var g = function(k){ return tr.querySelector('[data-k="' + k + '"]'); };
+    var q = toNum(g('qty').value), us = toNum(g('us').value), ut = toNum(g('ut').value);
+    if(!q && !us && !ut) return;                       // 空行は作らない
+    rows.push({ name:(g('name').value||'').trim(), qty:q, us:us, ut:ut });
+  });
+  if(!rows.length){ alert('作成する案がありません（数量か単価を入れてください）'); return; }
+  var NL = String.fromCharCode(10);
+  var lines = rows.map(function(r, i){
+    return '  ' + (i+1) + '. ' + (r.name || '(名前なし)') + '  ' + (r.qty || '—') + unit + ' × ' + (r.us || '—');
+  });
+  if(!confirm(cust + ' / ' + item + NL + NL + rows.length + ' 件の見積を作成します。よろしいですか？' + NL + lines.join(NL))) return;
+
+  var key = NAMEKEY[COMPANY];
+  if(!key || !SHEET_CAPABLE[key]){ alert('この会社はシート運用に未対応です'); return; }
+  var btn = document.getElementById('pat-save');
+  if(btn){ btn.disabled = true; btn.textContent = '作成中…'; }
+  // 仮番号は作る分だけ連番で確保する(同じ番号にならないように)
+  var used = {}; (CASES||[]).forEach(function(c){ used[String(c.denpyo||'')] = 1; });
+  var d = new Date();
+  var pre = '見積-' + String(d.getFullYear()).slice(2) + ('0'+(d.getMonth()+1)).slice(-2) + ('0'+d.getDate()).slice(-2) + '-';
+  var nextNo = function(){
+    for(var i=1; i<100; i++){ var n = pre + ('0'+i).slice(-2); if(!used[n]){ used[n]=1; return n; } }
+    return pre + Date.now().toString().slice(-4);
+  };
+  var ok = 0, ng = [];
+  for(var i=0; i<rows.length; i++){
+    var r = rows[i];
+    var as = (r.qty && r.us) ? Math.round(r.qty * r.us) : '';
+    var at = (r.qty && r.ut) ? Math.round(r.qty * r.ut) : '';
+    var c = {
+      denpyo: nextNo(), customer: cust, item: item, qty: (r.qty || ''), unit: unit,
+      orderDate: '', hopeDate: '', deliveryDate: '', status: '見積提出',
+      unitSelf: (r.us || ''), amtSelf: as, unitTokiwa: (r.ut || ''), amtTokiwa: at,
+      profit: ((as === '' && at === '') ? '' : ((as || 0) - (at || 0))), billMonth: '',
+      memo: '【見積日:' + ymd(d) + '】' + (r.name ? ('【案:' + r.name + '】') : '')
+    };
+    try{
+      var res = await _apiT_('sheetLedgerAppend', {}, { company: key, case: c });
+      if(res && res.success) ok++;
+      else ng.push((r.name || ('案' + (i+1))) + ': ' + ((res && res.error) || '保存失敗'));
+    }catch(e){
+      ng.push((r.name || ('案' + (i+1))) + ': ' + e.message);
+    }
+  }
+  if(btn){ btn.disabled = false; btn.textContent = 'まとめて作成'; }
+  patClose();
+  await loadList(true);
+  alert(ok + ' 件の見積を作成しました。' + (ng.length ? (NL + '失敗 ' + ng.length + ' 件:' + NL + ng.join(NL)) : ''));
+}
 // ✅ 見積の採用: この行を「受注」にし、同じ顧客名・案件名の他の見積を「失注」にする。
 // 複数案を出したとき、どれで受注したかをこの表だけで確定できるようにするための簡易版。
 async function adoptQuote(id){
@@ -1053,7 +1187,7 @@ function render(){
       return '<td'+cls+'>'+cell+'</td>';
     }).join('');
     var selTd='<td class="stk stk-_sel" style="text-align:center"><input type="checkbox" class="selck" data-id="'+c.id+'"'+(SEL.has(c.id)?' checked':'')+' onchange="selChg(this)"></td>';
-    var opsTd='<td class="stk stk-_ops" style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・見積書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button> <button class="btn sm" title="現品ラベル（A4横40面・案件から差し込み）" onclick="openLabel(\''+c.id+'\')">🏷</button> <button class="btn sm" title="この内容で見積をもう1件つくる（伝票番号は不要・仮番号が入ります）" onclick="dupAsQuote(\''+c.id+'\')">⧉</button>'+ (isQ ? ' <button class="btn sm" title="この見積を採用して受注にする（同じ顧客・案件名の他の見積は失注）" style="color:#065f46;border-color:#86efac;font-weight:700" onclick="adoptQuote(\''+c.id+'\')\">採用</button>'+ ' <button class="btn sm" title="この見積を失注にする" style="color:#9a3412;border-color:#fdba74" onclick="rejectQuote(\''+c.id+'\')\">不採用</button>' : '')+ '</td>';
+    var opsTd='<td class="stk stk-_ops" style="white-space:nowrap"><button class="btn sm" title="編集" onclick="openForm(\''+c.id+'\')">✏</button> <button class="btn sm" title="他社へ送る（相手の管理表に追加）" onclick="openSend(\''+c.id+'\')">📤</button> <button class="btn sm" title="帳票（納品書・受領書・請求書・見積書・領収書）" onclick="openDocs(\''+c.id+'\')">🧾</button> <button class="btn sm" title="現品ラベル（A4横40面・案件から差し込み）" onclick="openLabel(\''+c.id+'\')">🏷</button> <button class="btn sm" title="この内容で見積をもう1件つくる（伝票番号は不要・仮番号が入ります）" onclick="dupAsQuote(\''+c.id+'\')">⧉</button>'+ ' <button class="btn sm" title="この内容で複数パターンの見積をまとめて作る" onclick="openPatterns(\''+c.id+'\')">＋案</button>'+ (isQ ? ' <button class="btn sm" title="この見積を採用して受注にする（同じ顧客・案件名の他の見積は失注）" style="color:#065f46;border-color:#86efac;font-weight:700" onclick="adoptQuote(\''+c.id+'\')">採用</button>'+ ' <button class="btn sm" title="この見積を失注にする" style="color:#9a3412;border-color:#fdba74" onclick="rejectQuote(\''+c.id+'\')">不採用</button>' : '')+ '</td>';
     var delTd='<td class="stkR" style="white-space:nowrap;text-align:center"><button class="btn sm" title="この案件を削除" style="color:#c0261c;border-color:#e3a69f" onclick="delRow(\''+c.id+'\')">🗑</button></td>';
     return '<tr class="'+(red?'rowred ':'')+(isQ?'rowquote':'')+'">'+selTd+opsTd+tds+delTd+'</tr>';
   }).join('');
