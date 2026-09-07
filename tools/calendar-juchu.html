@@ -581,14 +581,23 @@ function sigOf(r){
 }
 function localSig(){ try{ return JSON.parse(localStorage.getItem(CAL_SIG_KEY))||[]; }catch(e){ return []; } }
 function localSigAdd(sig){ try{ var a=localSig(); if(sig && a.indexOf(sig)<0){ a.push(sig); if(a.length>5000) a=a.slice(-5000); localStorage.setItem(CAL_SIG_KEY, JSON.stringify(a)); } }catch(e){} }
-function allSig(db){ var m={}; localSig().forEach(function(x){ m[x]=1; }); if(db && Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig.forEach(function(x){ m[x]=1; }); return m; }
+function allSig(db){ var m={}; localSig().forEach(function(x){ m[x]=1; }); if(db && Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig.forEach(function(x){ m[x]=1; }); return _tombSane_(m,'内容 '); }
 function localTomb(){ try{ return JSON.parse(localStorage.getItem(CAL_TOMB_KEY))||[]; }catch(e){ return []; } }
 function localTombAdd(id){ try{ var a=localTomb(); if(a.indexOf(id)<0){ a.push(id); if(a.length>5000) a=a.slice(-5000); localStorage.setItem(CAL_TOMB_KEY, JSON.stringify(a)); } }catch(e){} }
+// 🛡 墓石が異常に多い=一括削除の事故。まるごと無効にして、これ以上データを消さない。
+// 正常運用では手で消した数十件程度にしかならない。2026-09の事故では5,100件まで膨れた。
+var TOMB_SANE_MAX=500;
+function _tombSane_(m, what){
+  var n=Object.keys(m).length;
+  if(n<=TOMB_SANE_MAX) return m;
+  console.warn('[墓石] '+(what||'')+n+'件は異常です。削除判定を無効化しました');
+  return {};
+}
 // DB内の墓石と端末ローカル墓石の和集合
 function allTomb(db){
   var m={}; localTomb().forEach(function(id){ m[id]=1; });
   if(db && Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted.forEach(function(id){ m[id]=1; });
-  return m;
+  return _tombSane_(m,'ID ');
 }
 // 本体(index.html)の CLOUD_CONFIG と同じ値。ツール単独でも全社クラウド(GAS)へ直接保存するために使う。
 var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
@@ -716,6 +725,7 @@ async function hubCloudPush(){
   if(cloud && typeof cloud==='object'){
     (cloud.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
     (cloud.calendarOrdersDeletedSig||[]).forEach(function(x){ sig[x]=1; });
+    tomb=_tombSane_(tomb,'ID '); sig=_tombSane_(sig,'内容 ');   // 異常なら空で送り、クラウドの壊れた墓石を消す
     var mergedCal=mergeCalById(db[COLL]||[], cloud.calendarOrders||[], tomb, sig);
     // マージ結果をローカルにも反映(他端末の新しい変更を取り込む)。※push誘発を避けるため直接書込。
     try{
@@ -781,6 +791,7 @@ async function hubCloudPull(){
     (db.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
     (d.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
     localSig().forEach(function(x){ sigp[x]=1; });
+    tomb=_tombSane_(tomb,'ID '); sigp=_tombSane_(sigp,'内容 ');   // 異常なら削除判定を無効化
     // レコードごとに更新時刻の新しい方を採用(先祖返り防止)。墓石は除外。
     var keyOf=function(arr){ return arr.map(function(r){ return r.id+':'+(r._updatedAt||''); }).sort().join(','); };
     var before=keyOf(db[COLL]||[]);
