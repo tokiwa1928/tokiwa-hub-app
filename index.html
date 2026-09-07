@@ -42873,11 +42873,7 @@ function renderSavedPatterns(tabId){
       </div>
       <span style="background:${statusColors[q.status]};color:#fff;font-size:9px;padding:2px 6px;border-radius:8px">${statusLabels[q.status]}</span>
       <button class="btn" style="font-size:10px;padding:2px 6px" onclick="loadQuotationPattern(${tabId},${idx})">読込</button>
-      ${q.linkedProjectId
-        ? `<span style="font-size:10px;color:#065f46;font-weight:700" title="この案で受注済み">📁 ${q.linkedProjectId}</span>
-           <button class="btn" style="font-size:10px;padding:2px 6px" onclick="unadoptQuotation(${idx},${tabId})" title="採用を取り消して案件を削除し、下書きに戻す">↩ 取消</button>`
-        : `<button class="btn" style="font-size:10px;padding:2px 6px;background:#16a34a;color:#fff;border-color:#16a34a" onclick="adoptQuotationAsProject(${idx},${tabId})" title="この案を採用して受注案件にする">✅ 採用→受注</button>`}
-      ${q.status==='draft' && !q.linkedProjectId ? `<button class="btn" style="font-size:10px;padding:2px 6px" onclick="deleteQuotationPattern(${idx},${tabId})">削除</button>` : ''}
+      ${q.status==='draft' ? `<button class="btn" style="font-size:10px;padding:2px 6px" onclick="deleteQuotationPattern(${idx},${tabId})">削除</button>` : ''}
     </div>`;
   }).join('');
 }
@@ -42937,133 +42933,6 @@ function deleteQuotationPattern(idx, tabId){
   saveDB();
   renderSavedPatterns(tabId);
 }
-// ✅ 採用 → 受注案件化（複数案から1つを選んで受注に進める・簡易版）
-// 採用した案を adopted、同じ得意先・品名の他案を rejected にして、案件を1件つくる。
-function adoptQuotationAsProject(idx, tabId){
-  var q = (DB.quotations||[])[idx];
-  if(!q){ alert('見積パターンが見つかりません'); return; }
-  if(q.linkedProjectId){ alert('この案は既に受注済みです（案件 ' + q.linkedProjectId + '）'); return; }
-
-  var others = (DB.quotations||[]).filter(function(x){
-    return x !== q && x.companyId === q.companyId && x.cust === q.cust && x.item === q.item && !x.linkedProjectId;
-  });
-  var L = [];
-  L.push('「' + (q.patternName || 'この案') + '」で受注しますか？');
-  L.push('');
-  L.push((q.cust || '?') + ' / ' + (q.item || '?'));
-  L.push((Number(q.qty)||0).toLocaleString() + (q.unit||'') + ' × ¥' + (Number(q.unitPrice)||0).toLocaleString()
-    + ' = ¥' + (Number(q.exTax)||0).toLocaleString() + '（税抜）');
-  if(others.length){ L.push(''); L.push('他の ' + others.length + ' 案は「不採用」になります。'); }
-  if(!confirm(L.join(String.fromCharCode(10)))) return;
-
-  if(!DB.projects) DB.projects = [];
-  var snap = {};
-  try { snap = q.tabSnapshot ? JSON.parse(q.tabSnapshot) : {}; } catch(e){}
-
-  var proj = {
-    id: (typeof nextProjNo === 'function') ? nextProjNo() : ('PRJ' + Date.now()),
-    companyId: q.companyId || (currentAuth && currentAuth.companyId) || 'COMP001',
-    companyCode: q.companyCode || ((typeof getCurrentCompanyCode === 'function') ? getCurrentCompanyCode() : ''),
-    orderDate: new Date().toISOString().slice(0,10),
-    dueDate: snap.due || snap.dueDate || '',
-    cust: q.cust || '',
-    item: q.item || '',
-    spec: q.spec || snap.spec || '',
-    end_user: snap.enduser || snap.endUser || '',
-    relay: snap.relay || '',
-    qty: parseInt(q.qty) || 0,
-    unit: q.unit || '部',
-    exTax: parseInt(q.exTax) || 0,
-    grand: 0,
-    status: 'データ作成中',
-    assignee: '',
-    memo: '見積パターン「' + (q.patternName||'') + '」より受注' + (snap.memo ? ('／' + snap.memo) : ''),
-    steps: { 版下:'─', 校了:'─', 印刷:'─', 加工:'─', 納品:'─' },
-    stepDates: {},
-    createdAt: new Date().toISOString(),
-    fromQuotationId: q.id
-  };
-  DB.projects.push(proj);
-
-  q.status = 'adopted';
-  q.linkedProjectId = proj.id;
-  q.adoptedAt = new Date().toISOString();
-  others.forEach(function(x){ if(x.status !== 'rejected') x.status = 'rejected'; });
-
-  if(typeof saveDB === 'function') saveDB();
-  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
-  try { renderSavedPatterns(tabId); } catch(e){}
-  try { if(typeof renderProjects === 'function') renderProjects(); } catch(e){}
-
-  alert('✅ 案件 ' + proj.id + ' として受注登録しました'
-    + (others.length ? ('（他 ' + others.length + ' 案は不採用）') : ''));
-}
-// ↩ 採用の取り消し（受注案件を消して見積を下書きに戻す・簡易版）
-// 後工程(仕入/校正/外注/配送/請求など)が1件でも紐づいていたら取り消さない。
-function unadoptQuotation(idx, tabId){
-  var q = (DB.quotations||[])[idx];
-  if(!q){ alert('見積パターンが見つかりません'); return; }
-  if(!q.linkedProjectId){ alert('この案はまだ受注していません'); return; }
-  var pid = q.linkedProjectId;
-  var proj = (DB.projects||[]).filter(function(p){ return p.id === pid; })[0];
-  var NL = String.fromCharCode(10);
-
-  // 案件に紐づく後工程データがあれば取り消し不可
-  var deps = [];
-  [['見積', DB.estimates], ['見積履歴', DB.history], ['外注見積依頼', DB.outsourceQuoteRequests],
-   ['校正', DB.proofings], ['仕入', DB.purchases], ['外注', DB.outsource],
-   ['外注発注', DB.outsourceOrders], ['社内発注', DB.intercoOrders], ['配送', DB.deliveryItems],
-   ['請求', DB.invoices], ['入金', DB.receipts], ['支払', DB.payments], ['出金', DB.payouts]
-  ].forEach(function(pair){
-    var n = (pair[1]||[]).filter(function(x){ return x && x.projectId === pid; }).length;
-    if(n) deps.push(pair[0] + ' ' + n + '件');
-  });
-  if(deps.length){
-    alert('案件 ' + pid + ' には後工程データが登録されているため取り消せません。' + NL
-      + deps.join('／') + NL + NL
-      + '先に案件管理側でそれらを整理してください。');
-    return;
-  }
-
-  var moved = proj && ((proj.status && proj.status !== 'データ作成中')
-    || Object.keys(proj.stepDates||{}).length > 0
-    || Object.keys(proj.steps||{}).some(function(k){ return proj.steps[k] !== '─'; }));
-
-  var L = [];
-  L.push('「' + (q.patternName||'この案') + '」の採用を取り消しますか？');
-  L.push('');
-  L.push('・案件 ' + pid + ' を削除します');
-  L.push('・この見積を「下書き」に戻します');
-  L.push('・同じ得意先/品名で不採用にした案も「下書き」に戻します');
-  if(moved){
-    L.push('');
-    L.push('⚠ この案件は既に進行しています（状態: ' + (proj.status||'?') + '）。');
-    L.push('  削除すると進捗の入力内容も消えます。');
-  }
-  if(!confirm(L.join(NL))) return;
-
-  DB.projects = (DB.projects||[]).filter(function(p){ return p.id !== pid; });
-
-  q.status = 'draft';
-  delete q.linkedProjectId;
-  delete q.adoptedAt;
-
-  var back = 0;
-  (DB.quotations||[]).forEach(function(x){
-    if(x !== q && x.companyId === q.companyId && x.cust === q.cust && x.item === q.item
-       && x.status === 'rejected' && !x.linkedProjectId){ x.status = 'draft'; back++; }
-  });
-
-  if(typeof saveDB === 'function') saveDB();
-  if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
-  try { renderSavedPatterns(tabId); } catch(e){}
-  try { if(typeof renderProjects === 'function') renderProjects(); } catch(e){}
-
-  alert('↩ 採用を取り消しました（案件 ' + pid + ' を削除'
-    + (back ? ('／他 ' + back + ' 案を下書きに戻しました') : '') + '）');
-}
-
-
 
 // ═══════════════════ 受注案件として確定モーダル ════════════════════
 
