@@ -1940,6 +1940,12 @@ function purgeTombstoned(){
   var arr=Array.isArray(db[COLL])?db[COLL]:[];
   var back=arr.filter(function(r){ return r && (tomb[r.id] || (!r._manual && sig[sigOf(r)])); });
   if(!back.length) return;
+  // 一度に大量に消える=墓石が壊れている。事故とみなして掃除しない(2026-09-07の事故対策)
+  if(back.length > 50){
+    console.warn('[墓石掃除] 中止: 削除対象が'+back.length+'件と異常に多い');
+    try{ hubToast('⚠ 削除マーカーが異常です('+back.length+'件)。データ保護のため掃除を中止しました'); }catch(e){}
+    return;
+  }
   hubSave(function(d){
     d[COLL]=(d[COLL]||[]).filter(function(r){ if(!r) return false; if(tomb[r.id]) return false; if(!r._manual && sig[sigOf(r)]) return false; return true; });
     if(!Array.isArray(d.calendarOrdersDeleted)) d.calendarOrdersDeleted=[];
@@ -2947,6 +2953,26 @@ function autoMigrate(){
 // 起動
 restoreUiState(); buildYears(); buildCats(); setView(viewMode||'matrix');
 _uiRestored=true;
+// 🛡 2026-09-07 事故対応: 一括整理の不具合で不正な削除マーカー(墓石)が数千件たまり、
+// 起動のたびに過去データが消え続けた(2,710件→673件)。全端末・全社DBで1回だけ墓石を空にする。
+// 以後の通常の削除(🗑ボタン)は従来どおり墓石で同期されるので、運用は変わらない。
+function resetBadTombstones(){
+  try{
+    if(localStorage.getItem('caljuchu_tomb_reset_v1')!=='1'){
+      localStorage.setItem(CAL_TOMB_KEY,'[]');
+      localStorage.setItem(CAL_SIG_KEY,'[]');
+      localStorage.setItem('caljuchu_tomb_reset_v1','1');
+    }
+    var db=hubLoad(); if(!db) return;                       // 本体未ログインなら何もしない
+    if(db._calMig && db._calMig['CAL-TOMB-RESET-1']) return;
+    hubSave(function(d){
+      d.calendarOrdersDeleted=[];
+      d.calendarOrdersDeletedSig=[];
+      var m=d._calMig||(d._calMig={}); m['CAL-TOMB-RESET-1']=true;
+    });
+  }catch(e){}
+}
+resetBadTombstones();   // 墓石の一括リセット(1回だけ)。同期より先に実行する
 // まずクラウド最新を取り込んで全PCを一致させ、その後に移行/自己修復を実行
 hubCloudPull().then(function(pulled){
   if(pulled){ _hubCacheClear(); _masterDirty=true; buildYears(); buildCats(); }
