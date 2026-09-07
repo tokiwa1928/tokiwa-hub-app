@@ -395,12 +395,12 @@
           <div style="grid-column:span 3;display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-right:10px;border-right:1px dashed #e0dcd2">
             <div class="mini" style="grid-column:span 2">自社</div>
             <div><label>単価</label><input id="f-unitSelf" type="number" step="any" oninput="calcFromSelf()"></div>
-            <div><label>金額</label><input id="f-amtSelf" type="number" oninput="calcProfit()"></div>
+            <div><label>税抜金額</label><input id="f-amtSelf" type="number" oninput="calcProfit()"></div>
           </div>
           <div style="grid-column:span 3;display:grid;grid-template-columns:1fr 1fr;gap:8px 10px">
             <div class="mini" style="grid-column:span 2">トキワ</div>
             <div><label>単価</label><input id="f-unitTokiwa" type="number" step="any" oninput="calcAmt()"></div>
-            <div><label>金額</label><input id="f-amtTokiwa" type="number" oninput="calcProfit()"></div>
+            <div><label>税抜金額</label><input id="f-amtTokiwa" type="number" oninput="calcProfit()"></div>
           </div>
         </div>
         <div class="calcbar">
@@ -484,7 +484,7 @@ var GAS_URL='https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nn
 var GAS_KEY='mitsumori-2024';
 var CASES=[], COMPANY='', deliveryMode='', NAMEKEY={}, ALL_TARGETS=[];
 var IMPORTABLE={murayama:1, kitakami:1}; // シート取込対応の会社key（マッピング実装済）
-var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['_billTo','💳請求先'],['item','案件名'],['orderQty','受注数量'],['unit','単位'],['qty','製造数量'],['_quoteDate','見積日'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
+var COLS=[['denpyo','伝票番号'],['customer','顧客名'],['_billTo','💳請求先'],['item','案件名'],['orderQty','受注数量'],['unit','単位'],['qty','製造数量'],['_quoteDate','見積日'],['orderDate','受注日'],['hopeDate','希望納期'],['_vendor','発注先'],['_arrival','到着予定日'],['deliveryDate','納品日'],['status','状況'],['billMonth','請求月'],['_docout','出力日'],['unitSelf','単価(自社)'],['amtSelf','税抜金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','税抜金額(トキワ)'],['profit','利益'],['multiPack','複数梱包'],['multiDest','複数納品先'],['memo','備考']];
 // 自社金額列を持つ会社（金額未入力の赤表示対象）
 var SELF_AMT_KEYS={murayama:1,nakao:1,yamauchi:1,tsushima:1};
 // 請求月は「YYYY年M月」表示（並び順は年月キーで正しく）
@@ -875,7 +875,7 @@ function openPatterns(id){
   h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:90px">数量</th>';
   h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:100px">単価(自社)</th>';
   h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:100px">単価(トキワ)</th>';
-  h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:230px">金額(自社) ／ (トキワ) ／ 利益</th>';
+  h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:230px">税抜金額(自社) ／ (トキワ) ／ 利益</th>';
   h +=     '<th style="border:1px solid #e5e3dc;padding:4px;width:34px"></th>';
   h +=   '</tr></thead><tbody id="pat-body"></tbody></table>';
   h +=   '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
@@ -911,13 +911,13 @@ function patAddRow(v){
 function patDelRow(btn){ var tr=btn.closest('tr'); if(tr) tr.remove(); patCalc(); }
 // 金額＝数量×単価、利益＝金額(自社)−金額(トキワ)。
 // 自社単価を入れてトキワ単価が空なら、既定として自社×0.7を入れる(あとから手で直せる)。
-var PAT_TOKIWA_RATE = 0.7;
+// 掛け率は会社ごと(tokiwaRate)。中尾=0.7 / 村山=0.95
 function patCalc(srcEl){
   Array.prototype.forEach.call(document.querySelectorAll('#pat-body tr'), function(tr){
     var g = function(k){ return tr.querySelector('[data-k="' + k + '"]'); };
     var q = toNum(g('qty').value), us = toNum(g('us').value), ut = toNum(g('ut').value);
     if(srcEl && srcEl === g('us') && us && !g('ut').value){
-      g('ut').value = Math.round(us * PAT_TOKIWA_RATE * 100) / 100;
+      g('ut').value = Math.round(us * tokiwaRate() * 100) / 100;
       ut = toNum(g('ut').value);
     }
     var as = (q && us) ? Math.round(q * us) : '';
@@ -1124,7 +1124,16 @@ function filtered(){
   });
 }
 var DISPLAY_CAP=400;
-function _caseTime_(c){ var d=parseD(c.orderDate); if(d) return d.getTime(); var u=c.updatedAt?Date.parse(c.updatedAt):0; return u||0; }
+// 一覧の既定の並び(新しい順)に使う日付。
+// 受注日が無い見積(＋案で作った直後など)が最下部に沈んで見えなくならないよう、
+// 受注日 → 見積日 → 仮番号の日付(見積-260907-01) → 更新時刻 の順に見る。
+function _caseTime_(c){
+  var d=parseD(c.orderDate); if(d) return d.getTime();
+  var q=parseD(_quoteDateTag_(c.memo)); if(q) return q.getTime();
+  var m=String(c.denpyo||'').match(/^見積-(\d{2})(\d{2})(\d{2})-/);
+  if(m) return new Date(2000+ +m[1], +m[2]-1, +m[3]).getTime();
+  var u=c.updatedAt?Date.parse(c.updatedAt):0; return u||0;
+}
 function _sortV_(V){
   if(SORTSTATE.dir&&SORTSTATE.k){
     var k=SORTSTATE.k, dir=SORTSTATE.dir;
@@ -1384,9 +1393,14 @@ function onDenpyo(){ // 同じ伝票番号が既にあれば顧客/案件を補�
   var same=CASES.find(function(c){ return c.denpyo===dp && c.id!==document.getElementById('f-id').value; });
   if(same){ if(!document.getElementById('f-customer').value) document.getElementById('f-customer').value=same.customer||''; if(!document.getElementById('f-item').value) document.getElementById('f-item').value=same.item||''; }
 }
-// 単価(トキワ)＝単価(自社)×0.95（小数点第三位を四捨五入）※村山の実データ規則(38→36.1, 3445→3272.75)
+// トキワへ請求する単価の既定 = 自社単価 × 掛け率。会社ごとに違うので表で持つ。
+//   村山 0.95 は実データ規則(38→36.1, 3445→3272.75)。中尾 0.7 は 2026-09 の指示。
+var TOKIWA_RATE = { murayama:0.95, nakao:0.7 };
+var TOKIWA_RATE_DEFAULT = 0.95;
+function tokiwaRate(){ var k = NAMEKEY[COMPANY]; return (TOKIWA_RATE[k] != null) ? TOKIWA_RATE[k] : TOKIWA_RATE_DEFAULT; }
+// 単価(トキワ)＝単価(自社)×掛け率（小数点第三位を四捨五入）
 function calcFromSelf(){ var us=toNum(document.getElementById('f-unitSelf').value);
-  if(us) document.getElementById('f-unitTokiwa').value=Math.round(us*0.95*100)/100;
+  if(us) document.getElementById('f-unitTokiwa').value=Math.round(us*tokiwaRate()*100)/100;
   calcAmt(); }
 // 自動計算は dataset.auto でマークし、入力を消したら追従してクリア（0や古い値を残さない）
 function calcAmt(){ var q=toNum(document.getElementById('f-qty').value); var us=toNum(document.getElementById('f-unitSelf').value), ut=toNum(document.getElementById('f-unitTokiwa').value);
@@ -2288,7 +2302,7 @@ async function loadDocHistory(denpyo){
 }
 
 // ── ④ リピート登録の変更点ライブ表示 ──
-var REP_FIELDS=[['item','案件名'],['qty','製造数量'],['orderQty','受注数量'],['unit','単位'],['unitSelf','単価(自社)'],['amtSelf','金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','金額(トキワ)'],['customer','顧客名']];
+var REP_FIELDS=[['item','案件名'],['qty','製造数量'],['orderQty','受注数量'],['unit','単位'],['unitSelf','単価(自社)'],['amtSelf','税抜金額(自社)'],['unitTokiwa','単価(トキワ)'],['amtTokiwa','税抜金額(トキワ)'],['customer','顧客名']];
 function _repDiffUpdate_(){
   var bar=document.getElementById('rep-diff-bar'); if(!bar||!window._repOrig_) return;
   var diffs=[];
