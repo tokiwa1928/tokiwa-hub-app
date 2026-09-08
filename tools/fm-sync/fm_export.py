@@ -31,6 +31,43 @@ OUT_DIR  = r'C:\gdrive-migration\fm-export'
 DATE_KEYS = ('起票日', '納期', '納品日', '前回起票日')
 
 
+BAD_CHARS = '\\/:*?"<>|'      # ファイル名に使えない文字 → -
+CTRL_CHARS = '\r\n\t'         # 改行やタブ → 取り除く（データに混入している）
+
+
+def clean(v):
+    """改行・タブを取り除いて前後の空白を落とす
+
+    FileMaker のデータには末尾に改行が入っている項目が実在するため、
+    FileMaker 側の計算式とまったく同じ規則でそろえる。
+    """
+    s = str(v or '')
+    for ch in CTRL_CHARS:
+        s = s.replace(ch, '')
+    s = s.replace('　', ' ')   # 全角スペースは半角に寄せる（FileMaker の Trim に合わせる）
+    return s.strip(' ')
+
+
+def note_title(r):
+    """ノート用タイトル  伝票番号_得意先名(ユーザー名)_品名
+
+    ・ユーザー名が空なら括弧ごと省く
+    ・品名は製品名、無ければ物品名
+    ・空の部分は区切り文字ごと省く
+    ・ファイル名に使えない文字は - に置き換える
+    """
+    denpyo = clean(r.get('伝票番号'))
+    cust   = clean(r.get('得意先名'))
+    user   = clean(r.get('ユーザー名'))
+    item   = clean(r.get('製品名')) or clean(r.get('物品名'))
+    if user:
+        cust = '%s(%s)' % (cust, user)
+    t = '_'.join(x for x in (denpyo, cust, item) if x)
+    for ch in BAD_CHARS:
+        t = t.replace(ch, '-')
+    return t.strip()
+
+
 def fm_date(d):
     """datetime → FileMaker の検索用 MM/DD/YYYY"""
     return '%02d/%02d/%04d' % (d.month, d.day, d.year)
@@ -135,8 +172,10 @@ def main():
         for k in DATE_KEYS:
             if k in r:
                 r[k] = iso_date(r[k])
-        r['得意先名'] = cust.get(str(r.get('得意先コード', '')).strip(), '')
-        r['担当者名'] = staff.get(str(r.get('担当者コード', '')).strip(), '')
+        # コードの末尾に改行が入っているレコードが実在するので必ず clean する
+        r['得意先名'] = cust.get(clean(r.get('得意先コード')), '')
+        r['担当者名'] = staff.get(clean(r.get('担当者コード')), '')
+        r['ノート用タイトル'] = note_title(r)
 
     stamp = datetime.date.today().strftime('%Y%m%d')
     cols = list(rows[0].keys()) if rows else []
