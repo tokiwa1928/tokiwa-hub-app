@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>トピー現品票 リピート作成支援 | Tokiwa Hub</title>
+<style>
+  :root{ --line:#e5e3dc; --ink:#1a1a1a; --sub:#64748b; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; color:var(--ink); background:#f7f6f3; font-size:13px; }
+  header{ background:#1a1a1a; color:#fff; padding:10px 16px; font-weight:700; }
+  header .sub{ font-weight:400; font-size:11.5px; color:#cbd5e1; margin-left:10px; }
+  main{ padding:14px 16px 60px; max-width:1500px; }
+  .card{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  .card h2{ font-size:14px; margin:0 0 4px; }
+  .card .hint{ font-size:11.5px; color:var(--sub); line-height:1.7; margin-bottom:10px; }
+  textarea{ width:100%; font-family:'Consolas','Yu Gothic',monospace; font-size:12px; padding:8px; border:1px solid #c9c6bf; border-radius:6px; resize:vertical; }
+  .btn{ border:1px solid #c9c6bf; background:#fff; border-radius:6px; padding:6px 14px; cursor:pointer; font-family:inherit; font-size:12.5px; }
+  .btn.p{ background:#1a1a1a; color:#fff; border-color:#1a1a1a; font-weight:700; }
+  .btn:disabled{ opacity:.45; cursor:default; }
+  .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+  table{ width:100%; border-collapse:collapse; font-size:12px; }
+  th,td{ border:1px solid var(--line); padding:5px 7px; text-align:left; }
+  th{ background:#f1f5f9; white-space:nowrap; }
+  td.n{ text-align:right; }
+  tr.rep{ background:#f0fdf4; }
+  tr.new{ background:#fffbeb; }
+  tr.ng{ background:#fef2f2; }
+  .tag{ display:inline-block; font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:9px; }
+  .tag.rep{ background:#065f46; color:#fff; }
+  .tag.new{ background:#92400e; color:#fff; }
+  .tag.warn{ background:#b91c1c; color:#fff; }
+  .kpi{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  .kpi div{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:7px 13px; }
+  .kpi b{ font-size:17px; display:block; }
+  .kpi span{ font-size:10.5px; color:var(--sub); }
+  .warnbox{ background:#fef2f2; border:1px solid #fca5a5; color:#991b1b; border-radius:6px; padding:8px 11px; font-size:12px; margin-top:8px; white-space:pre-wrap; }
+  .okbox{ background:#f0fdf4; border:1px solid #86efac; color:#065f46; border-radius:6px; padding:8px 11px; font-size:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>🏷 トピー現品票 リピート作成支援<span class="sub">発注表と過去実績を突合して、FileMaker での作業リストを出します</span></header>
+<main>
+
+<div class="card">
+  <h2>① FileMaker の書き出し（CSV / TSV）</h2>
+  <div class="hint">
+    受注データを <b>トピー工業で絞り込んでから書き出し</b>、その中身をここに貼り付けます。<br>
+    必要な列: <b>no</b>（伝票番号）／<b>製品名</b>／<b>インキ表1</b>／<b>ロット区分</b>／<b>起票日</b>。1行目は列名にしてください。<br>
+    ※ このツールは FileMaker に書き込みません。読むだけです。
+  </div>
+  <textarea id="fm" rows="6" placeholder="no,製品名,インキ表1,ロット区分,起票日&#10;a096831,現品票（M-45）,墨,新規,2025-02-06"></textarea>
+</div>
+
+<div class="card">
+  <h2>② 今月の発注内容</h2>
+  <div class="hint">
+    発注表のとおりに <b>「枚数 品目コード 品目コード …」</b> を1行ずつ。<b>一版 / 二版</b> の行で版が切り替わります。<br>
+    行末に <b>=合計枚数</b> を書くと検算します（例: <code>100 S-27 R-2 D-0 =700</code>）。読み違いがあればその行だけ赤く出ます。
+  </div>
+  <textarea id="ord" rows="14" placeholder="一版
+100 S-27 R-2 D-0 N-20 V-4 M-45 仕R-D9G =700
+200 SQ-A13S S-A13V D-2 D-D10XA N-59 V-2 仕S-A8A =1400
+二版
+100 R-14 R-15-A D-11 N-19 =400"></textarea>
+  <div class="row">
+    <button class="btn p" onclick="run()">突合して作業リストを出す</button>
+    <button class="btn" onclick="dl()" id="dlbtn" disabled>CSVで保存</button>
+    <span id="msg" style="font-size:12px;color:var(--sub)"></span>
+  </div>
+</div>
+
+<div class="card" id="out" style="display:none">
+  <h2>③ 作業リスト</h2>
+  <div class="hint">
+    <b>リピート</b>＝前回伝票番号を FileMaker で開き「Repeat登録」を押す。<br>
+    <b>新規</b>＝類似のコピー元を開いて複製し、<b>前回伝票番号・前回起票日を消して</b>ロット区分を「新規」にする。<br>
+    <b>★見本</b>＝印刷色が見本指定です。<b>実物を確認して合わせてください。</b>
+  </div>
+  <div class="kpi" id="kpi"></div>
+  <div id="chk"></div>
+  <div style="overflow-x:auto;margin-top:10px"><table id="tbl"></table></div>
+</div>
+
+</main>
+<script>
+var RESULT=[];
+function norm(s){ return String(s==null?'':s).trim(); }
+// 「現品票（M-45）」から M-45 を取り出す
+function codeOf(name){
+  var m=norm(name).match(/^現品票\s*[（(](.+?)[）)]\s*$/);
+  return m ? m[1].trim() : '';
+}
+function splitRows(text){
+  var t=norm(text); if(!t) return [];
+  var sep = (t.indexOf('\t')>=0 && t.split('\n')[0].indexOf('\t')>=0) ? '\t' : ',';
+  return t.split(/\r?\n/).filter(function(l){ return l.trim(); }).map(function(l){
+    // 引用符つきCSVに対応
+    var out=[], cur='', q=false;
+    for(var i=0;i<l.length;i++){
+      var c=l[i];
+      if(c==='"'){ if(q && l[i+1]==='"'){ cur+='"'; i++; } else q=!q; }
+      else if(c===sep && !q){ out.push(cur); cur=''; }
+      else cur+=c;
+    }
+    out.push(cur);
+    return out.map(function(x){ return x.trim(); });
+  });
+}
+function parseFM(text){
+  var rows=splitRows(text);
+  if(rows.length<2) return {err:'FileMaker の書き出しが空です（1行目に列名、2行目以降にデータ）'};
+  var hdr=rows[0], ix={};
+  hdr.forEach(function(h,i){ ix[h]=i; });
+  var need=['no','製品名'];
+  for(var i=0;i<need.length;i++) if(ix[need[i]]===undefined) return {err:'列「'+need[i]+'」が見つかりません。書き出しに含めてください。'};
+  var by={};
+  rows.slice(1).forEach(function(r){
+    var g=function(h){ var i=ix[h]; return (i===undefined||i>=r.length)?'':norm(r[i]); };
+    var no=g('no'); if(!no) return;
+    var c=codeOf(g('製品名')); if(!c) return;
+    (by[c]=by[c]||[]).push({ no:no, ink:g('インキ表1'), lot:g('ロット区分'), date:g('起票日'), name:g('製品名') });
+  });
+  Object.keys(by).forEach(function(c){ by[c].sort(function(a,b){ return a.no.localeCompare(b.no); }); });
+  return { by:by, n:rows.length-1, codes:Object.keys(by).length };
+}
+function parseOrders(text){
+  var lines=norm(text).split(/\r?\n/), cur='', items=[], checks=[];
+  lines.forEach(function(raw, li){
+    var l=raw.trim(); if(!l) return;
+    if(/^(一版|二版|三版|仕掛)/.test(l) && !/\d/.test(l.replace(/^(一版|二版|三版|仕掛)/,''))){ cur=l; return; }
+    var mm=l.match(/=\s*([0-9,]+)\s*$/);
+    var expect = mm ? parseInt(mm[1].replace(/,/g,''),10) : null;
+    if(mm) l=l.slice(0, mm.index).trim();
+    var parts=l.split(/[\s,、]+/).filter(Boolean);
+    if(!parts.length) return;
+    var qty=parseInt(String(parts[0]).replace(/[,枚]/g,''),10);
+    if(!(qty>0)){ checks.push({line:li+1, msg:'先頭が枚数になっていません: '+raw.trim(), ng:true}); return; }
+    var codes=parts.slice(1).map(function(x){ return x.replace(/[枚]$/,''); }).filter(Boolean);
+    if(!codes.length){ checks.push({line:li+1, msg:'品目コードがありません: '+raw.trim(), ng:true}); return; }
+    codes.forEach(function(c){ items.push({ code:c, qty:qty, ban:cur||'(版なし)' }); });
+    if(expect!==null){
+      var calc=codes.length*qty;
+      checks.push({ line:li+1, ng:(calc!==expect),
+        msg:(cur||'')+' '+qty+'枚 × '+codes.length+'品目 = '+calc.toLocaleString()+' / 記載 '+expect.toLocaleString()+(calc===expect?'  OK':'  ← 不一致') });
+    }
+  });
+  return { items:items, checks:checks };
+}
+function similar(code, by){
+  var m=code.match(/^(仕)?([A-Za-z]+)/);
+  var pre=m?m[2]:'';
+  if(!pre) return null;
+  var cands=Object.keys(by).filter(function(k){ return k!==code && k.indexOf(pre+'-')===0; });
+  if(!cands.length) return null;
+  cands.sort(function(a,b){ return by[a][by[a].length-1].no.localeCompare(by[b][by[b].length-1].no); });
+  var k=cands[cands.length-1];
+  return { code:k, rec:by[k][by[k].length-1] };
+}
+function run(){
+  var msg=document.getElementById('msg'); msg.textContent='';
+  var fm=parseFM(document.getElementById('fm').value);
+  if(fm.err){ msg.textContent='⚠ '+fm.err; return; }
+  var od=parseOrders(document.getElementById('ord').value);
+  if(!od.items.length){ msg.textContent='⚠ 発注内容が読み取れません'; return; }
+
+  RESULT = od.items.map(function(it){
+    var hist=fm.by[it.code];
+    if(hist && hist.length){
+      var last=hist[hist.length-1];
+      return { code:it.code, qty:it.qty, ban:it.ban, kind:'リピート', prevNo:last.no, prevDate:last.date,
+               ink:last.ink, hist:hist.length, from:'', mihon:(last.ink.indexOf('見本')>=0) };
+    }
+    var s=similar(it.code, fm.by);
+    return { code:it.code, qty:it.qty, ban:it.ban, kind:'新規', prevNo:'', prevDate:'',
+             ink:(s?s.rec.ink:''), hist:0, from:(s?('現品票（'+s.code+'） '+s.rec.no):'類似なし・手動で選んでください'),
+             mihon:(s? s.rec.ink.indexOf('見本')>=0 : false) };
+  });
+
+  var rep=RESULT.filter(function(x){return x.kind==='リピート';}).length;
+  var mih=RESULT.filter(function(x){return x.mihon;}).length;
+  var nofrom=RESULT.filter(function(x){return x.kind==='新規' && !x.prevNo && x.from.indexOf('類似なし')>=0;}).length;
+  document.getElementById('kpi').innerHTML=
+     '<div><b>'+RESULT.length+'</b><span>品目</span></div>'
+    +'<div><b>'+rep+'</b><span>リピート</span></div>'
+    +'<div><b>'+(RESULT.length-rep)+'</b><span>新規</span></div>'
+    +'<div><b>'+mih+'</b><span>★見本（要実物確認）</span></div>'
+    +'<div><b>'+fm.codes+'</b><span>過去の品目コード数</span></div>';
+
+  var ng=od.checks.filter(function(c){return c.ng;});
+  document.getElementById('chk').innerHTML = od.checks.length
+    ? (ng.length
+        ? '<div class="warnbox">⚠ 検算が合わない行があります。読み違いの可能性があるので確認してください。\n'
+            + od.checks.map(function(c){ return (c.ng?'  ✕ ':'  ○ ')+c.msg; }).join('\n') + '</div>'
+        : '<div class="okbox">✅ 検算はすべて一致しました（'+od.checks.length+'行）</div>')
+    : '';
+
+  var h='<tr><th>版</th><th>品目コード</th><th>枚数</th><th>区分</th><th>前回伝票番号</th><th>前回起票日</th><th>インキ</th><th>過去</th><th>FileMaker での操作</th></tr>';
+  RESULT.forEach(function(x){
+    var cls = x.mihon ? 'ng' : (x.kind==='リピート'?'rep':'new');
+    var act = x.kind==='リピート'
+      ? ('<b>'+x.prevNo+'</b> を開いて「Repeat登録」')
+      : (x.from.indexOf('類似なし')>=0
+          ? '<span class="tag warn">要手動</span> 類似が見つかりません'
+          : x.from+' を複製 → <b>前回伝票番号・前回起票日を消す</b>');
+    h+='<tr class="'+cls+'"><td>'+esc(x.ban)+'</td><td><b>'+esc(x.code)+'</b></td><td class="n">'+x.qty.toLocaleString()+'</td>'
+      +'<td><span class="tag '+(x.kind==='リピート'?'rep':'new')+'">'+x.kind+'</span></td>'
+      +'<td>'+esc(x.prevNo)+'</td><td>'+esc(x.prevDate)+'</td>'
+      +'<td>'+esc(x.ink)+(x.mihon?' <span class="tag warn">★見本 要実物確認</span>':'')+'</td>'
+      +'<td class="n">'+x.hist+'</td><td>'+act+'</td></tr>';
+  });
+  document.getElementById('tbl').innerHTML=h;
+  document.getElementById('out').style.display='';
+  document.getElementById('dlbtn').disabled=false;
+  msg.textContent='突合しました（過去データ '+fm.n+' 件）';
+  if(nofrom) msg.textContent += ' ／ 類似が見つからない品目が '+nofrom+' 件あります';
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function dl(){
+  var rows=[['版','品目コード','枚数','ロット区分','前回伝票番号','前回起票日','インキ表1','過去件数','要実物確認','コピー元']];
+  RESULT.forEach(function(x){
+    rows.push([x.ban,x.code,x.qty,x.kind,x.prevNo,x.prevDate,x.ink,x.hist,(x.mihon?'★見本':''),x.from]);
+  });
+  var csv='﻿'+rows.map(function(r){ return r.map(function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; }).join(','); }).join('\r\n');
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download='トピー現品票_作業リスト_'+new Date().toISOString().slice(0,10)+'.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+</script>
+</body>
+</html>
