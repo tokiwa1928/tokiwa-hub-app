@@ -17,7 +17,7 @@ FileMaker Cloud (Claris ID) 接続クライアント
     python fm_client.py            … 接続テスト（初回はClaris IDを聞く）
     python fm_client.py --reset    … 保存済みトークンを捨てて入れ直す
 """
-import sys, os, io, json, base64, ctypes, getpass, argparse
+import sys, os, io, json, base64, ctypes, getpass, argparse, subprocess
 from ctypes import wintypes
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -106,15 +106,63 @@ def _cognito(username=None):
                    user_pool_region=c['Region'], username=username)
 
 
-def login_interactive():
+def ask_gui():
+    """Windows の資格情報ダイアログで入力してもらう（既定）"""
+    ps1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ask-credential.ps1')
+    r = subprocess.run(
+        ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ps1],
+        capture_output=True, timeout=600)
+    if r.returncode == 2:
+        raise RuntimeError('入力がキャンセルされました')
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RuntimeError('ダイアログを表示できませんでした')
+    d = json.loads(r.stdout.decode('utf-8'))
+    return d['u'].strip(), d['p']
+
+
+def ask_console():
+    """コンソールで入力してもらう。伏せ字を出して打てているのが分かるようにする"""
+    user = input('  メールアドレス: ').strip()
+    try:
+        import msvcrt
+    except ImportError:
+        return user, getpass.getpass('  パスワード    : ')
+    sys.stdout.write('  パスワード    : ')
+    sys.stdout.flush()
+    buf = []
+    while True:
+        ch = msvcrt.getwch()
+        if ch in ('\r', '\n'):
+            sys.stdout.write('\n'); sys.stdout.flush(); break
+        if ch == '\x03':
+            raise KeyboardInterrupt
+        if ch in ('\x00', '\xe0'):       # 矢印などの特殊キーは2文字で届く
+            msvcrt.getwch(); continue
+        if ch == '\b':
+            if buf:
+                buf.pop(); sys.stdout.write('\b \b'); sys.stdout.flush()
+            continue
+        buf.append(ch)
+        sys.stdout.write('*'); sys.stdout.flush()
+    return user, ''.join(buf)
+
+
+def login_interactive(console=False):
     """Claris ID で1回だけサインインし、更新トークンを暗号化保存する"""
     print()
     print('  Claris ID でサインインします。')
     print('  （FileMaker Pro を開くときに使うメールアドレスとパスワード）')
     print('  パスワードは保存されません。保存するのは更新用トークンだけです。')
     print()
-    user = input('  メールアドレス: ').strip()
-    pwd  = getpass.getpass('  パスワード    : ')
+    if console:
+        user, pwd = ask_console()
+    else:
+        try:
+            print('  入力ダイアログを開きます…')
+            user, pwd = ask_gui()
+        except Exception as e:
+            print('  （ダイアログが使えないため、この画面で入力します: %s）' % e)
+            user, pwd = ask_console()
 
     u = _cognito(user)
     u.authenticate(password=pwd)
@@ -135,12 +183,12 @@ def login_interactive():
     return u.id_token
 
 
-def id_token(reset=False):
+def id_token(reset=False, console=False):
     """保存済みの更新トークンから、1時間有効な FMID トークンを得る"""
     if reset and os.path.exists(STORE_FIL):
         os.remove(STORE_FIL)
     if not os.path.exists(STORE_FIL):
-        return login_interactive()
+        return login_interactive(console)
 
     saved = json.loads(dpapi_unprotect(open(STORE_FIL, 'rb').read()).decode('utf-8'))
     u = _cognito(saved['username'])
@@ -149,7 +197,7 @@ def id_token(reset=False):
         u.renew_access_token()
     except Exception as e:
         print('  保存済みトークンが使えませんでした（%s）。入れ直します。' % type(e).__name__)
-        return login_interactive()
+        return login_interactive(console)
     return u.id_token
 
 
@@ -220,6 +268,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--reset', action='store_true', help='保存済みトークンを捨てて入れ直す')
     ap.add_argument('--db', default=None, help='対象ファイル（既定は AP→DB の順に試す）')
+    ap.add_argument('--console', action='store_true', help='ダイアログでなくこの画面で入力する')
     a = ap.parse_args()
 
     print()
@@ -227,7 +276,7 @@ def main():
     print('  ホスト: %s' % FM_HOST)
 
     try:
-        fmid = id_token(reset=a.reset)
+        fmid = id_token(reset=a.reset, console=a.console)
     except Exception as e:
         print()
         print('  × Claris ID のサインインに失敗しました: %s' % e)
