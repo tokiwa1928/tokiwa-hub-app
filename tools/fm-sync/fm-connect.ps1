@@ -14,7 +14,7 @@
 #     保存先: %USERPROFILE%\.tokiwa\fm-cred.xml
 
 param(
-  [string]$Db = 'トキワ印刷DB',
+  [string]$Db,
   [switch]$Reset
 )
 
@@ -151,14 +151,29 @@ if ($MyInvocation.InvocationName -ne '.') {
   Write-Host ''
   Write-Host '  FileMaker Cloud 接続テスト' -ForegroundColor White
   Write-Host ('  ホスト: {0}' -f $FM_HOST) -ForegroundColor DarkGray
-  Write-Host ('  ファイル: {0}' -f $Db) -ForegroundColor DarkGray
 
+  $targets = if ($Db) { @($Db) } else { @('トキワ印刷AP', 'トキワ印刷DB') }
   $cred  = Get-FMCredential -Force:$Reset
-  $token = $null
-  try {
-    $token = New-FMSession -Database $Db -Credential $cred
+
+  # 2ファイル構成なので、指定がなければ両方試して通った方を使う
+  $token = $null; $useDb = $null; $lastErr = $null
+  foreach ($t in $targets) {
     Write-Host ''
-    Write-Host '  ✓ 接続できました' -ForegroundColor Green
+    Write-Host ('  → {0} を試します' -f $t) -ForegroundColor DarkGray
+    try {
+      $token = New-FMSession -Database $t -Credential $cred
+      $useDb = $t
+      Write-Host ('  ✓ {0} に接続できました' -f $t) -ForegroundColor Green
+      break
+    } catch {
+      $lastErr = $_
+      Write-Host ('    × {0}' -f $_.Exception.Message) -ForegroundColor Yellow
+    }
+  }
+
+  try {
+    if (-not $token) { throw $lastErr.Exception.Message }
+    $Db = $useDb
 
     $lay = Get-FMLayouts -Database $Db -Token $token
     $names = @()
@@ -196,15 +211,17 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
 
     Write-Host ''
-    Write-Host '  すべて成功しました。毎朝の自動照合を組めます。' -ForegroundColor Green
+    Write-Host ('  すべて成功しました（対象ファイル: {0}）。毎朝の自動照合を組めます。' -f $Db) -ForegroundColor Green
   }
   catch {
     Write-Host ''
     Write-Host ('  × {0}' -f $_.Exception.Message) -ForegroundColor Red
     Write-Host ''
     if ($_.Exception.Message -match '212') {
-      Write-Host '  アカウントかパスワードが違います。' -ForegroundColor Yellow
-      Write-Host '  入力し直すには、次をそのまま実行してください:'
+      Write-Host '  アカウントかパスワードが受け付けられませんでした。' -ForegroundColor Yellow
+      Write-Host '  FileMaker Cloud は Claris ID（メールアドレス）方式のため、'
+      Write-Host '  Data API には「FileMaker ファイル内のアカウント」が必要です。'
+      Write-Host '  連携専用アカウント(hubsync)を作ってから、次を実行してください:'
       Write-Host ('    powershell -ExecutionPolicy Bypass -File "{0}" -Reset' -f $PSCommandPath) -ForegroundColor White
     } elseif ($_.Exception.Message -match '9|802') {
       Write-Host '  アカウントに Data API の権限(fmrest)がない可能性があります。' -ForegroundColor Yellow
