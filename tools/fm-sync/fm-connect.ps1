@@ -204,7 +204,8 @@ if ($MyInvocation.InvocationName -ne '.') {
     Write-Host ''
     if ($_.Exception.Message -match '212') {
       Write-Host '  アカウントかパスワードが違います。' -ForegroundColor Yellow
-      Write-Host '  入力し直す場合:  .\fm-connect.ps1 -Reset'
+      Write-Host '  入力し直すには、次をそのまま実行してください:'
+      Write-Host ('    powershell -ExecutionPolicy Bypass -File "{0}" -Reset' -f $PSCommandPath) -ForegroundColor White
     } elseif ($_.Exception.Message -match '9|802') {
       Write-Host '  アカウントに Data API の権限(fmrest)がない可能性があります。' -ForegroundColor Yellow
       Write-Host '  FileMaker Pro で [ファイル > 管理 > セキュリティ] を開き、'
