@@ -36,6 +36,9 @@
   .kpi span{ font-size:10.5px; color:var(--sub); }
   .warnbox{ background:#fef2f2; border:1px solid #fca5a5; color:#991b1b; border-radius:6px; padding:8px 11px; font-size:12px; margin-top:8px; white-space:pre-wrap; }
   .okbox{ background:#f0fdf4; border:1px solid #86efac; color:#065f46; border-radius:6px; padding:8px 11px; font-size:12px; margin-top:8px; }
+  #drop{ border:2px dashed #c9c6bf; border-radius:8px; padding:18px; text-align:center; color:#64748b; background:#fafaf8; cursor:pointer; font-size:12.5px; }
+  #drop.over{ border-color:#16a34a; background:#f0fdf4; color:#065f46; }
+  #fminfo{ font-size:11.5px; color:var(--sub); margin-top:6px; min-height:1.4em; }
 </style>
 </head>
 <body>
@@ -45,11 +48,18 @@
 <div class="card">
   <h2>① FileMaker の書き出し（CSV / TSV）</h2>
   <div class="hint">
-    受注データを <b>トピー工業で絞り込んでから書き出し</b>、その中身をここに貼り付けます。<br>
+    FileMaker の <b>ファイル(F) &gt; レコードのエクスポート</b> で書き出した CSV を、<b>下の枠にドラッグ＆ドロップ</b>してください。<br>
     必要な列: <b>no</b>（伝票番号）／<b>製品名</b>／<b>インキ表1</b>／<b>ロット区分</b>／<b>起票日</b>。1行目は列名にしてください。<br>
-    ※ このツールは FileMaker に書き込みません。読むだけです。
+    絞り込みは不要です。<b>全件でも構いません</b>（現品票の行だけ自動で拾います）。<b>文字コードは自動判定</b>します。<br>
+    ※ このツールは FileMaker に書き込みません。<b>読むだけです。</b>
   </div>
-  <textarea id="fm" rows="6" placeholder="no,製品名,インキ表1,ロット区分,起票日&#10;a096831,現品票（M-45）,墨,新規,2025-02-06"></textarea>
+  <div id="drop">📄 ここに CSV をドラッグ＆ドロップ　／　クリックしてファイルを選ぶ
+    <input type="file" id="file" accept=".csv,.tab,.tsv,.txt" style="display:none">
+  </div>
+  <div id="fminfo"></div>
+  <details style="margin-top:7px"><summary style="font-size:11.5px;color:#64748b;cursor:pointer">貼り付けで入れる場合はこちら</summary>
+    <textarea id="fm" rows="6" style="margin-top:6px" placeholder="no,製品名,インキ表1,ロット区分,起票日&#10;a096831,現品票（M-45）,墨,新規,2025-02-06"></textarea>
+  </details>
 </div>
 
 <div class="card">
@@ -66,6 +76,8 @@
   <div class="row">
     <button class="btn p" onclick="run()">突合して作業リストを出す</button>
     <button class="btn" onclick="dl()" id="dlbtn" disabled>CSVで保存</button>
+    <button class="btn" onclick="toFM()" id="fmbtn" disabled title="FileMaker を開いて「一括リピート」を実行します">FileMaker へ送る</button>
+    <label style="font-size:11.5px;color:var(--sub)">ファイル名 <input id="fmfile" value="トキワ印刷AP" style="width:130px;padding:3px 6px;border:1px solid #c9c6bf;border-radius:5px;font-family:inherit"></label>
     <span id="msg" style="font-size:12px;color:var(--sub)"></span>
   </div>
 </div>
@@ -86,6 +98,49 @@
 <script>
 var RESULT=[];
 function norm(s){ return String(s==null?'':s).trim(); }
+// ── CSVの読み込み（ドラッグ＆ドロップ／ファイル選択・文字コード自動判定）──
+// FileMaker の書き出しは既定が Shift-JIS になりやすいので UTF-8 と両対応にする
+function decodeBytes(buf){
+  var u8=new Uint8Array(buf);
+  if(u8.length>=3 && u8[0]===0xEF && u8[1]===0xBB && u8[2]===0xBF){
+    return { text:new TextDecoder('utf-8').decode(u8.subarray(3)), enc:'UTF-8 (BOM付き)' };
+  }
+  try{
+    var t=new TextDecoder('utf-8',{fatal:true}).decode(u8);
+    return { text:t, enc:'UTF-8' };
+  }catch(e){}
+  try{
+    return { text:new TextDecoder('shift_jis').decode(u8), enc:'Shift-JIS' };
+  }catch(e){}
+  return { text:new TextDecoder('utf-8').decode(u8), enc:'不明（UTF-8として読込）' };
+}
+function loadFile(f){
+  var info=document.getElementById('fminfo');
+  if(!f){ return; }
+  info.textContent='読み込み中… '+f.name;
+  var fr=new FileReader();
+  fr.onload=function(){
+    var d=decodeBytes(fr.result);
+    document.getElementById('fm').value=d.text;
+    var n=d.text.split(/\r?\n/).filter(function(l){ return l.trim(); }).length-1;
+    var genpin=(d.text.match(/現品票/g)||[]).length;
+    info.innerHTML='✅ <b>'+esc(f.name)+'</b>　'+(f.size/1024/1024).toFixed(1)+'MB　文字コード: '+d.enc
+      +'　データ '+(n>0?n.toLocaleString():'0')+'行　うち現品票 '+genpin.toLocaleString()+'行';
+    if(genpin===0) info.innerHTML+='　<span style="color:#b91c1c">※ 「現品票（…）」の行が見つかりません。製品名の列が入っているか確認してください</span>';
+  };
+  fr.onerror=function(){ info.textContent='⚠ 読み込みに失敗しました'; };
+  fr.readAsArrayBuffer(f);
+}
+(function(){
+  var d=document.getElementById('drop'), inp=document.getElementById('file');
+  if(!d) return;
+  d.onclick=function(){ inp.click(); };
+  inp.onchange=function(){ loadFile(inp.files[0]); };
+  d.ondragover=function(e){ e.preventDefault(); d.classList.add('over'); };
+  d.ondragleave=function(){ d.classList.remove('over'); };
+  d.ondrop=function(e){ e.preventDefault(); d.classList.remove('over');
+    if(e.dataTransfer.files && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); };
+})();
 // 「現品票（M-45）」から M-45 を取り出す
 function codeOf(name){
   var m=norm(name).match(/^現品票\s*[（(](.+?)[）)]\s*$/);
@@ -216,6 +271,33 @@ function run(){
   if(nofrom) msg.textContent += ' ／ 類似が見つからない品目が '+nofrom+' 件あります';
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+// FileMaker の「一括リピート」スクリプトへ渡す引数を作る。
+// 1行1件・タブ区切り: 区分 / 元になる伝票番号 / 枚数 / 棚番
+function fmParam(){
+  var TAB=String.fromCharCode(9), LF=String.fromCharCode(10);
+  return RESULT.map(function(x){
+    var m=String(x.from||'').match(/(a[0-9]{6})/);
+    var src = x.prevNo || (m?m[1]:'');
+    if(!src) return null;                       // 元が無い行は送らない
+    return [x.kind, src, x.qty, x.code].join(TAB);
+  }).filter(Boolean).join(LF);
+}
+function toFM(){
+  var file=(document.getElementById('fmfile').value||'').trim();
+  if(!file){ alert('FileMaker のファイル名を入れてください'); return; }
+  var p=fmParam(), LF=String.fromCharCode(10);
+  var n=p?p.split(LF).length:0;
+  if(!n){ alert('送れる行がありません（元になる伝票番号が特定できていません）'); return; }
+  var skip=RESULT.length-n;
+  if(!confirm(n+' 件を FileMaker へ送ります。'+LF+LF
+    +'ファイル: '+file+LF+'スクリプト: 一括リピート'+LF
+    +(skip?('※ 元が特定できない '+skip+' 件は送りません。'+LF):'')
+    +LF+'FileMaker 側で1件ずつ検索し、1件だけヒットした行のみ処理します。')) return;
+  var url='fmp://$/'+encodeURIComponent(file)+'?script='+encodeURIComponent('一括リピート')
+        +'&param='+encodeURIComponent(p);
+  if(url.length>2000){ alert('データが長すぎます（'+url.length+'文字）。件数を分けて送ってください。'); return; }
+  location.href=url;
+}
 function dl(){
   var rows=[['版','品目コード','枚数','ロット区分','前回伝票番号','前回起票日','インキ表1','過去件数','要実物確認','コピー元']];
   RESULT.forEach(function(x){
