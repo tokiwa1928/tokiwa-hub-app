@@ -24,8 +24,10 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 if hasattr(sys.stdout, 'buffer'):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8',
+                                  errors='replace', line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8',
+                                  errors='replace', line_buffering=True)
 
 FM_HOST   = 'tokiwa.account.filemaker-cloud.com'
 POOL_URL  = 'https://www.ifmcloud.com/endpoint/userpool/2.2.0.my.claris.com.json'
