@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>前回伝票をさがす</title>
+<style>
+ :root{ --bg:#f7f6f3; --fg:#1a1a1a; --line:#e0ddd6; --card:#fff; --dim:#6b7280;
+        --hit:#fff7ed; --rep:#0d7a4a; --new:#b45309; }
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--fg);font-size:13.5px;
+      font-family:'Yu Gothic','Meiryo',system-ui,sans-serif}
+ header{background:#1a1a1a;color:#fff;padding:10px 16px;position:sticky;top:0;z-index:9}
+ header b{font-size:15px} header span{font-size:11.5px;color:#cbd5e1;margin-left:12px}
+ .bar{background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;
+      position:sticky;top:39px;z-index:8;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ input[type=search],input[type=text]{font:inherit;padding:7px 11px;border:1px solid #c9c6bf;
+      border-radius:7px;min-width:230px;background:#fff}
+ input[type=search]{min-width:320px;font-size:15px}
+ .btn{font:inherit;border:1px solid #c9c6bf;background:#fff;border-radius:7px;
+      padding:6px 13px;cursor:pointer}
+ .btn.p{background:#1a1a1a;color:#fff;border-color:#1a1a1a;font-weight:700}
+ .btn:disabled{opacity:.45;cursor:default}
+ .drop{margin:40px auto;max-width:620px;background:var(--card);border:2px dashed #c9c6bf;
+       border-radius:12px;padding:44px 28px;text-align:center;color:var(--dim)}
+ .drop.on{border-color:#1a1a1a;background:#fff}
+ .drop b{display:block;color:var(--fg);font-size:15px;margin-bottom:8px}
+ .drop code{background:#f1efe9;padding:2px 6px;border-radius:4px;font-size:12px}
+ main{padding:12px 16px 60px}
+ table{border-collapse:collapse;width:100%;background:var(--card)}
+ th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+ th{background:#f1efe9;font-size:11.5px;color:#4b5563;position:sticky;top:88px;z-index:6;
+    white-space:nowrap}
+ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+ td.dp{font-weight:700;white-space:nowrap}
+ tr:hover td{background:var(--hit)}
+ .tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700}
+ .tag.rep{background:#e7f6ee;color:var(--rep)}
+ .tag.new{background:#fdf0dc;color:var(--new)}
+ .cp{border:1px solid #c9c6bf;background:#fff;border-radius:5px;padding:2px 8px;
+     cursor:pointer;font:inherit;font-size:11.5px;white-space:nowrap}
+ .cp.done{background:#e7f6ee;border-color:#86efac;color:var(--rep)}
+ .note{color:var(--dim);font-size:12px;margin:6px 0 10px}
+ .empty{padding:50px;text-align:center;color:var(--dim)}
+ mark{background:#fde68a;padding:0 1px}
+</style></head><body>
+
+<header>
+  <b>🔎 前回伝票をさがす</b>
+  <span id="hd">書き出したデータを読み込んでください</span>
+</header>
+
+<div class="bar" id="bar" hidden>
+  <input type="search" id="q" placeholder="品名・得意先・ユーザー名で検索（スペース区切りで絞り込み）">
+  <label><input type="checkbox" id="onlyRep"> リピートのみ</label>
+  <span class="note" id="cnt"></span>
+  <button class="btn" id="clear">条件をクリア</button>
+</div>
+
+<div class="drop" id="drop">
+  <b>受注データを読み込みます</b>
+  ここに <code>repeat-index.json</code> をドラッグ＆ドロップ<br>
+  （<code>C:\gdrive-migration\fm-export\</code> にあります）
+  <div style="margin-top:16px"><button class="btn" id="pick">ファイルを選ぶ</button></div>
+  <input type="file" id="file" accept=".json" hidden>
+</div>
+
+<main id="main"></main>
+
+<script>
+var COLS=[], ROWS=[], IDX={}, VIEW=[];
+var el=function(id){ return document.getElementById(id); };
+
+function boot(data){
+  COLS = data.cols; ROWS = data.rows;
+  COLS.forEach(function(c,i){ IDX[c]=i; });
+  el('drop').hidden = true;
+  el('bar').hidden = false;
+  el('hd').textContent = ROWS.length.toLocaleString() + '件（起票日の新しい順）';
+  el('q').focus();
+  render([]);
+}
+
+function readFile(f){
+  el('hd').textContent = '読み込み中…';
+  var r = new FileReader();
+  r.onload = function(){
+    try { boot(JSON.parse(r.result)); }
+    catch(e){ el('hd').textContent = '読み込めませんでした: ' + e.message; }
+  };
+  r.readAsText(f);
+}
+
+el('pick').onclick = function(){ el('file').click(); };
+el('file').onchange = function(){ if(this.files[0]) readFile(this.files[0]); };
+['dragenter','dragover'].forEach(function(t){
+  el('drop').addEventListener(t, function(e){ e.preventDefault(); this.classList.add('on'); });
+});
+['dragleave','drop'].forEach(function(t){
+  el('drop').addEventListener(t, function(e){ e.preventDefault(); this.classList.remove('on'); });
+});
+el('drop').addEventListener('drop', function(e){
+  var f = e.dataTransfer.files[0]; if(f) readFile(f);
+});
+
+// 検索対象（品名まわり）
+var SEARCH = ['製品名','物品名','得意先名','ユーザー名','品名1','備考','伝票番号'];
+
+function search(){
+  var q = el('q').value.trim();
+  var rep = el('onlyRep').checked;
+  if(!q){ VIEW=[]; render([]); return; }
+  var terms = q.split(/[\s　]+/).filter(Boolean).map(function(t){ return t.toLowerCase(); });
+  var si = SEARCH.map(function(c){ return IDX[c]; }).filter(function(i){ return i!=null; });
+  var out=[];
+  for(var n=0;n<ROWS.length;n++){
+    var r = ROWS[n];
+    if(rep && r[IDX['ロット区分']] !== 'リピート') continue;
+    var hay='';
+    for(var k=0;k<si.length;k++) hay += r[si[k]] + '\u0001';
+    hay = hay.toLowerCase();
+    var ok=true;
+    for(var t=0;t<terms.length;t++){ if(hay.indexOf(terms[t])<0){ ok=false; break; } }
+    if(ok){ out.push(r); if(out.length>=400) break; }
+  }
+  VIEW = out;
+  render(out, terms);
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+function hl(s, terms){
+  var t = esc(s);
+  if(!terms) return t;
+  terms.forEach(function(w){
+    if(!w) return;
+    var re = new RegExp('(' + w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')','ig');
+    t = t.replace(re, '<mark>$1</mark>');
+  });
+  return t;
+}
+
+function g(r, c){ var i=IDX[c]; return i==null ? '' : r[i]; }
+
+function render(rows, terms){
+  var m = el('main');
+  el('cnt').textContent = rows.length ? (rows.length >= 400 ? '400件以上（先頭400件）' : rows.length + '件') : '';
+  if(!rows.length){
+    m.innerHTML = '<div class="empty">' +
+      (el('q').value.trim() ? '見つかりませんでした' :
+       '品名や得意先を入力してください。<br>例：<b>長3封筒</b>　<b>名刺 中村</b>') + '</div>';
+    return;
+  }
+  var h = ['<table><thead><tr>',
+    '<th>伝票番号</th><th>起票日</th><th>区分</th><th>得意先（ユーザー）</th>',
+    '<th>品名</th><th class="num">数量</th><th class="num">単価</th><th class="num">金額</th>',
+    '<th>用紙</th><th>前回</th><th></th></tr></thead><tbody>'];
+  rows.forEach(function(r){
+    var kind = g(r,'ロット区分');
+    var cust = g(r,'得意先名');
+    var user = g(r,'ユーザー名');
+    var item = g(r,'製品名') || g(r,'物品名');
+    h.push('<tr>',
+      '<td class="dp">', hl(g(r,'伝票番号'), terms), '</td>',
+      '<td>', esc(g(r,'起票日')), '</td>',
+      '<td><span class="tag ', (kind==='リピート'?'rep':'new'), '">', esc(kind||'—'), '</span></td>',
+      '<td>', hl(cust, terms), (user ? '<br><span style="color:#6b7280">' + hl(user, terms) + '</span>' : ''), '</td>',
+      '<td>', hl(item, terms), '</td>',
+      '<td class="num">', esc(g(r,'合計数1') || g(r,'ロットセット数')), '</td>',
+      '<td class="num">', esc(g(r,'売価単価')), '</td>',
+      '<td class="num">', esc(g(r,'売価金額')), '</td>',
+      '<td>', esc(g(r,'紙質1')), (g(r,'面付1') ? ' / ' + esc(g(r,'面付1')) + '面' : ''), '</td>',
+      '<td>', esc(g(r,'前回伝票番号')), '</td>',
+      '<td><button class="cp" data-v="', esc(g(r,'伝票番号')), '">番号をコピー</button></td>',
+      '</tr>');
+  });
+  h.push('</tbody></table>');
+  m.innerHTML = h.join('');
+}
+
+document.addEventListener('click', function(e){
+  var b = e.target.closest('.cp');
+  if(!b) return;
+  navigator.clipboard.writeText(b.dataset.v).then(function(){
+    b.textContent = 'コピーしました'; b.classList.add('done');
+    setTimeout(function(){ b.textContent='番号をコピー'; b.classList.remove('done'); }, 1400);
+  });
+});
+
+var timer=null;
+el('q').addEventListener('input', function(){
+  clearTimeout(timer); timer = setTimeout(search, 180);
+});
+el('onlyRep').addEventListener('change', search);
+el('clear').onclick = function(){ el('q').value=''; el('onlyRep').checked=false; search(); el('q').focus(); };
+</script>
+</body></html>
