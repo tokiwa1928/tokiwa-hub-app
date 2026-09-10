@@ -178,7 +178,8 @@ window.FM見た目 = function () {};
     '画面_recordIdで読む': ['recordId'],
     '画面_保存':           ['recordId', 'modId', 'fields'],
     '画面_新規案件':       ['種別', '初期値'],
-    '画面_新規段階':       ['案件ID', '種別']
+    '画面_新規段階':       ['案件ID', '種別'],
+    '画面_一覧':           ['条件']
   };
 
   var トークン = '', 期限 = 0, 待っている = null;
@@ -190,10 +191,15 @@ window.FM見た目 = function () {};
     } catch (e) { return { exp: 0, email: '' }; }
   }
 
+  var 置き場 = 'fm_id_token';
+
   function 名乗る(jwt) {
     トークン = jwt;
     var p = 中身を読む(jwt);
     期限 = p.exp;
+    // 読み直すたびにサインインし直さずに済むよう、このタブの中だけに覚えておく。
+    // タブを閉じれば消える。トークン自体も1時間で切れる。
+    try { sessionStorage.setItem(置き場, jwt); } catch (e) {}
     var who = document.getElementById('fmwho');
     if (who) who.textContent = p.email ? '　' + p.email : '';
     var box = document.getElementById('fmsignin');
@@ -231,7 +237,24 @@ window.FM見た目 = function () {};
     return 用意;
   }
 
+  function 覚えているものを使う() {
+    if (トークン) return;
+    var jwt = '';
+    try { jwt = sessionStorage.getItem(置き場) || ''; } catch (e) {}
+    if (!jwt) return;
+    if (中身を読む(jwt).exp - Date.now() > 5 * 60 * 1000) 名乗る(jwt);
+    else { try { sessionStorage.removeItem(置き場); } catch (e) {} }
+  }
+
+  function 忘れる() {
+    トークン = ''; 期限 = 0;
+    try { sessionStorage.removeItem(置き場); } catch (e) {}
+    var who = document.getElementById('fmwho'); if (who) who.textContent = '';
+    var box = document.getElementById('fmsignin'); if (box) box.style.display = 'inline-block';
+  }
+
   function トークンを得る() {
+    覚えているものを使う();
     if (トークン && 期限 - Date.now() > 5 * 60 * 1000) return Promise.resolve(トークン);
     トークン = '';
     if (!クライアントID) {
@@ -244,8 +267,11 @@ window.FM見た目 = function () {};
       return new Promise(function (done, fail) {
         var 時間切れ = setTimeout(function () {
           待っている = null;
-          fail(new Error('黒帯の「Sign in with Google」を押して、社内のアカウントでサインインしてください'));
-        }, 60000);
+          var box = document.getElementById('fmsignin');
+          if (box) box.style.display = 'inline-block';
+          fail(new Error('サインインしてください。黒帯の「ログイン」を押して、'
+                         + '社内のアカウントを選んでください（この画面が裏にあると出せません）'));
+        }, 20000);
         待っている = function () { clearTimeout(時間切れ); done(トークン); };
         try { google.accounts.id.prompt(); } catch (e) {}
       });
@@ -272,7 +298,7 @@ window.FM見た目 = function () {};
         try { r = JSON.parse(t); }
         catch (e) { throw new Error('中継の返事を読めませんでした（' + res.status + '）'); }
         if (!r.ok) {
-          if (/サインイン/.test(r.error || '')) { トークン = ''; 期限 = 0; }
+          if (/サインイン|この画面あて/.test(r.error || '')) 忘れる();
           throw new Error(r.error || '不明なエラー');
         }
         return r.data;
@@ -282,6 +308,7 @@ window.FM見た目 = function () {};
 
   // 開いた時点でサインインを始めておく（押してから待たせないため）
   window.FM見た目 = function () {
+    覚えているものを使う();
     if (!クライアントID) {
       var s = document.getElementById('fmstat');
       if (s) {
