@@ -288,3 +288,67 @@ function json_(o) {
   return ContentService.createTextOutput(JSON.stringify(o))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+
+// ------------------------------------------------------------ 設置の確認
+
+/**
+ * ★ 設置したら、まずこの関数を1回実行してください ★
+ *
+ *   ・初回の実行で権限の承認画面が出ます。承認してください（これをしないと外から呼べません）
+ *   ・スクリプトプロパティが正しいか、FileMaker につながるかをここで確かめます
+ *   ・結果は「実行ログ」に出ます
+ */
+function セットアップ確認() {
+  var props = PropertiesService.getScriptProperties();
+  var log = [];
+
+  function chk(name, hint) {
+    var v = props.getProperty(name);
+    log.push((v ? '○ ' : '× ') + name + ' : ' + (v ? '(' + v.length + '文字)' : hint));
+    return v;
+  }
+
+  log.push('--- スクリプトプロパティ ---');
+  var refresh = chk('FM_REFRESH_TOKEN', '未設定。更新トークンをコピー.cmd で取得して貼ってください');
+  var domain  = props.getProperty('ALLOWED_DOMAIN');
+  log.push((domain ? '○ ' : '△ ') + 'ALLOWED_DOMAIN : '
+           + (domain || '未設定（既定の tokiwap-group.com,tokiwap.co.jp を使います）'));
+  var dev = props.getProperty('DEV_KEY');
+  if (dev) log.push('⚠ DEV_KEY が設定されています。動作確認が済んだら必ず削除してください');
+  var sheet = props.getProperty('LOG_SHEET_ID');
+  log.push((sheet ? '○ ' : '－ ') + 'LOG_SHEET_ID : ' + (sheet || '未設定（書き込み記録は残しません）'));
+
+  if (refresh) {
+    log.push('');
+    log.push('--- FileMaker ---');
+    try {
+      CacheService.getScriptCache().remove('fm_id_token');
+      CacheService.getScriptCache().remove('fm_session');
+      var t0 = new Date();
+      fmIdToken_();
+      log.push('○ Claris のトークン取得  ' + (new Date() - t0) + ' ミリ秒');
+
+      t0 = new Date();
+      fmSession_();
+      log.push('○ Data API のセッション  ' + (new Date() - t0) + ' ミリ秒');
+
+      t0 = new Date();
+      var info = fieldInfo_(LAYOUTS.juchu);
+      log.push('○ レイアウト ' + info.layout + '  ' + (new Date() - t0) + ' ミリ秒');
+      log.push('   書ける項目 ' + info.writable.length + ' / 読むだけ ' + info.readonly.length);
+
+      t0 = new Date();
+      var n = find_(LAYOUTS.juchu, [{ '伝票番号': '*' }], 1, 1, null).total;
+      log.push('○ 1件の検索  ' + (new Date() - t0) + ' ミリ秒（全 ' + n + ' 件）');
+      log.push('');
+      log.push('すべて通りました。中継は使える状態です。');
+    } catch (e) {
+      log.push('× ' + e.message);
+    }
+  }
+
+  var text = log.join('\n');
+  Logger.log(text);
+  return text;
+}
