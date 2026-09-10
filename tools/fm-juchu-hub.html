@@ -1703,6 +1703,27 @@ function setPane(p){
   #fmdiff .close{ float:right; cursor:pointer; border:1px solid #b45309; background:#fff;
                   color:#7c2d12; border-radius:4px; padding:2px 9px; font-size:11.5px; }
   #fmerr{ display:none; background:#7a2018; color:#fff; padding:6px 12px; font-size:12.5px; }
+  #fmfind{ display:none; background:#f1f5f9; border-bottom:2px solid #64748b; padding:8px 14px; }
+  #fmfind .cond{ display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+  #fmfind label{ font-size:11px; color:#475569; display:block; margin-bottom:2px; }
+  #fmfind input,#fmfind select{ font:inherit; font-size:13px; padding:4px 7px;
+        border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#1a1a1a; }
+  #fmfind button{ font:inherit; font-size:13px; padding:5px 14px; border-radius:5px; cursor:pointer;
+        border:1px solid #334155; background:#334155; color:#fff; font-weight:700; }
+  #fmfind button.plain{ background:#fff; color:#334155; font-weight:400; }
+  #fmfind .hit{ font-size:12px; color:#475569; margin:6px 0 3px; }
+  #fmfind .rows{ max-height:44vh; overflow:auto; background:#fff; border:1px solid #cbd5e1; border-radius:5px; }
+  #fmfind table{ border-collapse:collapse; width:100%; font-size:12px; }
+  #fmfind th{ position:sticky; top:0; background:#e2e8f0; text-align:left; padding:4px 7px;
+        border-bottom:1px solid #cbd5e1; white-space:nowrap; font-weight:700; }
+  #fmfind td{ padding:3px 7px; border-bottom:1px solid #eef2f7; white-space:nowrap; }
+  #fmfind tr.r:hover td{ background:#fef9c3; cursor:pointer; }
+  #fmfind td.num{ text-align:right; }
+  #fmfind .badge{ font-size:10.5px; font-weight:700; padding:1px 6px; border-radius:9px; color:#fff; background:#475569; }
+  #fmfind .badge.yosan{ background:#7c5a18; }
+  #fmfind .badge.mitsu{ background:#1e4d8c; }
+  #fmfind .badge.juchu{ background:#1d6f3f; }
+  #fmfind .badge.shitchu{ background:#6b2320; }
   .fm-dirty{ outline:2px solid #d97706 !important; outline-offset:-2px; }
 </style>
 
@@ -1711,6 +1732,7 @@ function setPane(p){
   <b>FileMaker</b>
   <input id="fm-no" placeholder="伝票番号・見積番号" autocomplete="off">
   <button class="go" id="fm-load">読み込む</button>
+  <button id="fm-find">探す</button>
   <span class="sep"></span>
   <span id="fmstage">—</span>
   <select id="fm-hist" title="この案件の段階"><option>—</option></select>
@@ -1728,6 +1750,23 @@ function setPane(p){
 </div>
 <div id="fmdiff"></div>
 <div id="fmerr"></div>
+<div id="fmfind">
+  <div class="cond">
+    <div><label>品名で探す</label><input id="ff-kw" placeholder="製品名の一部" autocomplete="off"></div>
+    <div><label>得意先コード</label><input id="ff-cust" style="width:110px" autocomplete="off"></div>
+    <div><label>段階</label>
+      <select id="ff-stage">
+        <option value="">すべて</option>
+        <option>予算見積</option><option>見積</option><option>受注</option><option>失注</option>
+      </select></div>
+    <div><label>件数</label>
+      <select id="ff-n"><option>50</option><option>100</option><option>200</option></select></div>
+    <button id="ff-go">探す</button>
+    <button class="plain" id="ff-x">閉じる</button>
+    <span class="hit" id="ff-msg" style="margin-left:auto"></span>
+  </div>
+  <div class="rows" id="ff-rows" style="display:none"></div>
+</div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
@@ -1885,8 +1924,8 @@ function setPane(p){
 
   function $(id) { return document.getElementById(id); }
   var bar = $('fmbar'), 番号欄 = $('fm-no'), stat = $('fmstat'), 段階札 = $('fmstage');
-  var 履歴欄 = $('fm-hist'), diff = $('fmdiff'), err = $('fmerr');
-  var btnL = $('fm-load'), btnS = $('fm-save'), btnR = $('fm-reload');
+  var 履歴欄 = $('fm-hist'), diff = $('fmdiff'), err = $('fmerr'), 探し = $('fmfind');
+  var btnL = $('fm-load'), btnS = $('fm-save'), btnR = $('fm-reload'), btnF = $('fm-find');
 
   function 状態(m, k) { stat.textContent = m; stat.className = k || ''; }
   function 失敗(m) { err.textContent = m || ''; err.style.display = m ? 'block' : 'none'; }
@@ -2061,6 +2100,98 @@ function setPane(p){
     }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }
 
+  // -------------------------------------------------- 探す
+
+  var 列 = [
+    { c:'伝票番号',   h:'伝票番号' },
+    { c:'見積番号',   h:'見積番号' },
+    { c:'案件区分',   h:'段階', badge:true },
+    { c:'起票日',     h:'起票日' },
+    { c:'得意先コード', h:'得意先' },
+    { c:'製品名',     h:'製品名' },
+    { c:'品種',       h:'品種' },
+    { c:'合計数1',    h:'数量', num:true },
+    { c:'売価金額',   h:'売価', money:true },
+    { c:'合計金額',   h:'原価', money:true },
+    { c:'納品日',     h:'納品日' },
+    { c:'注残数',     h:'注残', num:true }
+  ];
+
+  function 円(v) {
+    var x = Number(v);
+    return (v === '' || v === undefined || v === null || isNaN(x)) ? '' : x.toLocaleString();
+  }
+
+  function 一覧を出す(r) {
+    var box = $('ff-rows');
+    if (!r.行 || !r.行.length) {
+      box.style.display = 'none';
+      $('ff-msg').textContent = '見つかりませんでした';
+      return;
+    }
+    var h = '<table><thead><tr>';
+    列.forEach(function (k) { h += '<th>' + esc(k.h) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    r.行.forEach(function (row) {
+      h += '<tr class="r" data-id="' + esc(row.recordId) + '">';
+      列.forEach(function (k) {
+        var v = row[k.c];
+        if (k.badge) {
+          var cls = STAGE_CLASS[v] || '';
+          h += '<td>' + (v ? '<span class="badge ' + cls + '">' + esc(v) + '</span>' : '') + '</td>';
+        } else if (k.money || k.num) {
+          h += '<td class="num">' + esc(円(v)) + '</td>';
+        } else {
+          h += '<td>' + esc(v == null ? '' : v) + '</td>';
+        }
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    box.innerHTML = h;
+    box.style.display = 'block';
+    $('ff-msg').textContent = r.件数 + ' 件'
+      + (r.全体 && r.全体 > r.件数 ? '（全 ' + r.全体 + ' 件のうち）' : '')
+      + '　' + r.ミリ秒 + 'ms　行をクリックで開きます';
+
+    Array.prototype.forEach.call(box.querySelectorAll('tr.r'), function (tr) {
+      tr.onclick = function () {
+        if (Object.keys(変更分()).length
+            && !confirm('保存していない編集があります。捨てて開きますか？')) return;
+        待機(true); 状態('開いています…');
+        呼ぶ('画面_recordIdで読む', [tr.getAttribute('data-id')])
+          .then(function (x) { 受け取る(x, '開きました'); 探し.style.display = 'none'; })
+          .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+      };
+    });
+  }
+
+  function 探す() {
+    var 条件 = {
+      'キーワード': $('ff-kw').value.trim(),
+      '得意先コード': $('ff-cust').value.trim(),
+      '段階': $('ff-stage').value,
+      '件数': Number($('ff-n').value || 50)
+    };
+    $('ff-msg').textContent = '探しています…';
+    $('ff-go').disabled = true;
+    呼ぶ('画面_一覧', [条件])
+      .then(function (r) { 一覧を出す(r); })
+      .catch(function (e) { $('ff-msg').textContent = String(e.message || e); })
+      .then(function () { $('ff-go').disabled = false; });
+  }
+
+  btnF.onclick = function () {
+    var 開く = 探し.style.display !== 'block';
+    探し.style.display = 開く ? 'block' : 'none';
+    if (開く) { $('ff-kw').focus(); if (!$('ff-rows').innerHTML) 探す(); }
+  };
+  $('ff-go').onclick = 探す;
+  $('ff-x').onclick = function () { 探し.style.display = 'none'; };
+  ['ff-kw', 'ff-cust'].forEach(function (id) {
+    $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') 探す(); });
+  });
+
   // -------------------------------------------------- 画面まわり
 
   document.addEventListener('input', function (ev) {
@@ -2087,6 +2218,7 @@ function setPane(p){
   番号欄.addEventListener('keydown', function (e) { if (e.key === 'Enter') 読み込む(); });
 
   document.body.insertBefore(err, document.body.firstChild);
+  document.body.insertBefore(探し, document.body.firstChild);
   document.body.insertBefore(diff, document.body.firstChild);
   document.body.insertBefore(bar, document.body.firstChild);
   番号欄.focus();

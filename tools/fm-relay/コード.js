@@ -139,6 +139,73 @@ function 画面_利用者_() {
   return { email: mail };
 }
 
+/** 一覧に出す列。ここに無いものは返さない（1件あたりを軽くするため） */
+var 一覧の列 = [
+  '伝票番号', '見積番号', '案件区分', '案件ID', '起票日', '納品日',
+  '得意先コード', '担当者コード', '製品名', '品種',
+  '合計数1', '売価金額', '合計金額', '注残数'
+];
+
+/**
+ * 条件で探して一覧を返す。
+ *   { キーワード, 得意先コード, 段階, 件数 }
+ *   ・キーワードは製品名の部分一致
+ *   ・段階は 案件区分（予算見積/見積/受注/失注）。空なら全部
+ *   ・何も指定がなければ、起票日の新しい順に上から返す
+ */
+function 画面_一覧(条件) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  条件 = 条件 || {};
+
+  var 件数 = Number(条件['件数'] || 50);
+  if (!(件数 > 0)) 件数 = 50;
+  if (件数 > 200) 件数 = 200;   // 1件が重いので上限を切る
+
+  var q = {};
+  var キーワード = String(条件['キーワード'] || '').trim();
+  var 得意先 = String(条件['得意先コード'] || '').trim();
+  var 段階 = String(条件['段階'] || '').trim();
+
+  if (キーワード) q['製品名'] = '*' + キーワード + '*';
+  if (得意先)    q['得意先コード'] = '==' + 得意先;
+  if (段階)      q['案件区分'] = '==' + 段階;
+
+  var sort = [{ fieldName: '起票日', sortOrder: 'descend' }];
+  var t0 = new Date();
+  var rows;
+  if (Object.keys(q).length) {
+    rows = find_(lay, [q], 件数, 1, sort);
+  } else {
+    // 条件なしは _find が使えないので、レイアウトの先頭から取る
+    var r = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records'
+                    + '?_limit=' + 件数 + '&_offset=1'
+                    + '&_sort=' + encodeURIComponent(JSON.stringify(sort)));
+    if (r.code !== '0') throw new Error('一覧の取得に失敗 (' + r.code + ') ' + r.message);
+    rows = {
+      total: (r.response.dataInfo || {}).foundCount || 0,
+      records: (r.response.data || []).map(function (d) {
+        return { recordId: d.recordId, modId: d.modId, fields: d.fieldData };
+      })
+    };
+  }
+
+  return {
+    ok: true,
+    user: who.email,
+    件数: rows.records.length,
+    全体: rows.total,
+    ミリ秒: new Date() - t0,
+    行: rows.records.map(function (r) {
+      var o = { recordId: r.recordId };
+      一覧の列.forEach(function (c) {
+        if (r.fields[c] !== undefined) o[c] = r.fields[c];
+      });
+      return o;
+    })
+  };
+}
+
 /**
  * 番号で1件読む。伝票番号でも見積番号でも引ける。
  * 同じ案件の他の段階も一緒に返す（画面上部の履歴に出すため）。
@@ -316,6 +383,7 @@ function handle_(action, req, who) {
     case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields);
     case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
+    case '画面_一覧':         return 画面_一覧(req['条件']);
   }
   throw new Error('知らない action です: ' + action);
 }
