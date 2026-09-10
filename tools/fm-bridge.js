@@ -53,7 +53,7 @@
     トークン = jwt;
     var p = 中身を読む(jwt);
     期限 = p.exp; メール = p.email;
-    try { sessionStorage.setItem(置き場, jwt); } catch (e) {}
+    try { localStorage.setItem(置き場, jwt); } catch (e) {}
     置き場所.forEach(function (el) { el.style.display = 'none'; });
     知らせる();
     if (待っている) { var f = 待っている; 待っている = null; f(); }
@@ -61,7 +61,7 @@
 
   function 忘れる() {
     トークン = ''; 期限 = 0; メール = '';
-    try { sessionStorage.removeItem(置き場); } catch (e) {}
+    try { localStorage.removeItem(置き場); } catch (e) {}
     置き場所.forEach(function (el) { el.style.display = 'inline-block'; });
     知らせる();
   }
@@ -75,10 +75,10 @@
   function 覚えているものを使う() {
     if (トークン) return;
     var jwt = '';
-    try { jwt = sessionStorage.getItem(置き場) || ''; } catch (e) {}
+    try { jwt = localStorage.getItem(置き場) || ''; } catch (e) {}
     if (!jwt) return;
     if (中身を読む(jwt).exp - Date.now() > 5 * 60 * 1000) 名乗る(jwt);
-    else { try { sessionStorage.removeItem(置き場); } catch (e) {} }
+    else { try { localStorage.removeItem(置き場); } catch (e) {} }
   }
 
   function GISを待つ() {

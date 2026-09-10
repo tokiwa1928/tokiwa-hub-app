@@ -204,9 +204,9 @@ window.FM見た目 = function () {};
     トークン = jwt;
     var p = 中身を読む(jwt);
     期限 = p.exp;
-    // 読み直すたびにサインインし直さずに済むよう、このタブの中だけに覚えておく。
-    // タブを閉じれば消える。トークン自体も1時間で切れる。
-    try { sessionStorage.setItem(置き場, jwt); } catch (e) {}
+    // 読み直すたびにサインインし直さずに済むよう、このブラウザの中に覚えておく（タブをまたいで使える）。
+    // トークン自体が1時間で切れる。
+    try { localStorage.setItem(置き場, jwt); } catch (e) {}
     var who = document.getElementById('fmwho');
     if (who) who.textContent = p.email ? '　' + p.email : '';
     var box = document.getElementById('fmsignin');
@@ -247,15 +247,15 @@ window.FM見た目 = function () {};
   function 覚えているものを使う() {
     if (トークン) return;
     var jwt = '';
-    try { jwt = sessionStorage.getItem(置き場) || ''; } catch (e) {}
+    try { jwt = localStorage.getItem(置き場) || ''; } catch (e) {}
     if (!jwt) return;
     if (中身を読む(jwt).exp - Date.now() > 5 * 60 * 1000) 名乗る(jwt);
-    else { try { sessionStorage.removeItem(置き場); } catch (e) {} }
+    else { try { localStorage.removeItem(置き場); } catch (e) {} }
   }
 
   function 忘れる() {
     トークン = ''; 期限 = 0;
-    try { sessionStorage.removeItem(置き場); } catch (e) {}
+    try { localStorage.removeItem(置き場); } catch (e) {}
     var who = document.getElementById('fmwho'); if (who) who.textContent = '';
     var box = document.getElementById('fmsignin'); if (box) box.style.display = 'inline-block';
   }
@@ -371,12 +371,28 @@ LOGIC = r"""
 
   // -------------------------------------------------- 画面に流し込む
 
+  // FileMaker の日付は MM/DD/YYYY。<input type="date"> は YYYY-MM-DD しか受け付けず、
+  // 合わない値を入れると空になる。それを「変更あり」と誤解して空で保存すると
+  // 起票日が消える。ここで両方向に直す。
+  var 日付型 = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+  var 画面型 = /^(\d{4})-(\d{2})-(\d{2})$/;
+  function 画面の日付へ(v) {
+    var m = 日付型.exec(String(v || '').trim());
+    return m ? (m[3] + '-' + m[1] + '-' + m[2]) : String(v || '');
+  }
+  function FMの日付へ(v) {
+    var m = 画面型.exec(String(v || '').trim());
+    return m ? (m[2] + '/' + m[3] + '/' + m[1]) : String(v || '');
+  }
+  function 日付欄か(el) { return el && el.tagName === 'INPUT' && el.type === 'date'; }
+
   function 流し込む(rec) {
     現在 = rec; 読込時 = {};
     Object.keys(TO_FM).forEach(function (id) {
       var el = document.getElementById(id); if (!el) return;
       var v = rec.fields[TO_FM[id]];
       v = (v === undefined || v === null) ? '' : String(v);
+      if (日付欄か(el)) v = 画面の日付へ(v);
       s(id, v); 読込時[id] = v; el.classList.remove('fm-dirty');
     });
     var 区分 = rec.fields['案件区分'] || '受注';
@@ -511,18 +527,33 @@ LOGIC = r"""
       if (now === (読込時[id] || '')) return;
       var col = TO_FM[id];
       if (書ける && 書ける.indexOf(col) < 0) return;
-      out[col] = now;
+      out[col] = 日付欄か(el) ? FMの日付へ(now) : now;
     });
     return out;
+  }
+
+  // 読み込んだときは入っていたのに、いま空になっている項目（消す操作）
+  function 空にする項目(差) {
+    var 消す = [];
+    Object.keys(TO_FM).forEach(function (id) {
+      var col = TO_FM[id];
+      if (差[col] === '' && (読込時[id] || '') !== '') 消す.push(col);
+    });
+    return 消す;
   }
 
   function 保存() {
     if (!現在) return;
     var 差 = 変更分(), n = Object.keys(差).length;
     if (!n) { 状態('変更はありません', ''); return; }
-    if (!confirm(n + ' 項目を FileMaker に保存します。よろしいですか？\n\n'
-                 + Object.keys(差).slice(0, 30).join('、')
-                 + (n > 30 ? ' …ほか' + (n - 30) + '件' : ''))) return;
+    var 消す = 空にする項目(差);
+    var 文 = n + ' 項目を FileMaker に保存します。よろしいですか？\n\n'
+          + Object.keys(差).slice(0, 30).join('、')
+          + (n > 30 ? ' …ほか' + (n - 30) + '件' : '');
+    if (消す.length) {
+      文 += '\n\n⚠ 次の項目は【空】になります: ' + 消す.join('、');
+    }
+    if (!confirm(文)) return;
     待機(true); 失敗(''); 状態('保存中… ' + n + ' 項目');
     呼ぶ('画面_保存', [現在.recordId, 現在.modId, 差]).then(function (r) {
       if (r.conflict) { 失敗(r.message); 状態('保存できませんでした', 'err'); 待機(false); return; }
