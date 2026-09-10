@@ -29,7 +29,40 @@ var LAYOUTS = {          // Hub の画面 → FileMaker のレイアウト
   juchu: 'Hub受注'
 };
 
-var NEVER_WRITE = ['伝票番号'];   // 計算フィールドは自動で除外。これは追加の禁止
+var NEVER_WRITE = [];   // 計算フィールドは自動で除外される
+
+/**
+ * 段階と番号の決まりごと
+ *
+ *   新規レコードを作ると no が a108193 のように自動採番される。
+ *   それをそのまま案件番号にする（既存の「受注データ新規作成」が
+ *   伝票番号 = no としているのと同じ考え方）。
+ *
+ *     案件ID     a108193
+ *     予算見積    見積番号 = a108193-YM01、2件目は -YM02
+ *     見積       見積番号 = a108193-M01、 2件目は -M02
+ *     受注       伝票番号 = a108193（＝案件ID。今までと同じ形）
+ *     失注       番号はそのまま、案件区分だけ変える
+ *
+ *   見積レコードの no は空にする。受注化したときに
+ *   「伝票番号 = no = 案件ID」という今までの形を保てるようにするため。
+ *
+ *   分割納品で既に使われている -A / -B とはぶつからない記号を選んである。
+ */
+var 段階 = {
+  '予算見積': { 記号: 'YM', 欄: '見積番号' },
+  '見積':    { 記号: 'M',  欄: '見積番号' },
+  '受注':    { 記号: '',   欄: '伝票番号' },
+  '失注':    { 記号: '',   欄: '' }
+};
+
+/** 見積は既存業務に出さない。伝票作成区分・納品書作成区分をこう置く */
+var 段階の初期値 = {
+  '予算見積': { '伝票作成区分': '予算見積', 'no': '' },
+  '見積':    { '伝票作成区分': '見積',    'no': '' },
+  '受注':    {},
+  '失注':    { '伝票作成区分': '失注' }
+};
 
 var BASE = 'https://' + FM_HOST + '/fmi/data/vLatest/databases/' + encodeURIComponent(FM_DB);
 
@@ -92,6 +125,89 @@ function 画面_保存(recordId, modId, fields) {
   var who = 画面_利用者_();
   var r = update_(LAYOUTS.juchu, recordId, modId, fields, who);
   r.ok = true;
+  return r;
+}
+
+/** 次の段階に引き継がないもの（番号・段階・進み具合・実績） */
+var 引き継がない = [
+  '伝票番号', '見積番号', '案件区分', '案件ID', 'no',
+  '伝票作成区分', '納品書作成区分', '伝票チェック', '納品書チェック',
+  '起票日', '納品日', '注残数'
+];
+
+/**
+ * まっさらな案件を起こす。
+ *   レコードを作ると no が自動採番されるので、それを案件番号にする。
+ */
+function 画面_新規案件(種別, 初期値) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
+
+  var rec = 作成_(lay, 初期値 || {});
+  var 案件ID = String(rec.fields['no'] || '');
+  if (!案件ID) {
+    削除_(lay, rec.recordId);
+    throw new Error('番号が自動採番されませんでした。作成を取り消しました。');
+  }
+  var r = 番号と段階を入れる_(lay, rec, 案件ID, 種別, who);
+  return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [] };
+}
+
+/**
+ * 既にある案件の、次の段階を起こす。
+ *   ・内容は「その案件のいちばん新しい1件」から引き継ぐ（段階は問わない）
+ *   ・前回の同じ段階を参考として返し、そこからの差分も返す
+ *     （前年の予算見積の金額を見ながら、仕様の変化に気づけるように）
+ */
+function 画面_新規段階(案件ID, 種別) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
+  if (!案件ID) throw new Error('案件IDがありません');
+
+  var 種 = 最新_(lay, 案件ID);
+  if (!種) throw new Error('案件 ' + 案件ID + ' が見つかりません');
+
+  var allow = {};
+  fieldInfo_(lay).writable.forEach(function (n) { allow[n] = true; });
+  引き継がない.forEach(function (n) { delete allow[n]; });
+
+  var base = {};
+  Object.keys(種.fields).forEach(function (k) {
+    if (!allow[k]) return;
+    var v = 種.fields[k];
+    if (v === null || v === undefined || v === '') return;
+    base[k] = String(v);
+  });
+
+  var rec = 作成_(lay, base);
+  var r = 番号と段階を入れる_(lay, rec, 案件ID, 種別, who);
+
+  var 参考 = 同じ段階の前回_(lay, 案件ID, 種別, rec.recordId);
+  return {
+    ok: true,
+    案件ID: 案件ID,
+    record: r,
+    種: { recordId: 種.recordId, 区分: 種.fields['案件区分'] || '（従来の受注）',
+          番号: 種.fields['伝票番号'] || 種.fields['見積番号'] || '',
+          起票日: 種.fields['起票日'] || '' },
+    参考: 参考 ? { recordId: 参考.recordId, 番号: 参考.fields['見積番号'] || 参考.fields['伝票番号'] || '',
+                  起票日: 参考.fields['起票日'] || '',
+                  合計金額: 参考.fields['合計金額'], 売価金額: 参考.fields['売価金額'] } : null,
+    差分: 参考 ? 差分_(参考.fields, r.fields) : []
+  };
+}
+
+function 番号と段階を入れる_(lay, rec, 案件ID, 種別, who) {
+  var upd = { '案件ID': 案件ID, '案件区分': 種別 };
+  var def = 段階[種別];
+  if (def.欄) upd[def.欄] = 次の番号_(lay, 案件ID, 種別);
+  var ini = 段階の初期値[種別] || {};
+  Object.keys(ini).forEach(function (k) { upd[k] = ini[k]; });
+
+  var r = update_(lay, rec.recordId, rec.modId, upd, who);
+  if (r.conflict) throw new Error('番号を入れる途中で衝突しました');
   return r;
 }
 
@@ -317,6 +433,82 @@ function update_(layout, recordId, modId, fields, who) {
            recordId: recordId, modId: rec.modId, fields: rec.fieldData || {} };
 }
 
+// ------------------------------------------------------------ 段階と番号
+
+function 桁揃え_(n, 桁) {
+  var s = String(n);
+  while (s.length < 桁) s = '0' + s;
+  return s;
+}
+
+/**
+ * その案件・その段階の次の番号を作る。
+ *   予算見積 → a108193-YM01 / -YM02 …
+ *   見積    → a108193-M01  / -M02  …
+ *   受注・失注 → 案件ID そのもの
+ */
+function 次の番号_(layout, 案件ID, 種別) {
+  var def = 段階[種別];
+  if (!def) throw new Error('知らない段階です: ' + 種別);
+  if (!def.記号) return 案件ID;
+
+  var 既存 = find_(layout, [{ '案件ID': '==' + 案件ID, '案件区分': '==' + 種別 }], 500, 1, null);
+  return 案件ID + '-' + def.記号 + 桁揃え_(既存.total + 1, 2);
+}
+
+/** レコードを1件作って、その内容を返す */
+function 作成_(layout, fields) {
+  var r = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records', 'post',
+                  { fieldData: fields || {} });
+  if (r.code !== '0') throw new Error('作成に失敗 (' + r.code + ') ' + r.message);
+  var id = r.response.recordId;
+  var got = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records/' + id);
+  var rec = (got.response.data || [])[0] || {};
+  return { recordId: id, modId: rec.modId, fields: rec.fieldData || {} };
+}
+
+function 削除_(layout, recordId) {
+  return fmCall_('/layouts/' + encodeURIComponent(layout) + '/records/' + recordId, 'delete');
+}
+
+/** 同じ案件のうち、いちばん新しい1件（段階は問わない） */
+function 最新_(layout, 案件ID) {
+  var rows = find_(layout, [{ '案件ID': '==' + 案件ID }], 500, 1, null);
+  var best = null;
+  rows.records.forEach(function (r) {
+    if (!best) { best = r; return; }
+    // 起票日 → recordId の順で新しい方を採る
+    var a = String(r.fields['起票日'] || ''), b = String(best.fields['起票日'] || '');
+    if (a > b || (a === b && Number(r.recordId) > Number(best.recordId))) best = r;
+  });
+  return best;
+}
+
+/** 同じ案件・同じ段階のうち、いちばん新しい1件（前年の予算見積などの参考用） */
+function 同じ段階の前回_(layout, 案件ID, 種別, 除くRecordId) {
+  var rows = find_(layout, [{ '案件ID': '==' + 案件ID, '案件区分': '==' + 種別 }], 500, 1, null);
+  var best = null;
+  rows.records.forEach(function (r) {
+    if (除くRecordId && String(r.recordId) === String(除くRecordId)) return;
+    if (!best) { best = r; return; }
+    var a = String(r.fields['起票日'] || ''), b = String(best.fields['起票日'] || '');
+    if (a > b || (a === b && Number(r.recordId) > Number(best.recordId))) best = r;
+  });
+  return best;
+}
+
+/** 2つのレコードで中身が違う項目を並べる（金額と仕様の変化を見せるため） */
+function 差分_(前, 後) {
+  var out = [];
+  if (!前 || !後) return out;
+  Object.keys(後).forEach(function (k) {
+    var a = String(前[k] === undefined || 前[k] === null ? '' : 前[k]);
+    var b = String(後[k] === undefined || 後[k] === null ? '' : 後[k]);
+    if (a !== b) out.push({ 項目: k, 前: a, 後: b });
+  });
+  return out;
+}
+
 /** 誰がいつ何を書いたかを残す。スプレッドシートIDが無ければ何もしない */
 function log_(who, layout, recordId, sent) {
   try {
@@ -471,6 +663,73 @@ function 動作確認_書き込みまで() {
   log.push('');
   log.push(ng === 0 ? 'すべて通りました。書き込みも安全に使えます。'
                     : '× ' + ng + ' 件が想定どおりではありません。');
+  var text = log.join('\n');
+  Logger.log(text);
+  return text;
+}
+
+
+/**
+ * ★ 段階と番号の動作確認 ★
+ *
+ *   予算見積 → 見積 → 見積(2件目) → 受注 の順に4件作り、
+ *   番号の付き方・既存業務から外れていること・差分が出ることを確かめ、
+ *   最後に**作った4件を全部消す**。
+ */
+function 動作確認_段階と番号() {
+  var lay = LAYOUTS.juchu;
+  var log = [], ng = 0, 作った = [];
+  function ok(cond, msg) { log.push((cond ? '○ ' : '× ') + msg); if (!cond) ng++; return cond; }
+
+  try {
+    var a = 画面_新規案件('予算見積', {
+      '得意先コード': '47', '製品名': '【テスト】段階と番号', '用紙単価1': '2.5', '合計数1': '100'
+    });
+    作った.push(a.record.recordId);
+    var id = a.案件ID;
+    log.push('案件ID: ' + id);
+    ok(a.record.fields['見積番号'] === id + '-YM01', '予算見積の番号 = ' + a.record.fields['見積番号']);
+    ok(a.record.fields['no'] === '', '見積の no は空にした');
+    ok(a.record.fields['伝票作成区分'] === '予算見積', '伝票作成区分 = 予算見積（受注伝票出力に出ない）');
+
+    var b = 画面_新規段階(id, '見積');
+    作った.push(b.record.recordId);
+    ok(b.record.fields['見積番号'] === id + '-M01', '見積の番号 = ' + b.record.fields['見積番号']);
+    ok(b.record.fields['製品名'] === '【テスト】段階と番号', '内容が引き継がれた');
+    ok(b.record.fields['案件ID'] === id, '案件IDが揃っている');
+
+    var c = 画面_新規段階(id, '見積');
+    作った.push(c.record.recordId);
+    ok(c.record.fields['見積番号'] === id + '-M02', '2件目の見積 = ' + c.record.fields['見積番号']);
+    ok(c.参考 && String(c.参考.recordId) === String(b.record.recordId),
+       '前回の同じ段階を参考として拾えた（' + (c.参考 ? c.参考.番号 : '—') + '）');
+
+    // 仕様を変えてから受注を起こし、差分が出るか見る
+    update_(lay, c.record.recordId, c.record.modId, { '用紙単価1': '9.9' }, { email: 'test' });
+    var d = 画面_新規段階(id, '受注');
+    作った.push(d.record.recordId);
+    ok(d.record.fields['伝票番号'] === id, '受注の伝票番号 = 案件ID（' + d.record.fields['伝票番号'] + '）');
+    ok(String(d.record.fields['用紙単価1']) === '9.9', '最新の内容（9.9）が引き継がれた');
+
+    var 見積の差分 = 画面_新規段階(id, '予算見積');
+    作った.push(見積の差分.record.recordId);
+    var 変わった = (見積の差分.差分 || []).map(function (x) { return x.項目; });
+    ok(変わった.indexOf('用紙単価1') >= 0,
+       '前回の予算見積との差分に 用紙単価1 が出た（差分 ' + 変わった.length + ' 項目）');
+    ok(変わった.indexOf('用紙代1') >= 0 || 変わった.indexOf('合計金額') >= 0,
+       '金額の差分も出た');
+  } catch (e) {
+    ng++; log.push('× 途中で失敗: ' + e.message);
+  } finally {
+    var 消せた = 0;
+    作った.forEach(function (id) { try { 削除_(lay, id); 消せた++; } catch (e) {} });
+    log.push('');
+    log.push('後片付け: 作った ' + 作った.length + ' 件のうち ' + 消せた + ' 件を削除');
+    if (消せた !== 作った.length) { ng++; log.push('× 消し残しがあります。手で消してください'); }
+  }
+
+  log.push(ng === 0 ? '' : '');
+  log.push(ng === 0 ? 'すべて通りました。' : '× ' + ng + ' 件が想定どおりではありません。');
   var text = log.join('\n');
   Logger.log(text);
   return text;
