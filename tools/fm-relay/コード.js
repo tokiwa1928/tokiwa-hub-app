@@ -47,8 +47,52 @@ function doPost(e) {
   }
 }
 
-function doGet() {
-  return json_({ ok: true, note: 'FileMaker 中継。POST で使ってください。' });
+/**
+ * 画面を配信する。
+ *   ここから配ると、社内アカウントでないとページ自体が開けない。
+ *   合鍵も OAuth クライアントIDも要らず、CORS の問題も起きない。
+ */
+function doGet(e) {
+  var screen = (e && e.parameter && e.parameter.screen) || 'juchu';
+  var file = { juchu: 'juchu' }[screen];
+  if (!file) return json_({ ok: true, note: '知らない画面です: ' + screen });
+
+  return HtmlService.createHtmlOutputFromFile(file)
+    .setTitle('受注入力（FileMaker）')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+
+// ------------------------------------------------ 画面から呼ばれるもの
+
+/** いま開いている人。組織内配信なので取得できる */
+function 画面_利用者_() {
+  var mail = '';
+  try { mail = Session.getActiveUser().getEmail() || ''; } catch (err) {}
+  if (!mail) throw new Error('サインイン情報を取得できません。'
+                             + '社内の Google アカウントで開いてください。');
+  return { email: mail };
+}
+
+/** 伝票番号で1件読む。書ける列の一覧も一緒に返す */
+function 画面_読み込み(denpyo) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  return {
+    ok: true,
+    user: who.email,
+    writable: fieldInfo_(lay).writable,
+    record: getByDenpyo_(lay, denpyo)
+  };
+}
+
+/** 画面で変わった分だけを書く */
+function 画面_保存(recordId, modId, fields) {
+  var who = 画面_利用者_();
+  var r = update_(LAYOUTS.juchu, recordId, modId, fields, who);
+  r.ok = true;
+  return r;
 }
 
 function handle_(action, req, who) {

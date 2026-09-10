@@ -1,0 +1,1862 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>受注入力 | Tokiwa Hub</title>
+<style>
+  /* == Tokiwa Hub デザイン言語(techC) ==
+     生成り背景＋白カード／和文のみ／罫線は控えめ1px／赤は納期・削除だけ／
+     金額は黒メトリクスカード／余白を詰めて情報密度を上げる。
+     配置(列幅・行構成)は FileMaker と同じまま、見た目だけ Hub に合わせている。 */
+  :root{
+    --ink:#0d0d0d; --bg:#f1efea; --card:#ffffff;
+    --line:#b8b3a6;        /* カード枠・区切り(濃いめ) */
+    --line2:#8f97a3;       /* 表の罫線(濃いめ) */
+    --inline:#7b8695;      /* 入力欄の枠(シニア向けに濃いめ) */
+    --sub:#33393f;         /* ラベル・補助文字(濃いめ) */
+    --tx:#1a1a1a;
+    --acc:#65a30d;         /* トキワ印刷の会社カラー(黄緑) */
+    --red:#c0392b;         /* 納期・削除のみ */
+    --hd:#e6e3db;          /* 表ヘッダー背景(濃いめ) */
+    --gr2:#cbd5e1; --plh:#e0ddd6; --pl:#f4f3f0; --pl2:#faf9f7;
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--ink);
+        font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; font-size:12.5px; }
+
+  /* -- Hub共通の黒ヘッダー(他ツールと同じ) -- */
+  .hubbar{ background:#0a0a0a; color:#fff; padding:9px 18px; display:flex; align-items:center; gap:12px; }
+  .hubbar .logo{ font-weight:800; letter-spacing:.04em; font-size:13px; }
+  .hubbar .logo b{ color:#a3e635; }
+  .hubbar .tname{ font-size:15px; font-weight:800; }
+  .hubbar .who{ margin-left:auto; font-size:11px; color:#cbd5e1; }
+
+  /* -- カード(シート/下部/一覧を同じ体裁で縦に積む) -- */
+  .sheet, .btm, #report-box, .lst{
+    width:auto; min-width:1300px; margin-left:14px; margin-right:14px;
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.04); padding:10px 14px; }
+  .sheet{ margin-top:10px; margin-bottom:0; }
+  .btm{ margin-top:8px; }
+  .lst{ margin-top:8px; margin-bottom:26px; max-height:170px; overflow:auto; padding:0; }
+  #report-box{ display:none; margin-top:8px; }
+
+  /* -- 見出し＋操作ボタン -- */
+  .hdrow{ display:flex; align-items:flex-start; gap:10px; padding-bottom:7px;
+          border-bottom:1px solid var(--line); margin-bottom:7px; }
+  .ttl{ font-size:16px; font-weight:800; letter-spacing:.08em; color:var(--ink);
+        padding:2px 8px 0 8px; white-space:nowrap; border-left:3px solid var(--acc); }
+  .btns{ display:flex; flex-direction:column; gap:3px; }
+  .brow{ display:flex; gap:3px; }
+  .fb{ font-family:inherit; font-size:11.5px; font-weight:700; padding:3px 11px;
+       border:1.4px solid #6b6a64; border-radius:6px; cursor:pointer;
+       color:var(--ink); background:#fff; white-space:nowrap; }
+  .fb:hover{ background:#f4f3f0; }
+  .fb:active{ transform:translateY(1px); }
+  .fb.gy{ background:#fff; }
+  .fb.gn,.fb.or,.fb.pu,.fb.tl{ background:var(--ink); border-color:var(--ink); color:#fff; }
+  .fb.gn:hover,.fb.or:hover,.fb.pu:hover,.fb.tl:hover{ background:#333; }
+  .fb.rd{ background:#fff; border-color:var(--red); color:var(--red); }
+  .fb.rd:hover{ background:#fdf2f1; }
+  .stampbox{ margin-left:14px; font-size:10.5px; color:var(--sub);
+             border:1px solid var(--line); border-radius:6px; padding:2px 6px; background:#faf9f7; }
+  .stampbox td{ padding:0 6px; font-size:10.5px; }
+
+  /* -- 入力の基本 -- */
+  .lb{ font-size:11px; font-weight:800; color:var(--sub); white-space:nowrap; letter-spacing:.02em; }
+  .in{ font-family:inherit; font-size:12.5px; height:21px; padding:0 5px;
+       border:1.4px solid var(--inline); border-radius:5px; background:#fff; color:var(--ink); }
+  .in:focus{ border-color:var(--ink); box-shadow:0 0 0 2px rgba(0,0,0,.18); outline:none; }
+  .in[readonly]{ background:#f4f3f0; color:var(--sub); }
+  .row{ display:flex; align-items:center; gap:0 5px; margin:1px 0; flex-wrap:wrap; }
+  .hdr-l .row{ flex-wrap:nowrap; white-space:nowrap; }
+  .hdr-l .lb{ flex:none; }
+  .hdr-l .in{ min-width:0; }
+  /* ヘッダは右側まで使い切る: 文字が長くなりがちな欄に余りを配る */
+  .hdr-l #f-cust, .hdr-l #f-user, .hdr-l #f-item{ flex:1 1 auto; min-width:150px; }
+  .hdr-l #f-nofukuno{ flex:0 1 160px; }
+  .hdr-l #f-selfcd, .hdr-l #f-commcd{ flex:0 1 120px; }
+  .hdr-l #f-orderno{ flex:0 1 150px; }
+  .hdr-l #f-lotunit, .hdr-l #f-lotset{ flex:0 1 130px; }
+  .hdr-l #f-lotkind{ flex:0 1 130px; }
+  /* 末尾が余る行は、最後の入力に余りを渡して右端まで伸ばす */
+  .hdr-l .row.fill > .in:last-child{ flex:1 1 auto; }
+
+  .w3{width:36px}.w4{width:48px}.w5{width:60px}.w6{width:74px}.w8{width:98px}
+  .w10{width:120px}.w12{width:146px}.w16{width:190px}.w20{width:238px}.w26{width:300px}
+  .num{ text-align:right; font-variant-numeric:tabular-nums; }
+  .hdr{ display:flex; gap:10px; align-items:flex-start; }
+  .hdr-l{ flex:1; min-width:0; }
+  .hdr-r{ width:158px; flex:none; border-left:1px solid var(--line); padding-left:8px; }
+  .main{ display:flex; align-items:flex-start; gap:10px; }
+  .colL{ width:790px; flex:none; }
+  .colM{ width:630px; flex:none; }
+  .colR{ flex:1; min-width:0; }
+  /* 画面が広いぶんは明細表と見積業者表に配る。
+     ヘッダ(伝票番号〜起票日/納期)は見慣れた位置から動かしたくないので上限を付ける。 */
+  .sheet .colL{ flex:1 1 auto; width:auto; min-width:790px; }
+
+  /* 見積業者を撤去したので、ヘッダも明細表も幅いっぱいまで使う */
+  .sheet > .main > .colL{ flex:1 1 100%; }
+  .btm .colR{ flex:1 1 auto; min-width:300px; }
+  /* 下部も右端まで使う: 各行の最後の入力に余りを渡す */
+  .btm .row > .in:last-of-type{ flex:1 1 auto; min-width:70px; }
+
+  /* -- タブ＋明細(画面の主役) -- */
+  .tabs{ display:flex; gap:4px; margin-top:8px; }
+  .tab{ font-family:inherit; font-size:12.5px; font-weight:800; letter-spacing:.3em; color:var(--sub);
+        background:transparent; border:1px solid transparent; border-bottom:2px solid transparent;
+        padding:4px 0 3px; width:150px; text-align:center; cursor:pointer; border-radius:6px 6px 0 0; }
+  .tab:hover{ background:#f4f3f0; }
+  .tab.on{ color:var(--ink); background:#fff; border-color:var(--line); border-bottom:3px solid var(--ink); }
+  .panebox{ border:1px solid var(--line); border-radius:8px; background:#faf9f7; padding:5px 7px 6px; }
+  table.g{ border-collapse:collapse; background:#fff; width:100%;
+           border-radius:6px; overflow:hidden; }
+  table.g th{ background:var(--hd); font-size:10.5px; font-weight:800; color:var(--ink);
+              border:1px solid var(--line2); padding:2px 2px; white-space:nowrap; letter-spacing:.02em; }
+  table.g td{ border:1px solid var(--line2); padding:0; }
+  table.g td.rn{ background:var(--hd); font-size:10px; font-weight:700; color:var(--ink); text-align:center; width:26px; }
+  table.g td input{ width:100%; height:19px; border:none; background:#fff;
+                    font-family:inherit; font-size:11.5px; padding:0 4px; color:var(--ink); }
+  table.g td input:focus{ background:#fffbe8; outline:none; }
+  table.g td.n input{ text-align:right; font-variant-numeric:tabular-nums; }
+  /* タブは廃止。用紙・印刷・加工を最初から全部出す（本多さん指示） */
+  .pane{ display:block; margin-bottom:6px; }
+  .secttl{ font-size:12.5px; font-weight:800; letter-spacing:.3em; color:var(--ink);
+           border-left:3px solid var(--acc); padding:0 0 0 8px; margin:7px 0 3px; }
+  /* パーツ数・表紙の選択に応じて明細行を出し分ける */
+  table.g tr.off{ display:none; }
+  table.g th.ng{ background:#f7efe9; color:#8a5a2b; }
+  table.g td.x{ background:#faf6f2; }
+  table.g td.x input{ background:#faf6f2; color:#a08063; }
+
+  /* -- 見積業者 -- */
+  .qbox{ border:1px solid var(--line); border-radius:8px; padding:5px 8px; margin-top:6px; background:#faf9f7; }
+  .qh{ font-size:11px; font-weight:800; color:var(--ink); margin-bottom:3px; letter-spacing:.04em; }
+  .qtbl{ margin-top:2px; }
+  .qtbl th{ text-align:center; }
+  .qtbl td input{ height:23px; font-size:12px; }
+  .qr{ display:flex; align-items:center; gap:4px; margin:2px 0; }
+  .qr .lb{ width:64px; }
+  .qr .in{ flex:1; min-width:0; }
+
+  /* -- 下部(原価・外注先) --
+     下部は上部と列の中身が違う。左=ナンバー台等(実測532px)/中=原価(284px)/右=外注先 に配分 */
+  .btm .colL{ flex:1 1 auto; width:auto; min-width:540px; }
+  .btm .colM{ flex:1 1 auto; width:auto; min-width:330px; }
+  /* 金額は黒メトリクスカード(techC) */
+  .amt{ display:inline-block; min-width:110px; text-align:right;
+        background:#0a0a0a; color:#fff; padding:3px 12px; border-radius:6px;
+        font-size:15px; font-weight:800; font-variant-numeric:tabular-nums;
+        font-family:ui-monospace,Consolas,monospace; }
+  .memo{ margin-top:6px; }
+  .memo textarea{ width:100%; height:56px; font-family:inherit; font-size:12.5px;
+         border:1.4px solid var(--inline); border-radius:6px; padding:5px 7px; background:#fff; }
+  .memo textarea:focus{ border-color:var(--ink); outline:none; }
+
+  /* -- 直近の入力一覧 -- */
+  .lst table{ border-collapse:collapse; width:100%; font-size:11.5px; }
+  .lst th,.lst td{ border-bottom:1px solid var(--line); padding:5px 8px; white-space:nowrap; text-align:left; }
+  .lst th{ background:var(--hd); color:var(--ink); font-size:10.5px; font-weight:800;
+           position:sticky; top:0; z-index:1; }
+  .lst tr:hover td{ background:#faf9f7; }
+
+  .hint{ font-size:11px; color:var(--sub); }
+  .grid{ display:grid; gap:5px 10px; } .g4{ grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .f{ display:flex; flex-direction:column; } .f label{ font-size:10.5px; color:var(--sub); font-weight:700; }
+
+  /* -- 実績を見ながら入力（過去の同じ得意先・製品を下に並べる） -- */
+  .refbox{ display:none; margin:6px 0 2px; border:1px solid var(--line); border-radius:8px;
+           background:#faf9f7; overflow:hidden; }
+  body.refmode .refbox{ display:block; }
+  .refh{ display:flex; align-items:center; gap:8px; padding:5px 8px;
+         border-bottom:1px solid var(--line); font-size:11.5px; }
+  .reftbl{ max-height:190px; overflow:auto; }
+  .reftbl table{ border-collapse:collapse; width:100%; font-size:11px; }
+  .reftbl th,.reftbl td{ border-bottom:1px solid var(--line); padding:3px 7px;
+                         white-space:nowrap; text-align:left; }
+  .reftbl th{ background:var(--hd); color:var(--ink); font-weight:800; font-size:10.5px;
+              position:sticky; top:0; z-index:1; }
+  .reftbl tr:hover td{ background:#fff; }
+  .reftbl td.n{ text-align:right; font-variant-numeric:tabular-nums; }
+
+  /* -- レイアウト編集（並べ替え・項目名・幅）。ふだんは隠す -- */
+  .laybar{ display:none; align-items:center; gap:8px; margin:6px 0 2px; padding:7px 10px;
+           background:#1d4ed8; color:#fff; border-radius:8px; font-size:11.5px; }
+  body.laymode .laybar{ display:flex; }
+  .laybar b{ color:#bfdbfe; }
+  .laybar .fb{ padding:3px 12px; }
+  body.laymode [data-lay]{ outline:1px dashed #1d4ed8; outline-offset:1px; cursor:grab;
+                           position:relative; background:#f5f8ff; }
+  body.laymode [data-lay]:hover{ background:#e8efff; }
+  body.laymode [data-lay].dragging{ opacity:.45; }
+  body.laymode [data-lay].over{ outline:2px solid #1d4ed8; }
+  body.laymode select{ pointer-events:none; }
+  body.laymode input.in, body.laymode table.g td input{ cursor:ew-resize; }
+  body.laymode table.g th{ cursor:ew-resize; }
+  body.laymode .in.rsz, body.laymode th.rsz{ outline:2px solid #1d4ed8; }
+  body.laymode .lb[contenteditable], body.laymode .secttl[contenteditable],
+  body.laymode table.g th[contenteditable]{
+    outline:1px solid #1d4ed8; background:#fff; cursor:text; pointer-events:auto;
+    border-radius:3px; padding:0 3px; }
+  body.laymode .lb[contenteditable]:focus, body.laymode .secttl[contenteditable]:focus,
+  body.laymode table.g th[contenteditable]:focus{ outline:2px solid #1d4ed8; background:#eef4ff; }
+
+  /* -- 検索モード。ふだんは隠す -- */
+  .findbar{ display:none; align-items:center; gap:8px; margin:6px 0 2px; padding:7px 10px;
+            background:#0a0a0a; color:#fff; border-radius:8px; font-size:11.5px; }
+  body.findmode .findbar{ display:flex; }
+  .findbar b{ color:#a3e635; }
+  .findbar .fb{ padding:3px 12px; }
+  body.findmode .in{ background:#fffbe8; }
+  body.findmode #findbtn{ background:var(--ink); border-color:var(--ink); color:#fff; }
+
+  /* -- 過去実績の取込バー -- */
+  .pastbar{ display:flex; align-items:center; gap:6px; margin:6px 0 2px; padding:6px 8px;
+            background:#faf9f7; border:1px solid var(--line); border-radius:8px; font-size:11.5px; }
+  .pastbar b{ font-size:11px; color:var(--sub); letter-spacing:.04em; }
+  #past-box{ margin-top:4px; max-height:230px; }
+  #past-tbl tr{ cursor:pointer; }
+
+  /* -- 色分けの凡例。色分けONのときだけ出す -- */
+  .ulegend{ display:none; align-items:center; gap:10px; font-size:11px; color:var(--sub);
+            margin:6px 0 2px; padding:5px 8px; background:#faf9f7;
+            border:1px solid var(--line); border-radius:8px; flex-wrap:wrap; }
+  body.uc .ulegend{ display:flex; }
+  .ulegend b{ color:var(--ink); }
+  .ukey{ display:inline-block; width:11px; height:11px; border-radius:3px;
+         border:1px solid #999; vertical-align:-1px; margin-right:3px; }
+
+  /* -- 過去実績による色分け(5段階) --
+     u-hot  よく使う(50%以上)   u-warm ときどき(10〜50%)
+     u-low  たまに(1〜10%)      u-rare ほとんど無し(1%未満)
+     u-dead 2年間0件            u-none 過去データと照合できない */
+  body.uc .in.u-hot,  body.uc select.u-hot,  body.uc textarea.u-hot{
+    border-color:#3f6212; background:#cfe6b0; border-left:5px solid #3f6212; }
+  body.uc .in.u-warm, body.uc select.u-warm, body.uc textarea.u-warm{
+    border-color:#65803a; background:#e6f2d2; border-left:5px solid #65803a; }
+  body.uc .in.u-low,  body.uc select.u-low,  body.uc textarea.u-low{
+    border-color:#a16207; background:#fdedb0; border-left:5px solid #a16207; }
+  body.uc .in.u-rare, body.uc select.u-rare, body.uc textarea.u-rare{
+    border-color:#b45309; background:#fcd9a8; border-left:5px solid #b45309; }
+  body.uc .in.u-dead, body.uc select.u-dead, body.uc textarea.u-dead{
+    border-color:#991b1b; background:#f6b8b2; border-left:5px solid #991b1b; }
+  body.uc .in.u-none, body.uc select.u-none, body.uc textarea.u-none{
+    border-style:dashed; border-color:#6b7280; background:#e5e7eb; }
+  body.uc td input.u-hot{  background:#cfe6b0; box-shadow:inset 4px 0 0 #3f6212; }
+  body.uc td input.u-warm{ background:#e6f2d2; box-shadow:inset 4px 0 0 #65803a; }
+  body.uc td input.u-low{  background:#fdedb0; box-shadow:inset 4px 0 0 #a16207; }
+  body.uc td input.u-rare{ background:#fcd9a8; box-shadow:inset 4px 0 0 #b45309; }
+  body.uc td input.u-dead{ background:#f6b8b2; box-shadow:inset 4px 0 0 #991b1b; }
+  .ulegend{ display:none; align-items:center; gap:10px; font-size:11px; color:var(--sub);
+            margin:6px 0 2px; padding:5px 8px; background:#faf9f7;
+            border:1px solid var(--line); border-radius:8px; }
+  body.uc .ulegend{ display:flex; }
+  .ulegend b{ color:var(--ink); }
+  .ukey{ display:inline-block; width:11px; height:11px; border-radius:3px;
+         border:1px solid #999; vertical-align:-1px; margin-right:3px; }
+  .hubx{ display:none; } body.v-hub .hubx{ display:flex; }
+</style>
+</head>
+<body class="v-fm">
+<div class="hubbar">
+  <span class="logo">TOKIWA <b>HUB</b></span>
+  <span class="tname">受注入力</span>
+  <span class="who" id="hub-user"></span>
+</div>
+<div style="height:3px;background:#65a30d"></div>
+<div class="sheet">
+
+  <div class="hdrow">
+    <span class="ttl">受注入力</span>
+    <div class="btns">
+      <div class="brow">
+        <a class="fb gy" href="../index.html" style="text-decoration:none">戻る</a>
+        <button class="fb" onclick="newRec()">新規作成</button>
+        <button class="fb" id="findbtn" onclick="toggleFind()">検索モード</button>
+        <button class="fb gy" onclick="showReport()">全体表示</button>
+        <button class="fb or" onclick="repeatFrom()">Repeat登録</button>
+        <button class="fb or" onclick="alert('注文書はHubの発注書から出せます')">注文書</button>
+        <button class="fb tl" onclick="location.href='calendar-juchu.html'">配送カレンダー</button>
+        <button class="fb rd" onclick="if(confirm('この入力内容を消します。よろしいですか？')) newRec()">データ削除</button>
+      </div>
+      <div class="brow">
+        <a class="fb" href="group-ledger.html" style="text-decoration:none">受注一覧</a>
+        <a class="fb" href="../index.html?page=master" style="text-decoration:none">マスター覧</a>
+        <button class="fb" onclick="alert('製品在庫はHubで整備予定です')">製品在庫</button>
+        <button class="fb" onclick="alert('物品在庫はHubで整備予定です')">物品在庫</button>
+        <button class="fb pu" onclick="alert('外注入力はHubの外注発注にあります')">外注入力</button>
+        <button class="fb gy" id="ucbtn" onclick="toggleUsage()">使用率で色分け</button>
+        <button class="fb gy" id="laybtn" onclick="toggleLayout()">レイアウト編集</button>
+        <button class="fb gy" onclick="navGo(-1)" title="前のレコード">◀ 前</button>
+        <span class="hint" id="nav-pos" style="min-width:64px;text-align:center">–</span>
+        <button class="fb gy" onclick="navGo(1)" title="次のレコード">次 ▶</button>
+        <button class="fb gy" id="refbtn" onclick="toggleRef()">実績を見ながら</button>
+      </div>
+    </div>
+    <table class="stampbox">
+      <tr><td>作成者</td><td id="st-cu">—</td><td>修正者</td><td id="st-mu">—</td></tr>
+      <tr><td>作成日</td><td id="st-cd">—</td><td>修正日</td><td id="st-md">—</td></tr>
+      <tr><td>作成時刻</td><td id="st-ct">—</td><td>修正時刻</td><td id="st-mt">—</td></tr>
+    </table>
+  </div>
+
+  <div class="refbox" id="refbox">
+    <div class="refh">
+      <b>この得意先・製品の過去実績</b>
+      <span class="hint" id="ref-msg">得意先コードか製品名を入れると出ます</span>
+      <span style="margin-left:auto"></span>
+      <button class="fb gy" onclick="refresh_ref()">今の入力で探し直す</button>
+      <button class="fb gy" onclick="toggleRef()">閉じる</button>
+    </div>
+    <div class="reftbl" id="ref-tbl"></div>
+  </div>
+  <div class="laybar" id="laybar">
+    <b>レイアウト編集</b>
+    <span>行や表を<b>つかんで入れ替え</b>／項目名を<b>クリックして書き換え</b>／入力欄と列は<b>右端をつまんで幅を変更</b>。この端末に保存されます。</span>
+    <button class="fb gy" onclick="resetLayout()">並び・文字・幅を元に戻す</button>
+    <button class="fb gy" onclick="toggleLayout()">編集をやめる</button>
+    <span id="lay-msg" class="hint"></span>
+  </div>
+  <div class="findbar" id="findbar">
+    <b>検索モード</b>
+    <span>探したい欄に入力して〔この条件で探す〕。<b>部分一致</b>・複数の欄を埋めると<b>すべて満たすもの</b>を探します。</span>
+    <button class="fb gn" onclick="runFind()">この条件で探す</button>
+    <button class="fb gy" onclick="toggleFind()">検索モードをやめる</button>
+    <span id="find-msg" class="hint"></span>
+  </div>
+  <div class="pastbar" id="pastbar">
+    <b>過去実績</b>
+    <span id="past-n" class="hint">未取込</span>
+    <input type="file" id="past-file" accept=".json" style="display:none" onchange="importPast(this.files[0])">
+    <button class="fb gy" onclick="document.getElementById('past-file').click()">📁 取り込む</button>
+    <span style="width:12px"></span>
+    <input id="past-q" class="in w26" placeholder="伝票番号・製品名・得意先コードで過去を探す"
+           oninput="searchPast()" onkeydown="if(event.key==='Enter')searchPast()">
+    <button class="fb gy" onclick="searchPast()">探す</button>
+    <span id="past-msg" class="hint"></span>
+    <button class="fb rd" style="margin-left:auto" onclick="clearPast()">取込データを消す</button>
+  </div>
+  <div class="lst" id="past-box" style="display:none"><table id="past-tbl"></table></div>
+  <div class="ulegend" id="ulegend">
+    <b>いまのFileMakerでの使われ方</b>（2024・2025年の全 11,781 件）
+    <span><i class="ukey" style="background:#cfe6b0;border-color:#3f6212"></i>よく使う 50%以上</span>
+    <span><i class="ukey" style="background:#e6f2d2;border-color:#65803a"></i>ときどき 10〜50%</span>
+    <span><i class="ukey" style="background:#fdedb0;border-color:#a16207"></i>たまに 1〜10%</span>
+    <span><i class="ukey" style="background:#fcd9a8;border-color:#b45309"></i>ほとんど無し 1%未満</span>
+    <span><i class="ukey" style="background:#f6b8b2;border-color:#991b1b"></i>2年間0件＝やめる候補</span>
+    <span><i class="ukey" style="background:#e5e7eb;border-style:dashed;border-color:#6b7280"></i>過去データに無い</span>
+    <span id="ulegend-cnt" style="margin-left:auto"></span>
+  </div>
+  <div class="main">
+    <!-- 左: 案件ヘッダ＋明細タブ -->
+    <div class="colL">
+      <div class="hdr">
+        <div class="hdr-l">
+          <!-- 納品書No.・no は不要（本多さん指示）。前回伝票番号/前回起票日はリピートで使うので残す -->
+          <div class="row">
+            <span class="lb" style="width:70px">前回伝票番号</span><input id="f-lotno" class="in w8">
+            <span class="lb">前回起票日</span><input id="f-prevdate" class="in w8">
+          </div>
+          <div class="row">
+            <span class="lb" style="width:70px">伝票番号</span><input id="f-denpyo" class="in w8">
+            <span class="lb">得意先</span><input id="f-custcd" class="in w4">
+            <input id="f-cust" list="dl-cust" class="in w16">
+            <span style="margin-left:auto"></span>
+            <span class="lb">担当者</span><input id="f-tantocd" class="in w3"><input id="f-tanto" class="in w5">
+          </div>
+          <div class="row">
+            <span class="lb" style="width:70px">ユーザー</span><input id="f-user" list="dl-user" class="in w20">
+            <span class="lb">注文書No.</span><input id="f-orderno" class="in w6">
+            <span class="lb">経由会社</span><input id="f-relay" list="dl-cust" class="in w16">
+          </div>
+          <div class="row">
+            <span class="lb" style="width:70px">品種</span><input id="f-hinshu2" class="in w3">
+            <span class="lb">品目</span><select id="f-prod" class="in w12" onchange="onProd()"></select>
+            <span class="lb">種類</span><select id="f-sub" class="in w16"></select>
+            <span class="lb" style="width:74px">自社製品コード</span><input id="f-selfcd" class="in w5">
+            <span class="lb" style="width:74px">共通製品コード</span><input id="f-commcd" class="in w5">
+          </div>
+          <div class="row fill">
+            <span class="lb" style="width:70px">品名</span>
+            <input id="f-item" list="dl-item" class="in w26">
+            <span class="hint">↓の2つから自動で作ります（直接直してもOK）</span>
+            <span class="lb">名称</span><input id="f-pname" class="in w16" oninput="makeItemName()">
+            <span class="lb">その他</span><input id="f-pextra" class="in w12" oninput="makeItemName()">
+          </div>
+          <div class="row fill">
+            <span class="lb" style="width:70px">担当部署・窓口</span><input id="f-dept" class="in w20">
+            <span class="lb">先方担当者名</span><input id="f-ctanto" class="in w16">
+          </div>
+          <div class="row fill">
+            <span class="lb" style="width:82px;font-size:9.5px">01:連絡 02:案件 03:その他</span>
+            <span class="lb">仕上がりサイズ</span><select id="f-fsize" class="in w12" onchange="onFinishSize()"></select>
+            <span class="lb">横</span><input id="f-w" type="number" class="in w5 num">
+            <span class="lb">×  縦</span><input id="f-h" type="number" class="in w5 num"><span class="lb">mm</span>
+          </div>
+          <div class="row fill">
+            <span class="lb" style="width:70px">ロット区分</span><select id="f-lotkind" class="in w6"></select>
+            <span class="lb">パーツ数</span><input id="f-parts" class="in w3" oninput="applyRowVis()">
+            <span class="lb">表紙</span><select id="f-cover" class="in w4" onchange="applyRowVis()"><option>なし</option><option>あり</option></select>
+            <span class="lb">(in)</span><input id="f-in1" class="in w4"><span>/</span><input id="f-in2" class="in w4">
+            <span>×</span><input id="f-in3" class="in w4"><span>/</span><input id="f-in4" class="in w4">
+          </div>
+          <div class="row fill">
+            <span class="lb" style="width:70px">仕様変更</span><select id="f-specchg" class="in w4"></select>
+            <span class="lb">版下変更</span><select id="f-platechg" class="in w4"></select>
+            <span class="lb" style="width:96px">ロット数量(契約単位)</span><input id="f-lotunit" type="number" class="in w6 num">
+            <span class="hint" style="color:#3f6212">＝Hubの「数量」</span>
+            <select id="f-unit" class="in w4"></select>
+            <span class="lb" style="width:96px">ロット数量(セット数)</span><input id="f-lotset" type="number" class="in w6 num">
+          </div>
+        </div>
+        <div class="hdr-r">
+          <div class="row"><span class="lb" style="width:44px">起票日</span><input id="f-date" type="date" class="in" style="width:112px"></div>
+          <div class="row" style="gap:3px;justify-content:flex-end">
+            <button class="fb gy" style="padding:1px 9px" onclick="setDate(-1)">昨日</button>
+            <button class="fb gy" style="padding:1px 9px" onclick="setDate(0)">今日</button>
+            <button class="fb gy" style="padding:1px 9px" onclick="setDate(1)">明日</button>
+          </div>
+          <div class="row"><span class="lb" style="width:44px">有効期限</span><select id="f-valid" class="in" style="width:112px"></select></div>
+          <div class="row"><span class="lb" style="width:44px">納期</span><input id="f-due" type="date" class="in" style="width:112px"></div>
+          <div class="row"><span class="lb" style="width:44px">納品日</span><input id="d-done" type="date" class="in" style="width:112px"></div>
+          <div class="row"><span class="lb" style="width:44px">注残数</span><input id="f-zan" type="number" class="in num" style="width:112px"></div>
+        </div>
+      </div>
+
+
+      <div class="panebox">
+        <div class="sect"><div class="secttl">用　紙</div>
+        <div class="pane on" id="pane-A">
+          <table class="g">
+            <tr><th></th><th style="width:92px">紙情報</th><th style="width:84px">メーカー</th><th style="width:74px">品名</th>
+                <th style="width:44px">厚さ</th><th style="width:40px">サイズ</th><th style="width:32px">切数</th>
+                <th style="width:32px">面付</th><th style="width:34px">版下</th><th style="width:30px">紙目</th><th style="width:42px">実用数</th>
+                <th style="width:56px">標準予備数<br>加減算</th><th style="width:42px">合計数</th>
+                <th style="width:48px">用紙単価</th><th style="width:52px">用紙代</th></tr>
+            <tr class="r-n" data-n="1"><td class="rn">01</td><td class=""><input id="p1-kind"></td><td class=""><input id="p1-mk" list="dl-paper"></td><td class=""><input id="p1-nm"></td><td class=""><input id="p1-th"></td><td class=""><input id="p1-sz"></td><td class="n"><input id="p1-ki"></td><td class="n"><input id="p1-mn"></td><td class="n"><input id="p1-kom"></td><td class=""><input id="p1-kme"></td><td class="n"><input id="p1-jit"></td><td class="n"><input id="p1-yob"></td><td class="n"><input id="p1-tot"></td><td class="n"><input id="p1-up"></td><td class="n"><input id="p1-am"></td></tr>
+<tr class="r-n" data-n="2"><td class="rn">02</td><td class=""><input id="p2-kind"></td><td class=""><input id="p2-mk" list="dl-paper"></td><td class=""><input id="p2-nm"></td><td class=""><input id="p2-th"></td><td class=""><input id="p2-sz"></td><td class="n"><input id="p2-ki"></td><td class="n"><input id="p2-mn"></td><td class="n"><input id="p2-kom"></td><td class=""><input id="p2-kme"></td><td class="n"><input id="p2-jit"></td><td class="n"><input id="p2-yob"></td><td class="n"><input id="p2-tot"></td><td class="n"><input id="p2-up"></td><td class="n"><input id="p2-am"></td></tr>
+<tr class="r-n" data-n="3"><td class="rn">03</td><td class=""><input id="p3-kind"></td><td class=""><input id="p3-mk" list="dl-paper"></td><td class=""><input id="p3-nm"></td><td class=""><input id="p3-th"></td><td class=""><input id="p3-sz"></td><td class="n"><input id="p3-ki"></td><td class="n"><input id="p3-mn"></td><td class="n"><input id="p3-kom"></td><td class=""><input id="p3-kme"></td><td class="n"><input id="p3-jit"></td><td class="n"><input id="p3-yob"></td><td class="n"><input id="p3-tot"></td><td class="n"><input id="p3-up"></td><td class="n"><input id="p3-am"></td></tr>
+<tr class="r-n" data-n="4"><td class="rn">04</td><td class=""><input id="p4-kind"></td><td class=""><input id="p4-mk" list="dl-paper"></td><td class=""><input id="p4-nm"></td><td class=""><input id="p4-th"></td><td class=""><input id="p4-sz"></td><td class="n"><input id="p4-ki"></td><td class="n"><input id="p4-mn"></td><td class="n"><input id="p4-kom"></td><td class=""><input id="p4-kme"></td><td class="n"><input id="p4-jit"></td><td class="n"><input id="p4-yob"></td><td class="n"><input id="p4-tot"></td><td class="n"><input id="p4-up"></td><td class="n"><input id="p4-am"></td></tr>
+<tr class="r-n" data-n="5"><td class="rn">05</td><td class=""><input id="p5-kind"></td><td class=""><input id="p5-mk" list="dl-paper"></td><td class=""><input id="p5-nm"></td><td class=""><input id="p5-th"></td><td class=""><input id="p5-sz"></td><td class="n"><input id="p5-ki"></td><td class="n"><input id="p5-mn"></td><td class="n"><input id="p5-kom"></td><td class=""><input id="p5-kme"></td><td class="n"><input id="p5-jit"></td><td class="n"><input id="p5-yob"></td><td class="n"><input id="p5-tot"></td><td class="n"><input id="p5-up"></td><td class="n"><input id="p5-am"></td></tr>
+<tr class="r-n" data-n="6"><td class="rn">06</td><td class=""><input id="p6-kind"></td><td class=""><input id="p6-mk" list="dl-paper"></td><td class=""><input id="p6-nm"></td><td class=""><input id="p6-th"></td><td class=""><input id="p6-sz"></td><td class="n"><input id="p6-ki"></td><td class="n"><input id="p6-mn"></td><td class="n"><input id="p6-kom"></td><td class=""><input id="p6-kme"></td><td class="n"><input id="p6-jit"></td><td class="n"><input id="p6-yob"></td><td class="n"><input id="p6-tot"></td><td class="n"><input id="p6-up"></td><td class="n"><input id="p6-am"></td></tr>
+<tr class="r-n" data-n="7"><td class="rn">07</td><td class=""><input id="p7-kind"></td><td class=""><input id="p7-mk" list="dl-paper"></td><td class=""><input id="p7-nm"></td><td class=""><input id="p7-th"></td><td class=""><input id="p7-sz"></td><td class="n"><input id="p7-ki"></td><td class="n"><input id="p7-mn"></td><td class="n"><input id="p7-kom"></td><td class=""><input id="p7-kme"></td><td class="n"><input id="p7-jit"></td><td class="n"><input id="p7-yob"></td><td class="n"><input id="p7-tot"></td><td class="n"><input id="p7-up"></td><td class="n"><input id="p7-am"></td></tr>
+<tr class="r-n" data-n="8"><td class="rn">08</td><td class=""><input id="p8-kind"></td><td class=""><input id="p8-mk" list="dl-paper"></td><td class=""><input id="p8-nm"></td><td class=""><input id="p8-th"></td><td class=""><input id="p8-sz"></td><td class="n"><input id="p8-ki"></td><td class="n"><input id="p8-mn"></td><td class="n"><input id="p8-kom"></td><td class=""><input id="p8-kme"></td><td class="n"><input id="p8-jit"></td><td class="n"><input id="p8-yob"></td><td class="n"><input id="p8-tot"></td><td class="n"><input id="p8-up"></td><td class="n"><input id="p8-am"></td></tr>
+<tr class="r-n" data-n="9"><td class="rn">09</td><td class=""><input id="p9-kind"></td><td class=""><input id="p9-mk" list="dl-paper"></td><td class=""><input id="p9-nm"></td><td class=""><input id="p9-th"></td><td class=""><input id="p9-sz"></td><td class="n"><input id="p9-ki"></td><td class="n"><input id="p9-mn"></td><td class="n"><input id="p9-kom"></td><td class=""><input id="p9-kme"></td><td class="n"><input id="p9-jit"></td><td class="n"><input id="p9-yob"></td><td class="n"><input id="p9-tot"></td><td class="n"><input id="p9-up"></td><td class="n"><input id="p9-am"></td></tr>
+<tr class="r-cover"><td class="rn">表紙</td><td class=""><input id="p0-kind"></td><td class=""><input id="p0-mk"></td><td class=""><input id="p0-nm"></td><td class=""><input id="p0-th"></td><td class=""><input id="p0-sz"></td><td class="n"><input id="p0-ki"></td><td class="n"><input id="p0-mn"></td><td class="n"><input id="p0-kom"></td><td class=""><input id="p0-kme"></td><td class="n"><input id="p0-jit"></td><td class="n"><input id="p0-yob"></td><td class="n"><input id="p0-tot"></td><td class="n"><input id="p0-up"></td><td class="n"><input id="p0-am"></td></tr>
+          </table>
+        </div></div>
+        <div class="sect"><div class="secttl">印　刷</div>
+        <div class="pane on" id="pane-B">
+          <table class="g">
+            <tr><th rowspan="2"></th><th colspan="2" style="width:56px">色　数</th>
+                <th rowspan="2" style="width:98px">インキ（表）</th><th rowspan="2" style="width:98px">インキ（裏）</th>
+                <th rowspan="2" style="width:44px">版下</th>
+                <th colspan="7">ナンバーリング</th>
+                <th rowspan="2" style="width:52px">印刷代</th><th rowspan="2" style="width:52px">版下代</th>
+                <th rowspan="2">備　考</th></tr>
+            <tr><th style="width:28px">表</th><th style="width:28px">裏</th>
+                <th style="width:44px">バック</th><th style="width:56px">カーボン色</th><th style="width:40px">系番</th>
+                <th style="width:40px">種紙</th><th style="width:36px">番付</th><th style="width:36px">好数</th>
+                <th style="width:32px">色</th></tr>
+            <tr class="r-n" data-n="1"><td class="rn">01</td><td class="n"><input id="k1-iro1"></td><td class="n"><input id="k1-iro2"></td><td class=""><input id="k1-ink" list="dl-ink"></td><td class=""><input id="k1-ura" list="dl-ink"></td><td class=""><input id="k1-han"></td><td class=""><input id="k1-nbk"></td><td class=""><input id="k1-ncb"></td><td class=""><input id="k1-nkb"></td><td class=""><input id="k1-nsh"></td><td class=""><input id="k1-nbn"></td><td class=""><input id="k1-nks"></td><td class=""><input id="k1-ncl"></td><td class="n"><input id="k1-pc"></td><td class="n"><input id="k1-hd"></td><td class=""><input id="k1-bk"></td></tr>
+<tr class="r-n" data-n="2"><td class="rn">02</td><td class="n"><input id="k2-iro1"></td><td class="n"><input id="k2-iro2"></td><td class=""><input id="k2-ink" list="dl-ink"></td><td class=""><input id="k2-ura" list="dl-ink"></td><td class=""><input id="k2-han"></td><td class=""><input id="k2-nbk"></td><td class=""><input id="k2-ncb"></td><td class=""><input id="k2-nkb"></td><td class=""><input id="k2-nsh"></td><td class=""><input id="k2-nbn"></td><td class=""><input id="k2-nks"></td><td class=""><input id="k2-ncl"></td><td class="n"><input id="k2-pc"></td><td class="n"><input id="k2-hd"></td><td class=""><input id="k2-bk"></td></tr>
+<tr class="r-n" data-n="3"><td class="rn">03</td><td class="n"><input id="k3-iro1"></td><td class="n"><input id="k3-iro2"></td><td class=""><input id="k3-ink" list="dl-ink"></td><td class=""><input id="k3-ura" list="dl-ink"></td><td class=""><input id="k3-han"></td><td class=""><input id="k3-nbk"></td><td class=""><input id="k3-ncb"></td><td class=""><input id="k3-nkb"></td><td class=""><input id="k3-nsh"></td><td class=""><input id="k3-nbn"></td><td class=""><input id="k3-nks"></td><td class=""><input id="k3-ncl"></td><td class="n"><input id="k3-pc"></td><td class="n"><input id="k3-hd"></td><td class=""><input id="k3-bk"></td></tr>
+<tr class="r-n" data-n="4"><td class="rn">04</td><td class="n"><input id="k4-iro1"></td><td class="n"><input id="k4-iro2"></td><td class=""><input id="k4-ink" list="dl-ink"></td><td class=""><input id="k4-ura" list="dl-ink"></td><td class=""><input id="k4-han"></td><td class=""><input id="k4-nbk"></td><td class=""><input id="k4-ncb"></td><td class=""><input id="k4-nkb"></td><td class=""><input id="k4-nsh"></td><td class=""><input id="k4-nbn"></td><td class=""><input id="k4-nks"></td><td class=""><input id="k4-ncl"></td><td class="n"><input id="k4-pc"></td><td class="n"><input id="k4-hd"></td><td class=""><input id="k4-bk"></td></tr>
+<tr class="r-n" data-n="5"><td class="rn">05</td><td class="n"><input id="k5-iro1"></td><td class="n"><input id="k5-iro2"></td><td class=""><input id="k5-ink" list="dl-ink"></td><td class=""><input id="k5-ura" list="dl-ink"></td><td class=""><input id="k5-han"></td><td class=""><input id="k5-nbk"></td><td class=""><input id="k5-ncb"></td><td class=""><input id="k5-nkb"></td><td class=""><input id="k5-nsh"></td><td class=""><input id="k5-nbn"></td><td class=""><input id="k5-nks"></td><td class=""><input id="k5-ncl"></td><td class="n"><input id="k5-pc"></td><td class="n"><input id="k5-hd"></td><td class=""><input id="k5-bk"></td></tr>
+<tr class="r-n" data-n="6"><td class="rn">06</td><td class="n"><input id="k6-iro1"></td><td class="n"><input id="k6-iro2"></td><td class=""><input id="k6-ink" list="dl-ink"></td><td class=""><input id="k6-ura" list="dl-ink"></td><td class=""><input id="k6-han"></td><td class=""><input id="k6-nbk"></td><td class=""><input id="k6-ncb"></td><td class=""><input id="k6-nkb"></td><td class=""><input id="k6-nsh"></td><td class=""><input id="k6-nbn"></td><td class=""><input id="k6-nks"></td><td class=""><input id="k6-ncl"></td><td class="n"><input id="k6-pc"></td><td class="n"><input id="k6-hd"></td><td class=""><input id="k6-bk"></td></tr>
+<tr class="r-n" data-n="7"><td class="rn">07</td><td class="n"><input id="k7-iro1"></td><td class="n"><input id="k7-iro2"></td><td class=""><input id="k7-ink" list="dl-ink"></td><td class=""><input id="k7-ura" list="dl-ink"></td><td class=""><input id="k7-han"></td><td class=""><input id="k7-nbk"></td><td class=""><input id="k7-ncb"></td><td class=""><input id="k7-nkb"></td><td class=""><input id="k7-nsh"></td><td class=""><input id="k7-nbn"></td><td class=""><input id="k7-nks"></td><td class=""><input id="k7-ncl"></td><td class="n"><input id="k7-pc"></td><td class="n"><input id="k7-hd"></td><td class=""><input id="k7-bk"></td></tr>
+<tr class="r-n" data-n="8"><td class="rn">08</td><td class="n"><input id="k8-iro1"></td><td class="n"><input id="k8-iro2"></td><td class=""><input id="k8-ink" list="dl-ink"></td><td class=""><input id="k8-ura" list="dl-ink"></td><td class=""><input id="k8-han"></td><td class=""><input id="k8-nbk"></td><td class=""><input id="k8-ncb"></td><td class=""><input id="k8-nkb"></td><td class=""><input id="k8-nsh"></td><td class=""><input id="k8-nbn"></td><td class=""><input id="k8-nks"></td><td class=""><input id="k8-ncl"></td><td class="n"><input id="k8-pc"></td><td class="n"><input id="k8-hd"></td><td class=""><input id="k8-bk"></td></tr>
+<tr class="r-n" data-n="9"><td class="rn">09</td><td class="n"><input id="k9-iro1"></td><td class="n"><input id="k9-iro2"></td><td class=""><input id="k9-ink" list="dl-ink"></td><td class=""><input id="k9-ura" list="dl-ink"></td><td class=""><input id="k9-han"></td><td class=""><input id="k9-nbk"></td><td class=""><input id="k9-ncb"></td><td class=""><input id="k9-nkb"></td><td class=""><input id="k9-nsh"></td><td class=""><input id="k9-nbn"></td><td class=""><input id="k9-nks"></td><td class=""><input id="k9-ncl"></td><td class="n"><input id="k9-pc"></td><td class="n"><input id="k9-hd"></td><td class=""><input id="k9-bk"></td></tr>
+<tr class="r-cover"><td class="rn">表紙</td><td class="n"><input id="k0-iro1"></td><td class="n"><input id="k0-iro2"></td><td class=""><input id="k0-ink"></td><td class=""><input id="k0-ura"></td><td class=""><input id="k0-han"></td><td class=""><input id="k0-nbk"></td><td class=""><input id="k0-ncb"></td><td class=""><input id="k0-nkb"></td><td class=""><input id="k0-nsh"></td><td class=""><input id="k0-nbn"></td><td class=""><input id="k0-nks"></td><td class=""><input id="k0-ncl"></td><td class="n"><input id="k0-pc"></td><td class="n"><input id="k0-hd"></td><td class=""><input id="k0-bk"></td></tr>
+          </table>
+        </div></div>
+        <div class="sect"><div class="secttl">加　工</div>
+        <div class="pane on" id="pane-C">
+          <table class="g">
+            <tr><th rowspan="2"></th><th colspan="3">マージン／穴パンチ</th>
+                <th rowspan="2" style="width:44px">ファイル</th><th rowspan="2" style="width:32px">穴</th>
+                <th rowspan="2" style="width:48px">給パンチ</th><th rowspan="2" style="width:32px">穴</th>
+                <th colspan="2">横ミシン</th><th rowspan="2" style="width:30px">止</th>
+                <th rowspan="2" style="width:56px" class="ng">中間<br>縦ミシン</th>
+                <th rowspan="2" style="width:48px">縦ミシン</th><th rowspan="2" style="width:30px">止</th>
+                <th rowspan="2" style="width:52px">加工賃</th><th rowspan="2" style="width:52px">加工費</th>
+                <th rowspan="2">備　考</th></tr>
+            <tr><th style="width:30px">左</th><th style="width:30px">中</th><th style="width:30px">右</th>
+                <th style="width:44px">横ミシン</th><th style="width:44px">横ミシン</th></tr>
+            <tr class="r-n" data-n="1"><td class="rn">01</td><td class=""><input id="w1-ml"></td><td class=""><input id="w1-mc"></td><td class=""><input id="w1-mr"></td><td class=""><input id="w1-fil"></td><td class=""><input id="w1-an1"></td><td class=""><input id="w1-kpn"></td><td class=""><input id="w1-an2"></td><td class=""><input id="w1-ym1"></td><td class=""><input id="w1-ym2"></td><td class=""><input id="w1-yst"></td><td class="x"><input id="w1-cym"></td><td class=""><input id="w1-tm1"></td><td class=""><input id="w1-tst"></td><td class="n"><input id="w1-kch"></td><td class="n"><input id="w1-kcs"></td><td class=""><input id="w1-bk"></td></tr>
+<tr class="r-n" data-n="2"><td class="rn">02</td><td class=""><input id="w2-ml"></td><td class=""><input id="w2-mc"></td><td class=""><input id="w2-mr"></td><td class=""><input id="w2-fil"></td><td class=""><input id="w2-an1"></td><td class=""><input id="w2-kpn"></td><td class=""><input id="w2-an2"></td><td class=""><input id="w2-ym1"></td><td class=""><input id="w2-ym2"></td><td class=""><input id="w2-yst"></td><td class="x"><input id="w2-cym"></td><td class=""><input id="w2-tm1"></td><td class=""><input id="w2-tst"></td><td class="n"><input id="w2-kch"></td><td class="n"><input id="w2-kcs"></td><td class=""><input id="w2-bk"></td></tr>
+<tr class="r-n" data-n="3"><td class="rn">03</td><td class=""><input id="w3-ml"></td><td class=""><input id="w3-mc"></td><td class=""><input id="w3-mr"></td><td class=""><input id="w3-fil"></td><td class=""><input id="w3-an1"></td><td class=""><input id="w3-kpn"></td><td class=""><input id="w3-an2"></td><td class=""><input id="w3-ym1"></td><td class=""><input id="w3-ym2"></td><td class=""><input id="w3-yst"></td><td class="x"><input id="w3-cym"></td><td class=""><input id="w3-tm1"></td><td class=""><input id="w3-tst"></td><td class="n"><input id="w3-kch"></td><td class="n"><input id="w3-kcs"></td><td class=""><input id="w3-bk"></td></tr>
+<tr class="r-n" data-n="4"><td class="rn">04</td><td class=""><input id="w4-ml"></td><td class=""><input id="w4-mc"></td><td class=""><input id="w4-mr"></td><td class=""><input id="w4-fil"></td><td class=""><input id="w4-an1"></td><td class=""><input id="w4-kpn"></td><td class=""><input id="w4-an2"></td><td class=""><input id="w4-ym1"></td><td class=""><input id="w4-ym2"></td><td class=""><input id="w4-yst"></td><td class="x"><input id="w4-cym"></td><td class=""><input id="w4-tm1"></td><td class=""><input id="w4-tst"></td><td class="n"><input id="w4-kch"></td><td class="n"><input id="w4-kcs"></td><td class=""><input id="w4-bk"></td></tr>
+<tr class="r-n" data-n="5"><td class="rn">05</td><td class=""><input id="w5-ml"></td><td class=""><input id="w5-mc"></td><td class=""><input id="w5-mr"></td><td class=""><input id="w5-fil"></td><td class=""><input id="w5-an1"></td><td class=""><input id="w5-kpn"></td><td class=""><input id="w5-an2"></td><td class=""><input id="w5-ym1"></td><td class=""><input id="w5-ym2"></td><td class=""><input id="w5-yst"></td><td class="x"><input id="w5-cym"></td><td class=""><input id="w5-tm1"></td><td class=""><input id="w5-tst"></td><td class="n"><input id="w5-kch"></td><td class="n"><input id="w5-kcs"></td><td class=""><input id="w5-bk"></td></tr>
+<tr class="r-n" data-n="6"><td class="rn">06</td><td class=""><input id="w6-ml"></td><td class=""><input id="w6-mc"></td><td class=""><input id="w6-mr"></td><td class=""><input id="w6-fil"></td><td class=""><input id="w6-an1"></td><td class=""><input id="w6-kpn"></td><td class=""><input id="w6-an2"></td><td class=""><input id="w6-ym1"></td><td class=""><input id="w6-ym2"></td><td class=""><input id="w6-yst"></td><td class="x"><input id="w6-cym"></td><td class=""><input id="w6-tm1"></td><td class=""><input id="w6-tst"></td><td class="n"><input id="w6-kch"></td><td class="n"><input id="w6-kcs"></td><td class=""><input id="w6-bk"></td></tr>
+<tr class="r-n" data-n="7"><td class="rn">07</td><td class=""><input id="w7-ml"></td><td class=""><input id="w7-mc"></td><td class=""><input id="w7-mr"></td><td class=""><input id="w7-fil"></td><td class=""><input id="w7-an1"></td><td class=""><input id="w7-kpn"></td><td class=""><input id="w7-an2"></td><td class=""><input id="w7-ym1"></td><td class=""><input id="w7-ym2"></td><td class=""><input id="w7-yst"></td><td class="x"><input id="w7-cym"></td><td class=""><input id="w7-tm1"></td><td class=""><input id="w7-tst"></td><td class="n"><input id="w7-kch"></td><td class="n"><input id="w7-kcs"></td><td class=""><input id="w7-bk"></td></tr>
+<tr class="r-n" data-n="8"><td class="rn">08</td><td class=""><input id="w8-ml"></td><td class=""><input id="w8-mc"></td><td class=""><input id="w8-mr"></td><td class=""><input id="w8-fil"></td><td class=""><input id="w8-an1"></td><td class=""><input id="w8-kpn"></td><td class=""><input id="w8-an2"></td><td class=""><input id="w8-ym1"></td><td class=""><input id="w8-ym2"></td><td class=""><input id="w8-yst"></td><td class="x"><input id="w8-cym"></td><td class=""><input id="w8-tm1"></td><td class=""><input id="w8-tst"></td><td class="n"><input id="w8-kch"></td><td class="n"><input id="w8-kcs"></td><td class=""><input id="w8-bk"></td></tr>
+<tr class="r-n" data-n="9"><td class="rn">09</td><td class=""><input id="w9-ml"></td><td class=""><input id="w9-mc"></td><td class=""><input id="w9-mr"></td><td class=""><input id="w9-fil"></td><td class=""><input id="w9-an1"></td><td class=""><input id="w9-kpn"></td><td class=""><input id="w9-an2"></td><td class=""><input id="w9-ym1"></td><td class=""><input id="w9-ym2"></td><td class=""><input id="w9-yst"></td><td class="x"><input id="w9-cym"></td><td class=""><input id="w9-tm1"></td><td class=""><input id="w9-tst"></td><td class="n"><input id="w9-kch"></td><td class="n"><input id="w9-kcs"></td><td class=""><input id="w9-bk"></td></tr>
+<tr class="r-cover"><td class="rn">表紙</td><td class=""><input id="w0-ml"></td><td class=""><input id="w0-mc"></td><td class=""><input id="w0-mr"></td><td class=""><input id="w0-fil"></td><td class=""><input id="w0-an1"></td><td class=""><input id="w0-kpn"></td><td class=""><input id="w0-an2"></td><td class=""><input id="w0-ym1"></td><td class=""><input id="w0-ym2"></td><td class=""><input id="w0-yst"></td><td class="x"><input id="w0-cym"></td><td class=""><input id="w0-tm1"></td><td class=""><input id="w0-tst"></td><td class="n"><input id="w0-kch"></td><td class="n"><input id="w0-kcs"></td><td class=""><input id="w0-bk"></td></tr>
+          </table>
+        </div></div>
+      </div>
+    </div>
+
+
+    </div>
+  </div>
+
+  <!-- 下部: 原価・外注先 -->
+  <div class="btm">
+    <div class="main">
+      <div class="colL">
+        <div class="row">
+          <span class="lb">ナンバー台</span><input id="b-numdai" class="in w6">
+          <span class="lb">至</span><input id="b-numto" class="in w6">
+          <span class="lb">カートン型式</span><input id="d-cart" class="in w8">
+          <span class="lb">内装番号</span><input id="b-inbox" class="in w6">
+        </div>
+        <div class="row">
+          <span class="lb">製本加工</span><input id="f-bind" list="dl-bind" class="in w10">
+          <span class="lb">備考</span><input id="f-memo" list="dl-memo" class="in w16">
+        </div>
+        <div class="row">
+          <span class="lb">カートン</span><input id="d-cartn" class="in w4"><span class="lb">通</span><input id="b-tsu" class="in w4">
+          <span class="lb">背サイズ</span><input id="b-se1" class="in w3">-<input id="b-se2" class="in w3">-<input id="b-se3" class="in w3">
+          <span class="lb">複数</span><input id="b-fuku" class="in w3">
+          <span class="lb">種留</span><input id="b-shu" class="in w4">
+        </div>
+        <div class="row">
+          <span class="lb">配送代単価</span>
+          <label class="lb"><input type="radio" name="ship" value="0">0</label>
+          <label class="lb"><input type="radio" name="ship" value="100">100</label>
+          <label class="lb"><input type="radio" name="ship" value="200">200</label>
+          <label class="lb"><input type="radio" name="ship" value="500" checked>500</label>
+          <label class="lb"><input type="radio" name="ship" value="1000">1000</label>
+          <label class="lb"><input type="radio" name="ship" value="">その他</label>
+        </div>
+        <div class="row">
+          <span class="lb">梱包代単価</span>
+          <label class="lb"><input type="radio" name="pack" value="0">0</label>
+          <label class="lb"><input type="radio" name="pack" value="250" checked>250</label>
+          <label class="lb"><input type="radio" name="pack" value="">その他</label>
+          <span class="lb">製品在庫用注文書番号</span><input id="b-stkno" class="in w8">
+        </div>
+      </div>
+
+      <div class="colM">
+        <div class="row"><span class="lb" style="width:56px">用紙代</span><input id="c-paper" class="in w8 num">
+          <span class="lb" style="width:44px">版代</span><input id="c-plate" class="in w6 num"></div>
+        <div class="row"><span class="lb" style="width:56px">印刷代</span><input id="c-print" class="in w8 num">
+          <span class="lb" style="width:44px">配送代</span><input id="c-ship" class="in w6 num"></div>
+        <div class="row"><span class="lb" style="width:56px">加工代</span><input id="c-work" class="in w8 num">
+          <span class="lb" style="width:44px">梱包代</span><input id="c-pack" class="in w6 num"></div>
+        <div class="row"><span class="lb" style="width:56px">人件費</span><input id="c-labor" class="in w8 num">
+          <span class="lb" style="width:44px">在庫原価</span><input id="c-stock" class="in w6 num"></div>
+        <div class="row"><span class="lb" style="width:56px">売価単価</span><input id="f-price" type="number" step="0.01" class="in w8 num" oninput="calc()">
+          <span class="lb" style="width:44px">合計金額</span><input id="c-total" class="in w6 num" readonly></div>
+        <div class="row"><span class="lb" style="width:56px">製品単価<br>(原単)</span><input id="c-unit" class="in w8 num">
+          <span class="lb" style="width:44px">売価金額</span><span class="amt" id="t-amt">0</span>
+          <input id="f-amt" type="hidden"></div>
+      </div>
+
+      <div class="colR">
+        <!-- ホットフォルダは不要（本多さん指示）。インキ表記からの振り分けは印刷側で行う -->
+<div class="row hubx">
+          <span class="lb">社内メモ</span><input id="f-note" class="in w26">
+        </div>
+        <div class="row"><span class="hint" id="msg"></span><span style="margin-left:auto"></span>
+          <span class="hint" id="t-id"></span><span class="hint" id="h-cust"></span></div>
+      </div>
+    </div>
+    <!-- 注意事項は不要（本多さん指示） -->
+  </div>
+
+  <div id="report-box">
+    <div style="font-size:11px;color:#4b5563;margin-bottom:4px">
+      入力を楽にするための記録です。<b>誰が使ったかは記録しません</b>（氏名・端末名は取得せず、この端末の中だけ）。</div>
+    <div id="report-body"></div>
+    <div class="row" style="margin-top:4px">
+      <button class="fb gy" onclick="exportReport()">CSVで出す</button>
+      <button class="fb rd" onclick="clearLog()">記録を消す</button>
+      <button class="fb gy" onclick="document.getElementById('report-box').style.display='none'">閉じる</button>
+    </div>
+  </div>
+
+  <div class="lst"><table id="tbl"></table></div>
+
+<datalist id="dl-cust"></datalist><datalist id="dl-user"></datalist>
+<datalist id="dl-item"></datalist><datalist id="dl-paper"></datalist>
+<datalist id="dl-bind"></datalist><datalist id="dl-memo"></datalist><datalist id="dl-ink"></datalist>
+<datalist id="dl-vendor"></datalist>
+
+<script>
+
+var MASTER = {"品種": ["03", "04"], "ロット区分": ["リピート", "新規"], "単位": ["枚", "冊", "Ｓ"], "規格": ["特厚口", "70.5ｋ", "44.5ｋ", "中厚口"], "用紙": ["色上質特厚口うぐいす色", "色上質特厚口", "色上質特厚口ﾌﾞﾙｰ色", "色上質特厚口空色", "上質110K", "色上質特厚口銀鼠色", "色上質特厚口ﾌﾞﾙｰ", "色上質特厚口白色", "上質70K", "上質紙70K", "色上質特厚口ブルー色", "色上質特厚銀鼠色", "色上質特厚口オレンジ色", "色上質中厚口オレンジ色", "ｼｺｸｺﾋﾟｰ薄口", "色上質特厚口コスモス色", "色上質特厚口黄色", "色上質中厚口黄色"], "インキ": ["墨", "赤", "赤、墨", "見本", "見本、墨", "墨、赤", "緑", "墨、青", "緑、墨", "緑、赤", "赤、青", "墨、見本", "墨、緑", "茶色", "赤、茶", "赤,青", "緑　墨", "墨,見本", "緑、青"], "色数": ["1", "2", "4"], "切数": ["4", "1"], "面付": ["2", "4"], "横ミシン": ["2", "1"], "製本加工": ["ミシン横2本", "ミシン横2本,A3トンボ無しで納品", "ミシン横1本（上部）", "ミシン横1本", "横ミシン1本（下端から10.5cm）", "バラ,荷札加工,横ミシン1本", "ブック製本（100s/冊）,背糊（天）,マーブル巻,表紙印刷無,裏地券紙", "横ミシン1本", "横ミシン1本（下端から100mm）", "バラ,横ミシン1本", "横ミシン2本"], "備考": ["ミシン横2本", "ミシン横1本（上部）", "ミシン横1本", "横ミシン1本", "横ミシン2本", "横ミシン1本（下端から10ｍｍ）"], "サイズ横": ["210", "150", "420", "297"], "サイズ縦": ["297", "210"], "品名": ["現品票（N-59）", "現品票（S-24）", "現品票（V-15）", "現品票（S-19）", "現品票（S-3）", "現品票（D-3）", "現品票（D-9）", "現品票（D-8）", "現品票（N-49）", "現品票（R-0）", "現品票（V-A9Gベルリナ）", "現品票（S-4）", "現品票（R-14）", "現品票（S-17）", "現品票（S-27）", "現品票（D-2）", "現品票（仕A8A）[G6]", "現品票（D-7）", "現品票（S-5）", "現品票（D-0）", "現品票（R-12）", "現品票（D-4）", "現品票（M-45）", "現品票（N-50）", "現品票（S-23）", "現品票（R-1）", "現品票（V-2）", "現品票（N-F2M）", "現品票（D-11）", "現品票（N-19）", "現品票（R-7）", "現品票（R-10）", "現品票（マルチ-29）", "現品票（V-23）", "現品票（V-18）", "現品票（マルチ-6）", "現品票（SQ-A13S）[B1]", "現品票（仕A8A）[QW9]", "現品票（S-26）", "現品票（マルチ-53）", "現品票（D-D10XA）", "現品票（N-20）", "現品票（R-15-A）", "現品票（SオートA10D）", "現品票（V-4）", "現品票（マルチ-56）", "現品票（補N-49）", "現品票（SQ-A7HC）", "現品票（V-A7J-40）", "現品票（V-3）", "現品票（S-3-A）", "現品票（SオートA10DA）", "現品票（マルチ-3）", "現品票（補N-50）", "現品票（M-3）", "現品票（マルチ-62）", "現品票（D-1-C）", "現品票（補N-59）", "現品票（マルチ-P-A/C6JA-42）", "現品票（D-13）", "現品票（V-24）", "現品票（P箱-6）", "現品票（SQ-A13T）", "現品票（マルチ-19）", "現品票（マルチ-61）", "現品票（箱-24）", "現品票（マルチ-37）", "現品票（マルチ-F3Y）", "荷札（仕掛品）", "現品票（SQ-A13S）[S5]", "現品票（D-5）", "現品票（N-52）", "現品票（R-9）", "現品票（マルチ-64）", "現品票（R-15）", "現品票（N-4）", "現品票（V-31-B）", "現品票（箱-46）", "現品票（M-42）", "現品票（マルチ-33）", "現品票（補N-19）", "現品票（P箱-31）", "現品票（M-44）", "現品票（N-18）", "現品票（V-16-B）", "現品票（SオートA7HC）", "補修品（オレンジ）", "SAP用紙（白）", "現品票（N-C3NB[B3]）", "現品票（マルチ-27-A）", "現品票（I-PG）", "現品票（R-2）", "現品票（R-1-A）", "現品票（マルチ-A6JP-48）", "現品票（R-D9G）", "ミシン用紙（緑）", "現品票（仕A8A-ミディアム）", "現品票（F-2）", "現品票（D-6）", "現品票（捕N-4）", "現品票（マルチ-51）", "材料出庫明細（板厚規格＝3.6ｔ）", "色上質特厚口うぐいす色_2月分現品票用紙", "色上質特厚口白色_2月分現品票用紙", "上質110K_2月分現品票用紙", "現品票（S-25）", "ミシン用紙（薄い青色）", "現品票（箱P-30）", "現品票（箱P-47-A）", "現品票（箱P-54）", "現品票（T-47）", "現品票（マルチ-P-A/C6JA-42（箱））", "データ作成費（1版）", "現品票（T-47)", "現品票（箱-55）", "ミシン用紙（白）", "現品票（S-32）", "現品票（補N-20）", "現品票（マルチ-6-B）", "現品票（R-A11Q）", "現品票（箱P-3）", "現品票（R-16）", "現品票（P箱_P-A13LB）", "ミシン入用紙", "現品票（N-D10BA）", "現品票（I-8）", "現品票（I-9）", "現品票（F-Z2K）［B1］", "現品票（S-6）", "現品票（箱P-17）", "現品票（P箱-57）", "現品票（M-0-C）", "現品票（箱-28）", "現品票（箱-54）", "ミシン用紙（オレンジ）", "現品票（マルチ-14）", "現品票（マルチD-13LA）", "現品票（箱P-13LA）", "現品票（箱P-49）", "現品票（R-13）", "現品票（箱P-30-A）", "現品票（箱P-46）", "現品票（V-16）", "現品票（マルチ-29-B）", "ミシン用紙（黄色）", "現品票（P-A13LB）", "現品票（マルチ-55）", "現品票（箱-48）", "現品票（I-PG-M10MB）", "現品票（マルチ-34）", "現品票（箱6-B）", "保留品（ｵﾚﾝｼﾞ）"], "有無": ["無", "有"]};
+var KEY='fm_juchu_v1';
+var REC=[];   // この端末に登録したもの
+
+// インキ表記 → ホットフォルダ名
+// 印刷機に実在するホットフォルダ（192.168.0.201 実機確認済）
+var HOTFOLDERS=['現品票(墨)','現品票(墨緑)','現品票(墨茶)','現品票(墨赤)','現品票(墨青)',
+                '現品票(緑)','現品票(緑茶)','現品票(緑赤)','現品票(緑青)',
+                '現品票(茶)','現品票(赤)','現品票(赤茶)','現品票(赤青)','現品票(青)'];
+function inkFolder(v){
+  var s=String(v||'').replace(/[,、　\s]+/g,',').replace(/,+$/,'');
+  if(!s) return '';
+  if(/見本/.test(s)) return '⚠要確認（色見本あり）';
+  var parts=s.split(',').map(function(x){ return x.replace('茶色','茶').replace(/^K$/,'墨').trim(); }).filter(Boolean);
+  var uniq=[]; parts.forEach(function(p){ if(uniq.indexOf(p)<0) uniq.push(p); });
+  var ORDER=['墨','緑','赤','青','茶'];
+  if(/カラー/.test(s)) return '⚠色の指定が必要（「カラー」は旧表記）';
+  if(uniq.some(function(p){ return ORDER.indexOf(p)<0; })) return '⚠要確認（'+s+'）';
+  uniq.sort(function(a,b){ return ORDER.indexOf(a)-ORDER.indexOf(b); });
+  if(!uniq.length) return '';
+  var name='現品票('+uniq.slice(0,2).join('')+')';
+  return HOTFOLDERS.indexOf(name)>=0 ? name : ('⚠要確認（'+name+' は印刷機にありません）');
+}
+
+function fill(sel, arr, blank){
+  var el=document.getElementById(sel); if(!el) return;
+  el.innerHTML=(blank!==false?'<option value=""></option>':'')
+    + (arr||[]).map(function(v){ return '<option>'+String(v).replace(/</g,'&lt;')+'</option>'; }).join('');
+}
+function fillDL(id, arr){
+  var el=document.getElementById(id); if(!el) return;
+  el.innerHTML=(arr||[]).map(function(v){ return '<option value="'+String(v).replace(/"/g,'&quot;')+'">'; }).join('');
+}
+function g(id){ var e=document.getElementById(id); return e?e.value.trim():''; }
+function s(id,v){ var e=document.getElementById(id); if(e) e.value=(v==null?'':v); }
+
+function setView(v){
+  document.body.className='v-'+v;
+
+  try{ localStorage.setItem('fm_juchu_view', v); }catch(e){}
+}
+function calc(){
+  var p=parseFloat(g('f-price'))||0;
+  var q=parseFloat(g('f-lotset'))||0;
+  var a=Math.round(p*q);
+  s('f-amt', a||'');
+  var _ta=document.getElementById('t-amt'); if(_ta) _ta.textContent=a.toLocaleString();
+}
+
+// Hubの取引先マスタを読む
+function hubCust(){
+  try{
+    var db=JSON.parse(localStorage.getItem('murayama_v15')||'null')||{};
+    var arr=((db.master||{}).cust)||[];
+    var orgs=[], users=[];
+    arr.forEach(function(r){
+      if(!r||typeof r==='string') return;
+      if(r.org && orgs.indexOf(r.org)<0) orgs.push(r.org);
+      if(r.user && users.indexOf(r.user)<0) users.push(r.user);
+    });
+    return { orgs:orgs.sort(), users:users.sort() };
+  }catch(e){ return { orgs:[], users:[] }; }
+}
+
+// 見積業者・外注先の候補: Hub本体の仕入先/外注先マスタから拾う(無ければ空=自由入力)
+function hubVendors(){
+  try{
+    var db=JSON.parse(localStorage.getItem('murayama_v15')||'null')||{};
+    var out=[], seen={};
+    function push(v){ if(v && !seen[v]){ seen[v]=1; out.push(v); } }
+    [(db.master||{}).vendor, (db.master||{}).supplier, db.vendors, db.suppliers,
+     (db.master||{}).gaichu].forEach(function(arr){
+      if(!Array.isArray(arr)) return;
+      arr.forEach(function(r){
+        if(typeof r==='string') push(r);
+        else if(r && typeof r==='object') push(r.name || r.org || r.company || r.vendor);
+      });
+    });
+    return out.sort();
+  }catch(e){ return []; }
+}
+
+// 過去2年(2024/2025 FileMakerフル書き出し 11,781件)の入力実績。
+// 値は「件数 n / 使用率% r / 値の種類 k / 対応するFMの列名 c」だけ。実データは持たない。
+var FM_TOTAL = 11781;
+var FMUSE = {"b-fuku": {"c": "FMに列なし", "k": 0, "n": -1, "r": -1}, "b-inbox": {"c": "内装備考", "k": 185, "n": 1247, "r": 10.6}, "b-numdai": {"c": "ナンバー自", "k": 50, "n": 136, "r": 1.1}, "b-numto": {"c": "ナンバー至", "k": 67, "n": 141, "r": 1.2}, "b-se1": {"c": "FMに列なし", "k": 0, "n": -1, "r": -1}, "b-shu": {"c": "FMに列なし", "k": 0, "n": -1, "r": -1}, "b-stkno": {"c": "FMに列なし", "k": 0, "n": -1, "r": -1}, "b-tsu": {"c": "FMに列なし", "k": 0, "n": -1, "r": -1}, "c-labor": {"c": "人件費", "k": 41, "n": 11781, "r": 100.0}, "c-pack": {"c": "梱包代", "k": 52, "n": 10444, "r": 88.7}, "c-paper": {"c": "用紙代", "k": 935, "n": 10287, "r": 87.3}, "c-plate": {"c": "版代", "k": 2, "n": 11781, "r": 100.0}, "c-print": {"c": "印刷代", "k": 556, "n": 7160, "r": 60.8}, "c-ship": {"c": "配送代", "k": 52, "n": 10444, "r": 88.7}, "c-stock": {"c": "製品在庫原価", "k": 16, "n": 222, "r": 1.9}, "c-total": {"c": "合計金額", "k": 2615, "n": 11780, "r": 100.0}, "c-work": {"c": "加工賃", "k": 9, "n": 11781, "r": 100.0}, "d-cart": {"c": "カートン型式", "k": 76, "n": 7332, "r": 62.2}, "d-cartn": {"c": "カートン", "k": 125, "n": 7992, "r": 67.8}, "d-done": {"c": "納品日", "k": 2, "n": 6686, "r": 56.8}, "f-amt": {"c": "売価金額", "k": 1845, "n": 11769, "r": 99.9}, "f-bind": {"c": "製本加工", "k": 773, "n": 4147, "r": 35.2}, "f-commcd": {"c": "共通製品コード", "k": 181, "n": 2187, "r": 18.6}, "f-cust": {"c": "FMは得意先コードのみ(名称はマスタ参照)", "k": 0, "n": -1, "r": -1}, "f-custcd": {"c": "得意先コード", "k": 537, "n": 11781, "r": 100.0}, "f-date": {"c": "起票日", "k": 252, "n": 11781, "r": 100.0}, "f-denpyo": {"c": "伝票番号", "k": 6686, "n": 11781, "r": 100.0}, "f-due": {"c": "納期", "k": 96, "n": 11781, "r": 100.0}, "f-h": {"c": "サイズ縦", "k": 225, "n": 8655, "r": 73.5}, "f-hinshu2": {"c": "品種", "k": 6, "n": 11781, "r": 100.0}, "f-ink": {"c": "インキ表1", "k": 206, "n": 10792, "r": 91.6}, "f-iro": {"c": "色数1", "k": 5, "n": 10747, "r": 91.2}, "f-item": {"c": "製品名", "k": 4265, "n": 11779, "r": 100.0}, "f-kikaku": {"c": "規格1", "k": 88, "n": 5984, "r": 50.8}, "f-kiri": {"c": "切数1", "k": 4, "n": 8304, "r": 70.5}, "f-lotkind": {"c": "ロット区分", "k": 2, "n": 11781, "r": 100.0}, "f-lotno": {"c": "前回伝票番号", "k": 4319, "n": 8065, "r": 68.5}, "f-lotset": {"c": "ロットセット数", "k": 393, "n": 11667, "r": 99.0}, "f-lotunit": {"c": "ロット契約単位", "k": 334, "n": 11768, "r": 99.9}, "f-memo": {"c": "備考", "k": 501, "n": 3390, "r": 28.8}, "f-menu": {"c": "面付1", "k": 18, "n": 8944, "r": 75.9}, "f-mishin": {"c": "横ミシン1", "k": 17, "n": 716, "r": 6.1}, "f-no": {"c": "no", "k": 6685, "n": 11780, "r": 100.0}, "f-nofukuno": {"c": "納品書番号", "k": 0, "n": 0, "r": 0.0}, "f-note": {"c": "FMに列なし", "k": 0, "n": -1, "r": -1}, "f-orderno": {"c": "注文書No", "k": 26, "n": 53, "r": 0.5}, "f-ordmemo": {"c": "注意事項", "k": 76, "n": 454, "r": 3.9}, "f-paper": {"c": "紙質1", "k": 947, "n": 10378, "r": 88.1}, "f-parts": {"c": "パーツ数", "k": 49, "n": 8837, "r": 75.0}, "f-platechg": {"c": "版下変更", "k": 2, "n": 11781, "r": 100.0}, "f-prevdate": {"c": "前回起票日", "k": 775, "n": 11781, "r": 100.0}, "f-price": {"c": "売価単価", "k": 1456, "n": 11634, "r": 98.8}, "f-selfcd": {"c": "自社製品コード", "k": 28, "n": 358, "r": 3.0}, "f-specchg": {"c": "仕様変更", "k": 2, "n": 11781, "r": 100.0}, "f-tanto": {"c": "FMは担当者コードのみ(名称はマスタ参照)", "k": 0, "n": -1, "r": -1}, "f-tantocd": {"c": "担当者コード", "k": 11, "n": 11579, "r": 98.3}, "f-unit": {"c": "単位", "k": 8, "n": 11778, "r": 100.0}, "f-user": {"c": "ユーザー名", "k": 1056, "n": 7320, "r": 62.1}, "f-w": {"c": "サイズ横", "k": 214, "n": 8655, "r": 73.5}, "f-zan": {"c": "注残数", "k": 334, "n": 11768, "r": 99.9}, "k1-bk": {"c": "備考1", "k": 331, "n": 2786, "r": 23.6}, "k1-han": {"c": "版下1", "k": 17, "n": 8901, "r": 75.5}, "k1-hd": {"c": "版下代1", "k": 2, "n": 11781, "r": 100.0}, "k1-ink": {"c": "インキ表1", "k": 206, "n": 10792, "r": 91.6}, "k1-iro1": {"c": "色数1", "k": 5, "n": 10747, "r": 91.2}, "k1-pc": {"c": "印刷代1", "k": 514, "n": 7158, "r": 60.8}, "k1-ura": {"c": "インキ裏1", "k": 59, "n": 6184, "r": 52.5}, "k2-bk": {"c": "備考2", "k": 164, "n": 1093, "r": 9.3}, "k2-han": {"c": "版下2", "k": 10, "n": 1078, "r": 9.2}, "k2-hd": {"c": "版下代2", "k": 1, "n": 11781, "r": 100.0}, "k2-ink": {"c": "インキ表2", "k": 62, "n": 1225, "r": 10.4}, "k2-iro1": {"c": "色数2", "k": 5, "n": 1196, "r": 10.2}, "k2-pc": {"c": "印刷代2", "k": 123, "n": 591, "r": 5.0}, "k2-ura": {"c": "インキ裏2", "k": 20, "n": 296, "r": 2.5}, "k3-bk": {"c": "備考3", "k": 104, "n": 472, "r": 4.0}, "k3-han": {"c": "版下3", "k": 11, "n": 541, "r": 4.6}, "k3-hd": {"c": "版下代3", "k": 1, "n": 11781, "r": 100.0}, "k3-ink": {"c": "インキ表3", "k": 43, "n": 590, "r": 5.0}, "k3-iro1": {"c": "色数3", "k": 4, "n": 585, "r": 5.0}, "k3-pc": {"c": "印刷代3", "k": 58, "n": 239, "r": 2.0}, "k3-ura": {"c": "インキ裏3", "k": 13, "n": 122, "r": 1.0}, "k4-bk": {"c": "備考4", "k": 77, "n": 347, "r": 3.0}, "k4-han": {"c": "版下4", "k": 9, "n": 140, "r": 1.2}, "k4-hd": {"c": "版下代4", "k": 1, "n": 11781, "r": 100.0}, "k4-ink": {"c": "インキ表4", "k": 18, "n": 174, "r": 1.5}, "k4-iro1": {"c": "色数4", "k": 4, "n": 161, "r": 1.4}, "k4-pc": {"c": "印刷代4", "k": 21, "n": 72, "r": 0.6}, "k4-ura": {"c": "インキ裏4", "k": 13, "n": 77, "r": 0.7}, "k5-bk": {"c": "備考5", "k": 68, "n": 282, "r": 2.4}, "k5-han": {"c": "版下5", "k": 6, "n": 36, "r": 0.3}, "k5-hd": {"c": "版下代5", "k": 1, "n": 11781, "r": 100.0}, "k5-ink": {"c": "インキ表5", "k": 11, "n": 61, "r": 0.5}, "k5-iro1": {"c": "色数5", "k": 3, "n": 42, "r": 0.4}, "k5-pc": {"c": "印刷代5", "k": 6, "n": 16, "r": 0.1}, "k5-ura": {"c": "インキ裏5", "k": 11, "n": 36, "r": 0.3}, "k6-bk": {"c": "備考6", "k": 21, "n": 64, "r": 0.5}, "k6-han": {"c": "版下6", "k": 5, "n": 18, "r": 0.1}, "k6-hd": {"c": "版下代6", "k": 1, "n": 11781, "r": 100.0}, "k6-ink": {"c": "インキ表6", "k": 8, "n": 34, "r": 0.3}, "k6-iro1": {"c": "色数6", "k": 3, "n": 22, "r": 0.2}, "k6-pc": {"c": "印刷代6", "k": 5, "n": 11, "r": 0.1}, "k6-ura": {"c": "インキ裏6", "k": 10, "n": 36, "r": 0.3}, "k7-bk": {"c": "備考7", "k": 19, "n": 189, "r": 1.6}, "k7-han": {"c": "版下7", "k": 1, "n": 5, "r": 0.0}, "k7-hd": {"c": "版下代7", "k": 1, "n": 11781, "r": 100.0}, "k7-ink": {"c": "インキ表7", "k": 7, "n": 26, "r": 0.2}, "k7-iro1": {"c": "色数7", "k": 4, "n": 12, "r": 0.1}, "k7-pc": {"c": "印刷代7", "k": 3, "n": 6, "r": 0.1}, "k7-ura": {"c": "インキ裏7", "k": 7, "n": 29, "r": 0.2}, "k8-bk": {"c": "備考8", "k": 17, "n": 224, "r": 1.9}, "k8-han": {"c": "版下8", "k": 0, "n": 1, "r": 0.0}, "k8-hd": {"c": "版下代8", "k": 1, "n": 11781, "r": 100.0}, "k8-ink": {"c": "インキ表8", "k": 3, "n": 11, "r": 0.1}, "k8-iro1": {"c": "色数8", "k": 2, "n": 6, "r": 0.1}, "k8-pc": {"c": "印刷代8", "k": 2, "n": 4, "r": 0.0}, "k8-ura": {"c": "インキ裏8", "k": 4, "n": 18, "r": 0.1}, "k9-bk": {"c": "備考9", "k": 24, "n": 154, "r": 1.3}, "k9-han": {"c": "版下9", "k": 0, "n": 1, "r": 0.0}, "k9-hd": {"c": "版下代9", "k": 1, "n": 11781, "r": 100.0}, "k9-ink": {"c": "インキ表9", "k": 3, "n": 15, "r": 0.1}, "k9-iro1": {"c": "色数9", "k": 1, "n": 3, "r": 0.0}, "k9-pc": {"c": "印刷代9", "k": 0, "n": 1, "r": 0.0}, "k9-ura": {"c": "インキ裏9", "k": 3, "n": 16, "r": 0.1}, "p1-am": {"c": "用紙代1", "k": 845, "n": 10289, "r": 87.3}, "p1-jit": {"c": "実用数1", "k": 315, "n": 8947, "r": 75.9}, "p1-ki": {"c": "切数1", "k": 4, "n": 8304, "r": 70.5}, "p1-kind": {"c": "紙質1", "k": 947, "n": 10378, "r": 88.1}, "p1-kom": {"c": "版下1", "k": 17, "n": 8901, "r": 75.5}, "p1-mk": {"c": "メーカー1", "k": 122, "n": 1019, "r": 8.7}, "p1-mn": {"c": "面付1", "k": 18, "n": 8944, "r": 75.9}, "p1-nm": {"c": "品名1", "k": 598, "n": 7958, "r": 67.5}, "p1-sz": {"c": "サイズ1", "k": 29, "n": 7056, "r": 59.9}, "p1-th": {"c": "FMに厚さ列なし", "k": 0, "n": -1, "r": -1}, "p1-tot": {"c": "合計数1", "k": 504, "n": 10255, "r": 87.0}, "p1-up": {"c": "用紙単価1", "k": 207, "n": 6867, "r": 58.3}, "p1-yob": {"c": "標準予備数_加減算済1", "k": 63, "n": 10200, "r": 86.6}, "p2-am": {"c": "用紙代2", "k": 247, "n": 3287, "r": 27.9}, "p2-jit": {"c": "実用数2", "k": 109, "n": 941, "r": 8.0}, "p2-ki": {"c": "切数2", "k": 4, "n": 836, "r": 7.1}, "p2-kind": {"c": "紙質2", "k": 484, "n": 3316, "r": 28.1}, "p2-kom": {"c": "版下2", "k": 10, "n": 1078, "r": 9.2}, "p2-mk": {"c": "メーカー2", "k": 34, "n": 146, "r": 1.2}, "p2-mn": {"c": "面付2", "k": 9, "n": 941, "r": 8.0}, "p2-nm": {"c": "品名2", "k": 189, "n": 1369, "r": 11.6}, "p2-sz": {"c": "サイズ2", "k": 7, "n": 838, "r": 7.1}, "p2-tot": {"c": "合計数2", "k": 163, "n": 3285, "r": 27.9}, "p2-up": {"c": "用紙単価2", "k": 67, "n": 677, "r": 5.8}, "p2-yob": {"c": "標準予備数_加減算済2", "k": 27, "n": 3304, "r": 28.1}, "p3-am": {"c": "用紙代3", "k": 126, "n": 1624, "r": 13.8}, "p3-jit": {"c": "実用数3", "k": 61, "n": 446, "r": 3.8}, "p3-ki": {"c": "切数3", "k": 3, "n": 402, "r": 3.4}, "p3-kind": {"c": "紙質3", "k": 253, "n": 1600, "r": 13.6}, "p3-kom": {"c": "版下3", "k": 11, "n": 541, "r": 4.6}, "p3-mk": {"c": "メーカー3", "k": 16, "n": 58, "r": 0.5}, "p3-mn": {"c": "面付3", "k": 7, "n": 446, "r": 3.8}, "p3-nm": {"c": "品名3", "k": 205, "n": 925, "r": 7.8}, "p3-sz": {"c": "サイズ3", "k": 3, "n": 408, "r": 3.5}, "p3-tot": {"c": "合計数3", "k": 88, "n": 1624, "r": 13.8}, "p3-up": {"c": "用紙単価3", "k": 49, "n": 314, "r": 2.7}, "p3-yob": {"c": "標準予備数_加減算済3", "k": 13, "n": 1633, "r": 13.9}, "p4-am": {"c": "用紙代4", "k": 31, "n": 419, "r": 3.6}, "p4-jit": {"c": "実用数4", "k": 25, "n": 105, "r": 0.9}, "p4-ki": {"c": "切数4", "k": 2, "n": 103, "r": 0.9}, "p4-kind": {"c": "紙質4", "k": 116, "n": 415, "r": 3.5}, "p4-kom": {"c": "版下4", "k": 9, "n": 140, "r": 1.2}, "p4-mk": {"c": "メーカー4", "k": 7, "n": 68, "r": 0.6}, "p4-mn": {"c": "面付4", "k": 5, "n": 105, "r": 0.9}, "p4-nm": {"c": "品名4", "k": 193, "n": 665, "r": 5.6}, "p4-sz": {"c": "サイズ4", "k": 2, "n": 103, "r": 0.9}, "p4-tot": {"c": "合計数4", "k": 35, "n": 419, "r": 3.6}, "p4-up": {"c": "用紙単価4", "k": 22, "n": 86, "r": 0.7}, "p4-yob": {"c": "標準予備数_加減算済4", "k": 7, "n": 419, "r": 3.6}, "p5-am": {"c": "用紙代5", "k": 9, "n": 245, "r": 2.1}, "p5-jit": {"c": "実用数5", "k": 11, "n": 24, "r": 0.2}, "p5-ki": {"c": "切数5", "k": 3, "n": 30, "r": 0.2}, "p5-kind": {"c": "紙質5", "k": 54, "n": 245, "r": 2.1}, "p5-kom": {"c": "版下5", "k": 6, "n": 36, "r": 0.3}, "p5-mk": {"c": "メーカー5", "k": 3, "n": 9, "r": 0.1}, "p5-mn": {"c": "面付5", "k": 4, "n": 24, "r": 0.2}, "p5-nm": {"c": "品名5", "k": 161, "n": 501, "r": 4.2}, "p5-sz": {"c": "サイズ5", "k": 3, "n": 27, "r": 0.2}, "p5-tot": {"c": "合計数5", "k": 12, "n": 245, "r": 2.1}, "p5-up": {"c": "用紙単価5", "k": 10, "n": 21, "r": 0.2}, "p5-yob": {"c": "標準予備数_加減算済5", "k": 7, "n": 245, "r": 2.1}, "p6-am": {"c": "用紙代6", "k": 6, "n": 167, "r": 1.4}, "p6-jit": {"c": "実用数6", "k": 5, "n": 11, "r": 0.1}, "p6-ki": {"c": "切数6", "k": 3, "n": 14, "r": 0.1}, "p6-kind": {"c": "紙質6", "k": 30, "n": 167, "r": 1.4}, "p6-kom": {"c": "版下6", "k": 5, "n": 18, "r": 0.1}, "p6-mk": {"c": "メーカー6", "k": 5, "n": 14, "r": 0.1}, "p6-mn": {"c": "面付6", "k": 3, "n": 11, "r": 0.1}, "p6-nm": {"c": "品名6", "k": 122, "n": 489, "r": 4.2}, "p6-sz": {"c": "サイズ6", "k": 2, "n": 12, "r": 0.1}, "p6-tot": {"c": "合計数6", "k": 7, "n": 167, "r": 1.4}, "p6-up": {"c": "用紙単価6", "k": 6, "n": 12, "r": 0.1}, "p6-yob": {"c": "標準予備数_加減算済6", "k": 5, "n": 167, "r": 1.4}, "p7-am": {"c": "用紙代7", "k": 6, "n": 149, "r": 1.3}, "p7-jit": {"c": "実用数7", "k": 5, "n": 9, "r": 0.1}, "p7-ki": {"c": "切数7", "k": 2, "n": 10, "r": 0.1}, "p7-kind": {"c": "紙質7", "k": 19, "n": 149, "r": 1.3}, "p7-kom": {"c": "版下7", "k": 1, "n": 5, "r": 0.0}, "p7-mk": {"c": "メーカー7", "k": 2, "n": 6, "r": 0.1}, "p7-mn": {"c": "面付7", "k": 3, "n": 9, "r": 0.1}, "p7-nm": {"c": "品名7", "k": 103, "n": 525, "r": 4.5}, "p7-sz": {"c": "サイズ7", "k": 3, "n": 10, "r": 0.1}, "p7-tot": {"c": "合計数7", "k": 7, "n": 149, "r": 1.3}, "p7-up": {"c": "用紙単価7", "k": 5, "n": 10, "r": 0.1}, "p7-yob": {"c": "標準予備数_加減算済7", "k": 3, "n": 149, "r": 1.3}, "p8-am": {"c": "用紙代8", "k": 3, "n": 25, "r": 0.2}, "p8-jit": {"c": "実用数8", "k": 3, "n": 5, "r": 0.0}, "p8-ki": {"c": "切数8", "k": 1, "n": 6, "r": 0.1}, "p8-kind": {"c": "紙質8", "k": 10, "n": 25, "r": 0.2}, "p8-kom": {"c": "版下8", "k": 0, "n": 1, "r": 0.0}, "p8-mk": {"c": "メーカー8", "k": 0, "n": 0, "r": 0.0}, "p8-mn": {"c": "面付8", "k": 1, "n": 5, "r": 0.0}, "p8-nm": {"c": "品名8", "k": 76, "n": 1028, "r": 8.7}, "p8-sz": {"c": "サイズ8", "k": 1, "n": 6, "r": 0.1}, "p8-tot": {"c": "合計数8", "k": 4, "n": 25, "r": 0.2}, "p8-up": {"c": "用紙単価8", "k": 4, "n": 8, "r": 0.1}, "p8-yob": {"c": "標準予備数_加減算済8", "k": 2, "n": 25, "r": 0.2}, "p9-am": {"c": "用紙代9", "k": 2, "n": 15, "r": 0.1}, "p9-jit": {"c": "実用数9", "k": 1, "n": 2, "r": 0.0}, "p9-ki": {"c": "切数9", "k": 2, "n": 5, "r": 0.0}, "p9-kind": {"c": "紙質9", "k": 9, "n": 15, "r": 0.1}, "p9-kom": {"c": "版下9", "k": 0, "n": 1, "r": 0.0}, "p9-mk": {"c": "メーカー9", "k": 0, "n": 0, "r": 0.0}, "p9-mn": {"c": "面付9", "k": 1, "n": 2, "r": 0.0}, "p9-nm": {"c": "品名9", "k": 80, "n": 588, "r": 5.0}, "p9-sz": {"c": "サイズ9", "k": 2, "n": 5, "r": 0.0}, "p9-tot": {"c": "合計数9", "k": 2, "n": 15, "r": 0.1}, "p9-up": {"c": "用紙単価9", "k": 3, "n": 5, "r": 0.0}, "p9-yob": {"c": "標準予備数_加減算済9", "k": 2, "n": 15, "r": 0.1}, "q1-a": {"c": "見積金額1", "k": 117, "n": 588, "r": 5.0}, "q1-d": {"c": "見積日1", "k": 10, "n": 11781, "r": 100.0}, "q1-q": {"c": "見積数量1", "k": 40, "n": 588, "r": 5.0}, "q1-u": {"c": "見積単価1", "k": 104, "n": 588, "r": 5.0}, "q1-v": {"c": "見積業者1", "k": 1, "n": 614, "r": 5.2}, "q2-v": {"c": "見積業者2", "k": 1, "n": 70, "r": 0.6}, "q3-v": {"c": "見積業者3", "k": 1, "n": 19, "r": 0.2}, "q4-v": {"c": "見積業者4", "k": 1, "n": 6, "r": 0.1}, "q5-v": {"c": "見積業者5", "k": 0, "n": 0, "r": 0.0}, "v1-n": {"c": "FMに外注先列なし", "k": 0, "n": -1, "r": -1}, "v2-n": {"c": "FMに外注先列なし", "k": 0, "n": -1, "r": -1}, "v3-n": {"c": "FMに外注先列なし", "k": 0, "n": -1, "r": -1}, "v4-n": {"c": "FMに外注先列なし", "k": 0, "n": -1, "r": -1}, "w1-bk": {"c": "備考1", "k": 331, "n": 2786, "r": 23.6}, "w1-fil": {"c": "ファイル穴1", "k": 7, "n": 479, "r": 4.1}, "w1-kpn": {"c": "マージナルパンチa1", "k": 1, "n": 96, "r": 0.8}, "w1-tm1": {"c": "中間横ミシン1", "k": 4, "n": 79, "r": 0.7}, "w1-ym1": {"c": "横ミシン1", "k": 17, "n": 716, "r": 6.1}, "w1-ym2": {"c": "横ミシン1", "k": 17, "n": 716, "r": 6.1}, "w1-yst": {"c": "縦ミシン1", "k": 15, "n": 282, "r": 2.4}, "w2-bk": {"c": "備考2", "k": 164, "n": 1093, "r": 9.3}, "w2-fil": {"c": "ファイル穴2", "k": 6, "n": 217, "r": 1.8}, "w2-kpn": {"c": "マージナルパンチa2", "k": 1, "n": 62, "r": 0.5}, "w2-tm1": {"c": "中間横ミシン2", "k": 2, "n": 3, "r": 0.0}, "w2-ym1": {"c": "横ミシン2", "k": 3, "n": 55, "r": 0.5}, "w2-ym2": {"c": "横ミシン2", "k": 3, "n": 55, "r": 0.5}, "w2-yst": {"c": "縦ミシン2", "k": 10, "n": 212, "r": 1.8}, "w3-bk": {"c": "備考3", "k": 104, "n": 472, "r": 4.0}, "w3-fil": {"c": "ファイル穴3", "k": 5, "n": 135, "r": 1.1}, "w3-kpn": {"c": "マージナルパンチa3", "k": 1, "n": 35, "r": 0.3}, "w3-tm1": {"c": "中間横ミシン3", "k": 1, "n": 2, "r": 0.0}, "w3-ym1": {"c": "横ミシン3", "k": 2, "n": 27, "r": 0.2}, "w3-ym2": {"c": "横ミシン3", "k": 2, "n": 27, "r": 0.2}, "w3-yst": {"c": "縦ミシン3", "k": 9, "n": 100, "r": 0.8}, "w4-bk": {"c": "備考4", "k": 77, "n": 347, "r": 3.0}, "w4-fil": {"c": "ファイル穴4", "k": 3, "n": 50, "r": 0.4}, "w4-kpn": {"c": "マージナルパンチa4", "k": 1, "n": 7, "r": 0.1}, "w4-tm1": {"c": "中間横ミシン4", "k": 0, "n": 0, "r": 0.0}, "w4-ym1": {"c": "横ミシン4", "k": 1, "n": 5, "r": 0.0}, "w4-ym2": {"c": "横ミシン4", "k": 1, "n": 5, "r": 0.0}, "w4-yst": {"c": "縦ミシン4", "k": 4, "n": 30, "r": 0.2}, "w5-bk": {"c": "備考5", "k": 68, "n": 282, "r": 2.4}, "w5-fil": {"c": "ファイル穴5", "k": 1, "n": 10, "r": 0.1}, "w5-kpn": {"c": "マージナルパンチa5", "k": 1, "n": 4, "r": 0.0}, "w5-tm1": {"c": "中間横ミシン5", "k": 0, "n": 0, "r": 0.0}, "w5-ym1": {"c": "横ミシン5", "k": 0, "n": 0, "r": 0.0}, "w5-ym2": {"c": "横ミシン5", "k": 0, "n": 0, "r": 0.0}, "w5-yst": {"c": "縦ミシン5", "k": 3, "n": 8, "r": 0.1}, "w6-bk": {"c": "備考6", "k": 21, "n": 64, "r": 0.5}, "w6-fil": {"c": "ファイル穴6", "k": 0, "n": 0, "r": 0.0}, "w6-kpn": {"c": "マージナルパンチa6", "k": 1, "n": 2, "r": 0.0}, "w6-tm1": {"c": "中間横ミシン6", "k": 0, "n": 0, "r": 0.0}, "w6-ym1": {"c": "横ミシン6", "k": 0, "n": 0, "r": 0.0}, "w6-ym2": {"c": "横ミシン6", "k": 0, "n": 0, "r": 0.0}, "w6-yst": {"c": "縦ミシン6", "k": 2, "n": 4, "r": 0.0}, "w7-bk": {"c": "備考7", "k": 19, "n": 189, "r": 1.6}, "w7-fil": {"c": "ファイル穴7", "k": 0, "n": 0, "r": 0.0}, "w7-kpn": {"c": "マージナルパンチa7", "k": 0, "n": 0, "r": 0.0}, "w7-tm1": {"c": "中間横ミシン7", "k": 0, "n": 0, "r": 0.0}, "w7-ym1": {"c": "横ミシン7", "k": 0, "n": 0, "r": 0.0}, "w7-ym2": {"c": "横ミシン7", "k": 0, "n": 0, "r": 0.0}, "w7-yst": {"c": "縦ミシン7", "k": 0, "n": 0, "r": 0.0}, "w8-bk": {"c": "備考8", "k": 17, "n": 224, "r": 1.9}, "w8-fil": {"c": "ファイル穴8", "k": 0, "n": 0, "r": 0.0}, "w8-kpn": {"c": "マージナルパンチa8", "k": 0, "n": 0, "r": 0.0}, "w8-tm1": {"c": "中間横ミシン8", "k": 0, "n": 0, "r": 0.0}, "w8-ym1": {"c": "横ミシン8", "k": 0, "n": 0, "r": 0.0}, "w8-ym2": {"c": "横ミシン8", "k": 0, "n": 0, "r": 0.0}, "w8-yst": {"c": "縦ミシン8", "k": 0, "n": 0, "r": 0.0}, "w9-bk": {"c": "備考9", "k": 24, "n": 154, "r": 1.3}, "w9-fil": {"c": "ファイル穴9", "k": 0, "n": 0, "r": 0.0}, "w9-kpn": {"c": "マージナルパンチa9", "k": 0, "n": 0, "r": 0.0}, "w9-tm1": {"c": "中間横ミシン9", "k": 0, "n": 0, "r": 0.0}, "w9-ym1": {"c": "横ミシン9", "k": 0, "n": 0, "r": 0.0}, "w9-ym2": {"c": "横ミシン9", "k": 0, "n": 0, "r": 0.0}, "w9-yst": {"c": "縦ミシン9", "k": 0, "n": 0, "r": 0.0}};
+
+function _usageClass_(v){
+  if(!v) return "";
+  if(v.r < 0)   return "u-none";   // 過去データに対応する列が無い
+  if(v.n === 0) return "u-dead";   // 2年間1件も入力なし
+  if(v.r < 1)   return "u-rare";
+  if(v.r < 10)  return "u-low";
+  if(v.r < 50)  return "u-warm";
+  return "u-hot";
+}
+var _USENAME_ = { 'u-hot':'よく使う', 'u-warm':'ときどき', 'u-low':'たまに',
+                  'u-rare':'ほとんど使わない', 'u-dead':'2年間1件もなし', 'u-none':'過去データに無い' };
+var CNT = {};
+function applyUsage(){
+  CNT = {};
+  Object.keys(FMUSE).forEach(function(id){
+    var el = document.getElementById(id); if(!el) return;
+    var v = FMUSE[id], c = _usageClass_(v);
+    el.classList.remove("u-hot","u-warm","u-low","u-rare","u-dead","u-none");
+    if(c){ el.classList.add(c); if(!CNT[c]) CNT[c]=0; CNT[c]++; }
+    el.title = (v.r < 0)
+      ? ("過去データに対応する列がありません（" + v.c + "）")
+      : (_USENAME_[c] + "：過去2年 " + FM_TOTAL.toLocaleString() + " 件中 " + v.n.toLocaleString()
+         + " 件に入力あり（" + v.r + "%）／FMの列: " + v.c
+         + (v.k <= 1 && v.n > 0 ? "　※全件同じ値＝設定値で、1件ずつ入れる項目ではない" : ""));
+  });
+  var e = document.getElementById("ulegend-cnt");
+  if(e) e.textContent = "画面の項目: よく使う " + (CNT["u-hot"]||0) + " ／ ときどき " + (CNT["u-warm"]||0)
+      + " ／ たまに " + (CNT["u-low"]||0) + " ／ ほとんど無し " + (CNT["u-rare"]||0)
+      + " ／ 0件 " + (CNT["u-dead"]||0) + " ／ 照合不可 " + (CNT["u-none"]||0);
+}
+function toggleUsage(){
+  var on = !document.body.classList.contains("uc");
+  document.body.classList.toggle("uc", on);
+  try{ localStorage.setItem("fm_juchu_usage_color", on ? "1" : "0"); }catch(e){}
+  var b = document.getElementById("ucbtn");
+  if(b) b.textContent = on ? "色分けを消す" : "使用率で色分け";
+}
+
+// ===== 過去実績(FileMaker 2024/2025) =====
+// 件数が多く得意先名も含むので localStorage ではなく端末のIndexedDBに入れる。
+// 取り込んだデータは端末の中だけ。クラウドにも公開リポジトリにも出さない。
+var PASTDB = null;
+function pastOpen(cb, _retry){
+  if(PASTDB && PASTDB.objectStoreNames.contains('rows')){ cb(PASTDB); return; }
+  // 注意: IndexedDBのkeyPath/インデックスは識別子しか使えないため、
+  // 'f-denpyo' のようなハイフン入りのキーは指定できない。
+  // 検索は取込時に作る _s（1本の検索用文字列）をカーソルで走査して行う。
+  var rq = indexedDB.open('fm_juchu_past', 2);
+  rq.onupgradeneeded = function(e){
+    var db = e.target.result;
+    if(!db.objectStoreNames.contains('rows')) db.createObjectStore('rows', {autoIncrement:true});
+  };
+  rq.onsuccess = function(e){
+    var db = e.target.result;
+    if(!db.objectStoreNames.contains('rows')){
+      // 以前の不具合で中身のないDBが残っている場合は作り直す
+      db.close(); PASTDB = null;
+      if(_retry){ alert('この端末では過去実績の保存が使えません'); return; }
+      var del = indexedDB.deleteDatabase('fm_juchu_past');
+      del.onsuccess = function(){ pastOpen(cb, true); };
+      del.onerror   = function(){ alert('この端末では過去実績の保存が使えません'); };
+      return;
+    }
+    PASTDB = db; cb(db);
+  };
+  rq.onerror = function(){ alert('この端末では過去実績の保存が使えません'); };
+}
+// 検索用の文字列(伝票番号・製品名・得意先コード・ユーザー名をつないだもの)
+function _pastKey_(r){
+  return [r['f-denpyo'], r['f-item'], r['f-custcd'], r['f-user'], r['f-commcd'], r['f-selfcd']]
+         .filter(Boolean).join(' ');
+}
+function pastCount(){
+  pastOpen(function(db){
+    var tx = db.transaction('rows','readonly').objectStore('rows').count();
+    tx.onsuccess = function(){
+      var n = tx.result;
+      document.getElementById('past-n').textContent =
+        n ? (n.toLocaleString() + ' 件 取込済み') : '未取込（📁取り込む から実績JSONを入れてください）';
+      if(n && REF_ON) refresh_ref();
+    };
+  });
+}
+function importPast(file){
+  if(!file) return;
+  var msg = document.getElementById('past-msg');
+  msg.textContent = '読み込み中…';
+  var rd = new FileReader();
+  rd.onload = function(){
+    var data;
+    try{ data = JSON.parse(rd.result); }
+    catch(e){ msg.textContent = '❌ JSONとして読めません'; return; }
+    var rows = data.rows || data;
+    if(!Array.isArray(rows)){ msg.textContent = '❌ 形式が違います'; return; }
+    // 1万件超をまとめて入れるとブラウザが固まって見えるので、分けて入れて進み具合を出す
+    pastOpen(function(db){
+      try{
+        var cl = db.transaction('rows','readwrite').objectStore('rows').clear();
+        cl.onerror = function(){ msg.textContent = '❌ 前のデータを消せませんでした'; };
+      }catch(e){ msg.textContent = '❌ 取り込めません: ' + e; return; }
+      var i = 0, CH = 1000;
+      function step(){
+        if(i >= rows.length){
+          msg.textContent = '✅ ' + rows.length.toLocaleString() + ' 件を取り込みました';
+          pastCount(); refresh_ref();
+          return;
+        }
+        var tx = db.transaction('rows','readwrite'), st = tx.objectStore('rows');
+        var end = Math.min(i + CH, rows.length);
+        for(var k = i; k < end; k++){
+          var r = rows[k];
+          if(r && typeof r === 'object'){ r._s = _pastKey_(r); st.put(r); }
+        }
+        tx.oncomplete = function(){
+          i = end;
+          msg.textContent = '取り込み中… ' + i.toLocaleString() + ' / ' + rows.length.toLocaleString() + ' 件';
+          setTimeout(step, 0);
+        };
+        tx.onabort = function(){ msg.textContent = '❌ 取り込みが中断されました（' + ((tx.error && tx.error.name) || '原因不明') + '）'; };
+        tx.onerror = function(){ msg.textContent = '❌ 保存に失敗しました（' + ((tx.error && tx.error.name) || '容量不足の可能性') + '）'; };
+      }
+      step();
+    });
+  };
+  rd.readAsText(file, 'utf-8');
+}
+function clearPast(){
+  if(!confirm('この端末に取り込んだ過去実績を消します。よろしいですか？\n（元のJSONファイルは残ります）')) return;
+  pastOpen(function(db){
+    var tx = db.transaction('rows','readwrite');
+    tx.objectStore('rows').clear();
+    tx.oncomplete = function(){ pastCount(); document.getElementById('past-box').style.display='none';
+      document.getElementById('past-msg').textContent = '消しました'; };
+  });
+}
+var PASTHIT = [];
+function searchPast(){
+  var q = (document.getElementById('past-q').value||'').trim();
+  var box = document.getElementById('past-box'), msg = document.getElementById('past-msg');
+  if(!q){ box.style.display='none'; msg.textContent=''; return; }
+  pastOpen(function(db){
+    var hits = [], cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
+    cur.onsuccess = function(e){
+      var c = e.target.result;
+      if(c && hits.length < 200){
+        var r = c.value;
+        var hay = r._s || _pastKey_(r);
+        if(hay.indexOf(q) >= 0) hits.push(r);
+        c.continue(); return;
+      }
+      PASTHIT = hits;
+      var h = '<thead><tr><th>伝票番号</th><th>起票日</th><th>得意先コード</th><th>製品名</th>'
+            + '<th>数量</th><th>単価</th><th>金額</th><th>納期</th></tr></thead><tbody>';
+      if(!hits.length){ h += '<tr><td colspan="8" style="padding:12px;color:#94a3b8">見つかりません</td></tr>'; }
+      hits.forEach(function(r,i){
+        h += '<tr onclick="pickPast('+i+')">'
+          + '<td>'+(r['f-denpyo']||'')+'</td><td>'+(r['f-date']||'')+'</td>'
+          + '<td>'+(r['f-custcd']||'')+'</td><td>'+(r['f-item']||'')+'</td>'
+          + '<td style="text-align:right">'+(r['f-lotset']||'')+'</td>'
+          + '<td style="text-align:right">'+(r['f-price']||'')+'</td>'
+          + '<td style="text-align:right">'+(r['f-amt']||'')+'</td>'
+          + '<td>'+(r['f-due']||'')+'</td></tr>';
+      });
+      box.innerHTML = '<table id="past-tbl">'+h+'</tbody></table>';
+      box.style.display = 'block';
+      msg.textContent = hits.length ? (hits.length + '件'+(hits.length>=200?'以上':'')+'（行をクリックで流し込み）') : '';
+    };
+  });
+}
+// 過去1件を画面に流し込む(＝リピート)。伝票番号だけ空にして新規として起票する。
+function usePast(i){
+  var r = PASTHIT[i]; if(!r) return;
+  Object.keys(r).forEach(function(k){
+    if(k.charAt(0) === '_') return;
+    var el = document.getElementById(k); if(el) s(k, r[k]);
+  });
+  s('f-denpyo','');
+  s('f-lotno', r['f-denpyo']||'');
+  s('f-prevdate', r['f-date']||'');
+  s('f-date', new Date().toISOString().slice(0,10));
+  var sel=document.getElementById('f-lotkind'); if(sel) sel.value='リピート';
+  try{ calc(); }catch(e){}
+  try{ onInk(); }catch(e){}
+  document.getElementById('msg').textContent =
+    '過去実績（'+(r['f-denpyo']||'')+' / '+(r['f-date']||'')+'）から流し込みました。伝票番号と納期を入れてください。';
+  window.scrollTo(0,0);
+}
+
+// ===== 検索モード(FileMakerのFind相当) =====
+var FIND_ON = false, FIND_BAK = null;
+function _findFields_(){
+  return Array.prototype.slice.call(
+    document.querySelectorAll('input[id],select[id],textarea[id]')
+  ).filter(function(e){
+    return /-/.test(e.id) && e.type !== 'file' && e.type !== 'checkbox'
+        && e.id.indexOf('past-') !== 0;
+  });
+}
+function toggleFind(){
+  FIND_ON = !FIND_ON;
+  document.body.classList.toggle('findmode', FIND_ON);
+  var b = document.getElementById('findbtn');
+  var box = document.getElementById('past-box');
+  if(FIND_ON){
+    // 入力中の内容は預かっておき、検索をやめたら元に戻す
+    FIND_BAK = {};
+    _findFields_().forEach(function(e){ FIND_BAK[e.id] = e.value; e.value = ''; });
+    if(b) b.textContent = '検索モード中';
+    document.getElementById('find-msg').textContent = '';
+    var c = document.getElementById('f-cust'); if(c) c.focus();
+  }else{
+    if(FIND_BAK) _findFields_().forEach(function(e){
+      if(Object.prototype.hasOwnProperty.call(FIND_BAK, e.id)) e.value = FIND_BAK[e.id];
+    });
+    FIND_BAK = null;
+    if(b) b.textContent = '検索モード';
+    if(box) box.style.display = 'none';
+  }
+}
+function runFind(){
+  var cond = [];
+  _findFields_().forEach(function(e){
+    var v = (e.value || '').trim();
+    if(v) cond.push([e.id, v]);
+  });
+  var msg = document.getElementById('find-msg');
+  if(!cond.length){ msg.textContent = '探したい欄に入力してください'; return; }
+  msg.textContent = '探しています…';
+  // 端末に保存した入力(REC)と、取り込んだ過去実績(IndexedDB)の両方を探す
+  var hits = [];
+  (REC || []).forEach(function(rec){
+    var f = rec.f || {};
+    if(cond.every(function(c){ return String(f[c[0]] || '').indexOf(c[1]) >= 0; })){
+      var r = {}; Object.keys(f).forEach(function(k){ r[k] = f[k]; });
+      r._src = 'この端末'; hits.push(r);
+    }
+  });
+  pastOpen(function(db){
+    var cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
+    cur.onsuccess = function(e){
+      var c = e.target.result;
+      if(c && hits.length < 300){
+        var r = c.value;
+        if(cond.every(function(q){ return String(r[q[0]] || '').indexOf(q[1]) >= 0; })){
+          r._src = '過去実績'; hits.push(r);
+        }
+        c.continue(); return;
+      }
+      PASTHIT = hits;
+      navSetFrom(hits, -1);
+      _renderHits_(hits, cond.map(function(q){ return q[1]; }).join(' / '));
+    };
+  });
+}
+function _renderHits_(hits, label){
+  var box = document.getElementById('past-box');
+  var h = '<thead><tr><th>どこ</th><th>伝票番号</th><th>起票日</th><th>得意先コード</th><th>製品名</th>'
+        + '<th>数量</th><th>単価</th><th>金額</th><th>納期</th></tr></thead><tbody>';
+  if(!hits.length) h += '<tr><td colspan="9" style="padding:12px;color:#94a3b8">見つかりません</td></tr>';
+  hits.forEach(function(r,i){
+    h += '<tr onclick="pickPast('+i+')">'
+      + '<td>'+(r._src||'過去実績')+'</td>'
+      + '<td>'+(r['f-denpyo']||'')+'</td><td>'+(r['f-date']||'')+'</td>'
+      + '<td>'+(r['f-custcd']||'')+'</td><td>'+(r['f-item']||'')+'</td>'
+      + '<td style="text-align:right">'+(r['f-lotset']||'')+'</td>'
+      + '<td style="text-align:right">'+(r['f-price']||'')+'</td>'
+      + '<td style="text-align:right">'+(r['f-amt']||'')+'</td>'
+      + '<td>'+(r['f-due']||'')+'</td></tr>';
+  });
+  box.innerHTML = '<table id="past-tbl">'+h+'</tbody></table>';
+  box.style.display = 'block';
+  document.getElementById('find-msg').textContent =
+    hits.length ? ('「'+label+'」で '+hits.length+'件'+(hits.length>=300?'以上':'')+'（行をクリックで開く）')
+                : ('「'+label+'」は見つかりません');
+}
+// 検索モードなら「開く」、そうでなければ「リピート起票」
+function pickPast(i){
+  if(FIND_ON) openPast(i); else usePast(i);
+}
+function openPast(i){
+  var r = PASTHIT[i]; if(!r) return;
+  if(NAVLIST !== PASTHIT){ navSetFrom(PASTHIT, i); } else { NAVIDX = i; _navShow_(); }
+  FIND_ON = false;
+  document.body.classList.remove('findmode');
+  FIND_BAK = null;
+  var b = document.getElementById('findbtn'); if(b) b.textContent = '検索モード';
+  _findFields_().forEach(function(e){ e.value = ''; });
+  Object.keys(r).forEach(function(k){
+    if(k.charAt(0) === '_') return;
+    if(document.getElementById(k)) s(k, r[k]);
+  });
+  try{ applyRowVis(); }catch(e){}
+  try{ calc(); }catch(e){}
+  try{ onInk(); }catch(e){}
+  document.getElementById('past-box').style.display = 'none';
+  document.getElementById('msg').textContent =
+    '検索結果（'+(r['f-denpyo']||'')+'）を開きました。そのまま直すか、Repeat登録で新規にできます。';
+  window.scrollTo(0,0);
+}
+
+// ===== 表紙・パーツ数で明細行を出し分ける =====
+// 明細は 01〜09 がパーツ、その下の行が表紙。
+// パーツ数を入れるとその数だけ行が出て、表紙=あり のときだけ表紙行が出る。
+// (Hub本体 index.html の帳票フォームも 表紙 / 1パーツ目… でパーツを数えている)
+function applyRowVis(){
+  var n = parseInt((document.getElementById('f-parts') || {}).value, 10);
+  var all = !(n > 0);                 // 未入力なら全部出す(今までどおり)
+  if(n > 9) n = 9;
+  var cover = (document.getElementById('f-cover') || {}).value === 'あり';
+  document.querySelectorAll('table.g tr.r-n').forEach(function(tr){
+    var i = parseInt(tr.getAttribute('data-n'), 10);
+    tr.classList.toggle('off', !all && i > n);
+  });
+  document.querySelectorAll('table.g tr.r-cover').forEach(function(tr){
+    tr.classList.toggle('off', !cover);
+  });
+}
+
+// ===== レイアウト編集（行・表の並べ替え） =====
+// 自由配置ではなく「入れ替え」方式にしている。自由配置は行の折返しや明細表と相性が悪く、
+// 一度崩れると現場で直せなくなるため。並びは端末ごとに保存する。
+var LAYKEY = 'fm_juchu_layout_v1';
+var LAY_ON = false;
+// 並べ替えできる場所: [キー, 親要素のセレクタ, 動かす単位のセレクタ]
+var LAY_ZONES = [
+  ['hdr',  '.hdr-l',        ':scope > .row'],
+  ['sect', '.panebox',      ':scope > .sect'],
+  ['btmL', '.btm .colL',    ':scope > .row'],
+  ['btmM', '.btm .colM',    ':scope > .row'],
+  ['btmR', '.btm .colR',    ':scope > .row']
+];
+function _layEach_(fn){
+  LAY_ZONES.forEach(function(z){
+    var box = document.querySelector(z[1]); if(!box) return;
+    fn(z[0], box, Array.prototype.slice.call(box.querySelectorAll(z[2])));
+  });
+}
+// 最初のDOM順で固定キーを振る（並べ替えても変わらない＝保存の目印になる）
+function initLayout(){
+  _layEach_(function(key, box, items){
+    items.forEach(function(el, i){ if(!el.dataset.lay) el.dataset.lay = key + '-' + i; });
+  });
+  applySavedLayout();
+}
+function applySavedLayout(){
+  var saved = null;
+  try{ saved = JSON.parse(localStorage.getItem(LAYKEY) || 'null'); }catch(e){}
+  if(!saved) return;
+  _layEach_(function(key, box, items){
+    var order = saved[key]; if(!Array.isArray(order)) return;
+    var byId = {};
+    items.forEach(function(el){ byId[el.dataset.lay] = el; });
+    // 保存された順に並べ直す。保存に無い要素（後から増えた行）は末尾に残る
+    order.forEach(function(id){ if(byId[id]) box.appendChild(byId[id]); });
+  });
+}
+function saveLayout(){
+  var out = {};
+  _layEach_(function(key, box, items){
+    out[key] = items.map(function(el){ return el.dataset.lay; });
+  });
+  try{ localStorage.setItem(LAYKEY, JSON.stringify(out)); }catch(e){}
+  var m = document.getElementById('lay-msg');
+  if(m) m.textContent = '並びを保存しました';
+}
+function resetLayout(){
+  if(!confirm('並び・項目名・幅を最初の状態に戻します。よろしいですか？')) return;
+  try{ localStorage.removeItem(LAYKEY); localStorage.removeItem(LBLKEY);
+       localStorage.removeItem(WIDKEY); }catch(e){}
+  location.reload();
+}
+var _layDrag = null;
+function _layBind_(el){
+  if(el._layBound) return;
+  el._layBound = true;
+  el.addEventListener('dragstart', function(e){
+    if(!LAY_ON){ e.preventDefault(); return; }
+    _layDrag = el; el.classList.add('dragging');
+    try{ e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', el.dataset.lay || ''); }catch(x){}
+  });
+  el.addEventListener('dragend', function(){
+    el.classList.remove('dragging');
+    document.querySelectorAll('[data-lay].over').forEach(function(o){ o.classList.remove('over'); });
+    _layDrag = null;
+  });
+  el.addEventListener('dragover', function(e){
+    if(!LAY_ON || !_layDrag || _layDrag === el) return;
+    if(_layDrag.parentElement !== el.parentElement) return;  // 同じ枠の中だけ
+    e.preventDefault();
+    el.classList.add('over');
+  });
+  el.addEventListener('dragleave', function(){ el.classList.remove('over'); });
+  el.addEventListener('drop', function(e){
+    if(!LAY_ON || !_layDrag || _layDrag === el) return;
+    if(_layDrag.parentElement !== el.parentElement) return;
+    e.preventDefault();
+    el.classList.remove('over');
+    var box = el.parentElement;
+    var items = Array.prototype.slice.call(box.children);
+    // つかんだ行が下から来たなら上に、上から来たなら下に入れる
+    if(items.indexOf(_layDrag) < items.indexOf(el)) box.insertBefore(_layDrag, el.nextSibling);
+    else box.insertBefore(_layDrag, el);
+    saveLayout();
+  });
+}
+function toggleLayout(){
+  LAY_ON = !LAY_ON;
+  document.body.classList.toggle('laymode', LAY_ON);
+  var b = document.getElementById('laybtn');
+  if(b) b.textContent = LAY_ON ? 'レイアウト編集中' : 'レイアウト編集';
+  _layEach_(function(key, box, items){
+    items.forEach(function(el){
+      el.setAttribute('draggable', LAY_ON ? 'true' : 'false');
+      _layBind_(el);
+    });
+  });
+  _labelEdit_(LAY_ON);
+  _lockInputs_(LAY_ON);
+  var m = document.getElementById('lay-msg');
+  if(m) m.textContent = LAY_ON ? 'つかんで入れ替え／項目名はクリックで書き換え' : '';
+}
+
+// ===== 項目名(文字)の書き換え =====
+// 変えた文字は端末ごとに保存する。並びと同じく〔元に戻す〕で初期状態へ。
+var LBLKEY = 'fm_juchu_labels_v1';
+function _lblTargets_(){
+  return Array.prototype.slice.call(
+    document.querySelectorAll('.lb, .secttl, table.g th')
+  ).filter(function(e){
+    // 空の見出し(行番号の上など)は対象外
+    return (e.textContent || '').trim() !== '';
+  });
+}
+function initLabels(){
+  var n = 0;
+  _lblTargets_().forEach(function(e){
+    if(!e.dataset.lbl){ e.dataset.lbl = 'L' + n; e.dataset.lbl0 = e.innerHTML; }
+    n++;
+  });
+  applySavedLabels();
+}
+function applySavedLabels(){
+  var saved = null;
+  try{ saved = JSON.parse(localStorage.getItem(LBLKEY) || 'null'); }catch(e){}
+  if(!saved) return;
+  _lblTargets_().forEach(function(e){
+    var v = saved[e.dataset.lbl];
+    if(typeof v === 'string' && v !== '') e.textContent = v;
+  });
+}
+function saveLabels(){
+  var out = {};
+  _lblTargets_().forEach(function(e){
+    var now = (e.textContent || '').trim();
+    var org = (e.dataset.lbl0 || '').replace(/<[^>]*>/g, '').trim();
+    if(now && now !== org) out[e.dataset.lbl] = now;
+  });
+  try{ localStorage.setItem(LBLKEY, JSON.stringify(out)); }catch(e){}
+  var m = document.getElementById('lay-msg');
+  if(m) m.textContent = '項目名を保存しました';
+}
+function _labelEdit_(on){
+  _lblTargets_().forEach(function(e){
+    if(on){
+      e.setAttribute('contenteditable', 'true');
+      e.setAttribute('draggable', 'false');
+      if(!e._lblBound){
+        e._lblBound = true;
+        e.addEventListener('blur', saveLabels);
+        e.addEventListener('keydown', function(ev){
+          if(ev.key === 'Enter'){ ev.preventDefault(); e.blur(); }
+        });
+      }
+    }else{
+      e.removeAttribute('contenteditable');
+    }
+  });
+}
+
+// ===== 幅の変更（入力欄・明細表の列） =====
+// input には CSS の resize が効かないので、右端10pxの押下を拾って自前で伸縮させる。
+var WIDKEY = 'fm_juchu_widths_v1';
+var _rsz = null;
+function _widKeyOf_(el){
+  if(el.id) return '#' + el.id;
+  // 表の見出しは「何番目の表の何列目か」で覚える
+  var th = el.closest ? el.closest('th') : null;
+  if(th){
+    var tbl = th.closest('table');
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('table.g'));
+    var row = th.parentElement;
+    return 'th:' + tabs.indexOf(tbl) + ':' + Array.prototype.indexOf.call(row.children, th);
+  }
+  return null;
+}
+function applySavedWidths(){
+  var saved = null;
+  try{ saved = JSON.parse(localStorage.getItem(WIDKEY) || 'null'); }catch(e){}
+  if(!saved) return;
+  Object.keys(saved).forEach(function(k){
+    var w = saved[k];
+    if(k.charAt(0) === '#'){
+      var el = document.getElementById(k.slice(1));
+      if(el){ el.style.width = w + 'px'; el.style.flex = '0 0 ' + w + 'px'; }
+    }else{
+      var p = k.split(':');
+      var tbl = document.querySelectorAll('table.g')[parseInt(p[1], 10)];
+      if(!tbl) return;
+      var th = tbl.querySelectorAll('tr')[0];
+      if(th && th.children[parseInt(p[2], 10)]) th.children[parseInt(p[2], 10)].style.width = w + 'px';
+    }
+  });
+}
+function _saveWidth_(key, w){
+  var saved = {};
+  try{ saved = JSON.parse(localStorage.getItem(WIDKEY) || '{}'); }catch(e){}
+  saved[key] = Math.round(w);
+  try{ localStorage.setItem(WIDKEY, JSON.stringify(saved)); }catch(e){}
+  var m = document.getElementById('lay-msg');
+  if(m) m.textContent = '幅を保存しました（' + Math.round(w) + 'px）';
+}
+function initWidths(){
+  applySavedWidths();
+  document.addEventListener('mousedown', function(e){
+    if(!LAY_ON) return;
+    var el = e.target;
+    var isIn = el.classList && el.classList.contains('in') && el.tagName === 'INPUT';
+    var isTh = el.tagName === 'TH';
+    if(!isIn && !isTh) return;
+    var r = el.getBoundingClientRect();
+    if(e.clientX < r.right - 10) return;          // 右端10pxだけが「つまみ」
+    var key = _widKeyOf_(el); if(!key) return;
+    e.preventDefault();
+    el.classList.add('rsz');
+    _rsz = { el: el, key: key, x0: e.clientX, w0: r.width, isTh: isTh };
+  }, true);
+  document.addEventListener('mousemove', function(e){
+    if(!_rsz) return;
+    var w = Math.max(24, _rsz.w0 + (e.clientX - _rsz.x0));
+    if(_rsz.isTh){ _rsz.el.style.width = w + 'px'; }
+    else { _rsz.el.style.width = w + 'px'; _rsz.el.style.flex = '0 0 ' + w + 'px'; }
+  });
+  document.addEventListener('mouseup', function(){
+    if(!_rsz) return;
+    _saveWidth_(_rsz.key, _rsz.el.getBoundingClientRect().width);
+    _rsz.el.classList.remove('rsz');
+    _rsz = null;
+  });
+}
+// 編集中は打ち込みを止める（幅つまみは掴めるようにしておくため readonly を使う）
+function _lockInputs_(on){
+  document.querySelectorAll('input.in, table.g td input, textarea').forEach(function(el){
+    if(on) el.setAttribute('readonly', 'readonly'); else el.removeAttribute('readonly');
+  });
+}
+
+// ===== レコード送り（◀ 前 / 次 ▶）=====
+// 検索結果があればその中を、無ければ取り込んだ過去実績ぜんぶを順に送る。
+var NAVLIST = [], NAVIDX = -1;
+function _navShow_(){
+  var e = document.getElementById('nav-pos');
+  if(!e) return;
+  // まだどれも開いていないときは 0 ではなく – と出す
+  e.textContent = !NAVLIST.length ? '–'
+                : (NAVIDX < 0 ? ('– / ' + NAVLIST.length)
+                              : ((NAVIDX + 1) + ' / ' + NAVLIST.length));
+}
+function navSetFrom(list, idx){
+  NAVLIST = list || []; NAVIDX = (typeof idx === 'number') ? idx : -1;
+  _navShow_();
+}
+function navGo(d){
+  if(!NAVLIST.length){
+    // まだ何も選んでいないときは、取り込んだ実績を起票日順に読み込む
+    pastOpen(function(db){
+      var all = [], cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
+      cur.onsuccess = function(e){
+        var c = e.target.result;
+        if(c){ all.push(c.value); c.continue(); return; }
+        if(!all.length){ alert('先に📁から過去実績を取り込んでください'); return; }
+        all.sort(function(a,b){ return String(a['f-date']||'').localeCompare(String(b['f-date']||'')); });
+        PASTHIT = all; navSetFrom(all, d > 0 ? -1 : all.length);
+        navGo(d);
+      };
+    });
+    return;
+  }
+  var i = NAVIDX + d;
+  if(i < 0){ i = 0; }
+  if(i > NAVLIST.length - 1){ i = NAVLIST.length - 1; }
+  if(i === NAVIDX && NAVIDX >= 0){
+    var m = document.getElementById('msg');
+    if(m) m.textContent = (d > 0 ? '最後のレコードです' : '最初のレコードです');
+    return;
+  }
+  NAVIDX = i; _navShow_();
+  PASTHIT = NAVLIST;
+  openPast(NAVIDX);
+}
+
+// ===== 実績を見ながら入力 =====
+// いま入力中の得意先コード・製品名に近い過去実績を並べて出す。
+// 同じ品物を前回いくらで・どんな仕様で作ったかを見ながら打てるようにするため。
+var REF_ON = false;
+function toggleRef(){
+  REF_ON = !REF_ON;
+  document.body.classList.toggle('refmode', REF_ON);
+  var b = document.getElementById('refbtn');
+  if(b) b.textContent = REF_ON ? '実績を閉じる' : '実績を見ながら';
+  try{ localStorage.setItem('fm_juchu_ref_on', REF_ON ? '1' : '0'); }catch(e){}
+  if(REF_ON) refresh_ref();
+}
+function refresh_ref(){
+  if(!REF_ON) return;
+  var cust = (g('f-custcd') || '').trim();
+  var item = (g('f-item') || '').trim();
+  var msg = document.getElementById('ref-msg');
+  var box = document.getElementById('ref-tbl');
+  // 得意先コードも製品名も空のときは、取り込んだ実績の直近ぶんを出す
+  var wide = (!cust && !item);
+  msg.textContent = '探しています…';
+  pastOpen(function(db){
+    var hits = [], cur = db.transaction('rows','readonly').objectStore('rows').openCursor();
+    cur.onsuccess = function(e){
+      var c = e.target.result;
+      if(c && hits.length < 400){
+        var r = c.value, ok = true;
+        if(!wide){
+          if(cust && String(r['f-custcd'] || '').indexOf(cust) < 0) ok = false;
+          if(ok && item && String(r['f-item'] || '').indexOf(item) < 0) ok = false;
+        }
+        if(ok) hits.push(r);
+        c.continue(); return;
+      }
+      // 新しい順（起票日の降順）に並べて、直近30件だけ出す
+      hits.sort(function(a,b){ return String(b['f-date']||'').localeCompare(String(a['f-date']||'')); });
+      var top = hits.slice(0, 30);
+      var h = '<table><thead><tr>'
+        + '<th>伝票番号</th><th>no</th><th>起票日</th><th>納期</th><th>製品名</th>'
+        + '<th>数量</th><th>単価</th><th>金額</th><th>用紙</th><th>色数</th><th>面付</th><th>切数</th>'
+        + '<th>原価計</th><th>粗利率</th></tr></thead><tbody>';
+      if(!top.length) h += '<tr><td colspan="14" style="padding:10px;color:#94a3b8">見つかりません</td></tr>';
+      top.forEach(function(r, i){
+        h += '<tr onclick="useRef(' + i + ')" style="cursor:pointer">'
+          + '<td>' + (r['f-denpyo'] || '') + '</td>'
+          + '<td>' + (r['f-no'] || '') + '</td>'
+          + '<td>' + (r['f-date'] || '') + '</td>'
+          + '<td>' + (r['f-due'] || '') + '</td>'
+          + '<td>' + (r['f-item'] || '') + '</td>'
+          + '<td class="n">' + (r['f-lotset'] || '') + '</td>'
+          + '<td class="n">' + (r['f-price'] || '') + '</td>'
+          + '<td class="n">' + (r['f-amt'] || '') + '</td>'
+          + '<td>' + (r['p1-kind'] || '') + '</td>'
+          + '<td class="n">' + (r['f-iro'] || '') + '</td>'
+          + '<td class="n">' + (r['p1-mn'] || '') + '</td>'
+          + '<td class="n">' + (r['p1-ki'] || '') + '</td>'
+          + '<td class="n">' + (r['x-genka'] || '') + '</td>'
+          + '<td class="n">' + (r['x-arariritsu'] || '') + '</td>'
+          + '</tr>';
+      });
+      box.innerHTML = h + '</tbody></table>';
+      REFHIT = top;
+      msg.textContent = !hits.length
+        ? (wide ? '取り込んだ実績がありません。📁取り込む から入れてください' : '該当なし')
+        : ((wide ? '取り込んだ実績の直近 ' : hits.length + '件のうち新しい順に ')
+           + top.length + '件を表示（得意先コードか製品名を入れると絞れます・行をクリックで流し込み）');
+      // レコード送りの対象にもする
+      navSetFrom(top, -1);
+    };
+  });
+}
+var REFHIT = [];
+function useRef(i){
+  PASTHIT = REFHIT; NAVIDX = i; _navShow_();
+  usePast(i);   // リピート起票（伝票番号は空にして今日の日付で起こす）
+}
+
+// ===== Hubから持ってきた選択肢（index.html と同じ中身にそろえる） =====
+var HUB_CATS = ['封筒','帳票','冊子','名刺・カード','ラベル・シール','チラシ','ポスター','カレンダー','その他'];
+var HUB_SUBS = {
+  '封筒':['長3','長4','長40','長30','洋長3','洋2','角0','角1','角2','角3','角6','角8','別注','印刷なし'],
+  '帳票':['複写伝票','単票','連続伝票'],
+  '冊子':['無線綴じ(左)','無線綴じ(右)','中綴じ(左)','中綴じ(右)','スクラム製本(左)','スクラム製本(右)','折りパンフ','カタログ','会報誌','記念誌','テキスト','マニュアル','広報誌'],
+  '名刺・カード':['名刺','はがき・カード','挨拶状・招待状','診察券','ポイントカード'],
+  'ラベル・シール':['ラベル','シール','荷札','訂正シール','バーコード','宛名'],
+  'チラシ':['A4','B4','A3','B5','A5'],
+  'ポスター':['B2','B1','A1','A2','B3','A3'],
+  'カレンダー':['日表','ミニ','卓上','壁掛け'],
+  'その他':['のぼり','うちわ','賞状','卒業証書','のし紙','クリアファイル','その他']
+};
+var HUB_UNITS = ['枚','冊','セット','束','箱','部','式'];
+var HUB_JOBKIND = ['新規','リピート'];
+var HUB_VALID = ['発行日より1ヶ月','発行日より2ヶ月','発行日より3ヶ月'];
+// 仕上がりサイズ（品目で出し分ける）
+var HUB_SIZE_GROUPS = [
+  {label:'A判', sizes:['A0','A1','A2','A3','A3ノビ','A4','A5','A6','A7','A8'], cats:['帳票','冊子','その他']},
+  {label:'B判', sizes:['B0','B1','B2','B3','B4','B5','B6','B7'], cats:['帳票','冊子','その他']},
+  {label:'葉書・カード', sizes:['葉書','往復葉書','二つ折葉書','名刺'], cats:['帳票','冊子','その他']},
+  {label:'長形封筒', sizes:['長3','長4','長40','長30','洋長3'], cats:['封筒']},
+  {label:'角形封筒', sizes:['角0','角1','角2','角3','角4','角5','角6','角7','角8'], cats:['封筒']},
+  {label:'洋形封筒', sizes:['洋0','洋1','洋2','洋3','洋4','洋6','洋7'], cats:['封筒']},
+  {label:'その他', sizes:['その他'], cats:['封筒','帳票','冊子','その他']}
+];
+// よく使う仕上がりサイズの実寸(mm)。選ぶと横縦が入る
+var HUB_SIZE_MM = {
+  'A3':[297,420],'A4':[210,297],'A5':[148,210],'A6':[105,148],'A3ノビ':[329,483],
+  'B4':[257,364],'B5':[182,257],'B6':[128,182],
+  '葉書':[100,148],'往復葉書':[200,148],'名刺':[91,55],
+  '長3':[120,235],'長4':[90,205],'角2':[240,332],'角3':[216,277]
+};
+function _selOpts_(el, list, keepBlank){
+  if(!el) return;
+  var cur = el.value;
+  el.innerHTML = (keepBlank ? '<option value=""></option>' : '')
+    + list.map(function(x){ return '<option>' + x + '</option>'; }).join('');
+  if(list.indexOf(cur) >= 0) el.value = cur;
+}
+// 品目を変えたら「種類」と「仕上がりサイズ」の中身を入れ替える
+function onProd(){
+  var cat = (document.getElementById('f-prod') || {}).value || '';
+  _selOpts_(document.getElementById('f-sub'), HUB_SUBS[cat] || [], true);
+  var groups = HUB_SIZE_GROUPS.filter(function(g){ return !cat || g.cats.indexOf(cat) >= 0; });
+  var fs = document.getElementById('f-fsize');
+  if(fs){
+    var cur = fs.value;
+    fs.innerHTML = '<option value="">— サイズ選択 —</option>' + groups.map(function(g){
+      return '<optgroup label="' + g.label + '">'
+        + g.sizes.map(function(z){ return '<option>' + z + '</option>'; }).join('') + '</optgroup>';
+    }).join('');
+    fs.value = cur;
+  }
+  makeItemName();
+}
+// 仕上がりサイズを選ぶと横縦(mm)を入れる（分かっているものだけ）
+function onFinishSize(){
+  var v = (document.getElementById('f-fsize') || {}).value || '';
+  var mm = HUB_SIZE_MM[v];
+  if(mm){ s('f-w', mm[0]); s('f-h', mm[1]); }
+}
+// 品名を「品目＋名称＋その他」から自動で作る（Hubと同じ考え方）
+function makeItemName(){
+  var el = document.getElementById('f-item'); if(!el) return;
+  if(el.dataset.manual === '1') return;   // 自分で書き換えたら以後は触らない
+  var a = (document.getElementById('f-pname') || {}).value || '';
+  var b = (document.getElementById('f-pextra') || {}).value || '';
+  var c = (document.getElementById('f-sub') || {}).value || '';
+  var t = [a, c, b].filter(Boolean).join(' ');
+  if(t) el.value = t;
+}
+// 起票日を 昨日/今日/明日 にする
+function setDate(d){
+  var t = new Date(); t.setDate(t.getDate() + d);
+  s('f-date', t.toISOString().slice(0, 10));
+}
+
+function newRec(){
+  ['f-denpyo','f-lotno','f-item','f-lotset','f-lotunit','f-zan','f-price','f-amt',
+   'f-w','f-h','f-bind','f-memo','f-due','f-note'].forEach(function(k){ s(k,''); });
+  s('f-date', new Date().toISOString().slice(0,10));
+  var _t0e=document.getElementById('t-amt'); if(_t0e) _t0e.textContent='0';
+  document.getElementById('t-id').textContent='';
+  document.getElementById('msg').textContent='';
+  document.getElementById('f-cust').focus();
+}
+function repeatFrom(){
+  if(!REC.length){ alert('まだ登録がありません'); return; }
+  var last=REC[REC.length-1];
+  Object.keys(last.f||{}).forEach(function(k){ s(k, last.f[k]); });
+  s('f-denpyo',''); s('f-lotno', last.f['f-denpyo']||'');
+  var sel=document.getElementById('f-lotkind'); if(sel) sel.value='リピート';
+  calc(); onInk();
+  document.getElementById('msg').textContent='前回（'+(last.f['f-denpyo']||'')+'）から複製しました。伝票番号を入れてください。';
+}
+function saveRec(){
+  var cust=g('f-cust'), item=g('f-item');
+  if(!cust || !item){ alert('得意先と製品名（品名）は必要です'); return; }
+  var f={};
+  ['f-denpyo','f-date','f-lotkind','f-lotno','f-cust','f-user','f-item','f-hinshu',
+   'f-lotset','f-lotunit','f-zan','f-unit','f-price','f-w','f-h',
+   'f-bind','f-memo','f-specchg','f-platechg','f-due','f-note']
+   .forEach(function(k){ f[k]=g(k); });
+  var qty=parseFloat(f['f-lotset'])||0, pr=parseFloat(f['f-price'])||0;
+  var rec={
+    savedAt:new Date().toISOString(),
+    f:f,
+    // Hubの案件形式へのマッピング（そのまま取り込める形）
+    hub:{
+      id:f['f-denpyo']||('FM-'+Date.now()),
+      cust:f['f-cust'], item:f['f-item'],
+      spec:[f['f-paper'],f['f-kikaku'],(f['f-w']&&f['f-h'])?(f['f-w']+'×'+f['f-h']):'',
+            f['f-ink']?('インキ:'+f['f-ink']):'', f['f-bind']].filter(Boolean).join(' / '),
+      qty:qty, unit:f['f-unit']||'枚',
+      unitPrice:pr, exTax:Math.round(pr*qty),
+      orderDate:f['f-date'], dueDate:f['f-due'],
+      end_user:f['f-user'], memo:f['f-note'],
+      repeatFrom:f['f-lotno'], hotFolder:inkFolder(f['f-ink']),
+      source:'FM風受注入力'
+    }
+  };
+  REC.push(rec);
+  try{ localStorage.setItem(KEY, JSON.stringify(REC)); }catch(e){ alert('保存に失敗: '+e.message); }
+  document.getElementById('t-id').textContent='登録: '+rec.hub.id;
+  try{ logSave(rec); }catch(e){}
+  document.getElementById('msg').textContent='✅ 登録しました（'+REC.length+'件目）';
+  renderList();
+}
+function renderList(){
+  var h='<thead><tr><th>伝票番号</th><th>得意先</th><th>製品名</th><th>数量</th><th>単価</th><th>金額</th><th>ホットフォルダ</th></tr></thead><tbody>';
+  if(!REC.length){ document.getElementById('tbl').innerHTML=h+'<tr><td colspan="7" style="padding:14px;color:#94a3b8">まだありません</td></tr></tbody>'; return; }
+  REC.slice().reverse().forEach(function(r){
+    var b=r.hub||{};
+    h+='<tr><td>'+(b.id||'')+'</td><td>'+(b.cust||'')+'</td><td>'+(b.item||'')+'</td>'
+      +'<td style="text-align:right">'+(b.qty||'')+'</td><td style="text-align:right">'+(b.unitPrice||'')+'</td>'
+      +'<td style="text-align:right">'+((b.exTax||0).toLocaleString())+'</td>'
+      +'<td style="color:#0e7c86;font-weight:700">'+(b.hotFolder||'')+'</td></tr>';
+  });
+  document.getElementById('tbl').innerHTML=h+'</tbody>';
+}
+// ホットフォルダは印刷タブ1行目のインキ(表)から決める（下部の重複欄は廃止）
+// ホットフォルダ欄は廃止。判定関数(inkFolder)は残してあるので必要になれば戻せる
+function onInk(){}
+
+/* ===== 使われ方の記録 =====
+   目的: どの項目が実際に使われているかを知り、使わない項目を削る・選択肢を直すため。
+   ※ 氏名・端末名は一切記録しない（人を評価するためのものではない） */
+var LOGKEY='fm_juchu_log_v1';
+var LOG=[]; var _t0=Date.now(); var _edits={};
+var FIELDLABEL={'f-denpyo':'伝票番号','f-date':'起票日','f-lotkind':'ロット区分','f-lotno':'ロットNO',
+ 'f-cust':'得意先','f-user':'ユーザー','f-item':'製品名','f-hinshu':'品種','f-lotset':'ロットセット数',
+ 'f-lotunit':'ロット契約単位','f-zan':'注残数','f-unit':'単位','f-price':'売価単価','f-paper':'紙質',
+ 'f-kikaku':'規格','f-w':'サイズ横','f-h':'サイズ縦','f-kiri':'切数','f-ink':'インキ','f-iro':'色数',
+ 'f-menu':'面付','f-bind':'製本加工','f-mishin':'横ミシン','f-memo':'備考','f-specchg':'仕様変更',
+ 'f-platechg':'版下変更','f-due':'希望納期','f-note':'社内メモ'};
+function _logFields(){ return Object.keys(FIELDLABEL); }
+function trackEdits(){
+  _logFields().forEach(function(k){
+    var el=document.getElementById(k); if(!el||el._tracked) return;
+    el._tracked=true;
+    el.addEventListener('change', function(){ _edits[k]=(_edits[k]||0)+1; });
+  });
+}
+function logSave(rec){
+  var filled={}, vals={};
+  _logFields().forEach(function(k){
+    var v=g(k); filled[k]=v?1:0;
+    if(v && ['f-lotkind','f-hinshu','f-unit','f-kikaku','f-kiri','f-ink','f-iro','f-menu','f-mishin','f-specchg','f-platechg'].indexOf(k)>=0) vals[k]=v;
+  });
+  LOG.push({ t:new Date().toISOString().slice(0,16), view:(document.body.className==='v-hub'?'Hub風':'FM風'),
+             secs:Math.round((Date.now()-_t0)/1000), filled:filled, vals:vals, edits:_edits,
+             repeat:(g('f-lotkind')==='リピート')?1:0 });
+  if(LOG.length>2000) LOG=LOG.slice(-2000);
+  try{ localStorage.setItem(LOGKEY, JSON.stringify(LOG)); }catch(e){}
+  _t0=Date.now(); _edits={};
+}
+function showReport(){
+  var box=document.getElementById('report-box'); box.style.display='block';
+  var n=LOG.length;
+  if(!n){ document.getElementById('report-body').innerHTML='<div style="padding:14px;color:#94a3b8">まだ記録がありません。何件か登録すると出ます。</div>'; return; }
+  var use={}, ed={}, valc={};
+  _logFields().forEach(function(k){ use[k]=0; ed[k]=0; });
+  var fm=0, hub=0, rep=0, secs=0;
+  LOG.forEach(function(r){
+    _logFields().forEach(function(k){ use[k]+=(r.filled&&r.filled[k])?1:0; ed[k]+=(r.edits&&r.edits[k])||0; });
+    if(r.view==='Hub風') hub++; else fm++;
+    rep+=r.repeat||0; secs+=r.secs||0;
+    Object.keys(r.vals||{}).forEach(function(k){ valc[k]=valc[k]||{}; valc[k][r.vals[k]]=(valc[k][r.vals[k]]||0)+1; });
+  });
+  var rows=_logFields().map(function(k){ return {k:k, l:FIELDLABEL[k], u:Math.round(use[k]*100/n), e:ed[k]}; });
+  var never=rows.filter(function(r){ return r.u===0; });
+  var often=rows.filter(function(r){ return r.e>=Math.max(2,n*0.3); });
+  var h='<div class="grid g4" style="margin-bottom:10px">'
+    +'<div class="f"><label>登録件数</label><b style="font-size:17px">'+n+'</b></div>'
+    +'<div class="f"><label>1件あたり平均</label><b style="font-size:17px">'+Math.round(secs/n)+'秒</b></div>'
+    +'<div class="f"><label>リピートの割合</label><b style="font-size:17px">'+Math.round(rep*100/n)+'%</b></div>'
+    +'<div class="f"><label>Hub風を使った割合</label><b style="font-size:17px">'+Math.round(hub*100/n)+'%</b>'
+    +'<span class="hint">FM風 '+fm+'件 / Hub風 '+hub+'件</span></div></div>';
+  if(never.length){
+    h+='<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:8px 11px;margin-bottom:8px">'
+      +'<b>一度も使われていない項目（'+never.length+'）</b> → 削れる可能性があります<br>'
+      +'<span style="color:#9a3412">'+never.map(function(r){ return r.l; }).join('、')+'</span></div>';
+  }
+  if(often.length){
+    h+='<div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;padding:8px 11px;margin-bottom:8px">'
+      +'<b>何度も直している項目</b> → 選択肢が実態に合っていないかも<br>'
+      +'<span style="color:#1e40af">'+often.map(function(r){ return r.l+'('+r.e+'回)'; }).join('、')+'</span></div>';
+  }
+  h+='<div class="savedlist"><table><thead><tr><th>項目</th><th>使用率</th><th>修正回数</th><th>よく選ばれる値</th></tr></thead><tbody>';
+  rows.sort(function(a,b){ return a.u-b.u; }).forEach(function(r){
+    var vv=valc[r.k]?Object.keys(valc[r.k]).sort(function(a,b){ return valc[r.k][b]-valc[r.k][a]; }).slice(0,3)
+              .map(function(v){ return v+'('+valc[r.k][v]+')'; }).join('、'):'';
+    h+='<tr'+(r.u===0?' style="background:#fff7ed"':'')+'><td>'+r.l+'</td><td style="text-align:right">'+r.u+'%</td>'
+      +'<td style="text-align:right">'+r.e+'</td><td style="color:#475569">'+vv+'</td></tr>';
+  });
+  document.getElementById('report-body').innerHTML=h+'</tbody></table></div>';
+  try{ box.scrollIntoView({behavior:'smooth',block:'nearest'}); }catch(e){}
+}
+function exportReport(){
+  if(!LOG.length){ alert('記録がありません'); return; }
+  var n=LOG.length, use={}, ed={};
+  _logFields().forEach(function(k){ use[k]=0; ed[k]=0; });
+  LOG.forEach(function(r){ _logFields().forEach(function(k){
+    use[k]+=(r.filled&&r.filled[k])?1:0; ed[k]+=(r.edits&&r.edits[k])||0; }); });
+  var L=['項目,使用率(%),修正回数,登録件数'];
+  _logFields().forEach(function(k){ L.push([FIELDLABEL[k],Math.round(use[k]*100/n),ed[k],n].join(',')); });
+  var blob=new Blob([String.fromCharCode(0xFEFF)+L.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='使われ方レポート_'+new Date().toISOString().slice(0,10)+'.csv'; a.click();
+}
+function clearLog(){
+  if(!confirm('使われ方の記録を消します（登録した案件は消えません）。よろしいですか？')) return;
+  LOG=[]; try{ localStorage.removeItem(LOGKEY); }catch(e){}
+  showReport();
+}
+
+// 初期化
+(function(){
+  fill('f-hinshu',  MASTER['品種']);
+  fill('f-specchg', MASTER['有無'], false);
+  fill('f-platechg',MASTER['有無'], false);
+  fillDL('dl-item',  MASTER['品名']);
+  fillDL('dl-paper', MASTER['用紙']);
+  fillDL('dl-bind',  MASTER['製本加工']);
+  fillDL('dl-memo',  MASTER['備考']);
+  var hc=hubCust();
+  fillDL('dl-cust', hc.orgs); fillDL('dl-user', hc.users);
+  fillDL('dl-vendor', hubVendors());
+  // Hubと同じ選択肢を入れる
+  _selOpts_(document.getElementById('f-prod'), HUB_CATS, true);
+  _selOpts_(document.getElementById('f-unit'), HUB_UNITS, true);
+  _selOpts_(document.getElementById('f-lotkind'), HUB_JOBKIND, true);
+  _selOpts_(document.getElementById('f-valid'), HUB_VALID, true);
+  onProd();
+  var _it = document.getElementById('f-item');
+  if(_it) _it.addEventListener('input', function(){ _it.dataset.manual = '1'; });
+  var _sb = document.getElementById('f-sub');
+  if(_sb) _sb.addEventListener('change', makeItemName);
+  applyUsage();
+  pastCount();
+  applyRowVis();
+  initLayout();
+  initLabels();
+  initWidths();
+  var _uc = null; try{ _uc = localStorage.getItem("fm_juchu_usage_color"); }catch(e){}
+  if(_uc !== "0"){ document.body.classList.add("uc");
+    var _b=document.getElementById("ucbtn"); if(_b) _b.textContent="色分けを消す"; }
+  document.getElementById('h-cust').textContent = hc.orgs.length
+      ? ('Hubのマスタ '+hc.orgs.length+'社から選べます')
+      : 'Hubのマスタが読めません（自由入力できます）';
+  ['f-custcd','f-item'].forEach(function(k){
+    var e = document.getElementById(k);
+    if(e) e.addEventListener('change', refresh_ref);
+  });
+  var _refOn = null; try{ _refOn = localStorage.getItem('fm_juchu_ref_on'); }catch(e){}
+  if(_refOn === '1'){ REF_ON = false; toggleRef(); }
+  var _k1 = document.getElementById('k1-ink');
+  if(_k1) _k1.addEventListener('change', onInk);
+  ['f-lotset'].forEach(function(k){ document.getElementById(k).addEventListener('input', calc); });
+  try{ REC=JSON.parse(localStorage.getItem(KEY)||'[]'); }catch(e){ REC=[]; }
+  try{ LOG=JSON.parse(localStorage.getItem(LOGKEY)||'[]'); }catch(e){ LOG=[]; }
+  trackEdits();
+  try{ var v=localStorage.getItem('fm_juchu_view'); if(v) setView(v); }catch(e){}
+  newRec(); renderList();
+})();
+
+function setPane(p){
+  ['A','B','C'].forEach(function(x){
+    var pn=document.getElementById('pane-'+x), tb=document.getElementById('tab-'+x);
+    if(pn) pn.classList.toggle('on', x===p);
+    if(tb) tb.classList.toggle('on', x===p);
+  });
+  try{ localStorage.setItem('fm_juchu_pane', p); }catch(e){}
+}
+(function(){
+  var ks=['c-paper','c-plate','c-print','c-work','c-pack','c-ship','c-labor'];
+  function sum(){ var t=0; ks.forEach(function(k){ t+=parseFloat(g(k))||0; });
+    s('c-total', t?t.toLocaleString():''); }
+  ks.forEach(function(k){ var e=document.getElementById(k); if(e) e.addEventListener('input',sum); });
+  try{ fillDL('dl-ink', MASTER['インキ']); }catch(e){}
+  var d=new Date(), ds=d.toLocaleDateString('ja-JP',{year:'2-digit',month:'2-digit',day:'2-digit'}), ts=d.toTimeString().slice(0,5);
+  ['st-cd','st-md'].forEach(function(k){ var e=document.getElementById(k); if(e) e.textContent=ds; });
+  ['st-ct','st-mt'].forEach(function(k){ var e=document.getElementById(k); if(e) e.textContent=ts; });
+  try{ var p=localStorage.getItem('fm_juchu_pane'); if(p) setPane(p); }catch(e){}
+})();
+</script>
+
+<!-- ==================================================================
+     ここから下は build_juchu.py が足したぶん。
+     受注入力を FileMaker の実データにつなぐ。元の画面はいじっていない。
+     ================================================================== -->
+<style>
+  #fmbar{ position:sticky; top:0; z-index:60; display:flex; gap:8px; align-items:center;
+          flex-wrap:wrap; padding:7px 12px; background:#1a1a1a; color:#fff;
+          font-size:13px; border-bottom:2px solid #000; }
+  #fmbar input{ font:inherit; padding:4px 8px; border:1px solid #555; border-radius:4px;
+                background:#fff; color:#1a1a1a; width:130px; }
+  #fmbar button{ font:inherit; padding:5px 14px; border-radius:5px; cursor:pointer;
+                 border:1px solid #555; background:#333; color:#fff; }
+  #fmbar button.go{ background:#fff; color:#1a1a1a; font-weight:700; border-color:#fff; }
+  #fmbar button.save{ background:#1d6f3f; border-color:#1d6f3f; font-weight:700; }
+  #fmbar button:disabled{ opacity:.45; cursor:default; }
+  #fmstat{ margin-left:auto; font-size:12px; color:#cbd5e1; text-align:right; }
+  #fmstat.err{ color:#ffb4ac; font-weight:700; }
+  #fmstat.ok{ color:#9ae6b4; }
+  #fmwarn{ background:#7a2018; color:#fff; padding:6px 12px; font-size:12.5px; display:none; }
+  .fm-dirty{ outline:2px solid #d97706 !important; outline-offset:-2px; }
+</style>
+
+<div id="fmbar">
+  <b>FileMaker</b>
+  <input id="fm-denpyo" placeholder="伝票番号" autocomplete="off">
+  <button class="go" id="fm-load">読み込む</button>
+  <button class="save" id="fm-save" disabled>保存</button>
+  <button id="fm-reload" disabled title="編集を捨てて FileMaker の内容に戻す">読み直す</button>
+  <span id="fmstat">伝票番号を入れて「読み込む」</span>
+</div>
+<div id="fmwarn"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // 画面の項目id → FileMaker の列名（FMUSE から作る。列が無いものは除く）
+  var TO_FM = {}, FROM_FM = {};
+  Object.keys(FMUSE).forEach(function (id) {
+    var col = FMUSE[id].c;
+    if (!col || col.indexOf('FMに') === 0 || col.indexOf('FMは') === 0) return;
+    TO_FM[id] = col;
+    (FROM_FM[col] = FROM_FM[col] || []).push(id);
+  });
+
+  var 現在 = null;      // { recordId, modId, fields }  いま画面に出ている伝票
+  var 読込時 = {};      // 画面の項目id → 読み込んだ直後の値。保存時の差分に使う
+  var 書ける = null;    // FileMaker 側で書ける列名
+
+  var bar    = document.getElementById('fmbar');
+  var 番号欄 = document.getElementById('fm-denpyo');
+  var stat   = document.getElementById('fmstat');
+  var warn   = document.getElementById('fmwarn');
+  var btnL   = document.getElementById('fm-load');
+  var btnS   = document.getElementById('fm-save');
+  var btnR   = document.getElementById('fm-reload');
+
+  function 状態(msg, kind) {
+    stat.textContent = msg;
+    stat.className = kind || '';
+  }
+  function 警告(msg) {
+    warn.textContent = msg || '';
+    warn.style.display = msg ? 'block' : 'none';
+  }
+  function 待機(on) {
+    btnL.disabled = on;
+    btnS.disabled = on || !現在;
+    btnR.disabled = on || !現在;
+  }
+
+  /** google.script.run を Promise で使う */
+  function 呼ぶ(name, args) {
+    return new Promise(function (ok, ng) {
+      google.script.run
+        .withSuccessHandler(function (r) {
+          if (r && r.ok === false) ng(new Error(r.error || '不明なエラー'));
+          else ok(r);
+        })
+        .withFailureHandler(function (e) { ng(e); })
+        [name].apply(null, args || []);
+    });
+  }
+
+  // -------------------------------------------------- 読み込み
+
+  function 流し込む(rec) {
+    現在 = rec;
+    読込時 = {};
+    Object.keys(TO_FM).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var v = rec.fields[TO_FM[id]];
+      v = (v === undefined || v === null) ? '' : String(v);
+      s(id, v);
+      読込時[id] = v;
+      el.classList.remove('fm-dirty');
+    });
+    try { calc(); } catch (e) {}
+    try { onInk(); } catch (e) {}
+    try { applyRowVis(); } catch (e) {}
+  }
+
+  function 読み込む(denpyo) {
+    denpyo = (denpyo || 番号欄.value || '').trim();
+    if (!denpyo) { 状態('伝票番号を入れてください', 'err'); return; }
+    待機(true); 警告(''); 状態('読み込み中… ' + denpyo);
+    var t0 = Date.now();
+    呼ぶ('画面_読み込み', [denpyo]).then(function (r) {
+      if (!r.record) { 現在 = null; 状態('伝票 ' + denpyo + ' は見つかりません', 'err'); 待機(false); return; }
+      書ける = r.writable;
+      流し込む(r.record);
+      番号欄.value = denpyo;
+      状態(denpyo + ' を読み込みました（' + (Date.now() - t0) + 'ms・' + r.user + '）', 'ok');
+      待機(false);
+    }).catch(function (e) {
+      現在 = null; 状態(String(e.message || e), 'err'); 待機(false);
+    });
+  }
+
+  // -------------------------------------------------- 保存
+
+  /** 読み込んだときから変わった項目だけを集める */
+  function 変更分() {
+    var out = {}, 見た = {};
+    Object.keys(TO_FM).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var now = String(el.value == null ? '' : el.value).trim();
+      if (now === (読込時[id] || '')) return;
+      var col = TO_FM[id];
+      if (書ける && 書ける.indexOf(col) < 0) return;   // 計算などは送らない
+      // 同じ列を指す欄が2つある場合は、変わっている方を採る
+      if (見た[col] !== undefined && 見た[col] !== now) {
+        console.warn('同じ列に別々の値: ' + col, 見た[col], now);
+      }
+      見た[col] = now;
+      out[col] = now;
+    });
+    return out;
+  }
+
+  function 保存() {
+    if (!現在) return;
+    var 差分 = 変更分();
+    var n = Object.keys(差分).length;
+    if (!n) { 状態('変更はありません', ''); return; }
+    if (!confirm(n + ' 項目を FileMaker に保存します。よろしいですか？\n\n'
+                 + Object.keys(差分).slice(0, 30).join('、')
+                 + (n > 30 ? ' …ほか' + (n - 30) + '件' : ''))) return;
+
+    待機(true); 警告(''); 状態('保存中… ' + n + ' 項目');
+    呼ぶ('画面_保存', [現在.recordId, 現在.modId, 差分]).then(function (r) {
+      if (r.conflict) {
+        警告(r.message);
+        状態('保存できませんでした', 'err');
+        待機(false);
+        return;
+      }
+      流し込む({ recordId: r.recordId, modId: r.modId, fields: r.fields });
+      状態(r.saved.length + ' 項目を保存しました（金額は再計算済み）', 'ok');
+      待機(false);
+    }).catch(function (e) {
+      状態(String(e.message || e), 'err'); 待機(false);
+    });
+  }
+
+  // -------------------------------------------------- 画面まわり
+
+  // 変わった欄に色を付ける
+  document.addEventListener('input', function (ev) {
+    var el = ev.target;
+    if (!el || !el.id || 読込時[el.id] === undefined) return;
+    var now = String(el.value == null ? '' : el.value).trim();
+    el.classList.toggle('fm-dirty', now !== (読込時[el.id] || ''));
+  }, true);
+
+  window.addEventListener('beforeunload', function (e) {
+    if (現在 && Object.keys(変更分()).length) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  btnL.onclick = function () { 読み込む(); };
+  btnS.onclick = 保存;
+  btnR.onclick = function () {
+    if (Object.keys(変更分()).length && !confirm('編集を捨てて FileMaker の内容に戻します。よろしいですか？')) return;
+    読み込む(現在 ? 現在.fields['伝票番号'] : '');
+  };
+  番号欄.addEventListener('keydown', function (e) { if (e.key === 'Enter') 読み込む(); });
+
+  // 画面をいちばん上に置く
+  document.body.insertBefore(warn, document.body.firstChild);
+  document.body.insertBefore(bar, document.body.firstChild);
+
+  番号欄.focus();
+})();
+</script>
+
+</body>
+</html>
