@@ -352,3 +352,82 @@ function セットアップ確認() {
   Logger.log(text);
   return text;
 }
+
+
+/**
+ * ★ 書き込みまでの動作確認 ★
+ *
+ *   1件のレコードを借りて、次を順に確かめます。
+ *     ・書ける項目だけが書かれ、計算フィールドは捨てられるか
+ *     ・入力を書き換えると FileMaker 側で金額が計算し直されるか
+ *     ・古い modId で送ったとき、二重更新として弾かれるか
+ *   最後に必ず元へ戻し、全項目が変更前と一致することを確かめます。
+ *
+ *   借りるレコード: 伝票番号 a104362（内容の薄い古い伝票）
+ *   借りる項目    : 注文書No（使用率0.5%の自由記入欄）と 用紙単価1
+ */
+function 動作確認_書き込みまで() {
+  var DENPYO = 'a104362';
+  var lay = LAYOUTS.juchu;
+  var who = { email: 'setup-check' };
+  var log = [];
+  var ng = 0;
+  function ok(cond, msg) { log.push((cond ? '○ ' : '× ') + msg); if (!cond) ng++; return cond; }
+
+  var rec = getByDenpyo_(lay, DENPYO);
+  if (!rec) { Logger.log('× 伝票 ' + DENPYO + ' が見つかりません'); return; }
+
+  var before = {};
+  Object.keys(rec.fields).forEach(function (k) { before[k] = rec.fields[k]; });
+  log.push('対象 ' + DENPYO + '（recordId ' + rec.recordId + ' / modId ' + rec.modId
+           + ' / 項目 ' + Object.keys(before).length + '）');
+  log.push('');
+
+  try {
+    // ① 書ける項目だけが通るか。計算フィールドを混ぜて送ってみる
+    var r1 = update_(lay, rec.recordId, rec.modId,
+                     { '注文書No': 'HUBTEST', '合計金額': 999999 }, who);
+    ok(!r1.conflict, '書き込めた');
+    ok(r1.saved.indexOf('注文書No') >= 0, '注文書No は書けた');
+    ok(r1.saved.indexOf('合計金額') < 0 && r1.ignored.indexOf('合計金額') >= 0,
+       '合計金額（計算フィールド）は捨てられた');
+    ok(r1.fields['注文書No'] === 'HUBTEST', '読み返して値が一致');
+
+    // ② 古い modId で送ると弾かれるか
+    var r2 = update_(lay, rec.recordId, rec.modId, { '注文書No': 'ZZZ' }, who);
+    ok(r2.conflict === true, '古い modId は二重更新として弾かれた');
+
+    // ③ 入力を書き換えると金額が計算し直されるか
+    var r3 = update_(lay, rec.recordId, r1.modId, { '用紙単価1': '12.5' }, who);
+    ok(!r3.conflict, '用紙単価1 を書けた');
+    ok(String(r3.fields['用紙代1']) !== String(before['用紙代1']),
+       '用紙代1 が計算し直された（' + before['用紙代1'] + ' → ' + r3.fields['用紙代1'] + '）');
+    ok(String(r3.fields['合計金額']) !== String(before['合計金額']),
+       '合計金額 が計算し直された（' + before['合計金額'] + ' → ' + r3.fields['合計金額'] + '）');
+
+    // ④ 元へ戻す
+    var back = update_(lay, rec.recordId, r3.modId,
+                       { '注文書No': before['注文書No'] || '',
+                         '用紙単価1': before['用紙単価1'] || '' }, who);
+    var after = back.fields;
+    var diff = [];
+    Object.keys(before).forEach(function (k) {
+      if (String(before[k]) !== String(after[k])) diff.push(k);
+    });
+    ok(diff.length === 0, '全 ' + Object.keys(before).length
+       + ' 項目が変更前と一致' + (diff.length ? '（違い: ' + diff.join('、') + '）' : ''));
+  } catch (e) {
+    ng++;
+    log.push('× 途中で失敗: ' + e.message);
+    log.push('  ' + DENPYO + ' の状態を確認してください（変更前: 注文書No='
+             + JSON.stringify(before['注文書No']) + ' 用紙単価1='
+             + JSON.stringify(before['用紙単価1']) + '）');
+  }
+
+  log.push('');
+  log.push(ng === 0 ? 'すべて通りました。書き込みも安全に使えます。'
+                    : '× ' + ng + ' 件が想定どおりではありません。');
+  var text = log.join('\n');
+  Logger.log(text);
+  return text;
+}
