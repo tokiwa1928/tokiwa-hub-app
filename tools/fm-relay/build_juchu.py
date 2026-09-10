@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""受注入力（tools/fm-juchu.html）を、GAS から配信する版に組み立てる。
+"""受注入力（tools/fm-juchu.html）に「FileMaker とつなぐ」ぶんを足して組み立てる。
 
-   元の画面には手を入れず、末尾に「FileMaker とつなぐ」ぶんの
-   ツールバーと処理を足すだけにする。元を直したらこれを流し直せばよい。
+   元の画面には手を入れず、末尾に足すだけにする。元を直したらこれを流し直せばよい。
 
      python tools/fm-relay/build_juchu.py
-       → tools/fm-relay/juchu.html
+
+   出るもの
+     tools/fm-relay/juchu.html   Apps Script が配る版（google.script.run で呼ぶ）
+     tools/fm-juchu-hub.html     Hub に置く版（Google サインイン＋fetch で呼ぶ）
+
+   中身は同じで、中継の呼び方だけが違う。将来 FileMaker との連携を外すときは
+   「呼ぶ」の中を差し替えるだけで、画面はそのまま使える。
 """
 import os, sys, io
 
@@ -15,14 +20,21 @@ if hasattr(sys.stdout, 'buffer'):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC  = os.path.join(HERE, '..', 'fm-juchu.html')
-DST  = os.path.join(HERE, 'juchu.html')
+DST_GAS = os.path.join(HERE, 'juchu.html')
+DST_HUB = os.path.join(HERE, '..', 'fm-juchu-hub.html')
 
-ADDON = r"""
-<!-- ==================================================================
-     ここから下は build_juchu.py が足したぶん。
-     受注入力を FileMaker の実データにつなぎ、段階（予算見積/見積/受注）を扱う。
-     元の画面（tools/fm-juchu.html）はいじっていない。
-     ================================================================== -->
+WEBAPP = ('https://script.google.com/macros/s/'
+          'AKfycby3DCpR4kCCQMBZ0a8sdsBArM1z_J3JJKcIMYNOHLlhzB1LNrYPqw_NM-dxo_JirSyK4g/exec')
+
+# GCP で作る「ウェブアプリケーション」の OAuth クライアントID。
+# 秘密ではない（ページに書いてよい）。承認済みの JavaScript 生成元に
+# https://tokiwa1928.github.io を入れておくこと。
+CLIENT_ID = ''
+
+
+# ---------------------------------------------------------------- 見た目
+
+STYLE = r"""
 <style>
   #fmbar{ position:sticky; top:0; z-index:60; display:flex; gap:7px; align-items:center;
           flex-wrap:wrap; padding:6px 12px; background:#1a1a1a; color:#fff;
@@ -36,6 +48,8 @@ ADDON = r"""
   #fmbar button.save{ background:#1d6f3f; border-color:#1d6f3f; font-weight:700; }
   #fmbar button.new{ background:#334155; border-color:#475569; }
   #fmbar button:disabled{ opacity:.4; cursor:default; }
+  #fmbar a.back{ color:#cbd5e1; text-decoration:none; font-size:12px; }
+  #fmbar a.back:hover{ color:#fff; text-decoration:underline; }
   #fmbar .sep{ width:1px; height:20px; background:#555; margin:0 3px; }
   #fmstage{ font-weight:700; padding:2px 9px; border-radius:11px; background:#475569; }
   #fmstage.yosan{ background:#7c5a18; }
@@ -45,6 +59,8 @@ ADDON = r"""
   #fmstat{ margin-left:auto; font-size:12px; color:#cbd5e1; text-align:right; max-width:38%; }
   #fmstat.err{ color:#ffb4ac; font-weight:700; }
   #fmstat.ok{ color:#9ae6b4; }
+  #fmwho{ font-size:11.5px; color:#94a3b8; }
+  #fmsignin{ display:none; }
   #fmdiff{ display:none; background:#fff7ed; border-bottom:2px solid #b45309; padding:9px 14px; }
   #fmdiff h4{ margin:0 0 6px; font-size:13.5px; color:#7c2d12; }
   #fmdiff table{ border-collapse:collapse; font-size:12px; }
@@ -57,8 +73,11 @@ ADDON = r"""
   #fmerr{ display:none; background:#7a2018; color:#fff; padding:6px 12px; font-size:12.5px; }
   .fm-dirty{ outline:2px solid #d97706 !important; outline-offset:-2px; }
 </style>
+"""
 
+BAR = r"""
 <div id="fmbar">
+  __BACK__
   <b>FileMaker</b>
   <input id="fm-no" placeholder="伝票番号・見積番号" autocomplete="off">
   <button class="go" id="fm-load">読み込む</button>
@@ -73,14 +92,179 @@ ADDON = r"""
   <span class="sep"></span>
   <button class="save" id="fm-save" disabled>保存</button>
   <button id="fm-reload" disabled title="編集を捨てて FileMaker の内容に戻す">読み直す</button>
+  <span id="fmwho"></span>
+  <span id="fmsignin"></span>
   <span id="fmstat">番号を入れて「読み込む」／何も読み込まずに「新しく起こす」と新規案件</span>
 </div>
 <div id="fmdiff"></div>
 <div id="fmerr"></div>
+"""
 
+
+# ------------------------------------------- 中継の呼び方（ここだけが違う）
+
+呼ぶ_GAS = r"""
+<script>
+// Apps Script が配る版。ページ自体が社内アカウントでしか開けないので、
+// 誰が呼んだかは Session.getActiveUser() で分かる。
+window.FM呼ぶ = function (name, args) {
+  return new Promise(function (done, fail) {
+    google.script.run
+      .withSuccessHandler(function (r) {
+        if (r && r.ok === false) fail(new Error(r.error || '不明なエラー')); else done(r);
+      })
+      .withFailureHandler(function (e) { fail(e); })
+      [name].apply(null, args || []);
+  });
+};
+window.FM見た目 = function () {};
+</script>
+"""
+
+呼ぶ_HUB = r"""
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// Hub（GitHub Pages）に置く版。ページは誰でも開けるので、
+// Google のサインインで受け取った ID トークンを毎回そえて中継に送る。
+// 中継はそれを Google に確かめ、社内のドメインでなければ何もしない。
+(function () {
+  'use strict';
+
+  var 中継 = '__WEBAPP__';
+  var クライアントID = '__CLIENT_ID__';
+
+  // 位置で渡していた引数を、fetch 用に名前つきに直す
+  var 引数名 = {
+    '画面_読み込み':       ['番号'],
+    '画面_recordIdで読む': ['recordId'],
+    '画面_保存':           ['recordId', 'modId', 'fields'],
+    '画面_新規案件':       ['種別', '初期値'],
+    '画面_新規段階':       ['案件ID', '種別']
+  };
+
+  var トークン = '', 期限 = 0, 待っている = null;
+
+  function 中身を読む(jwt) {
+    try {
+      var p = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      return { exp: (p.exp || 0) * 1000, email: p.email || '' };
+    } catch (e) { return { exp: 0, email: '' }; }
+  }
+
+  function 名乗る(jwt) {
+    トークン = jwt;
+    var p = 中身を読む(jwt);
+    期限 = p.exp;
+    var who = document.getElementById('fmwho');
+    if (who) who.textContent = p.email ? '　' + p.email : '';
+    var box = document.getElementById('fmsignin');
+    if (box) box.style.display = 'none';
+    if (待っている) { var f = 待っている; 待っている = null; f(); }
+  }
+
+  function GISを待つ() {
+    return new Promise(function (done, fail) {
+      var 残り = 100;
+      var t = setInterval(function () {
+        if (window.google && google.accounts && google.accounts.id) { clearInterval(t); done(); }
+        else if (--残り <= 0) { clearInterval(t); fail(new Error('Google のサインインを読み込めませんでした')); }
+      }, 100);
+    });
+  }
+
+  var 用意 = null;
+  function 用意する() {
+    if (用意) return 用意;
+    用意 = GISを待つ().then(function () {
+      google.accounts.id.initialize({
+        client_id: クライアントID,
+        auto_select: true,
+        callback: function (res) { if (res && res.credential) 名乗る(res.credential); }
+      });
+      var box = document.getElementById('fmsignin');
+      if (box) {
+        box.style.display = '';
+        google.accounts.id.renderButton(box, { type: 'standard', size: 'small', text: 'signin' });
+      }
+      google.accounts.id.prompt();
+    });
+    return 用意;
+  }
+
+  function トークンを得る() {
+    if (トークン && 期限 - Date.now() > 5 * 60 * 1000) return Promise.resolve(トークン);
+    トークン = '';
+    if (!クライアントID) {
+      return Promise.reject(new Error(
+        'サインインの設定がまだです（OAuth クライアントIDが未設定）。'
+        + 'tools/fm-relay/設置手順.md をご覧ください'));
+    }
+    return 用意する().then(function () {
+      if (トークン) return トークン;
+      return new Promise(function (done, fail) {
+        var 時間切れ = setTimeout(function () {
+          待っている = null;
+          fail(new Error('黒帯の「Sign in with Google」を押して、社内のアカウントでサインインしてください'));
+        }, 60000);
+        待っている = function () { clearTimeout(時間切れ); done(トークン); };
+        try { google.accounts.id.prompt(); } catch (e) {}
+      });
+    });
+  }
+
+  window.FM呼ぶ = function (name, args) {
+    var 名 = 引数名[name];
+    if (!名) return Promise.reject(new Error('知らない操作です: ' + name));
+    return トークンを得る().then(function (jwt) {
+      var body = { action: name, idToken: jwt };
+      名.forEach(function (k, i) { body[k] = (args || [])[i]; });
+      return fetch(中継, {
+        method: 'POST',
+        // text/plain にしておくと事前確認（preflight）が飛ばない。
+        // Apps Script は OPTIONS に答えられないので、これが要る。
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body),
+        redirect: 'follow'
+      });
+    }).then(function (res) {
+      return res.text().then(function (t) {
+        var r;
+        try { r = JSON.parse(t); }
+        catch (e) { throw new Error('中継の返事を読めませんでした（' + res.status + '）'); }
+        if (!r.ok) {
+          if (/サインイン/.test(r.error || '')) { トークン = ''; 期限 = 0; }
+          throw new Error(r.error || '不明なエラー');
+        }
+        return r.data;
+      });
+    });
+  };
+
+  // 開いた時点でサインインを始めておく（押してから待たせないため）
+  window.FM見た目 = function () {
+    if (!クライアントID) {
+      var s = document.getElementById('fmstat');
+      if (s) {
+        s.className = 'err';
+        s.textContent = 'サインインの設定がまだです（設置手順.md の「Hub から呼ぶ準備」）';
+      }
+      return;
+    }
+    用意する().catch(function () {});
+  };
+})();
+</script>
+"""
+
+
+# ------------------------------------------------ 画面の中身（共通・長い）
+
+LOGIC = r"""
 <script>
 (function () {
   'use strict';
+
+  var 呼ぶ = window.FM呼ぶ;
 
   // 画面の項目id → FileMaker の列名（FMUSE から。列が無いものは除く）
   var TO_FM = {}, FROM_FM = {};
@@ -109,17 +293,6 @@ ADDON = r"""
     btnR.disabled = on || !現在;
     Array.prototype.forEach.call(document.querySelectorAll('#fmbar button.new'),
       function (b) { b.disabled = on; });
-  }
-
-  function 呼ぶ(name, args) {
-    return new Promise(function (done, fail) {
-      google.script.run
-        .withSuccessHandler(function (r) {
-          if (r && r.ok === false) fail(new Error(r.error || '不明なエラー')); else done(r);
-        })
-        .withFailureHandler(function (e) { fail(e); })
-        [name].apply(null, args || []);
-    });
   }
 
   // -------------------------------------------------- 画面に流し込む
@@ -314,9 +487,34 @@ ADDON = r"""
   document.body.insertBefore(diff, document.body.firstChild);
   document.body.insertBefore(bar, document.body.firstChild);
   番号欄.focus();
+
+  // 番号を URL で渡せる（Hub の一覧から開くときに使う）
+  try {
+    var q = new URLSearchParams(location.search).get('no');
+    if (q) { 番号欄.value = q; 読み込む(q); }
+  } catch (e) {}
+
+  try { window.FM見た目(); } catch (e) {}
 })();
 </script>
 """
+
+見出し = r"""
+<!-- ==================================================================
+     ここから下は build_juchu.py が足したぶん（__WHICH__）。
+     受注入力を FileMaker の実データにつなぎ、段階（予算見積/見積/受注）を扱う。
+     元の画面（tools/fm-juchu.html）はいじっていない。
+     ================================================================== -->
+"""
+
+
+def 組み立てる(src, which, 呼ぶ実装, back):
+    addon = (見出し.replace('__WHICH__', which)
+             + STYLE
+             + BAR.replace('__BACK__', back)
+             + 呼ぶ実装
+             + LOGIC)
+    return src.replace('</body>', addon + '\n</body>', 1)
 
 
 def main():
@@ -325,15 +523,27 @@ def main():
         print('× </body> が見つかりません')
         return 1
 
-    out = src.replace('</body>', ADDON + '\n</body>', 1)
+    gas = 組み立てる(src, 'Apps Script が配る版', 呼ぶ_GAS, '')
+    hub = 組み立てる(src, 'Hub に置く版',
+                     呼ぶ_HUB.replace('__WEBAPP__', WEBAPP).replace('__CLIENT_ID__', CLIENT_ID),
+                     '<a class="back" href="../index.html">← Hub</a>')
 
     # GAS の HtmlService はテンプレート記法 <?= ?> を解釈してしまうので確認だけしておく
     for bad in ('<?=', '<?!'):
-        if bad in out:
+        if bad in gas:
             print('△ テンプレート記法 %s が含まれています。表示が崩れるかもしれません' % bad)
 
-    open(DST, 'w', encoding='utf-8').write(out)
-    print('組み立てました: %s  (%.0f KB)' % (DST, len(out.encode('utf-8')) / 1024))
+    for path, text, label in ((DST_GAS, gas, 'Apps Script 版'),
+                              (DST_HUB, hub, 'Hub 版')):
+        open(path, 'w', encoding='utf-8').write(text)
+        print('%s : %s  (%.0f KB)'
+              % (label, os.path.normpath(path), len(text.encode('utf-8')) / 1024))
+
+    if not CLIENT_ID:
+        print('')
+        print('△ Hub 版は OAuth クライアントIDが未設定です。')
+        print('  設置手順.md の「Hub から呼ぶ準備」を済ませ、')
+        print('  この build_juchu.py の CLIENT_ID に入れて流し直してください。')
     print('  元: %s' % os.path.normpath(SRC))
     return 0
 

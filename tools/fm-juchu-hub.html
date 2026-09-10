@@ -1662,7 +1662,7 @@ function setPane(p){
 </script>
 
 <!-- ==================================================================
-     ここから下は build_juchu.py が足したぶん（Apps Script が配る版）。
+     ここから下は build_juchu.py が足したぶん（Hub に置く版）。
      受注入力を FileMaker の実データにつなぎ、段階（予算見積/見積/受注）を扱う。
      元の画面（tools/fm-juchu.html）はいじっていない。
      ================================================================== -->
@@ -1707,7 +1707,7 @@ function setPane(p){
 </style>
 
 <div id="fmbar">
-  
+  <a class="back" href="../index.html">← Hub</a>
   <b>FileMaker</b>
   <input id="fm-no" placeholder="伝票番号・見積番号" autocomplete="off">
   <button class="go" id="fm-load">読み込む</button>
@@ -1729,20 +1729,137 @@ function setPane(p){
 <div id="fmdiff"></div>
 <div id="fmerr"></div>
 
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
-// Apps Script が配る版。ページ自体が社内アカウントでしか開けないので、
-// 誰が呼んだかは Session.getActiveUser() で分かる。
-window.FM呼ぶ = function (name, args) {
-  return new Promise(function (done, fail) {
-    google.script.run
-      .withSuccessHandler(function (r) {
-        if (r && r.ok === false) fail(new Error(r.error || '不明なエラー')); else done(r);
-      })
-      .withFailureHandler(function (e) { fail(e); })
-      [name].apply(null, args || []);
-  });
-};
-window.FM見た目 = function () {};
+// Hub（GitHub Pages）に置く版。ページは誰でも開けるので、
+// Google のサインインで受け取った ID トークンを毎回そえて中継に送る。
+// 中継はそれを Google に確かめ、社内のドメインでなければ何もしない。
+(function () {
+  'use strict';
+
+  var 中継 = 'https://script.google.com/macros/s/AKfycby3DCpR4kCCQMBZ0a8sdsBArM1z_J3JJKcIMYNOHLlhzB1LNrYPqw_NM-dxo_JirSyK4g/exec';
+  var クライアントID = '';
+
+  // 位置で渡していた引数を、fetch 用に名前つきに直す
+  var 引数名 = {
+    '画面_読み込み':       ['番号'],
+    '画面_recordIdで読む': ['recordId'],
+    '画面_保存':           ['recordId', 'modId', 'fields'],
+    '画面_新規案件':       ['種別', '初期値'],
+    '画面_新規段階':       ['案件ID', '種別']
+  };
+
+  var トークン = '', 期限 = 0, 待っている = null;
+
+  function 中身を読む(jwt) {
+    try {
+      var p = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      return { exp: (p.exp || 0) * 1000, email: p.email || '' };
+    } catch (e) { return { exp: 0, email: '' }; }
+  }
+
+  function 名乗る(jwt) {
+    トークン = jwt;
+    var p = 中身を読む(jwt);
+    期限 = p.exp;
+    var who = document.getElementById('fmwho');
+    if (who) who.textContent = p.email ? '　' + p.email : '';
+    var box = document.getElementById('fmsignin');
+    if (box) box.style.display = 'none';
+    if (待っている) { var f = 待っている; 待っている = null; f(); }
+  }
+
+  function GISを待つ() {
+    return new Promise(function (done, fail) {
+      var 残り = 100;
+      var t = setInterval(function () {
+        if (window.google && google.accounts && google.accounts.id) { clearInterval(t); done(); }
+        else if (--残り <= 0) { clearInterval(t); fail(new Error('Google のサインインを読み込めませんでした')); }
+      }, 100);
+    });
+  }
+
+  var 用意 = null;
+  function 用意する() {
+    if (用意) return 用意;
+    用意 = GISを待つ().then(function () {
+      google.accounts.id.initialize({
+        client_id: クライアントID,
+        auto_select: true,
+        callback: function (res) { if (res && res.credential) 名乗る(res.credential); }
+      });
+      var box = document.getElementById('fmsignin');
+      if (box) {
+        box.style.display = '';
+        google.accounts.id.renderButton(box, { type: 'standard', size: 'small', text: 'signin' });
+      }
+      google.accounts.id.prompt();
+    });
+    return 用意;
+  }
+
+  function トークンを得る() {
+    if (トークン && 期限 - Date.now() > 5 * 60 * 1000) return Promise.resolve(トークン);
+    トークン = '';
+    if (!クライアントID) {
+      return Promise.reject(new Error(
+        'サインインの設定がまだです（OAuth クライアントIDが未設定）。'
+        + 'tools/fm-relay/設置手順.md をご覧ください'));
+    }
+    return 用意する().then(function () {
+      if (トークン) return トークン;
+      return new Promise(function (done, fail) {
+        var 時間切れ = setTimeout(function () {
+          待っている = null;
+          fail(new Error('黒帯の「Sign in with Google」を押して、社内のアカウントでサインインしてください'));
+        }, 60000);
+        待っている = function () { clearTimeout(時間切れ); done(トークン); };
+        try { google.accounts.id.prompt(); } catch (e) {}
+      });
+    });
+  }
+
+  window.FM呼ぶ = function (name, args) {
+    var 名 = 引数名[name];
+    if (!名) return Promise.reject(new Error('知らない操作です: ' + name));
+    return トークンを得る().then(function (jwt) {
+      var body = { action: name, idToken: jwt };
+      名.forEach(function (k, i) { body[k] = (args || [])[i]; });
+      return fetch(中継, {
+        method: 'POST',
+        // text/plain にしておくと事前確認（preflight）が飛ばない。
+        // Apps Script は OPTIONS に答えられないので、これが要る。
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body),
+        redirect: 'follow'
+      });
+    }).then(function (res) {
+      return res.text().then(function (t) {
+        var r;
+        try { r = JSON.parse(t); }
+        catch (e) { throw new Error('中継の返事を読めませんでした（' + res.status + '）'); }
+        if (!r.ok) {
+          if (/サインイン/.test(r.error || '')) { トークン = ''; 期限 = 0; }
+          throw new Error(r.error || '不明なエラー');
+        }
+        return r.data;
+      });
+    });
+  };
+
+  // 開いた時点でサインインを始めておく（押してから待たせないため）
+  window.FM見た目 = function () {
+    if (!クライアントID) {
+      var s = document.getElementById('fmstat');
+      if (s) {
+        s.className = 'err';
+        s.textContent = 'サインインの設定がまだです（設置手順.md の「Hub から呼ぶ準備」）';
+      }
+      return;
+    }
+    用意する().catch(function () {});
+  };
+})();
 </script>
 
 <script>

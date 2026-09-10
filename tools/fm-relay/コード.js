@@ -17,6 +17,8 @@
  *   ALLOWED_DOMAIN    許すドメイン。複数あればカンマ区切り
  *                     例: tokiwap-group.com,tokiwap.co.jp
  *   LOG_SHEET_ID      （任意）書き込み記録を残すスプレッドシート
+ *   WEB_CLIENT_ID     Hub のページから呼ぶときの Google OAuth クライアントID
+ *                     （秘密ではない。入れておくと他サイト発行のトークンを弾ける）
  *   DEV_KEY           （任意）開発中だけ使う抜け道。実運用前に必ず消す
  */
 
@@ -83,7 +85,12 @@ function doPost(e) {
   try {
     var req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var who = authorize_(req);
-    var out = handle_(req.action, req, who);
+    いま呼んでいる人 = who;                 // 画面_* が Session を使わずに済むように
+    try {
+      var out = handle_(req.action, req, who);
+    } finally {
+      いま呼んでいる人 = null;
+    }
     return json_({ ok: true, user: who.email, data: out });
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
@@ -110,7 +117,10 @@ function doGet(e) {
 // ------------------------------------------------ 画面から呼ばれるもの
 
 /** いま開いている人。組織内配信なので取得できる */
+var いま呼んでいる人 = null;   // doPost が authorize_ の結果を入れる。1リクエストのあいだだけ
+
 function 画面_利用者_() {
+  if (いま呼んでいる人) return いま呼んでいる人;   // Hub のページから fetch で来た場合
   var mail = '';
   try { mail = Session.getActiveUser().getEmail() || ''; } catch (err) {}
   if (!mail) throw new Error('サインイン情報を取得できません。'
@@ -288,6 +298,13 @@ function handle_(action, req, who) {
     case 'get':    return getByDenpyo_(layoutOf_(req.screen), req.denpyo);
     case 'find':   return find_(layoutOf_(req.screen), req.query, req.limit, req.offset, req.sort);
     case 'update': return update_(layoutOf_(req.screen), req.recordId, req.modId, req.fields, who);
+
+    // 受注入力の画面から呼ぶもの。google.script.run と同じ中身を fetch でも使えるようにした
+    case '画面_読み込み':     return 画面_読み込み(req['番号']);
+    case '画面_recordIdで読む': return 画面_recordIdで読む(req.recordId);
+    case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields);
+    case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
+    case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
   }
   throw new Error('知らない action です: ' + action);
 }
@@ -328,6 +345,12 @@ function authorize_(req) {
   var email = String(info.email || '').toLowerCase();
   if (info.email_verified !== true && info.email_verified !== 'true') {
     throw new Error('メールアドレスが確認されていません');
+  }
+  // このトークンが本当に Hub の画面向けに出されたものかを見る。
+  // これが無いと、社員が別サイトでもらったトークンでもここを通れてしまう。
+  var web = props.getProperty('WEB_CLIENT_ID');
+  if (web && String(info.aud || '') !== web) {
+    throw new Error('この画面あてのサインインではありません');
   }
   var at = email.lastIndexOf('@');
   if (at < 0 || domains.indexOf(email.slice(at + 1)) < 0) {
@@ -621,6 +644,9 @@ function セットアップ確認() {
   var domain  = props.getProperty('ALLOWED_DOMAIN');
   log.push((domain ? '○ ' : '△ ') + 'ALLOWED_DOMAIN : '
            + (domain || '未設定（既定の tokiwap-group.com,tokiwap.co.jp を使います）'));
+  var web = props.getProperty('WEB_CLIENT_ID');
+  log.push((web ? '○ ' : '△ ') + 'WEB_CLIENT_ID : '
+           + (web || '未設定（Hub のページから呼ぶなら入れてください）'));
   var dev = props.getProperty('DEV_KEY');
   if (dev) log.push('⚠ DEV_KEY が設定されています。動作確認が済んだら必ず削除してください');
   var sheet = props.getProperty('LOG_SHEET_ID');
