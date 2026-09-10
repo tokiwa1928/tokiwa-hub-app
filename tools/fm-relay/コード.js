@@ -107,7 +107,18 @@ function doGet(e) {
   var file = { juchu: 'juchu' }[screen];
   if (!file) return json_({ ok: true, note: '知らない画面です: ' + screen });
 
-  return HtmlService.createHtmlOutputFromFile(file)
+  var html = HtmlService.createHtmlOutputFromFile(file).getContent();
+
+  // ?no=a108193 のように番号を渡せる。
+  // HtmlService の画面は入れ子の枠で動くので、ページ側からは URL が見えない。
+  // だから中に書き込んでおく。
+  var no = (e && e.parameter && e.parameter.no) || '';
+  if (no) {
+    html += '\n<script>window.FM初期番号 = '
+          + JSON.stringify(String(no)) + ';<\/script>';
+  }
+
+  return HtmlService.createHtmlOutput(html)
     .setTitle('受注入力（FileMaker）')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
