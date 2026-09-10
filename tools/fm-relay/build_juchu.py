@@ -29,7 +29,7 @@ WEBAPP = ('https://script.google.com/macros/s/'
 # GCP で作る「ウェブアプリケーション」の OAuth クライアントID。
 # 秘密ではない（ページに書いてよい）。承認済みの JavaScript 生成元に
 # https://tokiwa1928.github.io を入れておくこと。
-CLIENT_ID = ''
+CLIENT_ID = '301364298857-pmt4p3fq440fh6hct3m8avcnlf11jos7.apps.googleusercontent.com'
 
 
 # ---------------------------------------------------------------- 見た目
@@ -183,7 +183,8 @@ window.FM見た目 = function () {};
       });
       var box = document.getElementById('fmsignin');
       if (box) {
-        box.style.display = '';
+        // CSS で display:none にしてあるので、'' ではなく実際の値を入れる
+        box.style.display = 'inline-block';
         google.accounts.id.renderButton(box, { type: 'standard', size: 'small', text: 'signin' });
       }
       google.accounts.id.prompt();
