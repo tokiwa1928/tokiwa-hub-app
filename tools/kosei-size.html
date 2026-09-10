@@ -12,6 +12,9 @@
 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<!-- 穴・窓の自動採寸に使う（PDFの中の図形を座標で取り出すため） -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if(window.pdfjsLib){ pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; }</script>
 <style>
   :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --cyan:#0891b2; --grn:#16a34a; }
   *{ box-sizing:border-box; }
@@ -104,6 +107,27 @@
       <label class="chk"><input type="checkbox" id="o-dim" checked onchange="schedule()"> 寸法を表示（縦×横 mm）</label>
       <label class="chk"><input type="checkbox" id="o-tonbo" checked onchange="schedule()"> トンボ（コーナー）</label>
       <label class="chk"><input type="checkbox" id="o-caption" checked onchange="schedule()"> 上部に仕上がり寸法のキャプション</label>
+      <label class="chk"><input type="checkbox" id="o-hole" checked onchange="schedule()"> 穴・窓を自動で見つけて寸法を入れる</label>
+    </div>
+    <div id="holeopt" class="grid" style="margin-top:10px">
+      <div>
+        <label>穴とみなす直径 mm（下限〜上限）</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" id="o-hmin" value="2" min="0.5" step="0.5" oninput="schedule()" style="text-align:right">
+          <span style="font-size:13px">〜</span>
+          <input type="number" id="o-hmax" value="15" min="1" step="0.5" oninput="schedule()" style="text-align:right">
+        </div>
+        <div class="muted">ファイル穴は ø6 前後、マージナルパンチは ø4 前後。絵柄の丸を拾いすぎるときは範囲を狭めてください。</div>
+      </div>
+      <div>
+        <label>窓とみなす大きさ mm（短辺の下限）</label>
+        <input type="number" id="o-wmin" value="25" min="5" step="1" oninput="schedule()">
+        <div class="muted">封筒の窓を想定。これより小さい長方形は無視します。</div>
+      </div>
+      <div>
+        <label>見つかったもの</label>
+        <div id="holelist" class="muted" style="line-height:1.7">まだ読み込んでいません</div>
+      </div>
     </div>
   </div>
 
@@ -198,8 +222,175 @@ function readOpts(){
     dash: document.getElementById('o-dash').value==='dash',
     dim: document.getElementById('o-dim').checked,
     tonbo: document.getElementById('o-tonbo').checked,
-    caption: document.getElementById('o-caption').checked
+    caption: document.getElementById('o-caption').checked,
+    hole: document.getElementById('o-hole').checked,
+    hmin: Math.max(0.2, parseFloat(document.getElementById('o-hmin').value)||2),
+    hmax: Math.max(1, parseFloat(document.getElementById('o-hmax').value)||15),
+    wmin: Math.max(3, parseFloat(document.getElementById('o-wmin').value)||25)
   };
+}
+
+// ══════════════════════════════════════════════════════════════
+//  穴・窓の自動採寸
+//
+//  PDF の中の図形を、CTM を掛けたユーザー空間の座標で取り出す。
+//  丸（4本のベジェで描かれた閉パス）= 穴、長方形 = 封筒の窓 とみなす。
+//  塗りでも線でも拾うが、クリップ枠は捨てる。
+// ══════════════════════════════════════════════════════════════
+
+function _mat(m,x,y){ return [ m[0]*x+m[2]*y+m[4], m[1]*x+m[3]*y+m[5] ]; }
+function _mul(a,b){
+  return [ a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
+           a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
+           a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5] ];
+}
+// 3次ベジェを何点かに割って返す（丸かどうかを見るため）
+function _bez(p0,p1,p2,p3,n){
+  var out=[];
+  for(var i=1;i<=n;i++){
+    var t=i/n, u=1-t;
+    out.push([ u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0],
+               u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1] ]);
+  }
+  return out;
+}
+
+// ページごとに、閉じた図形（丸・長方形）を集める
+async function extractShapes(buf){
+  if(!window.pdfjsLib) return null;
+  var task=pdfjsLib.getDocument({ data:new Uint8Array(buf.slice(0)), stopAtErrors:false, isEvalSupported:false });
+  var doc=await task.promise;
+  var pages=[];
+  for(var pn=1; pn<=doc.numPages; pn++){
+    var page=await doc.getPage(pn);
+    var OPS=pdfjsLib.OPS, opl=await page.getOperatorList();
+    var ctm=[1,0,0,1,0,0], stack=[];
+    var shapes=[], sub=null;      // sub: 作りかけの1つの閉パス
+    var cx=0, cy=0, sx=0, sy=0;
+    var KEEP={}, DROP={};
+    [OPS.stroke,OPS.closeStroke,OPS.fillStroke,OPS.eoFillStroke,OPS.closeFillStroke,
+     OPS.closeEOFillStroke,OPS.fill,OPS.eoFill].forEach(function(o){ if(o!=null) KEEP[o]=1; });
+    [OPS.endPath,OPS.clip,OPS.eoClip].forEach(function(o){ if(o!=null) DROP[o]=1; });
+    var buf2=[];   // このパスに含まれる部分パス
+
+    function 開く(){ sub={ pts:[], curves:0, lines:0, rect:false }; buf2.push(sub); }
+    function 打つ(p){ if(sub) sub.pts.push(p); }
+
+    for(var k=0;k<opl.fnArray.length;k++){
+      var fn=opl.fnArray[k], a=opl.argsArray[k];
+      if(fn===OPS.save){ stack.push(ctm.slice()); }
+      else if(fn===OPS.restore){ if(stack.length) ctm=stack.pop(); }
+      else if(fn===OPS.transform){ ctm=_mul(ctm,[a[0],a[1],a[2],a[3],a[4],a[5]]); }
+      else if(fn===OPS.constructPath){
+        var ops=a[0], co=a[1], i=0;
+        for(var j=0;j<ops.length;j++){
+          var op=ops[j];
+          if(op===OPS.moveTo){ 開く(); 打つ(_mat(ctm,co[i],co[i+1])); cx=co[i]; cy=co[i+1]; sx=cx; sy=cy; i+=2; }
+          else if(op===OPS.lineTo){ if(!sub) 開く(); 打つ(_mat(ctm,co[i],co[i+1])); if(sub) sub.lines++; cx=co[i]; cy=co[i+1]; i+=2; }
+          else if(op===OPS.curveTo){
+            if(!sub) 開く();
+            var q=_bez(_mat(ctm,cx,cy), _mat(ctm,co[i],co[i+1]), _mat(ctm,co[i+2],co[i+3]), _mat(ctm,co[i+4],co[i+5]), 6);
+            for(var z=0;z<q.length;z++) 打つ(q[z]);
+            if(sub) sub.curves++;
+            cx=co[i+4]; cy=co[i+5]; i+=6;
+          }
+          else if(op===OPS.curveTo2){ if(!sub) 開く(); 打つ(_mat(ctm,co[i+2],co[i+3])); if(sub) sub.curves++; cx=co[i+2]; cy=co[i+3]; i+=4; }
+          else if(op===OPS.curveTo3){ if(!sub) 開く(); 打つ(_mat(ctm,co[i+2],co[i+3])); if(sub) sub.curves++; cx=co[i+2]; cy=co[i+3]; i+=4; }
+          else if(op===OPS.closePath){ if(sub) 打つ(_mat(ctm,sx,sy)); cx=sx; cy=sy; }
+          else if(op===OPS.rectangle){
+            var rx=co[i], ry=co[i+1], rw=co[i+2], rh=co[i+3]; i+=4;
+            開く(); sub.rect=true;
+            [[rx,ry],[rx+rw,ry],[rx+rw,ry+rh],[rx,ry+rh],[rx,ry]].forEach(function(c){ 打つ(_mat(ctm,c[0],c[1])); });
+            cx=rx; cy=ry; sx=rx; sy=ry;
+          }
+        }
+      }
+      else if(KEEP[fn]){ shapes=shapes.concat(buf2); buf2=[]; sub=null; }
+      else if(DROP[fn]){ buf2=[]; sub=null; }
+    }
+    var view=page.view;
+    pages.push({ shapes:shapes, ox:view[0], oy:view[1],
+                 w:view[2]-view[0], h:view[3]-view[1] });
+  }
+  try{ doc.destroy(); }catch(e){}
+  return pages;
+}
+
+// 集めた閉パスを「穴」「窓」に仕分ける
+function classifyShapes(pg, opts){
+  var 穴=[], 窓=[];
+  var hmin=opts.hmin*MM, hmax=opts.hmax*MM, wmin=opts.wmin*MM;
+  pg.shapes.forEach(function(sp){
+    var pts=sp.pts; if(pts.length<4) return;
+    var xs=pts.map(function(p){return p[0];}), ys=pts.map(function(p){return p[1];});
+    var x0=Math.min.apply(null,xs), x1=Math.max.apply(null,xs);
+    var y0=Math.min.apply(null,ys), y1=Math.max.apply(null,ys);
+    var w=x1-x0, h=y1-y0;
+    if(w<=0.2||h<=0.2) return;
+    var mx=(x0+x1)/2, my=(y0+y1)/2;
+
+    if(sp.curves>=3 && sp.curves<=8 && !sp.rect){
+      // 丸かどうか: 幅と高さが近く、中心からの距離がそろっている
+      if(Math.abs(w-h) > Math.max(w,h)*0.12) return;
+      var r=(w+h)/4, ok=true;
+      for(var i=0;i<pts.length;i++){
+        var d=Math.hypot(pts[i][0]-mx, pts[i][1]-my);
+        if(Math.abs(d-r) > r*0.14){ ok=false; break; }
+      }
+      if(!ok) return;
+      var dia=(w+h)/2;
+      if(dia<hmin||dia>hmax) return;
+      穴.push({ cx:mx, cy:my, d:dia });
+    } else if(sp.rect || (sp.lines>=3 && sp.curves===0)) {
+      // 軸に並行な長方形か
+      var axis=pts.every(function(p){
+        return Math.abs(p[0]-x0)<0.6||Math.abs(p[0]-x1)<0.6||
+               Math.abs(p[1]-y0)<0.6||Math.abs(p[1]-y1)<0.6; });
+      if(!axis) return;
+      if(Math.min(w,h)<wmin) return;
+      if(w>pg.w*0.95 && h>pg.h*0.95) return;      // 紙全体の枠は窓ではない
+      窓.push({ x0:x0, y0:y0, x1:x1, y1:y1, w:w, h:h });
+    }
+  });
+  // 同じものが塗りと線で二重に来るのでまとめる
+  function 重複を消す(list, key){
+    var out=[];
+    list.forEach(function(a){
+      for(var i=0;i<out.length;i++) if(key(a,out[i])) return;
+      out.push(a);
+    });
+    return out;
+  }
+  穴=重複を消す(穴, function(a,b){ return Math.hypot(a.cx-b.cx,a.cy-b.cy)<1.5 && Math.abs(a.d-b.d)<1.5; });
+  窓=重複を消す(窓, function(a,b){ return Math.abs(a.x0-b.x0)<1.5 && Math.abs(a.y0-b.y0)<1.5 &&
+                                       Math.abs(a.w-b.w)<1.5 && Math.abs(a.h-b.h)<1.5; });
+  穴.sort(function(a,b){ return (b.cy-a.cy)||(a.cx-b.cx); });
+  窓.sort(function(a,b){ return (b.y1-a.y1)||(a.x0-b.x0); });
+  return { 穴:穴, 窓:窓 };
+}
+
+// 同じ高さ/同じ横位置に並ぶ穴を組にして、中心間の距離（穴間）を出す
+function holePitches(穴){
+  var out=[];
+  function 組(axis, other){
+    var g=[];
+    穴.forEach(function(hh){
+      var found=null;
+      for(var i=0;i<g.length;i++) if(Math.abs(g[i].v-hh[axis])<2) { found=g[i]; break; }
+      if(!found){ found={ v:hh[axis], list:[] }; g.push(found); }
+      found.list.push(hh);
+    });
+    g.forEach(function(row){
+      if(row.list.length<2) return;
+      row.list.sort(function(a,b){ return a[other]-b[other]; });
+      for(var i=0;i+1<row.list.length;i++)
+        out.push({ a:row.list[i], b:row.list[i+1],
+                   d:Math.abs(row.list[i+1][other]-row.list[i][other]), axis:axis });
+    });
+  }
+  組('cy','cx');   // 横に並ぶ
+  組('cx','cy');   // 縦に並ぶ
+  return out;
 }
 
 // ── 校正PDF生成コア (1ファイル分) ──
@@ -212,6 +403,14 @@ async function buildProofPdf(srcBytes, opts){
   var col=P.rgb(opts.color[0],opts.color[1],opts.color[2]);
   var marginPt=opts.margin*MM, bleedPt=opts.bleed*MM;
   var dash=opts.dash?[3,2]:undefined;
+
+  // 穴・窓を先に取り出しておく（pdf.js で1回だけ読む）
+  var 図形=null;
+  if(opts.hole){
+    try{ 図形=await extractShapes(srcBytes); }
+    catch(e){ console.warn('図形の抽出に失敗', e); 図形=null; }
+  }
+  var 見つけた=[];
 
   var idxs=src.getPageIndices();
   for(var pi=0; pi<idxs.length; pi++){
@@ -274,6 +473,68 @@ async function buildProofPdf(srcBytes, opts){
       }
     }
 
+    // ── 穴・窓の寸法 ────────────────────────────────
+    if(opts.hole && 図形 && 図形[pi]){
+      var pgS=図形[pi];
+      var 仕分け=classifyShapes(pgS, opts);
+      // PDFユーザー空間 → 校正ページの座標
+      var ox=marginPt-pgS.ox, oy=marginPt-pgS.oy;
+      var hc=P.rgb(0.86,0.08,0.24);                  // 穴・窓は赤で描く
+      var fs2=Math.max(6.5, Math.min(9, marginPt*0.26));
+
+      function 文字(t,x,y,align){
+        var w2=font.widthOfTextAtSize(t,fs2);
+        var x2=(align==='c')? x-w2/2 : (align==='r'? x-w2 : x);
+        page.drawRectangle({ x:x2-1.5, y:y-1.5, width:w2+3, height:fs2+1, color:P.rgb(1,1,1), opacity:0.85 });
+        page.drawText(t,{ x:x2, y:y, size:fs2, font:font, color:hc });
+      }
+      function 引出線(x1,y1,x2,y2){ line(x1,y1,x2,y2,0.4,hc); }
+
+      // 穴: 直径と、いちばん近い2辺からの距離
+      仕分け.穴.forEach(function(hh,ix){
+        var X=hh.cx+ox, Y=hh.cy+oy, r=hh.d/2;
+        page.drawCircle({ x:X, y:Y, size:r, borderColor:hc, borderWidth:0.4 });
+        // 直径（右上へ引き出す）
+        var lx=X+r*0.71, ly=Y+r*0.71;
+        引出線(lx,ly, lx+7, ly+7);
+        文字('ø'+fmtmm(hh.d), lx+8, ly+7);
+        // 左右いちばん近い辺から
+        var 左=X-L, 右=R-X;
+        var yh=Y;
+        if(左<=右){ 引出線(L,yh,X,yh); 文字(fmtmm(左), (L+X)/2, yh+1.5, 'c'); }
+        else      { 引出線(X,yh,R,yh); 文字(fmtmm(右), (X+R)/2, yh+1.5, 'c'); }
+        // 上下いちばん近い辺から
+        var 下=Y-B, 上=T-Y;
+        if(下<=上){ 引出線(X,B,X,Y); 文字(fmtmm(下), X+2, (B+Y)/2); }
+        else      { 引出線(X,Y,X,T); 文字(fmtmm(上), X+2, (Y+T)/2); }
+        見つけた.push({ 種:'穴', p:pi+1,
+                        文:'ø'+fmtmm(hh.d)+'  左から'+fmtmm(X-L)+' / 下から'+fmtmm(Y-B) });
+      });
+
+      // 穴間（中心から中心）
+      holePitches(仕分け.穴).forEach(function(pp){
+        var ax=pp.a.cx+ox, ay=pp.a.cy+oy, bx=pp.b.cx+ox, by=pp.b.cy+oy;
+        引出線(ax,ay,bx,by);
+        文字(fmtmm(pp.d), (ax+bx)/2, (ay+by)/2+2, 'c');
+        見つけた.push({ 種:'穴間', p:pi+1, 文:fmtmm(pp.d) });
+      });
+
+      // 窓: 大きさと、四辺それぞれからの距離
+      仕分け.窓.forEach(function(ww){
+        var x0=ww.x0+ox, y0=ww.y0+oy, x1=ww.x1+ox, y1=ww.y1+oy;
+        page.drawRectangle({ x:x0, y:y0, width:ww.w, height:ww.h,
+                             borderColor:hc, borderWidth:0.4, opacity:0 });
+        文字(fmtmm(ww.w)+' × '+fmtmm(ww.h), (x0+x1)/2, y1+2.5, 'c');
+        引出線(L,(y0+y1)/2, x0,(y0+y1)/2);  文字(fmtmm(x0-L), (L+x0)/2, (y0+y1)/2+1.5, 'c');
+        引出線(x1,(y0+y1)/2, R,(y0+y1)/2);  文字(fmtmm(R-x1), (x1+R)/2, (y0+y1)/2+1.5, 'c');
+        引出線((x0+x1)/2,B, (x0+x1)/2,y0);  文字(fmtmm(y0-B), (x0+x1)/2+2, (B+y0)/2);
+        引出線((x0+x1)/2,y1, (x0+x1)/2,T);  文字(fmtmm(T-y1), (x0+x1)/2+2, (y1+T)/2);
+        見つけた.push({ 種:'窓', p:pi+1,
+                        文:fmtmm(ww.w)+'×'+fmtmm(ww.h)+'  左から'+fmtmm(x0-L)
+                           +' / 右から'+fmtmm(R-x1)+' / 下から'+fmtmm(y0-B)+' / 上から'+fmtmm(T-y1) });
+      });
+    }
+
     // 上部キャプション
     if(opts.caption){
       var cs=Math.max(8, Math.min(12, marginPt*0.34));
@@ -283,7 +544,28 @@ async function buildProofPdf(srcBytes, opts){
       if(cy+cs<pageH){ page.drawText(cap,{ x:pageW/2-cw/2, y:cy, size:cs, font:fontB, color:col }); }
     }
   }
+  buildProofPdf.見つけた = 見つけた;
   return await out.save();
+}
+
+// 見つかった穴・窓を設定欄に出す（拾いすぎ・拾えなさに気づけるように）
+function 穴の一覧を出す(list, opts){
+  var el=document.getElementById('holelist'); if(!el) return;
+  if(!opts.hole){ el.textContent='（自動採寸は切ってあります）'; return; }
+  if(!window.pdfjsLib){ el.textContent='pdf.js を読み込めませんでした。自動採寸は使えません。'; return; }
+  if(!list || !list.length){
+    el.innerHTML='見つかりませんでした。<br>穴が線ではなく画像で描かれている、'
+                +'または直径の範囲から外れている可能性があります。';
+    return;
+  }
+  var 穴=list.filter(function(x){return x.種==='穴';}).length;
+  var 窓=list.filter(function(x){return x.種==='窓';}).length;
+  var h='<b>穴 '+穴+' / 窓 '+窓+'</b><br>';
+  list.slice(0,24).forEach(function(x){
+    h+='<span style="color:#b91c1c">●</span> p'+x.p+' '+esc(x.種)+'  '+esc(x.文)+'<br>';
+  });
+  if(list.length>24) h+='ほか '+(list.length-24)+' 件<br>';
+  el.innerHTML=h;
 }
 
 var _timer=null, _lastBytes=null, _lastName='';
@@ -303,6 +585,7 @@ async function generate(doDownload){
       var url=URL.createObjectURL(blob);
       var pv=document.getElementById('preview'); pv.src=url; pv.style.display='block';
       st.textContent='✅ '+fmtmm(f.w)+'×'+fmtmm(f.h)+'mm / '+f.pages+'p / '+kb(bytes.byteLength);
+      穴の一覧を出す(buildProofPdf.見つけた, opts);
       if(doDownload){ var a=document.createElement('a'); a.href=url; a.download=_lastName; a.click(); }
     } else {
       // 複数ファイル一括出力 → ZIP
