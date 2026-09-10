@@ -118,15 +118,62 @@ function 画面_利用者_() {
   return { email: mail };
 }
 
-/** 伝票番号で1件読む。書ける列の一覧も一緒に返す */
-function 画面_読み込み(denpyo) {
+/**
+ * 番号で1件読む。伝票番号でも見積番号でも引ける。
+ * 同じ案件の他の段階も一緒に返す（画面上部の履歴に出すため）。
+ */
+function 画面_読み込み(番号) {
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
+  番号 = String(番号 || '').trim();
+  if (!番号) throw new Error('番号を入れてください');
+
+  var rows = find_(lay, [{ '伝票番号': '==' + 番号 }], 1, 1, null);
+  if (!rows.records.length) rows = find_(lay, [{ '見積番号': '==' + 番号 }], 1, 1, null);
+  var rec = rows.records[0] || null;
+
   return {
     ok: true,
     user: who.email,
     writable: fieldInfo_(lay).writable,
-    record: getByDenpyo_(lay, denpyo)
+    record: rec,
+    履歴: rec ? 案件の履歴_(lay, rec.fields['案件ID']) : []
+  };
+}
+
+/** 同じ案件の段階を、古い順に並べて返す */
+function 案件の履歴_(lay, 案件ID) {
+  if (!案件ID) return [];
+  var rows = find_(lay, [{ '案件ID': '==' + 案件ID }], 500, 1, null);
+  return rows.records.map(function (r) {
+    return {
+      recordId: r.recordId,
+      区分: r.fields['案件区分'] || '（従来の受注）',
+      番号: r.fields['見積番号'] || r.fields['伝票番号'] || '',
+      起票日: r.fields['起票日'] || '',
+      合計金額: r.fields['合計金額'],
+      売価金額: r.fields['売価金額']
+    };
+  }).sort(function (a, b) {
+    if (a.起票日 !== b.起票日) return a.起票日 < b.起票日 ? -1 : 1;
+    return Number(a.recordId) - Number(b.recordId);
+  });
+}
+
+/** 履歴の1件を開く */
+function 画面_recordIdで読む(recordId) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  var r = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records/' + recordId);
+  if (r.code !== '0') throw new Error('読み込みに失敗 (' + r.code + ') ' + r.message);
+  var d = (r.response.data || [])[0];
+  if (!d) throw new Error('レコードが見つかりません');
+  var rec = { recordId: d.recordId, modId: d.modId, fields: d.fieldData };
+  return {
+    ok: true, user: who.email,
+    writable: fieldInfo_(lay).writable,
+    record: rec,
+    履歴: 案件の履歴_(lay, rec.fields['案件ID'])
   };
 }
 
@@ -161,7 +208,8 @@ function 画面_新規案件(種別, 初期値) {
     throw new Error('番号が自動採番されませんでした。作成を取り消しました。');
   }
   var r = 番号と段階を入れる_(lay, rec, 案件ID, 種別, who);
-  return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [] };
+  return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [],
+           writable: fieldInfo_(lay).writable, 履歴: 案件の履歴_(lay, 案件ID) };
 }
 
 /**
@@ -206,7 +254,9 @@ function 画面_新規段階(案件ID, 種別) {
     参考: 参考 ? { recordId: 参考.recordId, 番号: 参考.fields['見積番号'] || 参考.fields['伝票番号'] || '',
                   起票日: 参考.fields['起票日'] || '',
                   合計金額: 参考.fields['合計金額'], 売価金額: 参考.fields['売価金額'] } : null,
-    差分: 参考 ? 差分_(参考.fields, r.fields) : []
+    差分: 参考 ? 差分_(参考.fields, r.fields) : [],
+    writable: fieldInfo_(lay).writable,
+    履歴: 案件の履歴_(lay, 案件ID)
   };
 }
 
