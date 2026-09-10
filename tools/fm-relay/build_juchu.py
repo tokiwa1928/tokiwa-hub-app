@@ -690,12 +690,19 @@ LOGIC = r"""
 """
 
 
-def 組み立てる(src, which, 呼ぶ実装, back):
+KAIZEN = r"""
+<script>window.KAIZEN_KEY = 'juchu-fm';</script>
+<script src="kaizen.js"></script>
+"""
+
+
+def 組み立てる(src, which, 呼ぶ実装, back, 追加=''):
     addon = (見出し.replace('__WHICH__', which)
              + STYLE
              + BAR.replace('__BACK__', back)
              + 呼ぶ実装
-             + LOGIC)
+             + LOGIC
+             + 追加)
     return src.replace('</body>', addon + '\n</body>', 1)
 
 
@@ -708,7 +715,7 @@ def main():
     gas = 組み立てる(src, 'Apps Script が配る版', 呼ぶ_GAS, '')
     hub = 組み立てる(src, 'Hub に置く版',
                      呼ぶ_HUB.replace('__WEBAPP__', WEBAPP).replace('__CLIENT_ID__', CLIENT_ID),
-                     '<a class="back" href="../index.html">← Hub</a>')
+                     '<a class="back" href="../index.html">← Hub</a>', KAIZEN)
 
     # GAS の HtmlService はテンプレート記法 <?= ?> を解釈してしまうので確認だけしておく
     for bad in ('<?=', '<?!'):

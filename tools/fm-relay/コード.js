@@ -593,6 +593,18 @@ function update_(layout, recordId, modId, fields, who) {
     throw new Error('書ける項目がありませんでした（無視: ' + ignored.join('、') + '）');
   }
 
+  // 戻せるように、書き換える前の値を控えておく
+  var 前 = {};
+  try {
+    var b = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records/' + recordId);
+    var bd = ((b.response || {}).data || [])[0];
+    if (bd && bd.fieldData) {
+      Object.keys(send).forEach(function (k) {
+        if (bd.fieldData[k] !== undefined) 前[k] = bd.fieldData[k];
+      });
+    }
+  } catch (e) { /* 控えが取れなくても保存は止めない */ }
+
   var r = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records/' + recordId,
                   'patch', { fieldData: send, modId: String(modId) });
 
@@ -605,7 +617,7 @@ function update_(layout, recordId, modId, fields, who) {
 
   var after = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records/' + recordId);
   var rec   = (after.response.data || [])[0] || {};
-  log_(who, layout, recordId, send);
+  log_(who, layout, recordId, send, 前);
 
   return { saved: Object.keys(send), ignored: ignored,
            recordId: recordId, modId: rec.modId, fields: rec.fieldData || {} };
@@ -689,13 +701,33 @@ function 差分_(前, 後) {
 }
 
 /** 誰がいつ何を書いたかを残す。スプレッドシートIDが無ければ何もしない */
-function log_(who, layout, recordId, sent) {
+/**
+ * 書き込みの記録。誰がいつ何を、そして「前は何だったか」を残す。
+ * 置き場所（スプレッドシート）が無ければ自分で作って、その ID を覚える。
+ * 設定を忘れて記録が残らない、ということが起きないようにするため。
+ */
+function 記録の置き場_() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('LOG_SHEET_ID');
+  if (id) {
+    try { return SpreadsheetApp.openById(id); } catch (e) { /* 消えていたら作り直す */ }
+  }
+  var ss = SpreadsheetApp.create('FileMaker中継 書き込み記録');
+  var sh = ss.getSheets()[0];
+  sh.setName('記録');
+  sh.appendRow(['日時', '誰が', 'レイアウト', 'recordId', '直した項目',
+                '書いた内容', '書く前の内容']);
+  sh.setFrozenRows(1);
+  props.setProperty('LOG_SHEET_ID', ss.getId());
+  return ss;
+}
+
+function log_(who, layout, recordId, sent, 前) {
   try {
-    var id = PropertiesService.getScriptProperties().getProperty('LOG_SHEET_ID');
-    if (!id) return;
-    SpreadsheetApp.openById(id).getSheets()[0].appendRow(
+    記録の置き場_().getSheets()[0].appendRow(
       [new Date(), who.email, layout, recordId, Object.keys(sent).join('、'),
-       JSON.stringify(sent).slice(0, 4000)]);
+       JSON.stringify(sent).slice(0, 4000),
+       JSON.stringify(前 || {}).slice(0, 4000)]);
   } catch (e) { /* 記録に失敗しても本処理は止めない */ }
 }
 
@@ -735,7 +767,8 @@ function セットアップ確認() {
   var dev = props.getProperty('DEV_KEY');
   if (dev) log.push('⚠ DEV_KEY が設定されています。動作確認が済んだら必ず削除してください');
   var sheet = props.getProperty('LOG_SHEET_ID');
-  log.push((sheet ? '○ ' : '－ ') + 'LOG_SHEET_ID : ' + (sheet || '未設定（書き込み記録は残しません）'));
+  log.push((sheet ? '○ ' : '－ ') + 'LOG_SHEET_ID : '
+           + (sheet || '未設定（最初の書き込みのときに自動で作ります）'));
 
   if (refresh) {
     log.push('');
