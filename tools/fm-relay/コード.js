@@ -146,12 +146,22 @@ var 一覧の列 = [
   '合計数1', '売価金額', '合計金額', '注残数'
 ];
 
+/** FileMaker の日付は MM/DD/YYYY で渡す */
+function 日付_(d) {
+  function z(n) { return (n < 10 ? '0' : '') + n; }
+  return z(d.getMonth() + 1) + '/' + z(d.getDate()) + '/' + d.getFullYear();
+}
+
 /**
  * 条件で探して一覧を返す。
- *   { キーワード, 得意先コード, 段階, 件数 }
+ *   { キーワード, 得意先コード, 段階, 日数, 件数 }
  *   ・キーワードは製品名の部分一致
  *   ・段階は 案件区分（予算見積/見積/受注/失注）。空なら全部
- *   ・何も指定がなければ、起票日の新しい順に上から返す
+ *   ・日数は起票日の遡り。0 は「すべて」
+ *
+ * 【速さの話】遅いのはレイアウトの重さではなく「並べ替える件数」。実測:
+ *     条件なし（73,578件）45秒 ／ 品名で2,124件 1.2秒 ／ 得意先で6件 0.36秒
+ *   なので、絞り込みが何も無いときは起票日で区切って件数を減らす。
  */
 function 画面_一覧(条件) {
   var who = 画面_利用者_();
@@ -166,35 +176,31 @@ function 画面_一覧(条件) {
   var キーワード = String(条件['キーワード'] || '').trim();
   var 得意先 = String(条件['得意先コード'] || '').trim();
   var 段階 = String(条件['段階'] || '').trim();
+  var 日数 = Number(条件['日数']);
+  if (isNaN(日数)) 日数 = 90;
 
   if (キーワード) q['製品名'] = '*' + キーワード + '*';
   if (得意先)    q['得意先コード'] = '==' + 得意先;
   if (段階)      q['案件区分'] = '==' + 段階;
 
+  // 何も絞られていないのに全件を並べ替えると45秒かかる。既定で直近3か月に区切る
+  if (!Object.keys(q).length && !(日数 > 0)) 日数 = 90;
+  if (日数 > 0) {
+    var から = new Date();
+    から.setDate(から.getDate() - 日数);
+    q['起票日'] = '>=' + 日付_(から);
+  }
+
   var sort = [{ fieldName: '起票日', sortOrder: 'descend' }];
   var t0 = new Date();
-  var rows;
-  if (Object.keys(q).length) {
-    rows = find_(lay, [q], 件数, 1, sort);
-  } else {
-    // 条件なしは _find が使えないので、レイアウトの先頭から取る
-    var r = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records'
-                    + '?_limit=' + 件数 + '&_offset=1'
-                    + '&_sort=' + encodeURIComponent(JSON.stringify(sort)));
-    if (r.code !== '0') throw new Error('一覧の取得に失敗 (' + r.code + ') ' + r.message);
-    rows = {
-      total: (r.response.dataInfo || {}).foundCount || 0,
-      records: (r.response.data || []).map(function (d) {
-        return { recordId: d.recordId, modId: d.modId, fields: d.fieldData };
-      })
-    };
-  }
+  var rows = find_(lay, [q], 件数, 1, sort);
 
   return {
     ok: true,
     user: who.email,
     件数: rows.records.length,
     全体: rows.total,
+    日数: 日数,
     ミリ秒: new Date() - t0,
     行: rows.records.map(function (r) {
       var o = { recordId: r.recordId };

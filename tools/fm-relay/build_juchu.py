@@ -129,6 +129,13 @@ BAR = r"""
         <option value="">すべて</option>
         <option>予算見積</option><option>見積</option><option>受注</option><option>失注</option>
       </select></div>
+    <div><label>期間（起票日）</label>
+      <select id="ff-days">
+        <option value="90">直近3か月</option>
+        <option value="365">直近1年</option>
+        <option value="1095">直近3年</option>
+        <option value="0">すべて（遅い）</option>
+      </select></div>
     <div><label>件数</label>
       <select id="ff-n"><option>50</option><option>100</option><option>200</option></select></div>
     <button id="ff-go">探す</button>
@@ -531,16 +538,22 @@ LOGIC = r"""
     { c:'伝票番号',   h:'伝票番号' },
     { c:'見積番号',   h:'見積番号' },
     { c:'案件区分',   h:'段階', badge:true },
-    { c:'起票日',     h:'起票日' },
+    { c:'起票日',     h:'起票日', date:true },
     { c:'得意先コード', h:'得意先' },
     { c:'製品名',     h:'製品名' },
     { c:'品種',       h:'品種' },
     { c:'合計数1',    h:'数量', num:true },
     { c:'売価金額',   h:'売価', money:true },
     { c:'合計金額',   h:'原価', money:true },
-    { c:'納品日',     h:'納品日' },
+    { c:'納品日',     h:'納品日', date:true },
     { c:'注残数',     h:'注残', num:true }
   ];
+
+  // FileMaker は MM/DD/YYYY で返す。日本の並びに直す
+  function 日付(v) {
+    var m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(v || ''));
+    return m ? (m[3] + '/' + m[1] + '/' + m[2]) : (v == null ? '' : v);
+  }
 
   function 円(v) {
     var x = Number(v);
@@ -564,6 +577,8 @@ LOGIC = r"""
         if (k.badge) {
           var cls = STAGE_CLASS[v] || '';
           h += '<td>' + (v ? '<span class="badge ' + cls + '">' + esc(v) + '</span>' : '') + '</td>';
+        } else if (k.date) {
+          h += '<td>' + esc(日付(v)) + '</td>';
         } else if (k.money || k.num) {
           h += '<td class="num">' + esc(円(v)) + '</td>';
         } else {
@@ -576,8 +591,9 @@ LOGIC = r"""
     box.innerHTML = h;
     box.style.display = 'block';
     $('ff-msg').textContent = r.件数 + ' 件'
-      + (r.全体 && r.全体 > r.件数 ? '（全 ' + r.全体 + ' 件のうち）' : '')
-      + '　' + r.ミリ秒 + 'ms　行をクリックで開きます';
+      + (r.全体 && r.全体 > r.件数 ? '（あてはまる ' + r.全体.toLocaleString() + ' 件のうち）' : '')
+      + (r.日数 ? '　起票日 直近' + r.日数 + '日' : '')
+      + '　' + (r.ミリ秒 / 1000).toFixed(1) + '秒　行をクリックで開きます';
 
     Array.prototype.forEach.call(box.querySelectorAll('tr.r'), function (tr) {
       tr.onclick = function () {
@@ -596,8 +612,13 @@ LOGIC = r"""
       'キーワード': $('ff-kw').value.trim(),
       '得意先コード': $('ff-cust').value.trim(),
       '段階': $('ff-stage').value,
+      '日数': Number($('ff-days').value),
       '件数': Number($('ff-n').value || 50)
     };
+    var 絞りなし = !条件['キーワード'] && !条件['得意先コード'] && !条件['段階'];
+    if (絞りなし && 条件['日数'] === 0
+        && !confirm('絞り込みなしで全部を並べ替えると、45秒ほどかかります。\n\n'
+                    + '品名や得意先で絞るか、期間を選ぶとすぐ返ります。続けますか？')) return;
     $('ff-msg').textContent = '探しています…';
     $('ff-go').disabled = true;
     呼ぶ('画面_一覧', [条件])
