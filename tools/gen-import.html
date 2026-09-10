@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GEN 取り込み | Tokiwa Hub</title>
+<!--
+  📥 GEN 取り込み
+
+  GEN から書き出した Excel をここに放り込むと、Hub に入る。
+  どの画面の書き出しかは、4行目の見出しを見て自動で判断する。
+    受注登録 / 発注登録 / 発注受入登録 / 入金登録 / 品目マスタ / 取引先マスタ / 色マスタ / 納品登録（月別売上）
+
+  同じ番号のものは新しい書き出しで上書きされるので、何度放り込んでも二重にならない。
+  取り込んだものは、受注番号を入れると 受注 → 発注 → 受入 → 入金 の流れで見られる。
+
+  置き場所: このパソコンのブラウザの中（localStorage の tokiwa_gen）。
+  本体の共有データとは分けてある（大きいので、本体の同期を重くしないため）。
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --gen:#0F6E8C; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--ink); line-height:1.75;
+        font-family:'Yu Gothic','Hiragino Kaku Gothic ProN',Meiryo,sans-serif; }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header .logo{ font-weight:800; font-size:14px; letter-spacing:.04em; }
+  header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header a{ color:#cbd5e1; font-size:12px; text-decoration:none; }
+  main{ max-width:1080px; margin:18px auto; padding:0 14px 4rem; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.8rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.5rem; text-transform:uppercase; }
+  .drop{ border:2px dashed #94a3b8; border-radius:10px; padding:2rem 1rem; text-align:center; color:#64748b;
+         background:#fafaf9; cursor:pointer; font-size:14px; }
+  .drop.on{ border-color:var(--gen); background:#ecfeff; color:var(--gen); }
+  .drop b{ color:var(--ink); }
+  .btn{ font:inherit; font-size:13px; font-weight:600; padding:7px 14px; border:1px solid #d0cec8;
+        border-radius:7px; background:#fff; cursor:pointer; }
+  .btn-p{ background:var(--gen); border-color:var(--gen); color:#fff; }
+  table{ border-collapse:collapse; width:100%; font-size:12.5px; }
+  th{ text-align:left; font-size:11px; color:#666; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap; background:#f4f3f0; }
+  td{ padding:5px 8px; border-bottom:1px solid #f0eeea; vertical-align:top; }
+  td.n{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .kind{ font-weight:700; }
+  .muted{ color:#94a3b8; font-size:11.5px; }
+  .log{ font-size:12.5px; margin-top:.6rem; }
+  .log .ok{ color:#15803d; } .log .ng{ color:#b91c1c; }
+  .bar{ display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+  input[type=text]{ font:inherit; font-size:14px; padding:7px 10px; border:1px solid #d0cec8; border-radius:6px; }
+  .chain{ display:flex; gap:8px; flex-wrap:wrap; margin-top:.6rem; }
+  .step{ flex:1 1 200px; border:1px solid var(--line); border-top:3px solid var(--gen); border-radius:6px; padding:.5rem .7rem; background:#fff; }
+  .step h4{ margin:0 0 .3rem; font-size:12.5px; color:var(--gen); }
+  .step .row{ font-size:12px; padding:2px 0; border-bottom:1px dashed #eee; }
+  .step .row:last-child{ border-bottom:none; }
+  .step .none{ color:#bbb; font-size:12px; }
+  .tabs{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:.6rem; }
+  .tab{ font:inherit; font-size:12px; font-weight:700; padding:5px 12px; cursor:pointer; border:1px solid var(--line); background:#fff; color:#555; border-radius:16px; }
+  .tab.on{ background:#1a1a1a; color:#fff; border-color:#1a1a1a; }
+  .scroll{ overflow:auto; max-height:52vh; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 📥</span>
+  <span class="tname">GEN 取り込み</span>
+  <a href="../index.html">← Hub</a>
+</header>
+
+<main>
+  <div class="sec">
+    <div class="drop" id="drop">
+      ここに GEN から書き出した Excel を<b>まとめて</b>放り込んでください<br>
+      <span class="muted">受注登録・発注登録・発注受入登録・入金登録・品目マスタ・取引先マスタ・色マスタ・納品登録（月別売上）。どの画面かは自動で判断します</span><br>
+      <button class="btn" style="margin-top:.7rem" onclick="event.stopPropagation();document.getElementById('pick').click()">ファイルを選ぶ</button>
+      <input type="file" id="pick" multiple accept=".xlsx,.xls" style="display:none" onchange="取り込む(this.files)">
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="sec">
+    <div class="st">受注番号で追う</div>
+    <div class="bar">
+      <input type="text" id="q" placeholder="例: a106999" style="width:180px" onkeydown="if(event.key==='Enter')追う()">
+      <button class="btn btn-p" onclick="追う()">追う</button>
+      <span class="muted">受注 → 発注 → 受入 → 入金 の順に、GEN に何が入っているかを出します</span>
+    </div>
+    <div class="chain" id="chain"></div>
+  </div>
+
+  <div class="sec">
+    <div class="st">いま Hub に入っているもの</div>
+    <table>
+      <thead><tr><th>画面</th><th style="text-align:right">件数</th><th>いちばん新しい日付</th><th>最後に取り込んだ</th><th></th></tr></thead>
+      <tbody id="sum"></tbody>
+    </table>
+  </div>
+
+  <div class="sec">
+    <div class="tabs" id="tabs"></div>
+    <div class="bar" style="margin-bottom:.5rem">
+      <input type="text" id="f" placeholder="絞り込み（どの列でも）" style="flex:1;min-width:200px" oninput="一覧()">
+      <span class="muted" id="fcnt"></span>
+    </div>
+    <div class="scroll"><table><thead id="lh"></thead><tbody id="lb"></tbody></table></div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+var KEY = 'tokiwa_gen';
+
+// どの画面の書き出しか。4行目の見出しに含まれる列名で見分ける
+var 画面 = {
+  // 受注登録は1つの受注番号に複数行がある（本体＋版代など）。番号だけを鍵にすると2行目が消える
+  '受注':     { 見分け:['受注番号','受注額'],         鍵:function(r){ return [r['受注番号'],r['製品名'],r['受注数'],r['受注単価']].join('|'); }, 日付:'受注日' },
+  '発注':     { 見分け:['発注書番号','手配区分'],     鍵:function(r){ return [r['発注書番号'],r['受注番号'],r['製品名'],r['数量'],r['発注単価']].join('|'); }, 日付:'発注日' },
+  '受入':     { 見分け:['受入番号'],                  鍵:function(r){ return r['受入番号']+'|'+(r['オーダー番号']||''); }, 日付:'受入日' },
+  '入金':     { 見分け:['入金番号'],                  鍵:function(r){ return r['入金番号']+'|'+(r['行']||''); }, 日付:'入金日' },
+  '品目':     { 見分け:['品目コード'],                鍵:function(r){ return r['品目コード']; },            日付:null },
+  '取引先':   { 見分け:['取引先コード','請求方法'],   鍵:function(r){ return r['取引先コード']; },          日付:null },
+  '色':       { 見分け:['色ID'],                      鍵:function(r){ return r['色ID']; },                  日付:null },
+  '月別売上': { 見分け:['売上月'],                    鍵:function(r){ return 列(r,'売上月'); },              日付:null, 横持ち:true }
+};
+
+// 「売上月（納品）」のように、名前の後ろに補足が付く列を前方一致で取る
+function 列(r, 名){ var k=Object.keys(r).filter(function(h){ return h===名 || h.indexOf(名)===0; })[0]; return k? r[k] : ''; }
+
+function load(){ try{ return JSON.parse(localStorage.getItem(KEY))||{}; }catch(e){ return {}; } }
+function save(g){ localStorage.setItem(KEY, JSON.stringify(g)); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){ t.style.display='none'; },2600); }
+function logline(cls, m){ var l=document.getElementById('log'); l.insertAdjacentHTML('beforeend','<div class="'+cls+'">'+esc(m)+'</div>'); }
+function 見出しを掃除(h){ return String(h==null?'':h).replace(/\s*\*\s*$/,'').replace(/\s+/g,' ').trim(); }   // 「ロット区分 *」の * を落とす
+function 日付文字(v){
+  if (v==null||v==='') return '';
+  if (v instanceof Date) return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+  return String(v);
+}
+
+function 見分ける(見出し){
+  function ある(c){ return 見出し.some(function(h){ return h===c || h.indexOf(c)===0; }); }
+  var 候補=Object.keys(画面).filter(function(k){ return 画面[k].見分け.every(ある); });
+  return 候補[0]||null;
+}
+
+function シートを読む(ws){
+  var rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:true, defval:'' });
+  // 見出し行は「発行日時」の行のあとの、最初に3つ以上の文字が並ぶ行
+  var hi=-1;
+  for (var i=0;i<Math.min(rows.length,10);i++){
+    var 文字=rows[i].filter(function(c){ return String(c).trim()!==''; });
+    if (文字.length>=3 && !/発行日時/.test(文字.join(''))){ hi=i; break; }
+  }
+  if (hi<0) return null;
+  var 見出し = rows[hi].map(見出しを掃除);
+  var 種 = 見分ける(見出し);
+  if (!種) return { 種:null, 見出し:見出し };
+  var out=[];
+  for (var r=hi+1;r<rows.length;r++){
+    var row=rows[r]; if (!row || row.every(function(c){ return String(c).trim()===''; })) continue;
+    var o={};
+    見出し.forEach(function(h,c){ if(!h) return; var v=row[c]; o[h] = (v instanceof Date)? 日付文字(v) : v; });
+    out.push(o);
+  }
+  return { 種:種, 見出し:見出し, 行:out };
+}
+
+function 取り込む(files){
+  if (!files || !files.length) return;
+  document.getElementById('log').innerHTML='';
+  var g=load(); var 残り=files.length;
+  Array.prototype.forEach.call(files, function(f){
+    var fr=new FileReader();
+    fr.onload=function(){
+      try{
+        var wb=XLSX.read(fr.result,{type:'array',cellDates:true});
+        var res=シートを読む(wb.Sheets[wb.SheetNames[0]]);
+        if (!res){ logline('ng','× '+f.name+': 見出しが見つかりません'); }
+        else if (!res.種){ logline('ng','× '+f.name+': どの画面か分かりません（見出し: '+res.見出し.slice(0,6).join('、')+'…）'); }
+        else {
+          var def=画面[res.種];
+          if (!g[res.種]) g[res.種]={ 行:{}, 見出し:res.見出し, 取込:[] };
+          var 新=0, 更新=0;
+          res.行.forEach(function(r){
+            var k=def.鍵(r); if (k==null||String(k).trim()==='' ) return;
+            if (g[res.種].行[k]) 更新++; else 新++;
+            g[res.種].行[k]=r;
+          });
+          g[res.種].見出し=res.見出し;
+          g[res.種].取込.unshift({ 日時:new Date().toISOString(), ファイル:f.name, 件数:res.行.length, 新:新, 更新:更新 });
+          g[res.種].取込=g[res.種].取込.slice(0,20);
+          logline('ok','○ '+f.name+' → '+res.種+'：'+res.行.length+' 行（新しく '+新+'・上書き '+更新+'）');
+        }
+      }catch(e){ logline('ng','× '+f.name+': '+e.message); }
+      if(--残り===0){
+        try{ save(g); toast('💾 取り込みました'); }
+        catch(e){ logline('ng','× 保存できませんでした（ブラウザの保存容量を超えています）'); }
+        まとめ(); タブ(); 一覧();
+      }
+    };
+    fr.readAsArrayBuffer(f);
+  });
+  document.getElementById('pick').value='';
+}
+
+// ------------------------------------------------ まとめ
+
+function まとめ(){
+  var g=load(); var tb=document.getElementById('sum'); var h='';
+  Object.keys(画面).forEach(function(k){
+    var d=g[k]; if(!d){ h+='<tr><td class="kind">'+k+'</td><td class="n muted">—</td><td class="muted">まだ</td><td></td><td></td></tr>'; return; }
+    var n=Object.keys(d.行).length, 最新='';
+    var col=画面[k].日付;
+    if (col){ Object.keys(d.行).forEach(function(i){ var v=String(d.行[i][col]||''); if(v>最新) 最新=v; }); }
+    var t=d.取込[0]||{};
+    h+='<tr><td class="kind">'+k+'</td><td class="n">'+n.toLocaleString()+'</td><td>'+esc(最新||'—')+'</td>'
+      +'<td class="muted">'+esc((t.日時||'').slice(0,16).replace('T',' '))+' '+esc(t.ファイル||'')+'</td>'
+      +'<td><button class="btn" style="font-size:11px;padding:2px 8px" onclick="消す(\''+k+'\')">消す</button></td></tr>';
+  });
+  tb.innerHTML=h;
+}
+function 消す(k){
+  if(!confirm(k+' を Hub から消します（GEN 側には何もしません）。よろしいですか？')) return;
+  var g=load(); delete g[k]; save(g); まとめ(); タブ(); 一覧(); toast('消しました');
+}
+
+// ------------------------------------------------ 受注番号で追う
+
+function 追う(){
+  var no=(document.getElementById('q').value||'').trim(); var g=load(); var el=document.getElementById('chain');
+  if(!no){ el.innerHTML=''; return; }
+  function 探す(k, 列){ var d=g[k]; if(!d) return null; return Object.keys(d.行).map(function(i){ return d.行[i]; }).filter(function(r){ return 列.some(function(c){ return String(r[c]||'').trim()===no; }); }); }
+  function 箱(題, rows, 出す){
+    var h='<div class="step"><h4>'+題+'</h4>';
+    if (rows===null) h+='<div class="none">（'+題+'は未取込）</div>';
+    else if (!rows.length) h+='<div class="none">なし</div>';
+    else rows.forEach(function(r){ h+='<div class="row">'+出す(r)+'</div>'; });
+    return h+'</div>';
+  }
+  var 受注=探す('受注',['受注番号']);
+  var 発注=探す('発注',['受注番号']);
+  var 受入=探す('受入',['伝票番号']);
+  // 入金は請求書番号でつながる。受注番号からは直接引けないので、得意先で近いものを出す
+  var 得意先=(受注&&受注[0])?受注[0]['取引先名 (得意先)']:'';
+  var 入金=g['入金']? Object.keys(g['入金'].行).map(function(i){ return g['入金'].行[i]; }).filter(function(r){ return 得意先 && r['取引先名']===得意先; }).slice(0,5) : null;
+  el.innerHTML =
+    箱('受注登録', 受注, function(r){ return esc(r['受注日'])+'　'+esc(r['取引先名 (得意先)'])+'　<b>'+esc(r['製品名'])+'</b>　'+esc(r['受注数'])+esc(r['単位'])+'　¥'+Number(r['受注額']||0).toLocaleString()+'　<span class="muted">'+esc(r['ロット区分'])+'</span>'; })
+   +箱('発注登録', 発注, function(r){ return esc(r['発注日'])+'　'+esc(r['発注書番号'])+'　'+esc(r['取引先名 (発注先)'])+'　'+esc(r['製品名'])+'　'+esc(r['数量'])+'　¥'+Number(r['発注金額']||0).toLocaleString()+'　<span class="muted">'+esc(r['手配区分'])+'／'+esc(r['受入状況'])+'</span>'; })
+   +箱('発注受入', 受入, function(r){ return esc(r['受入日'])+'　'+esc(r['受入番号'])+'　'+esc(r['取引先名 (オーダー:発注先)'])+'　'+esc(r['品目名'])+'　'+esc(r['受入数'])+'　¥'+Number(r['仕入額']||0).toLocaleString(); })
+   +箱('入金（同じ得意先の直近）', 入金, function(r){ return esc(r['入金日'])+'　'+esc(r['入金番号'])+'　¥'+Number(r['入金金額']||0).toLocaleString()+'　<span class="muted">'+esc(r['入金種別'])+'／'+esc(r['請求書番号'])+'</span>'; });
+}
+
+// ------------------------------------------------ 一覧
+
+var いま='受注';
+function タブ(){
+  var g=load();
+  document.getElementById('tabs').innerHTML=Object.keys(画面).map(function(k){
+    var n=g[k]?Object.keys(g[k].行).length:0;
+    return '<button class="tab'+(k===いま?' on':'')+'" onclick="いま=\''+k+'\';タブ();一覧()">'+k+' <span class="muted" style="color:inherit;opacity:.7">'+n+'</span></button>';
+  }).join('');
+}
+function 一覧(){
+  var g=load(); var d=g[いま]; var lh=document.getElementById('lh'), lb=document.getElementById('lb');
+  if(!d){ lh.innerHTML=''; lb.innerHTML='<tr><td class="muted" style="padding:1.5rem;text-align:center">まだ取り込んでいません</td></tr>'; document.getElementById('fcnt').textContent=''; return; }
+  var cols=d.見出し.filter(function(h){ return h; });
+  var q=(document.getElementById('f').value||'').trim().toLowerCase();
+  var rows=Object.keys(d.行).map(function(i){ return d.行[i]; });
+  if(q) rows=rows.filter(function(r){ return cols.some(function(c){ return String(r[c]||'').toLowerCase().indexOf(q)>=0; }); });
+  var col=画面[いま].日付;
+  if(col) rows.sort(function(a,b){ return String(b[col]||'').localeCompare(String(a[col]||'')); });
+  var 上限=500;
+  lh.innerHTML='<tr>'+cols.map(function(c){ return '<th>'+esc(c)+'</th>'; }).join('')+'</tr>';
+  lb.innerHTML=rows.slice(0,上限).map(function(r){
+    return '<tr>'+cols.map(function(c){ var v=r[c]; var num=typeof v==='number'; return '<td class="'+(num?'n':'')+'">'+esc(num?v.toLocaleString():v)+'</td>'; }).join('')+'</tr>';
+  }).join('');
+  document.getElementById('fcnt').textContent=rows.length.toLocaleString()+' 件'+(rows.length>上限?'（先頭 '+上限+' 件を表示）':'');
+}
+
+// ドラッグ＆ドロップ
+(function(){
+  var d=document.getElementById('drop');
+  d.onclick=function(){ document.getElementById('pick').click(); };
+  ['dragenter','dragover'].forEach(function(e){ d.addEventListener(e,function(ev){ ev.preventDefault(); d.classList.add('on'); }); });
+  ['dragleave','drop'].forEach(function(e){ d.addEventListener(e,function(ev){ ev.preventDefault(); d.classList.remove('on'); }); });
+  d.addEventListener('drop',function(ev){ 取り込む(ev.dataTransfer.files); });
+  まとめ(); タブ(); 一覧();
+})();
+</script>
+<script>window.KAIZEN_KEY = 'gen-import';</script>
+<script src="kaizen.js"></script>
+</body>
+</html>
