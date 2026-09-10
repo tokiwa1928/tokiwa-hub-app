@@ -29,6 +29,16 @@ var LAYOUTS = {          // Hub の画面 → FileMaker のレイアウト
   juchu: 'Hub受注'
 };
 
+/**
+ * 段階を写すときに使うレイアウト。
+ *
+ *   Hub受注（262項目）は「画面が使う項目」であって、金額を動かす入力を
+ *   全部は含んでいない（箱数などが無く、写すと梱包代・配送代・印刷代が消えた）。
+ *   複製用は 受注データ の入力項目 597 をすべて載せ、計算は1つも載せていない。
+ *   計算が無いので速く（1件 0.17秒）、写しても取りこぼしが起きない。
+ */
+var COPY_LAYOUT = 'Hub受注_複製用';
+
 var NEVER_WRITE = [];   // 計算フィールドは自動で除外される
 
 /**
@@ -144,7 +154,7 @@ function 画面_新規案件(種別, 初期値) {
   var lay = LAYOUTS.juchu;
   if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
 
-  var rec = 作成_(lay, 初期値 || {});
+  var rec = 作成_(COPY_LAYOUT, 初期値 || {});
   var 案件ID = String(rec.fields['no'] || '');
   if (!案件ID) {
     削除_(lay, rec.recordId);
@@ -169,19 +179,20 @@ function 画面_新規段階(案件ID, 種別) {
   var 種 = 最新_(lay, 案件ID);
   if (!種) throw new Error('案件 ' + 案件ID + ' が見つかりません');
 
-  var allow = {};
-  fieldInfo_(lay).writable.forEach(function (n) { allow[n] = true; });
-  引き継がない.forEach(function (n) { delete allow[n]; });
+  // 写しは複製用レイアウトで行う。画面用のレイアウトだと入力を取りこぼす
+  var 種の全部 = getByDenpyo_複製用_(種);
+  var 除く = {};
+  引き継がない.forEach(function (n) { 除く[n] = true; });
 
   var base = {};
-  Object.keys(種.fields).forEach(function (k) {
-    if (!allow[k]) return;
-    var v = 種.fields[k];
+  Object.keys(種の全部).forEach(function (k) {
+    if (除く[k]) return;
+    var v = 種の全部[k];
     if (v === null || v === undefined || v === '') return;
     base[k] = String(v);
   });
 
-  var rec = 作成_(lay, base);
+  var rec = 作成_(COPY_LAYOUT, base);
   var r = 番号と段階を入れる_(lay, rec, 案件ID, 種別, who);
 
   var 参考 = 同じ段階の前回_(lay, 案件ID, 種別, rec.recordId);
@@ -197,6 +208,15 @@ function 画面_新規段階(案件ID, 種別) {
                   合計金額: 参考.fields['合計金額'], 売価金額: 参考.fields['売価金額'] } : null,
     差分: 参考 ? 差分_(参考.fields, r.fields) : []
   };
+}
+
+/** 種レコードの入力項目を、複製用レイアウトから全部読む */
+function getByDenpyo_複製用_(種) {
+  var r = fmCall_('/layouts/' + encodeURIComponent(COPY_LAYOUT) + '/records/' + 種.recordId);
+  if (r.code !== '0') throw new Error('複製用の読み取りに失敗 (' + r.code + ') ' + r.message);
+  var d = (r.response.data || [])[0];
+  if (!d) throw new Error('複製用に種レコードが見つかりません');
+  return d.fieldData || {};
 }
 
 function 番号と段階を入れる_(lay, rec, 案件ID, 種別, who) {
@@ -462,7 +482,8 @@ function 作成_(layout, fields) {
                   { fieldData: fields || {} });
   if (r.code !== '0') throw new Error('作成に失敗 (' + r.code + ') ' + r.message);
   var id = r.response.recordId;
-  var got = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records/' + id);
+  // 読み返しは画面用のレイアウトで（金額の計算結果を返すため）
+  var got = fmCall_('/layouts/' + encodeURIComponent(LAYOUTS.juchu) + '/records/' + id);
   var rec = (got.response.data || [])[0] || {};
   return { recordId: id, modId: rec.modId, fields: rec.fieldData || {} };
 }
