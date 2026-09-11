@@ -1735,6 +1735,14 @@ function setPane(p){
         border:1px solid #334155; background:#334155; color:#fff; font-weight:700; }
   #fmfind button.plain{ background:#fff; color:#334155; font-weight:400; }
   #fmfind .hit{ font-size:12px; color:#475569; margin:6px 0 3px; }
+  #fmgaichu{ display:none; background:#fdf6e3; border-bottom:2px solid #b45309; padding:6px 14px; font-size:12px; }
+  #fmgaichu table{ border-collapse:collapse; }
+  #fmgaichu th{ background:#fde68a; padding:3px 8px; font-weight:600; text-align:left; }
+  #fmgaichu td{ padding:2px 6px; border-bottom:1px solid #f3e8c8; }
+  #fmgaichu input{ font-size:12px; padding:2px 4px; border:1px solid #cbd5e1; border-radius:3px; }
+  #fmgaichu input.n{ width:70px; text-align:right; }
+  #fmgaichu .tot{ font-weight:700; }
+  #fmgaichu button{ font-size:12px; padding:3px 10px; }
   #fmfind .rows{ max-height:44vh; overflow:auto; background:#fff; border:1px solid #cbd5e1; border-radius:5px; }
   #fmfind table{ border-collapse:collapse; width:100%; font-size:12px; }
   #fmfind th{ position:sticky; top:0; background:#e2e8f0; text-align:left; padding:4px 7px;
@@ -1797,6 +1805,18 @@ function setPane(p){
   </div>
   <div class="rows" id="ff-rows" style="display:none"></div>
 </div>
+<div id="fmgaichu">
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px">
+    <b>外注（FileMaker 外注データ）</b>
+    <span id="gc-msg" style="color:#92400e"></span>
+    <button id="gc-add" class="plain" style="margin-left:auto">＋ 行を足す</button>
+    <button id="gc-save">外注を保存</button>
+  </div>
+  <table><thead><tr><th>#</th><th>外注コード</th><th>会社名</th><th>発注内容</th><th>数量</th><th>単価</th><th>合計</th></tr></thead>
+  <tbody id="gc-rows"></tbody>
+  <tfoot><tr><td colspan="6" style="text-align:right">外注合計</td><td class="tot" id="gc-total" style="text-align:right"></td></tr></tfoot></table>
+  <div style="color:#92400e;margin-top:3px">合計は FileMaker の計算（数量×単価）。保存すると原価（合計金額）に反映されます。Repeat 登録でも一緒に写ります</div>
+</div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
@@ -1818,6 +1838,9 @@ function setPane(p){
     '画面_新規段階':       ['案件ID', '種別'],
     '画面_Repeat登録':     ['recordId'],
     '画面_削除':           ['recordId', 'modId'],
+    '画面_外注':           ['伝票番号'],
+    '画面_外注保存':       ['recordId', 'modId', '行'],
+    '画面_外注作成':       ['伝票番号', '行'],
     '画面_一覧':           ['条件'],
     '写し_索引を配る':     []
   };
@@ -2100,7 +2123,79 @@ function setPane(p){
     差分を出す(r['参考'], r['差分']);
     状態(msg + (ms ? '（' + ms + 'ms）' : ''), 'ok');
     待機(false);
+    外注を読む(r.record.fields['伝票番号']);
   }
+
+  // -------------------------------------------------- 外注（FileMaker 外注データ・別テーブル）
+  var 外注 = null;   // { recordId, modId, 行:[…] } または null（無ければ新規）
+  function 外注を読む(伝票番号) {
+    var box = $('fmgaichu'); if (!伝票番号) { box.style.display = 'none'; return; }
+    外注 = null; $('gc-rows').innerHTML = ''; $('gc-total').textContent = ''; $('gc-msg').textContent = '読んでいます…'; box.style.display = 'block';
+    呼ぶ('画面_外注', [伝票番号]).then(function (r) {
+      外注 = (r.外注 && r.外注[0]) || null;
+      外注を描く(外注 ? 外注.行 : []);
+      $('gc-msg').textContent = 外注 ? '' : '外注はありません（＋ 行を足す で登録）';
+    }).catch(function (e) { $('gc-msg').textContent = String(e.message || e); });
+  }
+  function 外注を描く(行) {
+    var h = '';
+    for (var i = 1; i <= 4; i++) {
+      var x = 行.filter(function (y) { return Number(y.番) === i; })[0];
+      if (!x && i > Math.max(1, 行.length)) continue;
+      x = x || {};
+      h += '<tr data-i="' + i + '"><td>' + i + '</td>'
+        + '<td><input class="gc-code" style="width:60px" value="' + esc(x.外注コード || '') + '"></td>'
+        + '<td><input class="gc-name" style="width:180px" value="' + esc(x.会社名 || '') + '"></td>'
+        + '<td><input class="gc-what" style="width:220px" value="' + esc(x.発注内容 || '') + '"></td>'
+        + '<td><input class="gc-qty n" value="' + esc(x.数量 == null ? '' : x.数量) + '"></td>'
+        + '<td><input class="gc-price n" value="' + esc(x.単価 == null ? '' : x.単価) + '"></td>'
+        + '<td class="gc-sum" style="text-align:right">' + esc(円(x.合計)) + '</td></tr>';
+    }
+    $('gc-rows').innerHTML = h;
+    外注合計を出す();
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('input.n'), function (el) { el.addEventListener('input', 外注合計を出す); });
+  }
+  function 外注合計を出す() {
+    var 総 = 0;
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr'), function (tr) {
+      var q = Number(tr.querySelector('.gc-qty').value || 0), p = Number(tr.querySelector('.gc-price').value || 0);
+      var s = Math.round(q * p); tr.querySelector('.gc-sum').textContent = (q || p) ? s.toLocaleString() : ''; 総 += s;
+    });
+    $('gc-total').textContent = 総.toLocaleString();
+  }
+  function 外注の行() {
+    var out = [];
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr'), function (tr) {
+      var o = { 番: Number(tr.getAttribute('data-i')), 外注コード: tr.querySelector('.gc-code').value.trim(), 会社名: tr.querySelector('.gc-name').value.trim(),
+                発注内容: tr.querySelector('.gc-what').value.trim(), 数量: tr.querySelector('.gc-qty').value.trim(), 単価: tr.querySelector('.gc-price').value.trim() };
+      if (o.外注コード || o.会社名 || o.数量) out.push(o);
+    });
+    return out;
+  }
+  $('gc-add').onclick = function () {
+    var n = $('gc-rows').querySelectorAll('tr').length; if (n >= 4) { alert('外注は 4 件までです（FileMaker と同じ）'); return; }
+    var 行 = 外注の行(); 行.push({ 番: n + 1 }); 外注を描く(行);
+  };
+  $('gc-save').onclick = function () {
+    if (!現在) return;
+    var 行 = 外注の行();
+    if (!外注) {
+      if (!行.length) { $('gc-msg').textContent = '行がありません'; return; }
+      $('gc-msg').textContent = '作っています…';
+      呼ぶ('画面_外注作成', [String(現在.fields['伝票番号'] || ''), 行]).then(function (r) {
+        外注 = (r.外注 && r.外注[0]) || null; 外注を描く(外注 ? 外注.行 : []); $('gc-msg').textContent = '登録しました';
+        読み込む(String(現在.fields['伝票番号'] || ''));
+      }).catch(function (e) { $('gc-msg').textContent = String(e.message || e); });
+      return;
+    }
+    $('gc-msg').textContent = '保存しています…';
+    呼ぶ('画面_外注保存', [外注.recordId, 外注.modId, 行]).then(function (r) {
+      外注 = (r.外注 && r.外注[0]) || null; 外注を描く(外注 ? 外注.行 : []);
+      $('gc-msg').textContent = r.変更なし ? '変わっていません' : '保存しました';
+      // 原価（合計金額）が変わるので伝票を読み直す
+      if (!r.変更なし) 読み込む(String(現在.fields['伝票番号'] || ''));
+    }).catch(function (e) { $('gc-msg').textContent = String(e.message || e); });
+  };
 
   function 読み込む(番号) {
     番号 = (番号 || 番号欄.value || '').trim();

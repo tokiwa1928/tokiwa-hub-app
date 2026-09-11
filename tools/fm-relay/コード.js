@@ -386,8 +386,119 @@ function 画面_Repeat登録(recordId) {
   if (!案件ID) { 削除_(lay, rec.recordId); throw new Error('番号が自動採番されませんでした。作成を取り消しました。'); }
   var r = 番号と段階を入れる_(lay, rec, 案件ID, '受注', who);
   log_(who, lay, rec.recordId, { 'Repeat登録': '元 ' + base['前回伝票番号'] + ' → ' + 案件ID }, {});
-  return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [],
+  // 外注データ（別テーブル）も写す。合計は 数量×単価 で置き直す
+  var 外注件数 = 0;
+  try { 外注件数 = 外注_写す_(base['前回伝票番号'], 案件ID, who); } catch (e) { log_(who, 外注LAYOUT, '', { 'Repeat登録_外注_失敗': String(e.message || e) }, {}); }
+  // 外注を写したあとの金額で読み直す
+  var again = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records/' + rec.recordId);
+  if (again.code === '0' && again.response.data && again.response.data[0]) { var d2 = again.response.data[0]; r = { recordId: d2.recordId, modId: d2.modId, fields: d2.fieldData }; }
+  return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [], 外注件数: 外注件数,
            writable: fieldInfo_(lay).writable, 履歴: 案件の履歴_(lay, 案件ID) };
+}
+
+// ------------------------------------------------------------ 外注データ（別テーブル。伝票番号ごとに外注先 4 件まで）
+var 外注LAYOUT = '外注データ';
+var 外注の欄 = ['外注コード', '会社名', '発注内容', '数量', '単価'];   // 1 件目は添字なし、2〜4 件目は 2,3,4 を付ける
+function 外注_添字_(i) { return i === 1 ? '' : String(i); }
+
+/** 伝票番号の外注データ（1 レコード＝最大 4 行）を、画面向けの行の配列にして返す */
+function 外注_読む_(伝票番号) {
+  var r = find_(外注LAYOUT, [{ '伝票番号': '==' + 伝票番号 }], 5, 1, null);
+  return r.records.map(function (rec) {
+    var f = rec.fields, 行 = [];
+    for (var i = 1; i <= 4; i++) {
+      var s = 外注_添字_(i);
+      if (!f['外注コード' + s] && !f['会社名' + s] && !f['数量' + s]) continue;
+      行.push({ 番: i, 外注コード: f['外注コード' + s] || '', 会社名: f['会社名' + s] || '', 発注内容: f['発注内容' + s] || '',
+                数量: f['数量' + s], 単価: f['単価' + s], 合計: f['合計' + s] });
+    }
+    return { recordId: rec.recordId, modId: rec.modId, 外注合計: f['外注合計'], 作成者: f['作成者'] || '', 行: 行 };
+  });
+}
+
+/** 元の伝票の外注データを、新しい伝票番号で写す。合計は 数量×単価 で置き直す */
+function 外注_写す_(元伝票番号, 新伝票番号, who) {
+  var 元 = 外注_読む_(元伝票番号);
+  var 写した = 0;
+  元.forEach(function (o) {
+    if (!o.行.length) return;
+    var id = 外注_作る_(新伝票番号, o.行, who);
+    log_(who, 外注LAYOUT, id, { 'Repeat登録_外注': 元伝票番号 + ' → ' + 新伝票番号 }, {});
+    写した++;
+  });
+  return 写した;
+}
+
+/** 外注データを 1 レコード作る（行は最大 4）。合計は FileMaker の計算に任せる */
+function 外注_作る_(伝票番号, 行, who) {
+  var fields = { '伝票番号': 伝票番号, '作成者': who.email };
+  行.forEach(function (x, idx) {
+    var s = 外注_添字_(Number(x.番) || (idx + 1));
+    fields['外注コード' + s] = String(x.外注コード || '');
+    fields['会社名' + s] = String(x.会社名 || '');
+    if (x.発注内容) fields['発注内容' + s] = String(x.発注内容);
+    fields['数量' + s] = Number(x.数量 || 0); fields['単価' + s] = Number(x.単価 || 0);
+  });
+  var allow = {}; fieldInfo_(外注LAYOUT).writable.forEach(function (n) { allow[n] = true; });
+  Object.keys(fields).forEach(function (k) { if (!allow[k]) delete fields[k]; });
+  // 「変更禁止」の自動入力（作成者など）は項目一覧では分からないので、弾かれたら外して入れ直す
+  var 外した = [];
+  var r = fmCall_('/layouts/' + encodeURIComponent(外注LAYOUT) + '/records', 'post', { fieldData: fields });
+  var 疑い = ['作成者', '会社名', '会社名2', '会社名3', '会社名4', '発注内容', '発注内容2', '発注内容3', '発注内容4'];
+  while (r.code === '201' && 疑い.length) {
+    var k0 = 疑い.shift(); if (!(k0 in fields)) continue;
+    delete fields[k0]; 外した.push(k0);
+    r = fmCall_('/layouts/' + encodeURIComponent(外注LAYOUT) + '/records', 'post', { fieldData: fields });
+  }
+  if (r.code !== '0') throw new Error('外注データを作れませんでした (' + r.code + ') ' + r.message + ' 外した: ' + 外した.join(','));
+  return r.response.recordId;
+}
+
+/** 画面用: 外注データを新しく作る */
+function 画面_外注作成(伝票番号, 行) {
+  var who = 画面_利用者_();
+  if (!伝票番号) throw new Error('伝票番号がありません');
+  if (外注_読む_(伝票番号).length) throw new Error('この伝票の外注データは既にあります。読み直してください');
+  var id = 外注_作る_(伝票番号, 行 || [], who);
+  log_(who, 外注LAYOUT, id, { '外注作成': 伝票番号 }, {});
+  return { ok: true, 外注: 外注_読む_(伝票番号) };
+}
+
+/** 画面用: 伝票番号の外注データ */
+function 画面_外注(伝票番号) {
+  var who = 画面_利用者_();
+  if (!伝票番号) throw new Error('伝票番号がありません');
+  return { ok: true, user: who.email, 伝票番号: 伝票番号, 外注: 外注_読む_(伝票番号), 書けない: fieldInfo_(外注LAYOUT).readonly };
+}
+
+/** 画面用: 外注データの行を直す（数量・単価・発注内容・外注先）。合計は 数量×単価 で置き直す */
+function 画面_外注保存(recordId, modId, 行) {
+  var who = 画面_利用者_();
+  if (!recordId) throw new Error('recordId がありません');
+  var got = fmCall_('/layouts/' + encodeURIComponent(外注LAYOUT) + '/records/' + recordId);
+  if (got.code !== '0') throw new Error('外注データを読めません (' + got.code + ') ' + got.message);
+  var d = (got.response.data || [])[0]; var f = d.fieldData || {};
+  var upd = {}, 前 = {}, 総 = 0;
+  for (var i = 1; i <= 4; i++) {
+    var s = 外注_添字_(i);
+    var x = (行 || []).filter(function (y) { return Number(y.番) === i; })[0];
+    if (x) {
+      ['外注コード', '会社名', '発注内容'].forEach(function (k) { if (x[k] !== undefined && String(x[k]) !== String(f[k + s] || '')) { upd[k + s] = String(x[k]); 前[k + s] = f[k + s]; } });
+      var 数 = Number(x.数量 || 0), 単 = Number(x.単価 || 0), 計 = Math.round(数 * 単);
+      if (String(数) !== String(f['数量' + s] || '')) { upd['数量' + s] = 数; 前['数量' + s] = f['数量' + s]; }
+      if (String(単) !== String(f['単価' + s] || '')) { upd['単価' + s] = 単; 前['単価' + s] = f['単価' + s]; }
+      if (String(計) !== String(f['合計' + s] || '')) { upd['合計' + s] = 計; 前['合計' + s] = f['合計' + s]; }
+      総 += 計;
+    } else if (f['外注コード' + s] || f['会社名' + s] || f['数量' + s]) {
+      // 画面で消した行は空にする
+      ['外注コード', '会社名', '発注内容', '数量', '単価', '合計'].forEach(function (k) { 前[k + s] = f[k + s]; upd[k + s] = ''; });
+    }
+  }
+  if (String(総) !== String(f['外注合計'] || '')) { upd['外注合計'] = 総; 前['外注合計'] = f['外注合計']; }
+  if (!Object.keys(upd).length) return { ok: true, 変更なし: true, 外注: 外注_読む_(String(f['伝票番号'] || '')) };
+  var r = update_(外注LAYOUT, recordId, modId || d.modId, upd, who);
+  if (r.conflict) throw new Error('読み込んだあとに誰かが直しています。読み直してください');
+  return { ok: true, 外注: 外注_読む_(String(f['伝票番号'] || '')) };
 }
 
 /** 伝票を FileMaker から消す（画面の「データ削除」）。消す前の内容を記録に残す */
@@ -405,7 +516,15 @@ function 画面_削除(recordId, modId) {
   var del = 削除_(lay, recordId);
   if (del.code !== '0') throw new Error('削除に失敗 (' + del.code + ') ' + del.message);
   log_(who, lay, recordId, { '削除': String(f['伝票番号'] || '') }, 前);
-  return { ok: true, 伝票番号: String(f['伝票番号'] || '') };
+  // その伝票の外注データも消す（残すと宙に浮く）
+  var 外注消した = 0;
+  try {
+    外注_読む_(String(f['伝票番号'] || '')).forEach(function (o) {
+      var d2 = 削除_(外注LAYOUT, o.recordId);
+      if (d2.code === '0') { 外注消した++; log_(who, 外注LAYOUT, o.recordId, { '削除_外注': String(f['伝票番号'] || '') }, { 行: o.行, 外注合計: o.外注合計 }); }
+    });
+  } catch (e) {}
+  return { ok: true, 伝票番号: String(f['伝票番号'] || ''), 外注消した: 外注消した };
 }
 
 /** 種レコードの入力項目を、複製用レイアウトから全部読む */
@@ -433,6 +552,11 @@ function handle_(action, req, who) {
   switch (action) {
     case 'ping':   return { db: FM_DB, screens: Object.keys(LAYOUTS) };
     case 'fields': return fieldInfo_(layoutOf_(req.screen));
+    case 'layouts': { var r = fmCall_('/layouts'); if (r.code !== '0') throw new Error(r.message); return r.response.layouts; }   // 読むだけ: レイアウトの一覧
+    case 'layoutFields': { var q = fmCall_('/layouts/' + encodeURIComponent(req.layout)); if (q.code !== '0') throw new Error(q.message); return q.response.fieldMetaData.map(function (f) { return f.name + ':' + f.result; }); }
+    case 'layoutFind': return find_(req.layout, req.query, Number(req.limit || 20), 1, req.sort || null);   // 読むだけ: どのレイアウトでも探す
+    case '記録_末尾': { var sh0 = 記録の置き場_().getSheets()[0]; var n0 = Number(req.n || 10), last0 = sh0.getLastRow(); if (last0 < 2) return []; var from0 = Math.max(2, last0 - n0 + 1); return sh0.getRange(from0, 1, last0 - from0 + 1, 7).getValues(); }
+    case 'layoutPeek': { var g = fmCall_('/layouts/' + encodeURIComponent(req.layout) + '/records?_limit=' + Number(req.limit || 3)); if (g.code !== '0') throw new Error(g.message); return (g.response.data || []).map(function (d) { return d.fieldData; }); }
     case 'get':    return getByDenpyo_(layoutOf_(req.screen), req.denpyo);
     case 'find':   return find_(layoutOf_(req.screen), req.query, req.limit, req.offset, req.sort);
     case 'update': return update_(layoutOf_(req.screen), req.recordId, req.modId, req.fields, who);
@@ -445,6 +569,9 @@ function handle_(action, req, who) {
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
     case '画面_削除':         return 画面_削除(req.recordId, req.modId);
+    case '画面_外注':         return 画面_外注(req['伝票番号']);
+    case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
+    case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
     case '画面_一覧':         return 画面_一覧(req['条件']);
     // Hub 用の保管庫（FileMaker の写し）から読む。FileMaker を止めたあとの読み口
     case '写し_索引を配る':   return 写し_索引を配る();
