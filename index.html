@@ -1850,6 +1850,7 @@ setTimeout(_removeBootLoader_, 5000);
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12.5px">
       <a class="btn" href="tools/fm-juchu-hub.html" target="_blank" rel="noopener" style="text-align:left">🗄 受注入力（FileMaker 直結）</a>
       <a class="btn" href="tools/gen-import.html" target="_blank" rel="noopener" style="text-align:left">📥 GEN 取り込み</a>
+      <button class="btn" onclick="_importGenCustomers_()" style="text-align:left;background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c" title="保管庫の GEN_取引先（3,000件）を得意先マスタに合流。同じ名前ならコード・住所・TEL/FAX・請求方法を足し、無ければ新しく作ります">👥 GEN の取引先を得意先マスタへ</button>
       <a class="btn" href="tools/nohin.html" target="_blank" rel="noopener" style="text-align:left">🧾 納品書（FileMaker から）</a>
       <a class="btn" href="tools/seikyu.html" target="_blank" rel="noopener" style="text-align:left">📄 請求書（納品書から）</a>
       <a class="btn" href="tools/kaizen.html" target="_blank" rel="noopener" style="text-align:left">💡 気づいたこと・機能一覧</a>
@@ -28788,6 +28789,42 @@ function deleteReceipt(rcptId){
 }
 
 // 入金管理 (消込)
+// ═══ GEN の取引先マスタを得意先マスタへ合流。FMHUB-5 ═══
+function _normName_(v){ return String(v||'').replace(/[\s　]/g,'').replace(/株式会社|有限会社|\(株\)|\(有\)|㈱|㈲/g,''); }
+function _importGenCustomers_(){
+  if(!window.FM){ alert('窓口（tools/fm-bridge.js）が読み込めていません。ページを再読み込みしてください'); return; }
+  if(!confirm('保管庫の GEN_取引先 を得意先マスタに合流させます。\n\n同じ名前があれば GEN のコード・住所・TEL/FAX・請求方法を足し、無ければ新しく作ります。既存の項目は上書きしません。\n続けますか？')) return;
+  if(typeof _toastMsg==='function') _toastMsg('👥 保管庫から GEN の取引先を読んでいます…');
+  FM.呼ぶ('GEN_一覧',['取引先',null,0]).then(function(r){
+    var rows=r.行||[]; if(!DB.master) DB.master={}; if(!Array.isArray(DB.master.cust)) DB.master.cust=[];
+    var byName={}, byCode={};
+    DB.master.cust.forEach(function(c){ if(!c||typeof c==='string') return; byName[_normName_(c.org)]=c; if(c.cuCode) byCode[c.cuCode]=c; });
+    var 更新=0, 追加=0;
+    var _co=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.companyId)||'';
+    rows.forEach(function(g){
+      var name=String(g['取引先名']||'').trim(), code=String(g['取引先コード']||'').trim(); if(!name) return;
+      var c=byCode[code]||byName[_normName_(name)];
+      var isCust = g['得意先']===true||String(g['得意先'])==='true', isVendor = g['発注先']===true||String(g['発注先'])==='true', isUser = g['ユーザー']===true||String(g['ユーザー'])==='true';
+      var addr=((g['住所1']||'')+(g['住所2']||'')).trim();
+      if(!c){
+        c={ org:name, user:'', tel:'', fax:'', note:'', type: isCust?'customer':(isVendor?'vendor':'customer'), companyId:_co, _fromGen:true };
+        DB.master.cust.push(c); byName[_normName_(name)]=c; 追加++;
+      } else { 更新++; }
+      if(!c.cuCode) c.cuCode=code;
+      if(!c.tel && g['TEL']) c.tel=String(g['TEL']);
+      if(!c.fax && g['FAX']) c.fax=String(g['FAX']);
+      if(!c.zip && g['郵便番号']) c.zip=String(g['郵便番号']);
+      if(!c.addr && addr) c.addr=addr;
+      if(!c.closing && g['請求方法']) c.closing=String(g['請求方法']);
+      if(!c.genGroup && g['取引先グループ名 (取引先グループ1)']) c.genGroup=String(g['取引先グループ名 (取引先グループ1)']);
+      c.isCust = c.isCust || isCust; c.isVendor = c.isVendor || isVendor; c.isEndUser = c.isEndUser || isUser;
+      byCode[code]=c;
+    });
+    if(typeof saveDB==='function') saveDB(); try{ saveToCloud(); }catch(e){}
+    alert('👥 GEN の取引先を合流させました\n\n既存に足した: '+更新+' 件\n新しく作った: '+追加+' 件\n（保管庫 '+rows.length+' 件）');
+  }).catch(function(e){ alert('取り込めませんでした: '+(e&&e.message||e)); });
+}
+
 // ═══ GEN と同じ入金（PI 番号・種別・口座・請求書番号）。FMHUB-3 ═══
 function _nextPaymentNo_(){
   var mx = 3695;   // 2026-07-02 の GEN 書き出しで見た最新 PI03695。これより下には戻らない
