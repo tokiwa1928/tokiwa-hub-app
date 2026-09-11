@@ -307,3 +307,62 @@ function 案件の履歴_写し_(案件ID) {
              起票日: r['起票日'] || '', 合計金額: r['合計金額'], 売価金額: r['売価金額'] };
   }).sort(function (a, b) { return 写し_日付数_(a.起票日) - 写し_日付数_(b.起票日) || (Number(a.recordId) - Number(b.recordId)); });
 }
+
+// ============================================================ GEN のデータも同じ保管庫へ
+//   Hub のページ（gen-import.html）が GEN の Excel を読んで、ここに行を送る。
+//   画面ごとに1枚のスプレッドシート（GEN_受注・GEN_発注・…）。鍵で上書きするので何度送っても二重にならない。
+
+var GEN帳簿名_ = 'GEN_';
+
+/** 行を受け取り、鍵で上書きしながら保管する。{画面, 見出し, 鍵列（見出しの中の列名の配列）, 行:[{...}]} */
+function GEN_取り込み(画面, 見出し, 鍵列, 行) {
+  var who = 画面_利用者_();
+  if (!画面 || !見出し || !見出し.length || !行) throw new Error('画面・見出し・行が要ります');
+  var 名 = GEN帳簿名_ + 画面;
+  var 頭 = ['_鍵', '_取込日時', '_取込者'].concat(見出し);
+  var ss = 写し_帳簿_(名, 頭);
+  var sh = ss.getSheets()[0];
+  // 既存の見出しが違えば（列が増えた等）作り直す
+  var 既 = sh.getLastColumn() ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0] : [];
+  if (既.join('\u0001') !== 頭.join('\u0001')) { sh.clear(); sh.getRange(1, 1, 1, 頭.length).setValues([頭]); sh.setFrozenRows(1); }
+
+  var 鍵を作る = function (r) { return (鍵列 || [見出し[0]]).map(function (c) { return String(r[c] == null ? '' : r[c]); }).join('|'); };
+  var 位置 = {};
+  if (sh.getLastRow() > 1) {
+    var keys = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+    for (var i = 0; i < keys.length; i++) 位置[String(keys[i][0])] = i + 2;
+  }
+  var now = new Date().toISOString(), 更新 = 0, 追加 = [];
+  行.forEach(function (r) {
+    var k = 鍵を作る(r); if (!k.replace(/\|/g, '')) return;
+    var row = [k, now, who.email].concat(見出し.map(function (c) { var v = r[c]; return (v === undefined || v === null) ? '' : v; }));
+    var at = 位置[k];
+    if (at) { sh.getRange(at, 1, 1, row.length).setValues([row]); 更新++; }
+    else 追加.push(row);
+  });
+  if (追加.length) sh.getRange(sh.getLastRow() + 1, 1, 追加.length, 頭.length).setValues(追加);
+  return { ok: true, 画面: 画面, 更新: 更新, 追加: 追加.length, 全体: sh.getLastRow() - 1 };
+}
+
+/** 保管してある GEN の画面を読む。{画面, 絞り込み:{列名:値}, 件数} */
+function GEN_一覧(画面, 絞り込み, 件数) {
+  var who = 画面_利用者_();
+  var sh = 写し_開く_(GEN帳簿名_ + 画面);
+  var v = sh.getDataRange().getValues(); if (v.length < 2) return { ok: true, 画面: 画面, 件数: 0, 全体: 0, 行: [] };
+  var 頭 = v[0]; var out = [];
+  for (var i = 1; i < v.length; i++) {
+    var o = {}; for (var c = 3; c < 頭.length; c++) o[頭[c]] = v[i][c];
+    var ok = true;
+    if (絞り込み) Object.keys(絞り込み).forEach(function (k) { var want = String(絞り込み[k] || '').trim(); if (want && String(o[k] || '').indexOf(want) < 0) ok = false; });
+    if (ok) out.push(o);
+  }
+  var 全体 = out.length; 件数 = Number(件数 || 500); if (件数 > 0) out = out.slice(0, 件数);
+  return { ok: true, user: who.email, 画面: 画面, 件数: out.length, 全体: 全体, 行: out };
+}
+
+/** 保管してある GEN の画面ごとの件数 */
+function GEN_状況() {
+  var f = 写し_フォルダ_(); var it = f.getFiles(); var out = {};
+  while (it.hasNext()) { var file = it.next(); var n = file.getName(); if (n.indexOf(GEN帳簿名_) === 0) { var sh = SpreadsheetApp.open(file).getSheets()[0]; out[n.slice(GEN帳簿名_.length)] = Math.max(0, sh.getLastRow() - 1); } }
+  return { ok: true, 画面: out };
+}

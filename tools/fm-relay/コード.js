@@ -394,6 +394,10 @@ function handle_(action, req, who) {
     case '写し_一覧':         return 写し_一覧(req['条件']);
     case '写し_読み込み':     return 写し_読み込み(req['番号']);
     case '写し_状況':         return 写し_状況();
+    // GEN のデータも同じ保管庫へ
+    case 'GEN_取り込み':      return GEN_取り込み(req['画面'], req['見出し'], req['鍵列'], req['行']);
+    case 'GEN_一覧':          return GEN_一覧(req['画面'], req['絞り込み'], req['件数']);
+    case 'GEN_状況':          return GEN_状況();
   }
   throw new Error('知らない action です: ' + action);
 }

@@ -18,6 +18,7 @@
   本体の共有データとは分けてある（大きいので、本体の同期を重くしないため）。
 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="fm-bridge.js"></script>
 <style>
   :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --gen:#0F6E8C; }
   *{ box-sizing:border-box; }
@@ -77,6 +78,12 @@
       <input type="file" id="pick" multiple accept=".xlsx,.xls" style="display:none" onchange="取り込む(this.files)">
     </div>
     <div class="log" id="log"></div>
+    <div class="bar" style="margin-top:.7rem;padding-top:.7rem;border-top:1px solid var(--line)">
+      <button class="btn btn-p" id="send" onclick="保管庫へ送る()">☁ Hub の保管庫へ送る（全社で共有）</button>
+      <span class="muted" id="send-stat">このパソコンに取り込んだものを、FileMaker の写しと同じ Drive の保管庫に入れます。取り込んだら押してください</span>
+      <span id="fm-signin" style="margin-left:auto"></span>
+    </div>
+    <div class="log" id="send-log"></div>
   </div>
 
   <div class="sec">
@@ -115,14 +122,14 @@ var KEY = 'tokiwa_gen';
 // どの画面の書き出しか。4行目の見出しに含まれる列名で見分ける
 var 画面 = {
   // 受注登録は1つの受注番号に複数行がある（本体＋版代など）。番号だけを鍵にすると2行目が消える
-  '受注':     { 見分け:['受注番号','受注額'],         鍵:function(r){ return [r['受注番号'],r['製品名'],r['受注数'],r['受注単価']].join('|'); }, 日付:'受注日' },
-  '発注':     { 見分け:['発注書番号','手配区分'],     鍵:function(r){ return [r['発注書番号'],r['受注番号'],r['製品名'],r['数量'],r['発注単価']].join('|'); }, 日付:'発注日' },
-  '受入':     { 見分け:['受入番号'],                  鍵:function(r){ return r['受入番号']+'|'+(r['オーダー番号']||''); }, 日付:'受入日' },
-  '入金':     { 見分け:['入金番号'],                  鍵:function(r){ return r['入金番号']+'|'+(r['行']||''); }, 日付:'入金日' },
-  '品目':     { 見分け:['品目コード'],                鍵:function(r){ return r['品目コード']; },            日付:null },
-  '取引先':   { 見分け:['取引先コード','請求方法'],   鍵:function(r){ return r['取引先コード']; },          日付:null },
-  '色':       { 見分け:['色ID'],                      鍵:function(r){ return r['色ID']; },                  日付:null },
-  '月別売上': { 見分け:['売上月'],                    鍵:function(r){ return 列(r,'売上月'); },              日付:null, 横持ち:true }
+  '受注':     { 見分け:['受注番号','受注額'],         鍵列:['受注番号','製品名','受注数','受注単価'], 鍵:function(r){ return [r['受注番号'],r['製品名'],r['受注数'],r['受注単価']].join('|'); }, 日付:'受注日' },
+  '発注':     { 見分け:['発注書番号','手配区分'],     鍵列:['発注書番号','受注番号','製品名','数量','発注単価'], 鍵:function(r){ return [r['発注書番号'],r['受注番号'],r['製品名'],r['数量'],r['発注単価']].join('|'); }, 日付:'発注日' },
+  '受入':     { 見分け:['受入番号'],                  鍵列:['受入番号','オーダー番号'], 鍵:function(r){ return r['受入番号']+'|'+(r['オーダー番号']||''); }, 日付:'受入日' },
+  '入金':     { 見分け:['入金番号'],                  鍵列:['入金番号','行'], 鍵:function(r){ return r['入金番号']+'|'+(r['行']||''); }, 日付:'入金日' },
+  '品目':     { 見分け:['品目コード'],                鍵列:['品目コード'], 鍵:function(r){ return r['品目コード']; },            日付:null },
+  '取引先':   { 見分け:['取引先コード','請求方法'],   鍵列:['取引先コード'], 鍵:function(r){ return r['取引先コード']; },          日付:null },
+  '色':       { 見分け:['色ID'],                      鍵列:['色ID'], 鍵:function(r){ return r['色ID']; },                  日付:null },
+  '月別売上': { 見分け:['売上月'],                    鍵列:null, 鍵:function(r){ return 列(r,'売上月'); },              日付:null, 横持ち:true }
 };
 
 // 「売上月（納品）」のように、名前の後ろに補足が付く列を前方一致で取る
@@ -280,6 +287,30 @@ function 一覧(){
   document.getElementById('fcnt').textContent=rows.length.toLocaleString()+' 件'+(rows.length>上限?'（先頭 '+上限+' 件を表示）':'');
 }
 
+// ------------------------------------------------ Hub の保管庫へ（中継 → Drive のスプレッドシート）
+function 保管庫へ送る(){
+  var g=load(); var 画面名=Object.keys(g); if(!画面名.length){ toast('まだ取り込んでいません'); return; }
+  var log=document.getElementById('send-log'); log.innerHTML=''; document.getElementById('send').disabled=true;
+  var 残り=画面名.slice();
+  (function 次(){
+    if(!残り.length){ document.getElementById('send').disabled=false; toast('☁ 保管庫に送りました'); 保管庫の状況(); return; }
+    var k=残り.shift(); var d=g[k]; var def=画面[k];
+    var 見出し=d.見出し.filter(function(h){ return h; });
+    var 鍵列=def.鍵列 || [見出し.filter(function(h){ return h.indexOf('売上月')===0; })[0] || 見出し[0]];
+    var 行=Object.keys(d.行).map(function(i){ return d.行[i]; });
+    log.insertAdjacentHTML('beforeend','<div>'+esc(k)+'：'+行.length+' 行を送っています…</div>');
+    FM.呼ぶ('GEN_取り込み',[k, 見出し, 鍵列, 行]).then(function(r){
+      log.lastChild.innerHTML='<span class="ok">○ '+esc(k)+'：新しく '+r.追加+'・上書き '+r.更新+'（保管庫に '+r.全体+' 行）</span>';
+    }).catch(function(e){ log.lastChild.innerHTML='<span class="ng">× '+esc(k)+'：'+esc(e.message||e)+'</span>'; }).then(次);
+  })();
+}
+function 保管庫の状況(){
+  FM.呼ぶ('GEN_状況',[]).then(function(r){
+    var p=r.画面||{}; var ks=Object.keys(p);
+    document.getElementById('send-stat').textContent = ks.length ? '保管庫: '+ks.map(function(k){ return k+' '+p[k].toLocaleString(); }).join('／') : '保管庫はまだ空です';
+  }).catch(function(){});
+}
+
 // ドラッグ＆ドロップ
 (function(){
   var d=document.getElementById('drop');
@@ -288,6 +319,7 @@ function 一覧(){
   ['dragleave','drop'].forEach(function(e){ d.addEventListener(e,function(ev){ ev.preventDefault(); d.classList.remove('on'); }); });
   d.addEventListener('drop',function(ev){ 取り込む(ev.dataTransfer.files); });
   まとめ(); タブ(); 一覧();
+  if(window.FM){ FM.サインインのボタンを置く(document.getElementById('fm-signin')); FM.ようい().then(保管庫の状況).catch(function(){}); }
 })();
 </script>
 <script>window.KAIZEN_KEY = 'gen-import';</script>
