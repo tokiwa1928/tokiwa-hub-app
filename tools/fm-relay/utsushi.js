@@ -356,7 +356,9 @@ function GEN_一覧(画面, 絞り込み, 件数) {
     if (絞り込み) Object.keys(絞り込み).forEach(function (k) { var want = String(絞り込み[k] || '').trim(); if (want && String(o[k] || '').indexOf(want) < 0) ok = false; });
     if (ok) out.push(o);
   }
-  var 全体 = out.length; 件数 = Number(件数 || 500); if (件数 > 0) out = out.slice(0, 件数);
+  var 全体 = out.length;
+  件数 = (件数 === 0 || 件数 === '0') ? 0 : Number(件数 || 500);   // 0 は「全部」
+  if (件数 > 0) out = out.slice(0, 件数);
   return { ok: true, user: who.email, 画面: 画面, 件数: out.length, 全体: 全体, 行: out };
 }
 

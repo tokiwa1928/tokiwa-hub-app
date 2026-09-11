@@ -160,7 +160,21 @@
     });
   }
 
+  // 「Failed to fetch」は Google 側の一時的な失敗が多い。3回まで少し待って試し直す
   function 呼ぶ(name, args) {
+    var 残り = 3;
+    function 試す() {
+      return 呼ぶ一回_(name, args).catch(function (e) {
+        if (--残り > 0 && /Failed to fetch|NetworkError|Load failed/.test(String(e && e.message))) {
+          return new Promise(function (r) { setTimeout(r, 1500); }).then(試す);
+        }
+        throw e;
+      });
+    }
+    return 試す();
+  }
+
+  function 呼ぶ一回_(name, args) {
     var 名 = 引数名[name];
     if (!名) return Promise.reject(new Error('知らない操作です: ' + name));
     return トークンを得る().then(function (jwt) {
