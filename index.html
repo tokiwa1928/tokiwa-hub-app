@@ -1308,6 +1308,8 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddPayoutModal()">＋ 支払予定登録</button>
+    <button class="btn" onclick="_importGenPayouts_()" title="Hub の保管庫（GEN_支払）から支払を取り込みます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の支払を取り込む</button>
+    <span style="font-size:11px;color:#64748b">支払番号は GEN の続き（PM＋5桁）。振込手数料は「振込手数料」の行として別に持ちます（GEN と同じ）</span>
   </div>
   <div id="payouts-list" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
 </div>
@@ -29247,6 +29249,35 @@ function deleteOutsource(id){
   renderOutsource();
 }
 
+// ═══ GEN と同じ支払（PM 番号・支払種別・調整金額）。FMHUB-6 ═══
+function _nextPmNo_(){
+  var mx = 2190;   // 2026-09-11 の GEN 書き出しで見た最新 PM02190。これより下には戻らない
+  (DB.payouts||[]).forEach(function(p){ var m=/^PM(\d+)$/.exec(p.pmNo||''); if(m) mx=Math.max(mx,Number(m[1])); });
+  return 'PM' + String(mx+1).padStart(5,'0');
+}
+function _importGenPayouts_(){
+  if(!window.FM){ alert('窓口（tools/fm-bridge.js）が読み込めていません。ページを再読み込みしてください'); return; }
+  if(typeof _toastMsg==='function') _toastMsg('📥 保管庫から GEN の支払を読んでいます…');
+  FM.呼ぶ('GEN_一覧',['支払',null,0]).then(function(r){
+    var rows=r.行||[]; if(!DB.payouts) DB.payouts=[];
+    var have={}; DB.payouts.forEach(function(p){ if(p._genKey) have[p._genKey]=1; });
+    var added=0;
+    rows.forEach(function(g){
+      var key=String(g['支払番号']||'')+'|'+String(g['行']||''); if(!g['支払番号']||have[key]) return;
+      DB.payouts.push({ id:'POUT-GEN-'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), _genKey:key, _fromGen:true,
+        pmNo:String(g['支払番号']), line:String(g['行']||''), vendor:String(g['取引先名']||''), vendorCode:String(g['取引先コード']||''),
+        amount:Number(g['支払金額']||0), adjust:Number(g['調整金額']||0), dueDate:String(g['支払日']||'').slice(0,10),
+        method:String(g['支払種別']||''), memo:String(g['明細備考']||''),
+        status: String(g['印刷済'])==='true' ? 'paid' : 'pending', paidAt: String(g['印刷済'])==='true' ? String(g['支払日']||'').slice(0,10) : null,
+        createdAt:new Date().toISOString() });
+      have[key]=1; added++;
+    });
+    if(typeof saveDB==='function') saveDB();
+    renderPayouts();
+    alert('📥 GEN の支払を取り込みました\n\n新しく '+added+' 件（保管庫 '+rows.length+' 件）');
+  }).catch(function(e){ alert('取り込めませんでした: '+(e&&e.message||e)); });
+}
+
 // 支払管理
 function renderPayouts(){
   var el = document.getElementById('payouts-list');
@@ -29290,10 +29321,13 @@ function renderPayouts(){
 
 function showAddPayoutModal(){
   _showSimpleAddModal_('支払予定', '#f59e0b', [
+    { key:'pmNo', label:'支払番号', type:'text', default:_nextPmNo_() },
     { key:'vendor', label:'支払先 *', type:'text' },
+    { key:'poNo', label:'発注書番号（PO…・任意）', type:'text' },
     { key:'amount', label:'金額 *', type:'number' },
+    { key:'adjust', label:'調整金額（手数料の差引など）', type:'number' },
     { key:'dueDate', label:'支払予定日 *', type:'date' },
-    { key:'method', label:'支払方法', type:'select', options:['銀行振込','現金','手形','クレカ'] },
+    { key:'method', label:'支払種別', type:'select', options:['振込','振込手数料','現金','手形','相殺','クレカ','その他'] },
     { key:'memo', label:'摘要', type:'textarea' }
   ], function(data){
     var po = Object.assign({
@@ -29302,6 +29336,9 @@ function showAddPayoutModal(){
       createdAt: new Date().toISOString()
     }, data);
     po.amount = parseInt(po.amount) || 0;
+    po.adjust = parseInt(po.adjust) || 0;
+    if(po.pmNo && !/^PM\d{5}$/.test(po.pmNo)){ alert('支払番号は PM＋5桁です'); return; }
+    po.pmNo = po.pmNo || _nextPmNo_();
     // AAAA-3: 案件 / 仕入 / 外注 から master_no 継承
     if(typeof _inheritMasterNo_ === 'function'){
       var src = null;
