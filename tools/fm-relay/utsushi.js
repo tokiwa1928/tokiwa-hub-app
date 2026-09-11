@@ -224,3 +224,86 @@ function 写し_毎晩を登録() {
   ScriptApp.newTrigger('写し_毎晩').timeBased().atHour(2).everyDays(1).create();
   Logger.log('毎晩 2 時に 写し_毎晩 を動かします');
 }
+
+// ============================================================ 写しを読む（Hub から）
+//   FileMaker を止めたあとは、ここが「読む」の本体になる。
+//   画面は FileMaker（ライブ）と同じ形で結果を受け取るので、切り替えても画面は変わらない。
+
+var 写し帳簿キャッシュ_ = {};
+function 写し_開く_(名, 見出し) {
+  if (写し帳簿キャッシュ_[名]) return 写し帳簿キャッシュ_[名];
+  var f = 写し_フォルダ_(); var it = f.getFilesByName(名);
+  if (!it.hasNext()) throw new Error('写しがまだありません: ' + 名);
+  return (写し帳簿キャッシュ_[名] = SpreadsheetApp.open(it.next()).getSheets()[0]);
+}
+
+/** 索引を全部読む（73k行×18列。数秒） */
+function 写し_索引_() {
+  var sh = 写し_開く_(写し.索引名);
+  var v = sh.getDataRange().getValues();
+  var 見出し = v[0]; var out = [];
+  for (var i = 1; i < v.length; i++) { var o = {}; for (var c = 0; c < 見出し.length; c++) o[見出し[c]] = v[i][c]; out.push(o); }
+  return out;
+}
+
+function 写し_日付数_(v) {   // MM/DD/YYYY → 20260911 のような数（比較用）
+  var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v || '')); return m ? Number(m[3] + m[1] + m[2]) : 0;
+}
+
+/** 画面_一覧 と同じ条件・同じ返り値で、写しから探す */
+function 写し_一覧(条件) {
+  var who = 画面_利用者_(); 条件 = 条件 || {};
+  var t0 = new Date();
+  var 件数 = Number(条件['件数'] || 50); if (!(件数 > 0)) 件数 = 50; if (件数 > 200) 件数 = 200;
+  var kw = String(条件['キーワード'] || '').trim();
+  var cust = String(条件['得意先コード'] || '').trim();
+  var 段階 = String(条件['段階'] || '').trim();
+  var 日数 = Number(条件['日数']); if (isNaN(日数)) 日数 = 90;
+  var から = 0;
+  if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(Utilities.formatDate(d, 'Asia/Tokyo', 'yyyyMMdd')); }
+
+  var rows = 写し_索引_().filter(function (r) {
+    if (kw && String(r['製品名'] || '').indexOf(kw) < 0) return false;
+    if (cust && String(r['得意先コード'] || '') !== cust) return false;
+    if (段階 && String(r['案件区分'] || '') !== 段階) return false;
+    if (から && 写し_日付数_(r['起票日']) < から) return false;
+    return true;
+  });
+  rows.sort(function (a, b) { return 写し_日付数_(b['起票日']) - 写し_日付数_(a['起票日']) || (Number(b.recordId) - Number(a.recordId)); });
+  var 全体 = rows.length; rows = rows.slice(0, 件数);
+  return { ok: true, user: who.email, 件数: rows.length, 全体: 全体, 日数: 日数, ミリ秒: new Date() - t0, 源: '写し',
+           行: rows.map(function (r) { var o = { recordId: String(r.recordId) }; 一覧の列.forEach(function (c) { if (r[c] !== undefined) o[c] = r[c]; }); return o; }) };
+}
+
+/** 画面_読み込み と同じ返り値で、写しから1件読む（伝票番号でも見積番号でも） */
+function 写し_読み込み(番号) {
+  var who = 画面_利用者_(); 番号 = String(番号 || '').trim();
+  if (!番号) throw new Error('番号を入れてください');
+  var hit = 写し_索引_().filter(function (r) { return String(r['伝票番号']) === 番号 || String(r['見積番号']) === 番号; })[0];
+  if (!hit) return { ok: true, user: who.email, record: null, 履歴: [], 源: '写し' };
+  var rec = 写し_行を読む_(hit['年'], hit.recordId);
+  return { ok: true, user: who.email, writable: [], record: rec, 源: '写し',
+           履歴: rec ? 案件の履歴_写し_(rec.fields['案件ID']) : [] };
+}
+
+function 写し_行を読む_(年, recordId) {
+  var sh = 写し_開く_(写し.年別名 + 年);
+  var 見出し = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  var ids = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
+  for (var i = 1; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(recordId)) {
+      var v = sh.getRange(i + 1, 1, 1, 見出し.length).getValues()[0];
+      var f = {}; for (var c = 2; c < 見出し.length; c++) f[見出し[c]] = v[c];
+      return { recordId: String(v[0]), modId: String(v[1]), fields: f };
+    }
+  }
+  return null;
+}
+
+function 案件の履歴_写し_(案件ID) {
+  if (!案件ID) return [];
+  return 写し_索引_().filter(function (r) { return String(r['案件ID']) === String(案件ID); }).map(function (r) {
+    return { recordId: String(r.recordId), 区分: r['案件区分'] || '（従来の受注）', 番号: r['見積番号'] || r['伝票番号'] || '',
+             起票日: r['起票日'] || '', 合計金額: r['合計金額'], 売価金額: r['売価金額'] };
+  }).sort(function (a, b) { return 写し_日付数_(a.起票日) - 写し_日付数_(b.起票日) || (Number(a.recordId) - Number(b.recordId)); });
+}
