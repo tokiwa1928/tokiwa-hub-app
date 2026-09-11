@@ -1282,6 +1282,8 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddPurchaseModal()">＋ 仕入発注</button>
+    <button class="btn" onclick="_importGenOrders_()" title="Hub の保管庫（GEN_発注・GEN_受入）から発注と受入を取り込みます。手配区分「用紙」は仕入発注、それ以外は外注発注に入ります" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り込む</button>
+    <span style="font-size:11px;color:#64748b">発注書番号は GEN の続き（PO＋5桁）。受入すると受入番号（AC＋年月＋5桁）が付きます</span>
   </div>
   <div id="purchases-list" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
 </div>
@@ -1293,6 +1295,8 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddOutsourceModal()">＋ 外注発注</button>
+    <button class="btn" onclick="_importGenOrders_()" title="Hub の保管庫（GEN_発注・GEN_受入）から取り込みます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り込む</button>
+    <span style="font-size:11px;color:#64748b">発注書番号は GEN の続き（PO＋5桁）。手配区分: 印刷／加工／完全外製</span>
   </div>
   <div id="outsource-list" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
 </div>
@@ -29002,6 +29006,63 @@ function matchPaymentToInvoice(payId){
     : '💴 一部入金を記録: ' + inv.id + '\n累計 ¥' + inv.paidTotal.toLocaleString() + ' ／ 残 ¥' + (((+inv.total||0) - inv.paidTotal)).toLocaleString() + '\n（次の入金でまた消込できます）');
 }
 
+// ═══ GEN と同じ発注・受入（PO 番号・手配区分・受入番号）。FMHUB-4 ═══
+function _nextPoNo_(){
+  var mx = 6221;   // 2026-09-11 の GEN の画面で見た最新 PO06221。これより下には戻らない
+  ((DB.purchaseOrders||[]).concat(DB.outsourceOrders||[])).forEach(function(o){ var m=/^PO(\d+)$/.exec(o.poNo||''); if(m) mx=Math.max(mx,Number(m[1])); });
+  return 'PO' + String(mx+1).padStart(5,'0');
+}
+function _nextAcNo_(){
+  var d=new Date(), ym=String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0'); var mx=0;
+  ((DB.purchaseOrders||[]).concat(DB.outsourceOrders||[])).forEach(function(o){ var m=new RegExp('^AC'+ym+'(\\d{5})$').exec(o.acNo||''); if(m) mx=Math.max(mx,Number(m[1])); });
+  return 'AC' + ym + String(mx+1).padStart(5,'0');
+}
+// 受入: 受入番号を振って受入済みに。数量が違えば入れ直せる
+function _receiveOrder_(coll, id){
+  var list = DB[coll]||[]; var o=list.find(function(x){ return x.id===id; }); if(!o) return;
+  var q = prompt('受入数量（発注 '+(o.qty||0)+(o.unit||'')+'）', String(o.qty||0)); if(q===null) return;
+  var d = prompt('受入日', new Date().toISOString().slice(0,10)); if(d===null) return;
+  o.receivedQty = parseFloat(q)||0; o.receivedAt = d; o.acNo = o.acNo || _nextAcNo_();
+  o.status = (coll==='purchaseOrders') ? 'received' : 'done';
+  if(typeof saveDB==='function') saveDB();
+  if(coll==='purchaseOrders') renderPurchases(); else renderOutsource();
+  if(typeof _toastMsg==='function') _toastMsg('✅ 受入 '+o.acNo+'（'+o.receivedQty+(o.unit||'')+'）');
+}
+// 保管庫の GEN_発注・GEN_受入 を取り込む。手配区分「用紙」は仕入、それ以外は外注へ。発注書番号＋製品名＋数量＋単価で重複しない
+function _importGenOrders_(){
+  if(!window.FM){ alert('窓口（tools/fm-bridge.js）が読み込めていません。ページを再読み込みしてください'); return; }
+  if(typeof _toastMsg==='function') _toastMsg('📥 保管庫から GEN の発注・受入を読んでいます…');
+  Promise.all([FM.呼ぶ('GEN_一覧',['発注',null,0]), FM.呼ぶ('GEN_一覧',['受入',null,0]).catch(function(){ return {行:[]}; })]).then(function(rs){
+    var 発注=rs[0].行||[], 受入=rs[1].行||[];
+    if(!DB.purchaseOrders) DB.purchaseOrders=[]; if(!DB.outsourceOrders) DB.outsourceOrders=[];
+    var have={}; DB.purchaseOrders.concat(DB.outsourceOrders).forEach(function(o){ if(o._genKey) have[o._genKey]=o; });
+    var added=0;
+    発注.forEach(function(g){
+      var key=[g['発注書番号'],g['受注番号'],g['製品名'],g['数量'],g['発注単価']].join('|'); if(have[key]) return;
+      var kind=String(g['手配区分']||''); var isPur = kind==='用紙';
+      var o={ id:(isPur?'PUR-':'OUT-')+'GEN-'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), _genKey:key, _fromGen:true,
+        poNo:String(g['発注書番号']||''), orderDate:String(g['発注日']||'').slice(0,10), vendor:String(g['取引先名 (発注先)']||''),
+        juchuNo:String(g['受注番号']||''), custName:String(g['取引先名 (製番:受注:得意先)']||''), kind:kind,
+        item:String(g['製品名']||''), qty:Number(g['数量']||0), unit:String(g['発注単位']||''), unitPrice:Number(g['発注単価']||0),
+        amount:Number(g['発注金額']||0), dueDate:String(g['発注納期']||'').slice(0,10), memo:String(g['受入状況']||''),
+        status: /完/.test(String(g['受入状況']||'')) ? (isPur?'received':'done') : (isPur?'ordered':'sent'), createdAt:new Date().toISOString() };
+      (isPur?DB.purchaseOrders:DB.outsourceOrders).push(o); have[key]=o; added++;
+    });
+    // 受入を発注に付ける（発注書番号＋製品名で）
+    var 付いた=0;
+    受入.forEach(function(r){
+      var po=String(r['発注書番号']||''), item=String(r['製品名']||'');
+      var o=DB.purchaseOrders.concat(DB.outsourceOrders).find(function(x){ return x.poNo===po && x.item===item && !x.acNo; });
+      if(!o) return;
+      o.acNo=String(r['受入番号']||''); o.receivedAt=String(r['受入日']||'').slice(0,10); o.receivedQty=Number(r['受入数']||0);
+      o.receivedAmount=Number(r['仕入額']||0); o.status = (o.id.indexOf('PUR-')===0)?'received':'done'; 付いた++;
+    });
+    if(typeof saveDB==='function') saveDB();
+    renderPurchases(); renderOutsource();
+    alert('📥 GEN の発注・受入を取り込みました\n\n発注: 新しく '+added+' 件（保管庫 '+発注.length+' 件）\n受入を付けた: '+付いた+' 件（保管庫 '+受入.length+' 件）');
+  }).catch(function(e){ alert('取り込めませんでした: '+(e&&e.message||e)); });
+}
+
 // 仕入発注
 function renderPurchases(){
   var el = document.getElementById('purchases-list');
@@ -29018,15 +29079,16 @@ function renderPurchases(){
       {k:'ordered',label:'発注済',match:function(o){return o.status==='ordered';}},
       {k:'received',label:'入荷済',match:function(o){return o.status==='received';}} ],
     columns:[
+      {h:'発注書',cell:function(o){return '<span style="font-family:monospace">'+esc(o.poNo||'')+'</span>'+(o.kind?('<div style="font-size:10px;color:#64748b">'+esc(o.kind)+'</div>'):'');}},
       {h:'仕入先',cell:function(o){return '<b>'+esc(o.vendor||'')+'</b>';}},
-      {h:'製造番号',cell:function(o){return o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>';}},
+      {h:'受注',cell:function(o){return o.juchuNo?('<span style="font-family:monospace">'+esc(o.juchuNo)+'</span>'):(o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>');}},
       {h:'製品名',cell:function(o){return esc(o.item||'')+(o.itemCode?(' <span style="font-family:monospace;font-size:10px;color:#0f766e">'+esc(o.itemCode)+'</span>'):'');}},
       {h:'数量',align:'right',cell:function(o){return (o.qty?((o.qty).toLocaleString()+(o.unit||'')):'-');}},
       {h:'納期',cell:function(o){return o.dueDate||'-';}},
       {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||0)).toLocaleString()+'</b>';}},
       {h:'状況',cell:function(o){var c=o.status==='received'?'#16a34a':'#1e40af';return '<span style="color:'+c+';font-weight:700">'+(stL[o.status]||o.status||'-')+'</span>';}}
     ],
-    actions:function(o){ return '<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deletePurchase(\''+o.id+'\')">🗑</button>'; },
+    actions:function(o){ return (o.acNo?'':'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_receiveOrder_(\'purchaseOrders\',\''+o.id+'\')">📦 受入</button> ')+'<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deletePurchase(\''+o.id+'\')">🗑</button>'; },
     detail:function(o){
       return '<div style="padding:8px 14px;font-size:12px">'
         +'<div><span style="font-family:monospace;color:#8d897f">'+esc(o.id||'')+'</span>'+(o.projectId?('　紐付け案件: '+_ledgerProjLink_(o.projectId)):'')+'</div>'
@@ -29039,12 +29101,17 @@ function renderPurchases(){
 
 function showAddPurchaseModal(){
   _showSimpleAddModal_('仕入発注', '#1e40af', [
+    { key:'poNo', label:'発注書番号', type:'text', default:_nextPoNo_() },
+    { key:'orderDate', label:'発注日', type:'date', default:new Date().toISOString().slice(0,10) },
     { key:'vendor', label:'仕入先 *', type:'text' },
+    { key:'juchuNo', label:'受注番号（伝票番号）', type:'text' },
+    { key:'kind', label:'手配区分', type:'select', options:['用紙','印刷','加工','完全外製'] },
     { key:'item', label:'品名 *', type:'itempick' },
     { key:'qty', label:'数量', type:'number' },
     { key:'unit', label:'単位', type:'text', default:'式' },
-    { key:'amount', label:'金額', type:'number' },
-    { key:'dueDate', label:'納期', type:'date' },
+    { key:'unitPrice', label:'発注単価', type:'number' },
+    { key:'amount', label:'金額（空なら 数量×単価）', type:'number' },
+    { key:'dueDate', label:'発注納期', type:'date' },
     { key:'memo', label:'備考', type:'textarea' }
   ], function(data){
     var o = Object.assign({
@@ -29052,8 +29119,11 @@ function showAddPurchaseModal(){
       status: 'ordered',
       createdAt: new Date().toISOString()
     }, data);
-    o.qty = parseInt(o.qty) || 0;
-    o.amount = parseInt(o.amount) || 0;
+    o.qty = parseFloat(o.qty) || 0;
+    o.unitPrice = parseFloat(o.unitPrice) || 0;
+    o.amount = parseInt(o.amount) || Math.round(o.qty * o.unitPrice) || 0;
+    if(o.poNo && !/^PO\d{5}$/.test(o.poNo)){ alert('発注書番号は PO＋5桁です'); return; }
+    o.poNo = o.poNo || _nextPoNo_();
     if(!DB.purchaseOrders) DB.purchaseOrders = [];
     DB.purchaseOrders.push(o);
     if(typeof saveDB === 'function') saveDB();
@@ -29091,7 +29161,7 @@ function renderOutsource(){
       {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||o.totalCost||0)).toLocaleString()+'</b>';}},
       {h:'状況',cell:function(o){var c=o.status==='completed'?'#16a34a':'#7c3aed';return '<span style="color:'+c+';font-weight:700">'+(stL[o.status]||o.status||'-')+'</span>';}}
     ],
-    actions:function(o){ return '<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deleteOutsource(\''+o.id+'\')">🗑</button>'; },
+    actions:function(o){ return (o.acNo?'':'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_receiveOrder_(\'outsourceOrders\',\''+o.id+'\')">📦 受入</button> ')+'<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deleteOutsource(\''+o.id+'\')">🗑</button>'; },
     detail:function(o){
       return '<div style="padding:8px 14px;font-size:12px">'
         +'<div><span style="font-family:monospace;color:#8d897f">'+esc(o.id||'')+'</span>'+(o.projectId?('　紐付け案件: '+_ledgerProjLink_(o.projectId)):'')+'</div>'
@@ -29104,10 +29174,17 @@ function renderOutsource(){
 
 function showAddOutsourceModal(){
   _showSimpleAddModal_('外注発注', '#7c3aed', [
+    { key:'poNo', label:'発注書番号', type:'text', default:_nextPoNo_() },
+    { key:'orderDate', label:'発注日', type:'date', default:new Date().toISOString().slice(0,10) },
     { key:'vendor', label:'外注先 *', type:'text' },
+    { key:'juchuNo', label:'受注番号（伝票番号）', type:'text' },
+    { key:'kind', label:'手配区分', type:'select', options:['加工','印刷','完全外製','用紙'] },
     { key:'item', label:'内容 *', type:'itempick' },
-    { key:'amount', label:'金額', type:'number' },
-    { key:'dueDate', label:'納期', type:'date' },
+    { key:'qty', label:'数量', type:'number' },
+    { key:'unit', label:'単位', type:'text' },
+    { key:'unitPrice', label:'発注単価', type:'number' },
+    { key:'amount', label:'金額（空なら 数量×単価）', type:'number' },
+    { key:'dueDate', label:'発注納期', type:'date' },
     { key:'memo', label:'備考', type:'textarea' }
   ], function(data){
     var o = Object.assign({
@@ -29115,7 +29192,11 @@ function showAddOutsourceModal(){
       status: 'sent',
       createdAt: new Date().toISOString()
     }, data);
-    o.amount = parseInt(o.amount) || 0;
+    o.qty = parseFloat(o.qty) || 0;
+    o.unitPrice = parseFloat(o.unitPrice) || 0;
+    o.amount = parseInt(o.amount) || Math.round(o.qty * o.unitPrice) || 0;
+    if(o.poNo && !/^PO\d{5}$/.test(o.poNo)){ alert('発注書番号は PO＋5桁です'); return; }
+    o.poNo = o.poNo || _nextPoNo_();
     if(!DB.outsourceOrders) DB.outsourceOrders = [];
     DB.outsourceOrders.push(o);
     if(typeof saveDB === 'function') saveDB();
