@@ -358,6 +358,56 @@ function 画面_新規段階(案件ID, 種別) {
   };
 }
 
+/**
+ * Repeat 登録（FileMaker の「Repeat登録」ボタンと同じ狙い）。
+ *   読み込んでいる伝票を種に、新しい受注を起こす。番号・日付・注残などは引き継がず、
+ *   前回伝票番号・前回起票日に種の番号と起票日を入れる。
+ */
+function 画面_Repeat登録(recordId) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  if (!recordId) throw new Error('recordId がありません');
+  var 種の全部 = getByDenpyo_複製用_({ recordId: recordId });
+  var 除く = {};
+  引き継がない.forEach(function (n) { 除く[n] = true; });
+  var base = {};
+  Object.keys(種の全部).forEach(function (k) {
+    if (除く[k]) return;
+    var v = 種の全部[k];
+    if (v === null || v === undefined || v === '') return;
+    base[k] = String(v);
+  });
+  base['前回伝票番号'] = String(種の全部['伝票番号'] || '');
+  base['前回起票日'] = String(種の全部['起票日'] || '');
+  base['起票日'] = 日付_(new Date());
+
+  var rec = 作成_(COPY_LAYOUT, base);
+  var 案件ID = String(rec.fields['no'] || '');
+  if (!案件ID) { 削除_(lay, rec.recordId); throw new Error('番号が自動採番されませんでした。作成を取り消しました。'); }
+  var r = 番号と段階を入れる_(lay, rec, 案件ID, '受注', who);
+  log_(who, lay, rec.recordId, { 'Repeat登録': '元 ' + base['前回伝票番号'] + ' → ' + 案件ID }, {});
+  return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [],
+           writable: fieldInfo_(lay).writable, 履歴: 案件の履歴_(lay, 案件ID) };
+}
+
+/** 伝票を FileMaker から消す（画面の「データ削除」）。消す前の内容を記録に残す */
+function 画面_削除(recordId, modId) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  if (!recordId) throw new Error('recordId がありません');
+  var r = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records/' + recordId);
+  if (r.code !== '0') throw new Error('読み込みに失敗 (' + r.code + ') ' + r.message);
+  var d = (r.response.data || [])[0];
+  if (!d) throw new Error('レコードが見つかりません');
+  if (modId && String(d.modId) !== String(modId)) throw new Error('読み込んだあとに誰かが直しています。読み直してから消してください');
+  var f = d.fieldData || {};
+  var 前 = {}; ['伝票番号', '案件ID', '起票日', '得意先コード', 'ユーザー名', '製品名', '合計数1', '売価金額', '合計金額', '納品日'].forEach(function (k) { 前[k] = f[k]; });
+  var del = 削除_(lay, recordId);
+  if (del.code !== '0') throw new Error('削除に失敗 (' + del.code + ') ' + del.message);
+  log_(who, lay, recordId, { '削除': String(f['伝票番号'] || '') }, 前);
+  return { ok: true, 伝票番号: String(f['伝票番号'] || '') };
+}
+
 /** 種レコードの入力項目を、複製用レイアウトから全部読む */
 function getByDenpyo_複製用_(種) {
   var r = fmCall_('/layouts/' + encodeURIComponent(COPY_LAYOUT) + '/records/' + 種.recordId);
@@ -393,6 +443,8 @@ function handle_(action, req, who) {
     case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields);
     case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
+    case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
+    case '画面_削除':         return 画面_削除(req.recordId, req.modId);
     case '画面_一覧':         return 画面_一覧(req['条件']);
     // Hub 用の保管庫（FileMaker の写し）から読む。FileMaker を止めたあとの読み口
     case '写し_索引を配る':   return 写し_索引を配る();

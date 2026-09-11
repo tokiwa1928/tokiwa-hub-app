@@ -2167,13 +2167,15 @@ window.FM見た目 = function () {};
       + '　打つと出ます';
   }
   // 手元で絞る（1 打ごと）。番号（a10000）は伝票番号の前方一致、それ以外は製品名・ユーザー名の部分一致
+  var 全件モード = false;   // 「全体表示」を押したら、絞りが無くても新しい順に出す
   function 手元で探す(開いてよい) {
     if (!索引) return false;
     var kw = $('ff-kw').value.trim(), cust = $('ff-cust').value.trim(), 段階 = $('ff-stage').value;
     var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 50);
     var 番号らしい = /^[a-zA-Z]?\d{2,}$/.test(kw);
     if (番号らしい) 日数 = 0;
-    if (!kw && !cust && !段階) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    if (!kw && !cust && !段階 && !全件モード) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    全件モード = false;
     var から = 0;
     if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')); }
     var P = 索引位置, 行 = 索引.行, kwl = kw.toLowerCase(), hits = [], t0 = Date.now();
@@ -2245,6 +2247,49 @@ window.FM見た目 = function () {};
     $(id).addEventListener('input', 打ちながら);
   });
   ['ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { $(id).addEventListener('change', function () { 手元で探す(false); }); });
+  // -------------------------------------------------- FileMaker のボタンを本物の動きに（FMHUB-9）
+  function 帯のボタン(文言) {
+    return Array.prototype.filter.call(document.querySelectorAll('.hdrow .fb'), function (x) { return x.textContent.trim() === 文言; })[0];
+  }
+  function 帯に付ける(文言, fn, title) { var x = 帯のボタン(文言); if (!x) return; x.onclick = fn; if (x.tagName === 'A') x.removeAttribute('href'); if (title) x.title = title; }
+  function 読んでから(fn) { if (!現在) { alert('先に伝票を読み込んでください（探す窓で行をクリック、または番号を入れて「読み込む」）'); return; } fn(); }
+
+  帯に付ける('新規作成', function () {
+    var n = document.querySelector('#fmbar button.new[data-kind="受注"]') || document.querySelector('#fmbar button.new');
+    if (n) n.click();
+  }, 'FileMaker に新しい受注を起こします（黒帯の「受注」と同じ）');
+  帯に付ける('検索モード', function () { 探し.style.display = 'block'; $('ff-kw').focus(); $('ff-kw').select(); }, '探す窓に移ります。打つと出ます');
+  帯に付ける('全体表示', function () {
+    探し.style.display = 'block';
+    $('ff-kw').value = ''; $('ff-cust').value = ''; $('ff-stage').value = ''; $('ff-days').value = '0'; $('ff-n').value = '200';
+    全件モード = true;
+    if (!手元で探す(false)) 探す();
+  }, '新しい順に 200 件を出します');
+  帯に付ける('Repeat登録', function () { 読んでから(function () {
+    if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて Repeat 登録しますか？')) return;
+    var no = String(現在.fields['伝票番号'] || '');
+    if (!confirm(no + ' を元に、新しい受注を起こします。\n\n前回伝票番号 = ' + no + '、起票日 = 今日。番号・納品日・注残は引き継ぎません。\nよろしいですか？')) return;
+    待機(true); 失敗(''); diff.style.display = 'none'; 状態('Repeat 登録しています… 元 ' + no);
+    var t0 = Date.now();
+    呼ぶ('画面_Repeat登録', [現在.recordId])
+      .then(function (r) { var n2 = r.record.fields['伝票番号'] || ''; 受け取る(r, 'Repeat 登録しました  ' + n2 + '（元 ' + no + '）', Date.now() - t0); })
+      .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+  }); }, '読み込んでいる伝票を元に、新しい受注を FileMaker に起こします');
+  帯に付ける('データ削除', function () { 読んでから(function () {
+    var no = String(現在.fields['伝票番号'] || '');
+    var t = prompt('FileMaker からこの伝票を削除します。取り消せません。\n\n確認のため伝票番号（' + no + '）を入れてください');
+    if (t === null) return;
+    if (String(t).trim() !== no) { alert('番号が違うので削除しません'); return; }
+    待機(true); 状態('削除しています… ' + no);
+    呼ぶ('画面_削除', [現在.recordId, 現在.modId])
+      .then(function () { 現在 = null; 番号欄.value = ''; if (typeof newRec === 'function') { try { newRec(); } catch (e) {} } 状態(no + ' を削除しました（記録に残しています）'); 待機(false); })
+      .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+  }); }, '読み込んでいる伝票を FileMaker から消します（番号を打って確認）');
+  帯に付ける('注文書', function () { location.href = '../index.html?page=purchases'; }, 'Hub の仕入発注（注文書）へ');
+  帯に付ける('配送カレンダー', function () { location.href = '../index.html?page=delivery'; }, 'Hub の配送/納品へ');
+  帯に付ける('外注入力', function () { location.href = '../index.html?page=outsource'; }, 'Hub の外注発注へ');
+  帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '200'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
+
   setTimeout(索引を用意, 1500);                       // 開いたら索引を手元に（サインイン前なら次回）
   setInterval(function () { if (!索引) 索引を用意(); }, 30000);   // サインインが後から済んだとき用
 
