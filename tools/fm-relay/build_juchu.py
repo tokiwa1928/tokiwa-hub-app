@@ -211,6 +211,9 @@ window.FM見た目 = function () {};
     '画面_外注':           ['伝票番号'],
     '画面_外注保存':       ['recordId', 'modId', '行'],
     '画面_外注作成':       ['伝票番号', '行'],
+    '画面_全項目':         ['recordId'],
+    'マスタ_配る':         ['layout'],
+    'マスタ_写す':         ['layout'],
     '画面_一覧':           ['条件'],
     '写し_索引を配る':     []
   };
@@ -912,6 +915,13 @@ LOGIC = r"""
   帯に付ける('注文書', function () { location.href = '../index.html?page=purchases'; }, 'Hub の仕入発注（注文書）へ');
   帯に付ける('配送カレンダー', function () { location.href = '../index.html?page=delivery'; }, 'Hub の配送/納品へ');
   帯に付ける('外注入力', function () { location.href = '../index.html?page=outsource'; }, 'Hub の外注発注へ');
+  // 作業指示書（FileMaker と同じ紙を Hub で出す）: 帯の「レイアウト編集」の前に足す
+  (function () {
+    var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('作業指示書')) return;
+    var b2 = document.createElement('button'); b2.className = 'fb or'; b2.textContent = '作業指示書'; b2.title = '読み込んでいる伝票の作業指示書（FileMaker と同じ形）を出します';
+    b2.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')), '_blank'); }); };
+    lay.parentNode.insertBefore(b2, lay);
+  })();
   帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '200'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
 
   setTimeout(索引を用意, 1500);                       // 開いたら索引を手元に（サインイン前なら次回）

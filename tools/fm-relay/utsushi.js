@@ -226,7 +226,9 @@ function 写し_毎晩() {
 function 写し_毎晩を登録() {
   トリガーを外す_('写し_毎晩');
   ScriptApp.newTrigger('写し_毎晩').timeBased().atHour(2).everyDays(1).create();
-  Logger.log('毎晩 2 時に 写し_毎晩 を動かします');
+  トリガーを外す_('マスタ_毎晩');
+  ScriptApp.newTrigger('マスタ_毎晩').timeBased().atHour(3).everyDays(1).create();
+  Logger.log('毎晩 2 時に 写し_毎晩、3 時に マスタ_毎晩 を動かします');
 }
 
 // ============================================================ 写しを読む（Hub から）
@@ -474,3 +476,36 @@ function 検証_写し読み() {
   var c = 写し_読み込み('a108167'); var f = (c.record || {}).fields || {};
   Logger.log('読込 a108167: ' + (Date.now() - t) + 'ms 項目数 ' + Object.keys(f).length + ' 起票日 ' + f['起票日'] + ' 納期 ' + f['納期'] + ' 得意先コード ' + JSON.stringify(f['得意先コード']) + ' 履歴 ' + c.履歴.length);
 }
+
+
+// ------------------------------------------------------------ 小さなマスタの写し（FM_<マスタ名>.json）
+function マスタ_json名_(layout) { return 'FM_' + layout + '.json'; }
+
+/** FileMaker から読んで保管庫に置く（得意先は 60 秒ほど）。layout を省くと全部 */
+function マスタ_写す(layout) {
+  var f = 写し_フォルダ_();
+  var 対象 = layout ? [layout] : 配れるマスタ;
+  var out = {};
+  対象.forEach(function (L) {
+    var j = マスタ_読む_(L);
+    var it = f.getFilesByName(マスタ_json名_(L)); while (it.hasNext()) it.next().setTrashed(true);
+    f.createFile(マスタ_json名_(L), JSON.stringify(j), 'application/json');
+    out[L] = j.件数;
+  });
+  Logger.log('マスタを写した: ' + JSON.stringify(out));
+  return { ok: true, 件数: out };
+}
+
+/** 保管庫の json をそのまま配る（無ければその場で写す） */
+function マスタ_配る(layout) {
+  var who = 画面_利用者_();
+  if (配れるマスタ.indexOf(layout) < 0) throw new Error('そのマスタは配れません: ' + layout);
+  var it = 写し_フォルダ_().getFilesByName(マスタ_json名_(layout));
+  if (!it.hasNext()) { マスタ_写す(layout); it = 写し_フォルダ_().getFilesByName(マスタ_json名_(layout)); }
+  var j = JSON.parse(it.next().getBlob().getDataAsString('UTF-8'));
+  j.ok = true; j.user = who.email;
+  return j;
+}
+
+/** 毎晩 3 時: 小さなマスタを写し直す（トリガー用） */
+function マスタ_毎晩() { return マスタ_写す(); }

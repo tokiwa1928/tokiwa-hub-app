@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>作業指示書 | Tokiwa Hub</title>
+<style>
+  /* FileMaker の「作業指示書」（A4 縦）と同じ並び。画面では上に操作、印刷では紙だけ */
+  body{ margin:0; font-family:"Noto Sans JP","Yu Gothic","Meiryo",sans-serif; background:#e5e7eb; color:#111; }
+  #bar{ background:#0d0d0d; color:#e5e7eb; padding:6px 14px; display:flex; gap:10px; align-items:center; font-size:13px; flex-wrap:wrap; }
+  #bar a{ color:#93c5fd; text-decoration:none; }
+  #bar input{ font-size:13px; padding:3px 6px; border:1px solid #64748b; border-radius:4px; width:120px; }
+  #bar button{ font-size:13px; padding:3px 12px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#111; cursor:pointer; }
+  #bar .st{ color:#fbbf24; }
+  #paper{ width:210mm; min-height:297mm; margin:12px auto; background:#fff; padding:14mm 12mm 12mm; box-sizing:border-box; font-size:10.5pt; box-shadow:0 2px 10px rgba(0,0,0,.2); }
+  h1{ text-align:center; font-size:18pt; font-weight:500; letter-spacing:.15em; margin:0 0 4mm; }
+  .date{ text-align:right; font-size:10pt; margin-bottom:6mm; padding-right:6mm; }
+  table{ border-collapse:collapse; width:100%; table-layout:fixed; }
+  td,th{ border:1px solid #000; padding:1.2mm 1.5mm; font-size:9.5pt; line-height:1.25; vertical-align:middle; overflow:hidden; }
+  th{ font-weight:400; text-align:center; background:#fff; }
+  .lbl{ width:20mm; text-align:left; }
+  .c{ text-align:center; } .l{ text-align:left; } .r{ text-align:right; }
+  .thick{ border-width:2px; }
+  .box{ border:2px solid #000; }
+  .small{ font-size:8pt; } .tiny{ font-size:7pt; }
+  .foot{ margin-top:5mm; margin-left:auto; width:70mm; font-size:9.5pt; line-height:1.55; }
+  @media print{ body{ background:#fff; } #bar{ display:none; } #paper{ margin:0; box-shadow:none; width:auto; min-height:auto; padding:10mm 10mm 8mm; } @page{ size:A4 portrait; margin:0; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <a href="fm-juchu-hub.html">← 受注入力</a>
+  <b>作業指示書</b>
+  <input id="no" placeholder="伝票番号" autocomplete="off">
+  <button id="go">出す</button>
+  <button id="pr">🖨 印刷</button>
+  <span class="st" id="st"></span>
+  <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
+</div>
+<div id="paper"><div style="text-align:center;color:#9ca3af;padding-top:60mm">伝票番号を入れて「出す」</div></div>
+
+<script src="fm-bridge.js"></script>
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function 数(v) { var x = Number(v); return (v === '' || v == null || isNaN(x)) ? '' : x.toLocaleString(); }
+function 和暦(d) { var y = d.getFullYear(), m = ('0' + (d.getMonth() + 1)).slice(-2), dd = ('0' + d.getDate()).slice(-2); var r = y - 2018; return '令和' + (r === 1 ? '元' : r) + '年' + m + '月' + dd + '日'; }
+
+// ---- マスタ（保管庫の json。24 時間はこの PC に置く）
+var マスタ = {};
+function マスタを用意() {
+  var need = ['得意先マスタ', '社員マスタ'];
+  return Promise.all(need.map(function (L) {
+    try { var c = JSON.parse(localStorage.getItem('fm_master_' + L) || 'null'); if (c && c.取った && Date.now() - new Date(c.取った).getTime() < 24 * 3600 * 1000) { マスタ[L] = c; return; } } catch (e) {}
+    return FM.呼ぶ('マスタ_配る', [L]).then(function (j) { j.取った = new Date().toISOString(); マスタ[L] = j; try { localStorage.setItem('fm_master_' + L, JSON.stringify(j)); } catch (e) {} });
+  }));
+}
+function 得意先名(code) { var m = マスタ['得意先マスタ']; if (!m) return ''; var h = m.行.filter(function (r) { return String(r['得意先コード']) === String(code); })[0]; return h ? h['得意先名'] : ''; }
+function 社員名(code) { var m = マスタ['社員マスタ']; if (!m) return ''; var h = m.行.filter(function (r) { return String(r['社員コード']) === String(code); })[0]; return h ? h['氏名'] : ''; }
+
+// ---- 紙を描く（FileMaker の作業指示書テーブルと同じ対応: 色数裏=色MAX、バック/カーボン色=スポット色、穴=ファイル穴、左中右=マージナルパンチa/b/c）
+function 描く(f) {
+  var パーツ = [1, 2, 3, 4, 5];
+  function row(n) { return n === '表紙' ? 0 : n; }
+  function v(k, n) { var x = f[k + row(n)]; return (x == null) ? '' : String(x); }
+  var h = '<h1>作業指示書</h1><div class="date">' + 和暦(new Date()) + '</div>';
+  h += '<table class="box">'
+    + '<tr><td class="lbl">伝票番号</td><td colspan="8" class="c">' + esc(f['伝票番号']) + '</td></tr>'
+    + '<tr><td class="lbl">得意先名</td><td colspan="8" class="c">' + esc(得意先名(f['得意先コード'])) + '</td></tr>'
+    + '<tr><td class="lbl">ユーザ名</td><td colspan="8" class="c">' + esc(f['ユーザー名']) + '</td></tr>'
+    + '<tr><td class="lbl">品名</td><td colspan="8" class="c">' + esc(f['製品名']) + '</td></tr>'
+    + '<tr><td class="lbl">パーツ数</td><td colspan="8" class="c">' + esc(f['パーツ数']) + '</td></tr>'
+    + '<tr><td class="lbl" rowspan="2">サイズ</td><td colspan="8"><span style="display:inline-block;width:14mm">(mm)</span><span style="display:inline-block;width:60mm;text-align:right">横　' + esc(f['サイズ横']) + '　×　縦　' + esc(f['サイズ縦']) + '</span></td></tr>'
+    + '<tr><td colspan="8"><span style="display:inline-block;width:14mm">(in)</span><span style="display:inline-block;width:60mm;text-align:right">' + esc(f['横1'] || '-') + ' / ' + esc(f['縦1'] || '-') + '</span></td></tr>'
+    + '<tr><td class="lbl">契約数量</td><td colspan="8" class="c">' + esc(数(f['ロット契約単位'])) + '　　' + esc(f['単位']) + '</td></tr>'
+    + '<tr><td class="lbl">セット数</td><td colspan="8" class="c">' + esc(数(f['ロットセット数'])) + '</td></tr>'
+    + '<tr><td class="lbl">仕様変更</td><td colspan="2" class="c">' + esc(f['仕様変更']) + '</td><td class="c" colspan="2">版下変更</td><td colspan="2" class="c">' + esc(f['版下変更']) + '</td><td colspan="2"></td></tr>'
+    + '</table>';
+  // 紙情報・印刷
+  h += '<table class="box" style="margin-top:-1px"><colgroup><col style="width:20mm"><col style="width:38mm"><col style="width:9mm"><col style="width:12mm"><col style="width:7mm"><col style="width:7mm"><col style="width:14mm"><col style="width:14mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm"><col style="width:9mm"></colgroup>'
+    + '<tr><th rowspan="3"></th><th rowspan="3">紙情報</th><th rowspan="3">版下</th><th rowspan="3" class="tiny">バック<br>カーボン色</th><th colspan="9">印刷</th></tr>'
+    + '<tr><th colspan="2">色数</th><th colspan="2">インキ</th><th rowspan="2">減感</th><th colspan="4">ナンバリング</th></tr>'
+    + '<tr><th>表</th><th>裏</th><th>表</th><th>裏</th><th>種類</th><th>書体</th><th>桁数</th><th>色</th></tr>';
+  パーツ.concat(['表紙']).forEach(function (n) {
+    h += '<tr><td class="l">' + (n === '表紙' ? '表紙' : n + 'パーツ目') + '</td><td class="c">' + esc(v('紙質', n)) + '</td><td class="c">' + esc(v('版下', n)) + '</td><td class="c small">' + esc(v('スポット色', n)) + '</td>'
+      + '<td class="c">' + esc(v('色数', n)) + '</td><td class="c">' + esc(v('色MAX', n)) + '</td><td class="c">' + esc(v('インキ表', n)) + '</td><td class="c">' + esc(v('インキ裏', n)) + '</td><td class="c">' + esc(v('減感', n)) + '</td>'
+      + '<td class="c">' + esc(v('種類', n)) + '</td><td class="c">' + esc(v('書体', n)) + '</td><td class="c">' + esc(v('桁数', n)) + '</td><td class="c">' + esc(v('色', n)) + '</td></tr>';
+  });
+  h += '</table>';
+  // 加工
+  h += '<table class="box" style="margin-top:-1px"><colgroup><col style="width:20mm"><col style="width:6mm"><col style="width:6mm"><col style="width:6mm"><col style="width:9mm"><col style="width:8mm"><col style="width:10mm"><col style="width:10mm"><col style="width:10mm"><col style="width:10mm"><col></colgroup>'
+    + '<tr><th rowspan="3"></th><th colspan="9">加工</th><th rowspan="3">備考</th></tr>'
+    + '<tr><th colspan="3" class="tiny">ﾏｰｼﾞﾅﾙﾊﾟﾝﾁ</th><th rowspan="2" class="small">ﾌｧｲﾙ</th><th rowspan="2">穴</th><th rowspan="2" class="small">横ﾐｼﾝ</th><th rowspan="2" class="tiny">中間<br>横ﾐｼﾝ</th><th rowspan="2" class="small">縦ﾐｼﾝ</th><th rowspan="2" class="tiny">中間<br>縦ﾐｼﾝ</th></tr>'
+    + '<tr><th>左</th><th>中</th><th>右</th></tr>';
+  パーツ.concat(['表紙']).forEach(function (n) {
+    h += '<tr><td class="l">' + (n === '表紙' ? '表紙' : n + 'パーツ目') + '</td><td class="c">' + esc(v('マージナルパンチa', n)) + '</td><td class="c">' + esc(v('マージナルパンチb', n)) + '</td><td class="c">' + esc(v('マージナルパンチc', n)) + '</td>'
+      + '<td class="c">' + esc(v('ファイル', n)) + '</td><td class="c">' + esc(v('ファイル穴', n)) + '</td><td class="c">' + esc(v('横ミシン', n)) + '</td><td class="c">' + esc(v('中間横ミシン', n)) + '</td><td class="c">' + esc(v('縦ミシン', n)) + '</td><td class="c">' + esc(v('中間縦ミシン', n)) + '</td>'
+      + '<td class="l small">' + esc(v('備考', n)) + '</td></tr>';
+  });
+  h += '</table>';
+  // 下段
+  var 箱 = [f['箱サイズ横'], f['箱サイズ縦'], f['箱サイズ高さ']].map(function (x) { return x == null ? '' : String(x); });
+  h += '<table class="box" style="margin-top:-1px"><colgroup><col style="width:20mm"><col style="width:30mm"><col style="width:20mm"><col></colgroup>'
+    + '<tr><td class="lbl">ナンバー自</td><td>' + esc(f['ナンバー自']) + '</td><td class="lbl">ナンバー至</td><td>' + esc(f['ナンバー至']) + '</td></tr>'
+    + '<tr><td class="lbl">製本加工</td><td colspan="3" class="small">' + esc(f['製本加工']) + '</td></tr>'
+    + '<tr><td class="lbl">内部備考</td><td colspan="3" class="small">' + esc(f['内装備考']) + '</td></tr>'
+    + '<tr><td class="lbl">カートン型式</td><td colspan="3">' + esc(f['カートン型式']) + '</td></tr>'
+    + '<tr><td class="lbl">カートン</td><td colspan="3">' + esc(f['カートン']) + '</td></tr>'
+    + '<tr><td class="lbl">箱数</td><td colspan="3">' + esc(f['箱数']) + '</td></tr>'
+    + '<tr><td class="lbl">箱サイズ</td><td colspan="3">' + esc(箱[0]) + '　×　' + esc(箱[1]) + '　×　' + esc(箱[2]) + '</td></tr>'
+    + '<tr><td class="lbl">備考</td><td colspan="3" class="small">' + esc(f['備考']) + '</td></tr>'
+    + '</table>';
+  h += '<div class="foot">ご不明な点は下記担当者までご連絡下さい。<br>トキワ印刷株式会社<br>〒432-8053<br>静岡県浜松市中央区法枝町115<br>TEL:  053-441-2784<br>FAX:  053-442-1265<br>mail:<br>担当: ' + esc(社員名(f['担当者コード'])) + '</div>';
+  $('paper').innerHTML = h;
+}
+
+function 出す() {
+  var no = $('no').value.trim(); if (!no) return;
+  $('st').textContent = '読んでいます… ' + no;
+  var t0 = Date.now();
+  Promise.all([FM.呼ぶ('画面_読み込み', [no]), マスタを用意()]).then(function (rs) {
+    var r = rs[0]; if (!r.record) throw new Error('見つかりません: ' + no);
+    return FM.呼ぶ('画面_全項目', [r.record.recordId]);
+  }).then(function (j) {
+    描く(j.fields);
+    document.title = '【作業指示書】' + no + '_' + esc(得意先名(j.fields['得意先コード'])) + '_' + esc(j.fields['製品名'] || '');
+    $('st').textContent = '出しました（' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）';
+    try { history.replaceState(null, '', '?no=' + encodeURIComponent(no)); } catch (e) {}
+  }).catch(function (e) { $('st').textContent = String(e.message || e); });
+}
+
+(function () {
+  FM.サインインのボタンを置く($('fm-signin'));
+  function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
+  名(); window.addEventListener('fm-signin', 名);
+  $('go').onclick = 出す; $('pr').onclick = function () { window.print(); };
+  $('no').addEventListener('keydown', function (e) { if (e.key === 'Enter') 出す(); });
+  var q = new URLSearchParams(location.search); if (q.get('no')) { $('no').value = q.get('no'); setTimeout(出す, 300); }
+})();
+</script>
+<script>window.KAIZEN_KEY = 'sagyo';</script>
+<script src="kaizen.js"></script>
+</body>
+</html>

@@ -527,6 +527,32 @@ function 画面_削除(recordId, modId) {
   return { ok: true, 伝票番号: String(f['伝票番号'] || ''), 外注消した: 外注消した };
 }
 
+// ------------------------------------------------------------ 小さなマスタ
+var 配れるマスタ = ['得意先マスタ', '社員マスタ', '用紙マスタ', '外注先マスタ', '内装備考マスタ', '製品品目マスタ', '物品品目マスタ', '担当作業者マスタ'];
+var マスタの重い列 = { '得意先マスタ': ['買上額', '入金額', '消費税額', '売掛', 'g集計用_開始日', 'g集計用_終了日', '集計用_売上'] };
+function マスタ_読む_(layout) {
+  if (配れるマスタ.indexOf(layout) < 0) throw new Error('そのマスタは配れません: ' + layout);
+  var 落とす = {}; (マスタの重い列[layout] || []).forEach(function (c) { 落とす[c] = true; });
+  var all = [], off = 1, lim = 1000;
+  for (var guard = 0; guard < 50; guard++) {
+    var g = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records?_limit=' + lim + '&_offset=' + off);
+    if (g.code === '401') break;
+    if (g.code !== '0') throw new Error(g.message);
+    var data = g.response.data || [];
+    data.forEach(function (d) { var f = {}; Object.keys(d.fieldData).forEach(function (k) { if (!落とす[k]) f[k] = d.fieldData[k]; }); f._recordId = d.recordId; all.push(f); });
+    if (data.length < lim) break;
+    off += lim;
+  }
+  return { layout: layout, 件数: all.length, 行: all, 読んだ: new Date().toISOString() };
+}
+
+/** 画面用: 伝票の入力項目を全部（複製用レイアウト 597 項目。作業指示書などの印刷に使う） */
+function 画面_全項目(recordId) {
+  var who = 画面_利用者_();
+  if (!recordId) throw new Error('recordId がありません');
+  return { ok: true, user: who.email, fields: getByDenpyo_複製用_({ recordId: recordId }) };
+}
+
 /** 種レコードの入力項目を、複製用レイアウトから全部読む */
 function getByDenpyo_複製用_(種) {
   var r = fmCall_('/layouts/' + encodeURIComponent(COPY_LAYOUT) + '/records/' + 種.recordId);
@@ -556,6 +582,7 @@ function handle_(action, req, who) {
     case 'layoutFields': { var q = fmCall_('/layouts/' + encodeURIComponent(req.layout)); if (q.code !== '0') throw new Error(q.message); return q.response.fieldMetaData.map(function (f) { return f.name + ':' + f.result; }); }
     case 'layoutFind': return find_(req.layout, req.query, Number(req.limit || 20), 1, req.sort || null);   // 読むだけ: どのレイアウトでも探す
     case '記録_末尾': { var sh0 = 記録の置き場_().getSheets()[0]; var n0 = Number(req.n || 10), last0 = sh0.getLastRow(); if (last0 < 2) return []; var from0 = Math.max(2, last0 - n0 + 1); return sh0.getRange(from0, 1, last0 - from0 + 1, 7).getValues(); }
+    case 'マスタ_一覧': return マスタ_読む_(req.layout);   // 読むだけ（得意先は 60 秒かかる。ふだんは マスタ_配る）
     case 'layoutPeek': { var g = fmCall_('/layouts/' + encodeURIComponent(req.layout) + '/records?_limit=' + Number(req.limit || 3)); if (g.code !== '0') throw new Error(g.message); return (g.response.data || []).map(function (d) { return d.fieldData; }); }
     case 'get':    return getByDenpyo_(layoutOf_(req.screen), req.denpyo);
     case 'find':   return find_(layoutOf_(req.screen), req.query, req.limit, req.offset, req.sort);
@@ -572,6 +599,10 @@ function handle_(action, req, who) {
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
+    case '画面_全項目':       return 画面_全項目(req.recordId);
+    case 'マスタ_配る':       return マスタ_配る(req.layout);
+    case 'マスタ_写す':       return マスタ_写す(req.layout);
+    case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }
     case '画面_一覧':         return 画面_一覧(req['条件']);
     // Hub 用の保管庫（FileMaker の写し）から読む。FileMaker を止めたあとの読み口
     case '写し_索引を配る':   return 写し_索引を配る();
