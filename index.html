@@ -1260,6 +1260,8 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddPaymentModal()">＋ 入金登録</button>
+    <button class="btn" onclick="_importGenPayments_()" title="Hub の保管庫（GEN_入金）から入金を取り込み、請求書番号で消し込みます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の入金を取り込む</button>
+    <span style="font-size:11px;color:#64748b">入金番号は GEN の続き（PI＋5桁）。請求書番号（BI…）を入れると Hub の請求書に自動で消込</span>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px">
     <div>
@@ -28782,6 +28784,47 @@ function deleteReceipt(rcptId){
 }
 
 // 入金管理 (消込)
+// ═══ GEN と同じ入金（PI 番号・種別・口座・請求書番号）。FMHUB-3 ═══
+function _nextPaymentNo_(){
+  var mx = 3695;   // 2026-07-02 の GEN 書き出しで見た最新 PI03695。これより下には戻らない
+  (DB.payments||[]).forEach(function(p){ var m=/^PI(\d+)$/.exec(p.id||''); if(m) mx=Math.max(mx,Number(m[1])); });
+  return 'PI' + String(mx+1).padStart(5,'0');
+}
+function _findSeikyu_(no){ no=String(no||'').trim(); return (DB.seikyusho||[]).find(function(sk){ return sk.番号===no; }) || null; }
+function _unpaidSeikyuOptions_(){
+  return (DB.seikyusho||[]).filter(function(sk){ return !sk.入金; }).map(function(sk){
+    return '<option value="'+_escDiff(sk.番号)+'">'+_escDiff(sk.宛名||'')+' ¥'+(sk.合計||0).toLocaleString()+'</option>'; }).join('');
+}
+function _fillPaymentFromSeikyu_(){
+  var sk=_findSeikyu_(document.getElementById('pay-invno')?.value); if(!sk) return;
+  var c=document.getElementById('pay-cust'), a=document.getElementById('pay-amount');
+  if(c && !c.value) c.value = sk.宛名||'';
+  if(a && !a.value) a.value = sk.合計||'';
+}
+// 保管庫の GEN_入金 を取り込む（入金番号で重複しない）。請求書番号が Hub の請求書に当たれば消込
+function _importGenPayments_(){
+  if(!window.FM){ alert('FileMaker/GEN への窓口が読み込めていません。ページを再読み込みしてください'); return; }
+  if(typeof _toastMsg==='function') _toastMsg('📥 保管庫から GEN の入金を読んでいます…');
+  FM.呼ぶ('GEN_一覧',['入金', null, 0]).then(function(r){
+    var rows=r.行||[]; if(!DB.payments) DB.payments=[];
+    var have={}; DB.payments.forEach(function(p){ have[p.id]=1; });
+    var added=0, matched=0;
+    rows.forEach(function(g){
+      var no=String(g['入金番号']||'').trim(); if(!no) return;
+      var line=String(g['行']||'1'); var id = line==='1' ? no : (no+'-'+line);
+      if(have[id]) return;
+      var pay={ id:id, cust:String(g['取引先名']||''), custCode:String(g['取引先コード']||''), amount:Number(g['入金金額']||0),
+                receivedAt:String(g['入金日']||'').slice(0,10), method:String(g['入金種別']||''), bank:String(g['入金口座']||''),
+                invoiceNo:String(g['請求書番号']||''), memo:String(g['明細備考']||''), matchedInvoiceId:null, _fromGen:true };
+      var sk=_findSeikyu_(pay.invoiceNo); if(sk && !sk.入金){ sk.入金=pay.id; sk._updatedAt=new Date().toISOString(); pay.matchedInvoiceId=sk.番号; pay.matchedAt=new Date().toISOString(); pay.appliedAmount=pay.amount; matched++; }
+      DB.payments.push(pay); have[id]=1; added++;
+    });
+    if(typeof saveDB==='function') saveDB();
+    renderPayments();
+    alert('📥 GEN の入金を取り込みました\n\n新しく '+added+' 件（保管庫 '+rows.length+' 件）\nHub の請求書に消込 '+matched+' 件');
+  }).catch(function(e){ alert('取り込めませんでした: '+(e&&e.message||e)); });
+}
+
 function renderPayments(){
   var el = document.getElementById('payments-list');
   var unEl = document.getElementById('unmatched-invoices');
@@ -28797,6 +28840,7 @@ function renderPayments(){
       {k:'unmatched',label:'未消込',match:function(p){return !p.matchedInvoiceId;}},
       {k:'matched',label:'消込済',match:function(p){return !!p.matchedInvoiceId;}} ],
     columns:[
+      {h:'入金番号',cell:function(p){return '<span style="font-family:monospace">'+esc(p.id||'')+'</span>';}},
       {h:'入金日',cell:function(p){return p.receivedAt?new Date(p.receivedAt).toLocaleDateString('ja-JP'):'-';}},
       {h:'得意先',cell:function(p){return '<b>'+esc(p.cust||'')+'</b>';}},
       {h:'製造番号',cell:function(p){return p.projectId?_ledgerProjLink_(p.projectId):'<span style="color:#cbd5e1">—</span>';}},
@@ -28804,7 +28848,8 @@ function renderPayments(){
       {h:'数量',align:'right',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return (m&&m.qty)?((m.qty).toLocaleString()+esc(m.unit||'')):'-';}},
       {h:'納期',cell:function(p){var m=_ledgerProjMeta_(p.projectId); return (m&&m.due)?m.due:'-';}},
       {h:'金額',align:'right',cell:function(p){return '<b style="font-family:monospace">¥'+((p.amount||0)).toLocaleString()+'</b>';}},
-      {h:'支払方法',cell:function(p){return p.method||'-';}},
+      {h:'種別',cell:function(p){return esc(p.method||'-')+(p.bank?('<div style="font-size:10px;color:#64748b">'+esc(p.bank)+'</div>'):'');}},
+      {h:'請求書',cell:function(p){return '<span style="font-family:monospace">'+esc(p.matchedInvoiceId||p.invoiceNo||'')+'</span>';}},
       {h:'消込',cell:function(p){return p.matchedInvoiceId?('<span style="color:#16a34a;font-weight:700">✅ 消込済</span>'):'<span style="color:#d97706;font-weight:700">未消込</span>';}}
     ],
     actions:function(p){ return (p.matchedInvoiceId?'':'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();matchPaymentToInvoice(\''+p.id+'\')">→ 消込</button>'); },
@@ -28821,6 +28866,7 @@ function renderPayments(){
 
   if(unEl){
     var unmatched = (DB.invoices || []).filter(function(v){ return v.status !== 'paid'; });
+    (DB.seikyusho || []).forEach(function(sk){ if(!sk.入金) unmatched.push({ id: sk.番号, cust: sk.宛名, total: sk.合計, dueDate: sk.日付 + (sk.締切分?('（'+sk.締切分+'）'):'') }); });
     if(!unmatched.length){
       unEl.innerHTML = '<div style="text-align:center;color:#888;padding:30px;font-size:12px">未入金の請求書はありません ✅</div>';
     } else {
@@ -28846,10 +28892,13 @@ function showAddPaymentModal(){
         '<label style="grid-column:1/-1;background:#f0fdf4;padding:8px 10px;border-radius:6px;border-left:3px solid #16a34a"><strong>📁 関連案件 (任意)</strong>' +
           '<div style="display:flex;gap:6px;margin-top:4px"><input id="pay-projectId" placeholder="例: PRJ-2026-001" style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:monospace">' +
           '<button class="btn" onclick="showProjectPicker(_fillPaymentFromProject_, {title:\'入金対象の案件を選択\'})" style="font-size:11px">📁 案件選択</button></div></label>' +
+        '<label>入金番号</label><input id="pay-no" value="' + _nextPaymentNo_() + '" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:monospace" title="GEN の続き。PI＋5桁">' +
+        '<label>請求書番号</label><input id="pay-invno" list="pay-invno-dl" placeholder="BI04054（入れると自動で消込）" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-family:monospace" onchange="_fillPaymentFromSeikyu_()"><datalist id="pay-invno-dl">' + _unpaidSeikyuOptions_() + '</datalist>' +
         '<label>得意先 *</label><input id="pay-cust" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px">' +
         '<label>金額 *</label><input id="pay-amount" type="number" placeholder="100000" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px">' +
         '<label>入金日 *</label><input id="pay-date" type="date" value="' + new Date().toISOString().slice(0,10) + '" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px">' +
-        '<label>支払方法</label><select id="pay-method" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px"><option>銀行振込</option><option>現金</option><option>手形</option><option>クレカ</option><option>ファクタリング</option></select>' +
+        '<label>入金種別</label><select id="pay-method" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px"><option>振込</option><option>現金</option><option>手形</option><option>振込手数料</option><option>相殺</option><option>クレカ</option><option>ファクタリング</option><option>その他</option></select>' +
+        '<label>入金口座</label><select id="pay-bank" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px"><option>浜松磐田信用金庫本店営業部</option><option>静岡銀行浜松営業部</option><option>静岡焼津信用金庫本店営業部</option><option>三菱UFJ銀行</option><option>現金</option><option>その他</option></select>' +
         '<label>摘要</label><input id="pay-memo" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px">' +
       '</div>' +
       '<div style="padding:10px 20px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid #e5e7eb">' +
@@ -28875,16 +28924,23 @@ function submitPayment(){
   var cust = document.getElementById('pay-cust')?.value?.trim();
   var amount = parseInt(document.getElementById('pay-amount')?.value) || 0;
   if(!cust || !amount){ alert('得意先と金額は必須です'); return; }
+  var payNo = (document.getElementById('pay-no')?.value || '').trim() || _nextPaymentNo_();
+  if(!/^PI\d{5}$/.test(payNo)){ alert('入金番号は PI＋5桁です（例 PI03696）'); return; }
+  if((DB.payments||[]).some(function(p){ return p.id === payNo; })){ alert(payNo + ' は登録済みです'); return; }
   var pay = {
-    id: 'PAY-' + Date.now() + '-' + Math.floor(Math.random()*1000),
+    id: payNo,                                                       // GEN と同じ体系（PI＋5桁）
     projectId: document.getElementById('pay-projectId')?.value?.trim() || '', // 🆕 案件番号
     cust: cust,
     amount: amount,
     receivedAt: document.getElementById('pay-date')?.value || new Date().toISOString().slice(0,10),
-    method: document.getElementById('pay-method')?.value || '銀行振込',
+    method: document.getElementById('pay-method')?.value || '振込',
+    bank: document.getElementById('pay-bank')?.value || '',
+    invoiceNo: (document.getElementById('pay-invno')?.value || '').trim(),
     memo: document.getElementById('pay-memo')?.value || '',
     matchedInvoiceId: null
   };
+  // 請求書番号（BI…）が Hub の請求書に当たれば、その場で消込
+  if(pay.invoiceNo){ var sk = _findSeikyu_(pay.invoiceNo); if(sk && !sk.入金){ sk.入金 = pay.id; sk._updatedAt = new Date().toISOString(); pay.matchedInvoiceId = sk.番号; pay.matchedAt = new Date().toISOString(); pay.appliedAmount = amount; } }
   // AAAA-3: 案件から master_no 継承
   if(typeof _inheritMasterNo_ === 'function'){
     var srcProj = pay.projectId ? (DB.projects||[]).find(function(p){ return p.id === pay.projectId; }) : null;
@@ -28904,6 +28960,12 @@ function matchPaymentToInvoice(payId){
   var candidates = (DB.invoices || []).filter(function(v){
     return v.cust === pay.cust && v.status !== 'paid';
   });
+  // Hub で出した請求書（BI…・納品書を束ねたもの）も候補に出す。同じ宛名で未入金のもの
+  (DB.seikyusho || []).forEach(function(sk){
+    if(sk.入金) return;
+    if(String(sk.宛名||'').replace(/\s/g,'') !== String(pay.cust||'').replace(/\s/g,'')) return;
+    candidates.push({ id: sk.番号, cust: sk.宛名, total: sk.合計, paidTotal: 0, dueDate: sk.日付, status: 'unpaid', _seikyu: sk });
+  });
   if(!candidates.length){ alert('該当する未入金請求書がありません'); return; }
   var promptText = '消込先の請求書を選んでください:\n\n' + candidates.map(function(v, i){
     var rem = (+v.total||0) - (+v.paidTotal||0);
@@ -28920,6 +28982,12 @@ function matchPaymentToInvoice(payId){
   if(amtStr === null) return;
   var amt = parseInt(String(amtStr).replace(/[,¥\s円]/g,''), 10);
   if(!(amt > 0)){ alert('金額が不正です'); return; }
+  if(inv._seikyu){   // Hub の請求書（BI）への消込
+    inv._seikyu.入金 = pay.id; inv._seikyu._updatedAt = new Date().toISOString();
+    pay.matchedInvoiceId = inv.id; pay.matchedAt = new Date().toISOString(); pay.appliedAmount = amt;
+    if(typeof saveDB === 'function') saveDB();
+    renderPayments(); alert('✅ 消込完了: ' + inv.id + '（入金 ' + pay.id + '）'); return;
+  }
   pay.matchedInvoiceId = inv.id;
   pay.matchedAt = new Date().toISOString();
   pay.appliedAmount = amt;
