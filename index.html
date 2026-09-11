@@ -693,6 +693,7 @@ details.proof-status-picker summary::-webkit-details-marker{display:none}
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.1.0/diff.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script defer src="tools/fm-bridge.js"></script>  <!-- FileMaker への窓口（FMHUB-2） -->
 <!-- Google Maps API（配送経路最適化） -->
 <script>
 // Google Maps API設定 - APIキーを設定してください
@@ -8333,7 +8334,7 @@ function buildPanel(id,initData){
     <label style="display:block;font-size:12px;font-weight:700;color:#3f3f46;margin:0 0 4px">
       受注番号・数量 <span style="font-size:9px;font-weight:400;color:#71717a">FileMakerから移した項目（空欄のままでも構いません）</span></label>
     <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px 12px">
-      <div class="f"><label>伝票番号</label><input id="fm-denpyo-${id}" placeholder="a0xxxxx"></div>
+      <div class="f"><label>伝票番号 <button type="button" onclick="_fmImport_(${id})" title="FileMaker のこの伝票を読んで、下の項目と基本情報を埋めます" style="font-size:10px;padding:1px 8px;border:1px solid #0f4c5c;background:#e6f4f6;color:#0f4c5c;border-radius:5px;cursor:pointer;margin-left:6px">🗄 FileMaker から取り込む</button></label><input id="fm-denpyo-${id}" placeholder="a0xxxxx" onkeydown="if(event.key==='Enter'){event.preventDefault();_fmImport_(${id});}"></div>
       <div class="f"><label>no（納品書No.）</label><input id="fm-no-${id}" placeholder="伝票番号と違う場合のみ"></div>
       <div class="f"><label>前回伝票番号</label><input id="fm-prevdenpyo-${id}" placeholder="リピート元"></div>
       <div class="f"><label>前回起票日</label><input id="fm-prevdate-${id}" type="date"></div>
@@ -43791,6 +43792,8 @@ function _est3RenderBar_(id){
   } else if(cur==='mfg'){
     _est3Switch_(id,'in');  // 表示中に非表示化されたら入力タブへ戻す
   }
+  // FMHUB-2: FileMaker と同じ画面をこの場所に出す（データは FileMaker そのもの）
+  html += _est3Tab_(id,'fm','FileMaker','🗄',cur==='fm');
   bar.innerHTML = html;
 }
 function _est3EnableQuote_(id){
@@ -43850,6 +43853,56 @@ function _est3SeizouHtml_(id){
     return (typeof _seizouSheetCSS==='function'?_seizouSheetCSS():'') + _renderSeizouSheet(proj);
   }catch(e){ return '<div style="padding:1.5rem;color:#991b1b">製造指示書の生成に失敗: '+hubEsc2_(e.message)+'</div>'; }
 }
+// ═══ FMHUB-2: FileMaker をこの画面につなぐ ═══
+// 「🗄 FileMaker」タブ: tools/fm-juchu-hub.html を同じ場所に出す。同一オリジンなのでサインインは共有される
+function _est3FmHtml_(id){
+  var no = (document.getElementById('fm-denpyo-'+id)||{}).value || '';
+  var src = 'tools/fm-juchu-hub.html' + (no ? ('?no='+encodeURIComponent(no.trim())) : '');
+  return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+    + '<span style="font-size:12px;color:#64748b">FileMaker の受注入力と同じ画面です。写しではなく <b>FileMaker のデータそのもの</b>を読み書きします'+(no?('（'+_escHtml_(no)+'）'):'')+'</span>'
+    + '<a class="btn" style="font-size:12px;padding:5px 12px" href="'+src+'" target="_blank" rel="noopener">↗ 別タブで開く</a></div>'
+    + '<iframe src="'+src+'" style="width:100%;height:calc(100vh - 260px);min-height:640px;border:1px solid #d8d5ce;border-radius:8px;background:#fff"></iframe>';
+}
+function _escHtml_(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function _fmDate_(v){ var m=/^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v||'').trim()); return m ? (m[3]+'-'+m[1]+'-'+m[2]) : ''; }
+function _custNameOf_(code){
+  code=String(code||'').trim(); if(!code) return '';
+  var hit=(DB.master.cust||[]).find(function(r){ return r&&typeof r!=='string'&&String(r.code||'')===code; });
+  return hit ? (hit.org||'') : '';
+}
+// 「FileMaker から取り込む」: 伝票番号でFileMakerを読み、このフォームの項目を埋める。書き込みはしない
+function _fmImport_(id){
+  var el=document.getElementById('fm-denpyo-'+id); var no=(el&&el.value||'').trim();
+  if(!no){ if(typeof _toastMsg==='function') _toastMsg('⚠ 伝票番号を入れてください'); return; }
+  if(!window.FM){ alert('FileMaker への窓口（tools/fm-bridge.js）が読み込めていません。ページを再読み込みしてください'); return; }
+  if(typeof _toastMsg==='function') _toastMsg('🗄 FileMaker から '+no+' を読んでいます…');
+  FM.呼ぶ('画面_読み込み',[no]).then(function(r){
+    if(!r||!r.record){ if(typeof _toastMsg==='function') _toastMsg('⚠ '+no+' は FileMaker にありません'); return; }
+    var f=r.record.fields; var set=function(k,v){ var e=document.getElementById(k+'-'+id); if(e&&v!==undefined&&v!==null&&String(v)!=='') e.value=String(v); };
+    // FileMaker から移した項目
+    set('fm-denpyo', f['伝票番号']); set('fm-no', f['no']); set('fm-prevdenpyo', f['前回伝票番号']); set('fm-prevdate', _fmDate_(f['前回起票日']));
+    set('fm-custcd', f['得意先コード']); set('fm-tantocd', f['担当者コード']); set('fm-commcd', f['共通製品コード']);
+    set('fm-parts', f['パーツ数']); set('fm-lotunit', f['ロット契約単位']); set('fm-zan', f['注残数']); set('fm-donedate', _fmDate_(f['納品日']));
+    // 基本情報
+    var 名=_custNameOf_(f['得意先コード']); if(名){ set('cust',名); try{ onCustChange(id); }catch(e){} }
+    if(f['ユーザー名']) set('enduser', f['ユーザー名']);
+    if(f['製品名']){ set('pn-base', f['製品名']); try{ _composeProdName_(id); }catch(e){} }
+    var 数=Number(f['合計数1']||0), 単価=Number(f['売価単価']||0), 金額=Number(f['売価金額']||0);
+    if(!数 && 金額 && 単価) 数=Math.round(金額/単価);
+    if(数){ var q=document.getElementById('qty-'+id); if(q){ q.value=数; try{ q.dispatchEvent(new Event('input')); }catch(e){} } }
+    if(f['単位']){ var u=document.getElementById('unit-'+id); if(u){ for(var i=0;i<u.options.length;i++){ if(u.options[i].text===f['単位']){ u.value=u.options[i].value; break; } } } }
+    var d=_fmDate_(f['起票日']); if(d){ var p=document.getElementById('date-pick-'+id); if(p){ p.value=d; try{ onIssueDatePicked(id); }catch(e){} } }
+    var lot=String(f['ロット区分']||''); if(lot){ var jt=document.getElementById('job-type-'+id); if(jt) jt.value=/リピート/.test(lot)?'repeat':'new'; }
+    var sc=document.getElementById('spec-change-'+id); if(sc&&f['仕様変更']!==undefined) sc.value=/有/.test(String(f['仕様変更']))?'yes':'no';
+    var pc=document.getElementById('plate-change-'+id); if(pc&&f['版下変更']!==undefined) pc.value=/有/.test(String(f['版下変更']))?'yes':'no';
+    try{ onJobTypeChange(id); }catch(e){}
+    if(f['サイズ横']) set('finish-w', f['サイズ横']); if(f['サイズ縦']) set('finish-h', f['サイズ縦']);
+    try{ if(f['サイズ横']||f['サイズ縦']) onFinishMMChange(id); }catch(e){}
+    try{ calc(id); }catch(e){}
+    if(typeof _toastMsg==='function') _toastMsg('✅ FileMaker の '+no+' を取り込みました（'+(f['案件区分']||'受注')+'）。内容を確かめて保存してください');
+  }).catch(function(e){ alert('FileMaker から読めませんでした: '+(e&&e.message||e)); });
+}
+
 function _est3Switch_(id, which){
   var bar = document.getElementById('est3-bar-'+id);
   var form = document.getElementById('est3-form-'+id);
@@ -43860,6 +43913,7 @@ function _est3Switch_(id, which){
   if(which==='in'){
     form.style.display=''; prev.style.display='none';
   } else {
+    if(which==='fm'){ prev.innerHTML = _est3FmHtml_(id); form.style.display='none'; prev.style.display='block'; return; }
     var inner = (which==='quote') ? _est3QuoteHtml_(id) : _est3SeizouHtml_(id);
     var head = (which==='quote')
       ? '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
