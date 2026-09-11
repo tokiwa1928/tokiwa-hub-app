@@ -401,6 +401,7 @@ LOGIC = r"""
     try { calc(); } catch (e) {}
     try { onInk(); } catch (e) {}
     try { applyRowVis(); } catch (e) {}
+    try { refreshNote(); } catch (e) {}
   }
 
   function 履歴を出す(list) {
