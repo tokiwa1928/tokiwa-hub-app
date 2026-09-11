@@ -694,6 +694,7 @@ details.proof-status-picker summary::-webkit-details-marker{display:none}
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.1.0/diff.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script defer src="tools/fm-bridge.js"></script>  <!-- FileMaker への窓口（FMHUB-2） -->
+<script defer src="tools/gen-archive.js"></script> <!-- GEN の全記録（IndexedDB）。本体の一覧に混ぜる（FMHUB-8） -->
 <!-- Google Maps API（配送経路最適化） -->
 <script>
 // Google Maps API設定 - APIキーを設定してください
@@ -1260,7 +1261,7 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddPaymentModal()">＋ 入金登録</button>
-    <button class="btn" onclick="_importGenPayments_()" title="Hub の保管庫（GEN_入金）から入金を取り込み、請求書番号で消し込みます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の入金を取り込む</button>
+    <button class="btn" onclick="_genArchiveRefresh_()" title="Hub の保管庫（GEN_入金）を取り直します。GEN の記録は全件この一覧に並びます（保存先はこの PC の IndexedDB）" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の入金を取り直す</button>
     <span style="font-size:11px;color:#64748b">入金番号は GEN の続き（PI＋5桁）。請求書番号（BI…）を入れると Hub の請求書に自動で消込</span>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px">
@@ -1282,7 +1283,7 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddPurchaseModal()">＋ 仕入発注</button>
-    <button class="btn" onclick="_importGenOrders_()" title="Hub の保管庫（GEN_発注・GEN_受入）から発注と受入を取り込みます。手配区分「用紙」は仕入発注、それ以外は外注発注に入ります" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り込む</button>
+    <button class="btn" onclick="_genArchiveRefresh_()" title="Hub の保管庫（GEN_発注・GEN_受入）を取り直します。手配区分「用紙」は仕入発注、それ以外は外注発注に並びます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り直す</button>
     <span style="font-size:11px;color:#64748b">発注書番号は GEN の続き（PO＋5桁）。受入すると受入番号（AC＋年月＋5桁）が付きます</span>
   </div>
   <div id="purchases-list" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
@@ -1295,7 +1296,7 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddOutsourceModal()">＋ 外注発注</button>
-    <button class="btn" onclick="_importGenOrders_()" title="Hub の保管庫（GEN_発注・GEN_受入）から取り込みます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り込む</button>
+    <button class="btn" onclick="_genArchiveRefresh_()" title="Hub の保管庫（GEN_発注・GEN_受入）を取り直します" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り直す</button>
     <span style="font-size:11px;color:#64748b">発注書番号は GEN の続き（PO＋5桁）。手配区分: 印刷／加工／完全外製</span>
   </div>
   <div id="outsource-list" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
@@ -1308,7 +1309,7 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddPayoutModal()">＋ 支払予定登録</button>
-    <button class="btn" onclick="_importGenPayouts_()" title="Hub の保管庫（GEN_支払）から支払を取り込みます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の支払を取り込む</button>
+    <button class="btn" onclick="_genArchiveRefresh_()" title="Hub の保管庫（GEN_支払）を取り直します" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の支払を取り直す</button>
     <span style="font-size:11px;color:#64748b">支払番号は GEN の続き（PM＋5桁）。振込手数料は「振込手数料」の行として別に持ちます（GEN と同じ）</span>
   </div>
   <div id="payouts-list" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
@@ -4262,7 +4263,7 @@ function _inqLite_(r){
 // level 0=問い合わせ軽量化 / 1=問い合わせ空 / 2=用紙・封筒マスタと履歴も落とす
 function _localMirror_(db, level){
   const inq = db && db.inquiries;
-  let out = db;
+  let out = _genArchiveStrip_(db);   // FMHUB-8: GEN の記録（_archived）は本体の保存に乗せない
   if(Array.isArray(inq) && inq.length){
     out = {...db, inquiries:(level>=1 ? [] : inq.map(_inqLite_))};
   }
@@ -4272,6 +4273,7 @@ function _localMirror_(db, level){
 // DB を localStorage へ保存する唯一の入口。容量超過時は段階的に削って必ずどこかで成功させる。
 // 返り値: 使ったレベル(0=通常) / 全滅なら -1。
 function _persistLocal_(){
+  try { _genArchiveSettle_(); } catch(e){}
   for(let lvl=0; lvl<=2; lvl++){
     try{ localStorage.setItem(DBKEY, JSON.stringify(_localMirror_(DB, lvl))); return lvl; }
     catch(e){ /* さらに削って再試行 */ }
@@ -4618,6 +4620,7 @@ async function loadFromCloud() {
   if (Array.isArray(result.data.payments)) DB.payments = result.data.payments;
   if (Array.isArray(result.data.payouts)) DB.payouts = result.data.payouts;
   if (Array.isArray(result.data.purchaseOrders)) DB.purchaseOrders = result.data.purchaseOrders;
+  try { _genArchiveMerge_(); } catch(e){ console.warn('[gen-archive] merge after cloud', e); }   // FMHUB-8
   // ✅ クラウドからの初期同期が完了した印（これが無い端末は保存禁止=空上書き事故防止）
   window._cloudHydrated_ = true;
   // 🔖 リンク集: 単純上書きだと自動同期が「追加直後のローカル分」を空配列で消してしまうため
@@ -5079,6 +5082,7 @@ function _showAutoEstimateToast_(count, ids){
 // クラウドに保存
 async function saveToCloud() {
   if (!currentAuth.loggedIn) return false;
+  try { _genArchiveSettle_(); } catch(e){}   // FMHUB-8: 直した GEN の行は保存に乗せる
   // 🛡 SAVE-GUARD (2026-07-04): クラウドから一度も同期していない端末は保存禁止。
   // 空/古いDBでの全量上書き事故（品目・参考原価・アート案件が消えた）を再発させない。
   if (!window._cloudHydrated_) { console.warn('saveToCloud skipped: not hydrated from cloud yet'); return false; }
@@ -5091,7 +5095,7 @@ async function saveToCloud() {
     quotations: DB.quotations || [],
     intercoRequests: DB.intercoRequests || [],
     intercoOrders: DB.intercoOrders || [],
-    outsourceOrders: DB.outsourceOrders || [],
+    outsourceOrders: _noArc_(DB.outsourceOrders),
     artesoCases: DB.artesoCases || [],
     leases: DB.leases || [],
     faxDocs: DB.faxDocs || [],
@@ -5125,9 +5129,9 @@ async function saveToCloud() {
     stockCandidates: DB.stockCandidates || [],
     invoices: DB.invoices || [],
     receipts: DB.receipts || [],
-    payments: DB.payments || [],
-    payouts: DB.payouts || [],
-    purchaseOrders: DB.purchaseOrders || [],
+    payments: _noArc_(DB.payments),
+    payouts: _noArc_(DB.payouts),
+    purchaseOrders: _noArc_(DB.purchaseOrders),
     // FMHUB-7: 今日足した集まり。ここに無いと本体の保存でクラウドから落ちる
     nohinsho: DB.nohinsho || [],
     nohinsho_conf: DB.nohinsho_conf || {},
@@ -28365,6 +28369,8 @@ function _renderLedger_(cfg){
     return new Date(dof(b)||0)-new Date(dof(a)||0);
   });
   var hasAmt=!!cfg.amountOf;
+  // FMHUB-8: 何千行も一度に描くと重いので 300 行ずつ（「さらに表示」で増える）
+  var 全件=rows.length; st.limit=st.limit||300; if(rows.length>st.limit) rows=rows.slice(0,st.limit);
   // 表示条件パネル
   var periodOpts=[['','全期間'],['thismonth','今月'],['3m','直近3ヶ月'],['6m','直近6ヶ月'],['thisyear','今年'],['lastyear','昨年']]
     .map(function(o){return '<option value="'+o[0]+'"'+(st.period===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('');
@@ -28381,7 +28387,7 @@ function _renderLedger_(cfg){
     +'<select id="led-'+cfg.key+'-period" onchange="'+cfg.renderFn+'()">'+periodOpts+'</select>'
     +'<select id="led-'+cfg.key+'-sort" onchange="'+cfg.renderFn+'()">'+sortOpts+'</select>'
     +'<button class="btn" onclick="_ledgerClear_(\''+cfg.key+'\',\''+cfg.renderFn+'\')">× クリア</button>'
-    +'<span style="margin-left:auto;font-size:11px;color:#8d897f;font-weight:700">'+rows.length+' 件</span>'
+    +'<span style="margin-left:auto;font-size:11px;color:#8d897f;font-weight:700">'+全件.toLocaleString()+' 件'+(全件>rows.length?('（'+rows.length+' 件まで表示） <button class="btn" style="font-size:11px;padding:2px 8px" onclick="window._ledgerState_[\''+cfg.key+'\'].limit+=300;'+cfg.renderFn+'()">▼ さらに 300 件</button>'):'')+'</span>'
     +'</div>'+(tabs.length?('<div class="rd-filter-row" style="margin-top:6px">'+tabChips+'</div>'):'')+'</div>';
   // テーブル
   var cols=cfg.columns||[];
@@ -28858,6 +28864,97 @@ function _fillPaymentFromSeikyu_(){
   if(c && !c.value) c.value = sk.宛名||'';
   if(a && !a.value) a.value = sk.合計||'';
 }
+// ═══ GEN の全記録を本体の一覧に混ぜる（FMHUB-8） ═══
+// 保管庫 → tools/gen-archive.js（IndexedDB） → ここで本体の形に直して DB.* に _archived:true で混ぜる。
+// 保存（localStorage・クラウド）には乗せない。直した行だけ _archived を外して保存に乗せる。
+var _genPristine_ = {};   // 行の鍵 → 混ぜた直後の JSON（直したかどうかの比較用）
+function _genRowKey_(r){ return r._genKey || r.id; }
+function _genJson_(r){ var o={}; Object.keys(r).forEach(function(k){ if(k!=='_archived') o[k]=r[k]; }); return JSON.stringify(o); }
+function _noArc_(arr){ return (arr||[]).filter(function(r){ return !(r&&r._archived); }); }
+function _genArchiveStrip_(db){
+  if(!db) return db;
+  var out=db, ks=['payments','payouts','purchaseOrders','outsourceOrders'];
+  ks.forEach(function(k){ if(Array.isArray(db[k]) && db[k].some(function(r){ return r&&r._archived; })){ if(out===db) out=Object.assign({},db); out[k]=_noArc_(db[k]); } });
+  return out;
+}
+// 直した行は _archived を外す（＝本体の保存に乗る）
+function _genArchiveSettle_(){
+  ['payments','payouts','purchaseOrders','outsourceOrders'].forEach(function(k){
+    (DB[k]||[]).forEach(function(r){
+      if(!r||!r._archived) return;
+      var p=_genPristine_[k+'|'+_genRowKey_(r)];
+      if(p && _genJson_(r)!==p){ delete r._archived; r._fromGenArchive=true; }
+    });
+  });
+}
+function _genPayRow_(g){
+  var no=String(g['入金番号']||'').trim(); if(!no) return null;
+  var line=String(g['行']||'1'); var id = line==='1' ? no : (no+'-'+line);
+  return { id:id, cust:String(g['取引先名']||''), custCode:String(g['取引先コード']||''), amount:Number(g['入金金額']||0),
+           receivedAt:String(g['入金日']||'').slice(0,10), method:String(g['入金種別']||''), bank:String(g['入金口座']||''),
+           invoiceNo:String(g['請求書番号']||''), memo:String(g['明細備考']||''),
+           matchedInvoiceId:(String(g['請求書番号']||'')||null), _fromGen:true };   // GEN で請求書番号が付いていれば消込済み扱い
+}
+function _genPayoutRow_(g){
+  var key=String(g['支払番号']||'')+'|'+String(g['行']||''); if(!g['支払番号']) return null;
+  var paid = String(g['印刷済'])==='true';
+  return { id:'POUT-GEN-'+key.replace(/[^A-Za-z0-9]/g,''), _genKey:key, _fromGen:true,
+           pmNo:String(g['支払番号']), line:String(g['行']||''), vendor:String(g['取引先名']||''), vendorCode:String(g['取引先コード']||''),
+           amount:Number(g['支払金額']||0), adjust:Number(g['調整金額']||0), dueDate:String(g['支払日']||'').slice(0,10),
+           method:String(g['支払種別']||''), memo:String(g['明細備考']||''),
+           status: paid ? 'paid' : 'pending', paidAt: paid ? String(g['支払日']||'').slice(0,10) : null, createdAt:String(g['支払日']||'').slice(0,10) };
+}
+function _genOrderRow_(g){
+  var key=[g['発注書番号'],g['受注番号'],g['製品名'],g['数量'],g['発注単価']].join('|'); if(!g['発注書番号']) return null;
+  var kind=String(g['手配区分']||''); var isPur = kind==='用紙';
+  return { id:(isPur?'PUR-':'OUT-')+'GEN-'+key.replace(/[^A-Za-z0-9]/g,'').slice(0,40)+'-'+String(g['発注日']||'').replace(/-/g,''), _genKey:key, _fromGen:true, isPur:isPur,
+           poNo:String(g['発注書番号']||''), orderDate:String(g['発注日']||'').slice(0,10), vendor:String(g['取引先名 (発注先)']||''),
+           juchuNo:String(g['受注番号']||''), custName:String(g['取引先名 (製番:受注:得意先)']||''), kind:kind,
+           item:String(g['製品名']||''), qty:Number(g['数量']||0), unit:String(g['発注単位']||''), unitPrice:Number(g['発注単価']||0),
+           amount:Number(g['発注金額']||0), dueDate:String(g['発注納期']||'').slice(0,10), memo:String(g['受入状況']||''),
+           status: /完/.test(String(g['受入状況']||'')) ? (isPur?'received':'done') : (isPur?'ordered':'sent'), createdAt:String(g['発注日']||'').slice(0,10) };
+}
+function _genReceiptApply_(o, r){
+  o.acNo=String(r['受入番号']||''); o.receivedAt=String(r['受入日']||'').slice(0,10); o.receivedQty=Number(r['受入数']||0);
+  o.receivedAmount=Number(r['仕入額']||0); o.status = (o.id.indexOf('PUR-')===0)?'received':'done';
+}
+// GENARC.data → DB.* に混ぜる（何度呼んでも同じ結果）
+function _genArchiveMerge_(){
+  if(!window.GENARC || !GENARC.data) return;
+  var d=GENARC.data, 足した={payments:0,payouts:0,orders:0,receipts:0};
+  if(!Array.isArray(DB.payments)) DB.payments=[]; if(!Array.isArray(DB.payouts)) DB.payouts=[];
+  if(!Array.isArray(DB.purchaseOrders)) DB.purchaseOrders=[]; if(!Array.isArray(DB.outsourceOrders)) DB.outsourceOrders=[];
+  // 入金（id で重複しない）
+  if(d['入金']){ var have={}; DB.payments.forEach(function(p){ have[p.id]=1; });
+    d['入金'].forEach(function(g){ var p=_genPayRow_(g); if(!p||have[p.id]) return; p._archived=true; DB.payments.push(p); have[p.id]=1; _genPristine_['payments|'+_genRowKey_(p)]=_genJson_(p); 足した.payments++; }); }
+  // 支払（支払番号|行）
+  if(d['支払']){ var hv={}; DB.payouts.forEach(function(p){ if(p._genKey) hv[p._genKey]=1; });
+    d['支払'].forEach(function(g){ var p=_genPayoutRow_(g); if(!p||hv[p._genKey]) return; p._archived=true; DB.payouts.push(p); hv[p._genKey]=1; _genPristine_['payouts|'+_genRowKey_(p)]=_genJson_(p); 足した.payouts++; }); }
+  // 発注（鍵）＋受入
+  if(d['発注']){ var ho={}; DB.purchaseOrders.concat(DB.outsourceOrders).forEach(function(o){ if(o._genKey) ho[o._genKey]=o; });
+    var 新規=[];
+    d['発注'].forEach(function(g){ var o=_genOrderRow_(g); if(!o||ho[o._genKey]) return; var isPur=o.isPur; delete o.isPur; o._archived=true; (isPur?DB.purchaseOrders:DB.outsourceOrders).push(o); ho[o._genKey]=o; 新規.push(o); 足した.orders++; });
+    (d['受入']||[]).forEach(function(r){ var po=String(r['発注書番号']||''), item=String(r['製品名']||'');
+      var o=新規.find(function(x){ return x.poNo===po && x.item===item && !x.acNo; }); if(!o) return; _genReceiptApply_(o, r); 足した.receipts++; });
+    新規.forEach(function(o){ _genPristine_[(o.id.indexOf('PUR-')===0?'purchaseOrders':'outsourceOrders')+'|'+_genRowKey_(o)]=_genJson_(o); }); }
+  window._genArchiveLast_={ 足した:足した, 件数:GENARC.件数(), 更新:GENARC.更新 };
+  console.log('[gen-archive] merged', 足した, GENARC.件数());
+}
+function _genArchiveRerender_(){
+  ['renderPayments','renderPayouts','renderPurchases','renderOutsource'].forEach(function(fn){ try{ if(typeof window[fn]==='function') window[fn](); }catch(e){} });
+}
+// 保管庫から取り直す（ボタン）
+function _genArchiveRefresh_(){
+  if(!window.GENARC){ alert('tools/gen-archive.js が読み込めていません。ページを再読み込みしてください'); return; }
+  if(!window.FM || !FM.名乗っている || !FM.名乗っている()){ alert('先に「🗄 FileMaker」のサインイン（Google）をしてください。\n案件管理 → 入力 → 🗄 FileMaker タブ、または 設定 → システム連携 から'); return; }
+  if(typeof _toastMsg==='function') _toastMsg('📥 保管庫から GEN の記録を取り直しています（30秒ほど）…');
+  GENARC.取り直す(function(){
+    _genArchiveMerge_(); _genArchiveRerender_();
+    var k=GENARC.件数();
+    alert('📥 GEN の記録を取り直しました\n\n入金 '+k['入金']+'・支払 '+k['支払']+'・発注 '+k['発注']+'・受入 '+k['受入']+' 件\n\nこの PC に写して一覧に並べています（本体の保存容量は使いません）');
+  });
+}
+
 // 保管庫の GEN_入金 を取り込む（入金番号で重複しない）。請求書番号が Hub の請求書に当たれば消込
 function _importGenPayments_(){
   if(!window.FM){ alert('FileMaker/GEN への窓口が読み込めていません。ページを再読み込みしてください'); return; }
@@ -49576,6 +49673,8 @@ function showMasterHistory(masterType, index) {
 
 // ═══════════════════ 起動 ════════════════════
 loadDB();
+// FMHUB-8: GEN の全記録をこの PC の IndexedDB から本体の一覧へ（古ければ保管庫から取り直す）
+setTimeout(function(){ if(window.GENARC) GENARC.準備(function(){ _genArchiveMerge_(); _genArchiveRerender_(); }); }, 800);
 loadAuth();
 renderMaster('paper');
 initMasterModal();
