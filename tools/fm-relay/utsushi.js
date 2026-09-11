@@ -354,31 +354,74 @@ var GEN帳簿名_ = 'GEN_';
 /** 行を受け取り、鍵で上書きしながら保管する。{画面, 見出し, 鍵列（見出しの中の列名の配列）, 行:[{...}]} */
 function GEN_取り込み(画面, 見出し, 鍵列, 行) {
   var who = 画面_利用者_();
+  return GEN_取り込み_中_(画面, 見出し, 鍵列, 行, who.email);
+}
+
+/**
+ * 中身。行は {列名: 値} でも、見出しと同じ並びの配列でもよい。
+ * 保管庫の列が違っても消さず、列の和にして持つ（列が増えたら右に足す）。
+ */
+function GEN_取り込み_中_(画面, 見出し, 鍵列, 行, 誰) {
   if (!画面 || !見出し || !見出し.length || !行) throw new Error('画面・見出し・行が要ります');
   var 名 = GEN帳簿名_ + 画面;
-  var 頭 = ['_鍵', '_取込日時', '_取込者'].concat(見出し);
-  var ss = 写し_帳簿_(名, 頭);
+  var ss = 写し_帳簿_(名, ['_鍵', '_取込日時', '_取込者'].concat(見出し));
   var sh = ss.getSheets()[0];
-  // 既存の見出しが違えば（列が増えた等）作り直す
-  var 既 = sh.getLastColumn() ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0] : [];
-  if (既.join('\u0001') !== 頭.join('\u0001')) { sh.clear(); sh.getRange(1, 1, 1, 頭.length).setValues([頭]); sh.setFrozenRows(1); }
+  var 既 = sh.getLastColumn() ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String) : [];
+  var 頭 = 既.length ? 既.slice() : ['_鍵', '_取込日時', '_取込者'];
+  見出し.forEach(function (c) { if (頭.indexOf(c) < 0) 頭.push(c); });
+  if (頭.length !== 既.length) { sh.getRange(1, 1, 1, 頭.length).setValues([頭]); sh.setFrozenRows(1); }
+  var 位置列 = {}; 頭.forEach(function (c, i) { 位置列[c] = i; });
+  var 見出し位置 = {}; 見出し.forEach(function (c, i) { 見出し位置[c] = i; });
 
-  var 鍵を作る = function (r) { return (鍵列 || [見出し[0]]).map(function (c) { return String(r[c] == null ? '' : r[c]); }).join('|'); };
+  function 値(r, c) { var v = Array.isArray(r) ? r[見出し位置[c]] : r[c]; return (v === undefined || v === null) ? '' : v; }
+  var 鍵を作る = function (r) { return (鍵列 || [見出し[0]]).map(function (c) { return String(値(r, c)); }).join('|'); };
   var 位置 = {};
   if (sh.getLastRow() > 1) {
     var keys = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
     for (var i = 0; i < keys.length; i++) 位置[String(keys[i][0])] = i + 2;
   }
-  var now = new Date().toISOString(), 更新 = 0, 追加 = [];
+  var now = new Date().toISOString(), 更新 = 0, 追加 = [], 更新行 = [];
   行.forEach(function (r) {
     var k = 鍵を作る(r); if (!k.replace(/\|/g, '')) return;
-    var row = [k, now, who.email].concat(見出し.map(function (c) { var v = r[c]; return (v === undefined || v === null) ? '' : v; }));
+    var row = new Array(頭.length); for (var i = 0; i < 頭.length; i++) row[i] = '';
+    row[0] = k; row[1] = now; row[2] = 誰;
+    見出し.forEach(function (c) { row[位置列[c]] = 値(r, c); });
     var at = 位置[k];
-    if (at) { sh.getRange(at, 1, 1, row.length).setValues([row]); 更新++; }
-    else 追加.push(row);
+    if (at > 0) { 更新行.push([at, row]); 更新++; }
+    else if (at < 0) { 追加[-at - 1] = row; }                 // 同じファイルの中で鍵が重なった → 後の行で置き換え
+    else { 追加.push(row); 位置[k] = -追加.length; }
   });
-  if (追加.length) sh.getRange(sh.getLastRow() + 1, 1, 追加.length, 頭.length).setValues(追加);
+  // 更新は 1 行ずつ（数は少ない想定）。連続していればまとめる
+  更新行.sort(function (x, y) { return x[0] - y[0]; });
+  for (var u = 0; u < 更新行.length;) {
+    var start = 更新行[u][0], block = [更新行[u][1]]; var v = u + 1;
+    while (v < 更新行.length && 更新行[v][0] === start + block.length) { block.push(更新行[v][1]); v++; }
+    sh.getRange(start, 1, block.length, 頭.length).setValues(block); u = v;
+  }
+  // 追加は 2,000 行ずつ
+  for (var p = 0; p < 追加.length; p += 2000) {
+    var part = 追加.slice(p, p + 2000);
+    sh.getRange(sh.getLastRow() + 1, 1, part.length, 頭.length).setValues(part);
+  }
   return { ok: true, 画面: 画面, 更新: 更新, 追加: 追加.length, 全体: sh.getLastRow() - 1 };
+}
+
+/**
+ * Drive の保管庫フォルダに置いた GEN取込_<画面>.json（gen_csv_to_json.py の出力）を読んで保管庫に入れる。
+ * 1ファイル入れるごとに「済_」を頭に付けて名前を変える。時間が来たら途中で抜けるので、残っていればもう一度実行。
+ */
+function GEN_ファイルから取り込む() {
+  var t0 = Date.now(), f = 写し_フォルダ_(), it = f.getFiles(), files = [];
+  while (it.hasNext()) { var x = it.next(); if (/^GEN取込_.+\.json$/.test(x.getName())) files.push(x); }
+  files.sort(function (a, b) { return a.getSize() - b.getSize(); });   // 小さいものから
+  if (!files.length) { Logger.log('GEN取込_*.json がありません'); return; }
+  files.forEach(function (file) {
+    if (Date.now() - t0 > 270 * 1000) { Logger.log('時間なので止めます。もう一度実行してください（残り: ' + file.getName() + ' …）'); return; }
+    var j = JSON.parse(file.getBlob().getDataAsString('UTF-8'));
+    var r = GEN_取り込み_中_(j.画面, j.見出し, j.鍵列, j.行, 'ファイル取込 ' + file.getName());
+    file.setName('済_' + file.getName());
+    Logger.log(j.画面 + ': 追加 ' + r.追加 + '・更新 ' + r.更新 + '・全体 ' + r.全体 + '（' + Math.round((Date.now() - t0) / 1000) + '秒）');
+  });
 }
 
 /** 保管してある GEN の画面を読む。{画面, 絞り込み:{列名:値}, 件数} */
