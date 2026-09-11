@@ -71,7 +71,9 @@ function 進捗を書く_(o) {
 }
 
 /** 最初から。索引と年別を空にして、offset 1 から */
-function 写し_始める() {
+function 写し_始める(合図) {
+  // 誤って押すと保管庫（73k件・約70分）を捨ててやり直しになる。合図 'やり直す' を付けたときだけ動く
+  if (合図 !== 'やり直す') { Logger.log('写し_始める は保管庫を捨ててやり直します。本当に必要なら 写し_始める("やり直す") と書いて実行してください'); return; }
   トリガーを外す_('写し_続ける');
   var f = 写し_フォルダ_();
   var it = f.getFiles();
@@ -144,6 +146,7 @@ function 写し_続ける() {
   }
 
   if (p.状態 === '完了') {
+    索引キャッシュを捨てる_();
     p.終わった = new Date().toISOString();
     進捗を書く_(p);
     トリガーを外す_('写し_続ける');
@@ -215,6 +218,7 @@ function 写し_毎晩() {
     if (ai) 索引.getRange(ai, 1, 1, 索引行.length).setValues([索引行]);
     else { 索引.appendRow(索引行); 索引位置[String(rec.recordId)] = 索引.getLastRow(); }
   });
+  索引キャッシュを捨てる_(); 写し_索引_();   // 索引の json を作り直しておく（朝一番の人を待たせない）
   Logger.log('毎晩の写し: 更新 ' + 更新 + '・追加 ' + 追加 + '（修正日 ' + 昨日 + ' 以降 ' + rows.records.length + ' 件）');
   return rows.records.length;
 }
@@ -237,13 +241,46 @@ function 写し_開く_(名, 見出し) {
   return (写し帳簿キャッシュ_[名] = SpreadsheetApp.open(it.next()).getSheets()[0]);
 }
 
-/** 索引を全部読む（73k行×18列。数秒） */
+/** スプレッドシートが日付に解釈してしまった値を、FileMaker と同じ MM/dd/yyyy の文字に戻す */
+function 値を整える_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Tokyo', 'MM/dd/yyyy');
+  return v;
+}
+
+/**
+ * 索引を全部読む（73k行×18列）。
+ * シートから読むと 10 秒以上かかるので、読んだ結果を 受注_索引.json として同じフォルダに置き、次からはそれを読む（1〜2秒）。
+ * 写し直したら 索引キャッシュを捨てる_ で json を消す（次に読んだ人が作り直す。毎晩の写しは自分で作り直す）。
+ */
+var 索引JSON名 = '受注_索引.json';
 function 写し_索引_() {
+  var f = 写し_フォルダ_();
+  var it = f.getFilesByName(索引JSON名);
+  if (it.hasNext()) {
+    try {
+      var j = JSON.parse(it.next().getBlob().getDataAsString('UTF-8'));
+      var 列 = j.列, out = [];
+      for (var r = 0; r < j.行.length; r++) { var o = {}, row = j.行[r]; for (var c = 0; c < 列.length; c++) o[列[c]] = row[c]; out.push(o); }
+      return out;
+    } catch (e) { /* 壊れていたらシートから読み直す */ }
+  }
   var sh = 写し_開く_(写し.索引名);
   var v = sh.getDataRange().getValues();
-  var 見出し = v[0]; var out = [];
-  for (var i = 1; i < v.length; i++) { var o = {}; for (var c = 0; c < 見出し.length; c++) o[見出し[c]] = v[i][c]; out.push(o); }
-  return out;
+  var 見出し = v[0], rows = [], objs = [];
+  for (var i = 1; i < v.length; i++) {
+    var row = [], o = {};
+    for (var k = 0; k < 見出し.length; k++) { var x = 値を整える_(v[i][k]); row.push(x); o[見出し[k]] = x; }
+    rows.push(row); objs.push(o);
+  }
+  try {
+    索引キャッシュを捨てる_();
+    f.createFile(索引JSON名, JSON.stringify({ 列: 見出し, 行: rows, 作った: new Date().toISOString() }), 'application/json');
+  } catch (e) { /* 置けなくても動く */ }
+  return objs;
+}
+function 索引キャッシュを捨てる_() {
+  var it = 写し_フォルダ_().getFilesByName(索引JSON名);
+  while (it.hasNext()) it.next().setTrashed(true);
 }
 
 function 写し_日付数_(v) {   // MM/DD/YYYY → 20260911 のような数（比較用）
@@ -293,7 +330,7 @@ function 写し_行を読む_(年, recordId) {
   for (var i = 1; i < ids.length; i++) {
     if (String(ids[i][0]) === String(recordId)) {
       var v = sh.getRange(i + 1, 1, 1, 見出し.length).getValues()[0];
-      var f = {}; for (var c = 2; c < 見出し.length; c++) f[見出し[c]] = v[c];
+      var f = {}; for (var c = 2; c < 見出し.length; c++) f[見出し[c]] = 値を整える_(v[c]);
       return { recordId: String(v[0]), modId: String(v[1]), fields: f };
     }
   }
@@ -351,7 +388,7 @@ function GEN_一覧(画面, 絞り込み, 件数) {
   var v = sh.getDataRange().getValues(); if (v.length < 2) return { ok: true, 画面: 画面, 件数: 0, 全体: 0, 行: [] };
   var 頭 = v[0]; var out = [];
   for (var i = 1; i < v.length; i++) {
-    var o = {}; for (var c = 3; c < 頭.length; c++) o[頭[c]] = v[i][c];
+    var o = {}; for (var c = 3; c < 頭.length; c++) { var x = v[i][c]; o[頭[c]] = (x instanceof Date) ? Utilities.formatDate(x, 'Asia/Tokyo', 'yyyy-MM-dd') : x; }
     var ok = true;
     if (絞り込み) Object.keys(絞り込み).forEach(function (k) { var want = String(絞り込み[k] || '').trim(); if (want && String(o[k] || '').indexOf(want) < 0) ok = false; });
     if (ok) out.push(o);
@@ -367,4 +404,18 @@ function GEN_状況() {
   var f = 写し_フォルダ_(); var it = f.getFiles(); var out = {};
   while (it.hasNext()) { var file = it.next(); var n = file.getName(); if (n.indexOf(GEN帳簿名_) === 0) { var sh = SpreadsheetApp.open(file).getSheets()[0]; out[n.slice(GEN帳簿名_.length)] = Math.max(0, sh.getLastRow() - 1); } }
   return { ok: true, 画面: out };
+}
+
+/** エディタから実行して、写しの読みを確かめる（結果はログに出る） */
+function 検証_写し読み() {
+  いま呼んでいる人 = { mail: 'editor@test', name: 'エディタからの検証' };
+  var t = Date.now();
+  var a = 写し_一覧({ 得意先コード: 'N0052', 日数: 365, 件数: 3 });
+  Logger.log('一覧 N0052 直近1年: ' + (Date.now() - t) + 'ms 全体 ' + a.全体 + ' 先頭 ' + JSON.stringify(a.行[0] || null));
+  t = Date.now();
+  var b = 写し_一覧({ キーワード: 'カレンダー', 日数: 0, 件数: 3 });
+  Logger.log('一覧 カレンダー 全期間: ' + (Date.now() - t) + 'ms 全体 ' + b.全体 + ' 先頭 ' + JSON.stringify(b.行[0] || null));
+  t = Date.now();
+  var c = 写し_読み込み('a108167'); var f = (c.record || {}).fields || {};
+  Logger.log('読込 a108167: ' + (Date.now() - t) + 'ms 項目数 ' + Object.keys(f).length + ' 起票日 ' + f['起票日'] + ' 納期 ' + f['納期'] + ' 得意先コード ' + JSON.stringify(f['得意先コード']) + ' 履歴 ' + c.履歴.length);
 }
