@@ -122,7 +122,7 @@ BAR = r"""
 <div id="fmerr"></div>
 <div id="fmfind">
   <div class="cond">
-    <div><label>品名で探す</label><input id="ff-kw" placeholder="製品名の一部" autocomplete="off"></div>
+    <div><label>品名で探す</label><input id="ff-kw" placeholder="製品名の一部（a12345 なら伝票番号）" autocomplete="off"></div>
     <div><label>得意先コード</label><input id="ff-cust" style="width:110px" autocomplete="off"></div>
     <div><label>段階</label>
       <select id="ff-stage">
@@ -640,8 +640,11 @@ LOGIC = r"""
   }
 
   function 探す() {
+    // 伝票番号（a12345 のような形）を品名欄に入れたら、その番号をそのまま開く
+    var kw = $('ff-kw').value.trim();
+    if (/^[a-zA-Z]\d{4,}$/.test(kw)) { 番号欄.value = kw; $('ff-msg').textContent = '伝票番号として開きます: ' + kw; 読み込む(kw); return; }
     var 条件 = {
-      'キーワード': $('ff-kw').value.trim(),
+      'キーワード': kw,
       '得意先コード': $('ff-cust').value.trim(),
       '段階': $('ff-stage').value,
       '日数': Number($('ff-days').value),
