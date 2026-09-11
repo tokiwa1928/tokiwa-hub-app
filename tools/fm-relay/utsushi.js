@@ -278,6 +278,18 @@ function 写し_索引_() {
   } catch (e) { /* 置けなくても動く */ }
   return objs;
 }
+/** 画面の手元検索用に、索引の json をそのまま配る（要る列だけ・73k 行で 8MB ほど。gzip で 2MB） */
+var 配る列 = ['recordId', '年', '伝票番号', '見積番号', '案件区分', '起票日', '納品日', '得意先コード', 'ユーザー名', '製品名', '品種', '合計数1', '売価金額', '合計金額'];
+function 写し_索引を配る() {
+  var who = 画面_利用者_();
+  写し_索引_();   // json が無ければ作る
+  var it = 写し_フォルダ_().getFilesByName(索引JSON名);
+  if (!it.hasNext()) throw new Error('索引がまだありません');
+  var j = JSON.parse(it.next().getBlob().getDataAsString('UTF-8'));
+  var pos = 配る列.map(function (c) { return j.列.indexOf(c); });
+  var rows = j.行.map(function (r) { return pos.map(function (p) { return p < 0 ? '' : r[p]; }); });
+  return { ok: true, user: who.email, 列: 配る列, 行: rows, 作った: j.作った, 件数: rows.length };
+}
 function 索引キャッシュを捨てる_() {
   var it = 写し_フォルダ_().getFilesByName(索引JSON名);
   while (it.hasNext()) it.next().setTrashed(true);

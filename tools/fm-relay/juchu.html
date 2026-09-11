@@ -1775,7 +1775,7 @@ function setPane(p){
 <div id="fmerr"></div>
 <div id="fmfind">
   <div class="cond">
-    <div><label>品名で探す</label><input id="ff-kw" placeholder="製品名の一部。a10000 なら伝票番号の前方一致" autocomplete="off"></div>
+    <div><label>品名で探す</label><input id="ff-kw" placeholder="打つと出ます。a10000 なら伝票番号の前方一致" autocomplete="off"></div>
     <div><label>得意先コード</label><input id="ff-cust" style="width:110px" autocomplete="off"></div>
     <div><label>段階</label>
       <select id="ff-stage">
@@ -2105,7 +2105,7 @@ window.FM見た目 = function () {};
     $('ff-msg').textContent = r.件数 + ' 件'
       + (r.全体 && r.全体 > r.件数 ? '（あてはまる ' + r.全体.toLocaleString() + ' 件のうち）' : '')
       + (r.日数 ? '　起票日 直近' + r.日数 + '日' : '')
-      + '　' + (r.ミリ秒 / 1000).toFixed(1) + '秒　行をクリックで開きます';
+      + '　' + (r.源 === '索引' ? r.ミリ秒 + 'ms（手元の索引）' : (r.ミリ秒 / 1000).toFixed(1) + '秒') + '　行をクリックで開きます';
 
     Array.prototype.forEach.call(box.querySelectorAll('tr.r'), function (tr) {
       tr.onclick = function () {
@@ -2119,7 +2119,92 @@ window.FM見た目 = function () {};
     });
   }
 
+  // ---- 手元の索引（写しの 受注_索引 を一度もらって IndexedDB に置く。打っている最中に出せる速さ）
+  var 索引 = null;            // { 列:[…], 行:[[…]], 作った }
+  var 索引位置 = {};          // 列名 → 添字
+  var 索引日 = null;          // 行ごとの起票日 yyyymmdd（期間で絞る用）
+  function 索引を開くDB() {
+    return new Promise(function (res, rej) {
+      if (!window.indexedDB) return rej(new Error('IndexedDB なし'));
+      var q = indexedDB.open('tokiwa_fm_index', 1);
+      q.onupgradeneeded = function () { q.result.createObjectStore('idx'); };
+      q.onsuccess = function () { res(q.result); }; q.onerror = function () { rej(q.error); };
+    });
+  }
+  function 索引を据える(j) {
+    索引 = j; 索引位置 = {}; j.列.forEach(function (c, i) { 索引位置[c] = i; });
+    var d = 索引位置['起票日'];
+    索引日 = j.行.map(function (r) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(r[d] || '')); return m ? Number(m[3] + m[1] + m[2]) : 0; });
+  }
+  function 索引を用意() {
+    var 有効 = 24 * 60 * 60 * 1000;
+    return 索引を開くDB().then(function (db) {
+      return new Promise(function (res) {
+        var r = db.transaction('idx').objectStore('idx').get('juchu');
+        r.onsuccess = function () { res(r.result || null); }; r.onerror = function () { res(null); };
+      }).then(function (o) {
+        if (o && o.行) { 索引を据える(o); 索引の状態(); }
+        var 古い = !o || !o.取った || (Date.now() - new Date(o.取った).getTime()) > 有効;
+        if (!古い) return;
+        if (!(window.FM名乗っている ? FM名乗っている() : true)) return;   // サインイン前なら次の機会に
+        $('ff-msg').textContent = (索引 ? '索引を取り直しています…' : '索引を取っています（初回だけ 10〜20 秒）…');
+        var t0 = Date.now();
+        return 呼ぶ('写し_索引を配る', []).then(function (j) {
+          j.取った = new Date().toISOString();
+          索引を据える(j); 索引の状態();
+          console.log('[索引] ' + j.件数 + ' 件 ' + Math.round((Date.now() - t0) / 1000) + '秒');
+          try { db.transaction('idx', 'readwrite').objectStore('idx').put(j, 'juchu'); } catch (e) {}
+          if ($('ff-kw').value.trim()) 手元で探す();
+        });
+      });
+    }).catch(function (e) { console.warn('[索引]', e); });
+  }
+  function 索引の状態() {
+    if (!索引) return;
+    var when = 索引.作った ? new Date(索引.作った) : null;
+    $('ff-msg').textContent = '索引 ' + 索引.行.length.toLocaleString() + ' 件'
+      + (when ? '（' + (when.getMonth() + 1) + '/' + when.getDate() + ' ' + String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0') + ' の写し）' : '')
+      + '　打つと出ます';
+  }
+  // 手元で絞る（1 打ごと）。番号（a10000）は伝票番号の前方一致、それ以外は製品名・ユーザー名の部分一致
+  function 手元で探す(開いてよい) {
+    if (!索引) return false;
+    var kw = $('ff-kw').value.trim(), cust = $('ff-cust').value.trim(), 段階 = $('ff-stage').value;
+    var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 50);
+    var 番号らしい = /^[a-zA-Z]?\d{2,}$/.test(kw);
+    if (番号らしい) 日数 = 0;
+    if (!kw && !cust && !段階) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    var から = 0;
+    if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')); }
+    var P = 索引位置, 行 = 索引.行, kwl = kw.toLowerCase(), hits = [], t0 = Date.now();
+    for (var i = 0; i < 行.length; i++) {
+      var r = 行[i];
+      if (から && 索引日[i] < から) continue;
+      if (cust && String(r[P['得意先コード']]) !== cust) continue;
+      if (段階 && String(r[P['案件区分']]) !== 段階) continue;
+      if (kw) {
+        if (番号らしい) { if (String(r[P['伝票番号']]).toLowerCase().indexOf(kwl) !== 0) continue; }
+        else if (String(r[P['製品名']]).toLowerCase().indexOf(kwl) < 0 && String(r[P['ユーザー名']]).toLowerCase().indexOf(kwl) < 0) continue;
+      }
+      hits.push(i);
+    }
+    var 全体 = hits.length;
+    if (番号らしい) hits.sort(function (a, b) { return String(行[a][P['伝票番号']]) < String(行[b][P['伝票番号']]) ? -1 : 1; });
+    else hits.sort(function (a, b) { return (索引日[b] - 索引日[a]) || (Number(行[b][P['recordId']]) - Number(行[a][P['recordId']])); });
+    hits = hits.slice(0, 件数);
+    var out = hits.map(function (i) { var o = {}; 索引.列.forEach(function (c, ci) { o[c] = 行[i][ci]; }); o.recordId = String(o.recordId); return o; });
+    一覧を出す({ 行: out, 件数: out.length, 全体: 全体, 日数: 日数, ミリ秒: Date.now() - t0, 源: '索引' });
+    if (開いてよい && 番号らしい && out.length === 1) { 番号欄.value = String(out[0]['伝票番号']); 読み込む(String(out[0]['伝票番号'])); }
+    return true;
+  }
+  var 打鍵タイマー = null;
+  function 打ちながら() {
+    clearTimeout(打鍵タイマー);
+    打鍵タイマー = setTimeout(function () { 手元で探す(false); }, 120);
+  }
+
   function 探す() {
+    if (手元で探す(true)) return;   // 索引があれば手元で（速い）。無ければ中継に聞く
     // 伝票番号（a10000 のような形）を品名欄に入れたら、番号の前方一致で全期間から探す（中継が判断）
     var kw = $('ff-kw').value.trim();
     var 番号らしい = /^[a-zA-Z]\d{3,}$/.test(kw);
@@ -2157,7 +2242,11 @@ window.FM見た目 = function () {};
   $('ff-x').onclick = function () { 探し.style.display = 'none'; };
   ['ff-kw', 'ff-cust'].forEach(function (id) {
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') 探す(); });
+    $(id).addEventListener('input', 打ちながら);
   });
+  ['ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { $(id).addEventListener('change', function () { 手元で探す(false); }); });
+  setTimeout(索引を用意, 1500);                       // 開いたら索引を手元に（サインイン前なら次回）
+  setInterval(function () { if (!索引) 索引を用意(); }, 30000);   // サインインが後から済んだとき用
 
   // -------------------------------------------------- 画面まわり
 

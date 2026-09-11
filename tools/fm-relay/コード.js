@@ -395,6 +395,7 @@ function handle_(action, req, who) {
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
     case '画面_一覧':         return 画面_一覧(req['条件']);
     // Hub 用の保管庫（FileMaker の写し）から読む。FileMaker を止めたあとの読み口
+    case '写し_索引を配る':   return 写し_索引を配る();
     case '写し_一覧':         return 写し_一覧(req['条件']);
     case '写し_読み込み':     return 写し_読み込み(req['番号']);
     case '写し_状況':         return 写し_状況();
