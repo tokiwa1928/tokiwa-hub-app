@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>納品書（FileMaker から） | Tokiwa Hub</title>
+<!--
+  🧾 納品書（FileMaker から）
+
+  FileMaker の受注を選んで束ね、納品日を付けて、GEN と同じ3面（控／納品書／受領書）を出す。
+  番号は GEN の続き（DE + 5桁）。発行したものは Hub の共有データ（nohinsho）に残る。
+  希望すれば、FileMaker の各伝票に 納品日・納品書番号 を書き戻す。
+
+  仕様: docs/帳票仕様_GEN準拠.md
+-->
+<style>
+  :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --acc:#0f4c5c; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--ink); line-height:1.7;
+        font-family:'Yu Gothic','Hiragino Kaku Gothic ProN',Meiryo,sans-serif; }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header .logo{ font-weight:800; font-size:14px; letter-spacing:.04em; }
+  header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header a{ color:#cbd5e1; font-size:12px; text-decoration:none; }
+  header .user{ margin-left:auto; font-size:11px; color:#cbd5e1; display:flex; gap:10px; align-items:center; }
+  main{ max-width:1120px; margin:16px auto; padding:0 14px 4rem; }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.8rem; }
+  .st{ font-size:10px; font-weight:700; color:#999; letter-spacing:.1em; margin-bottom:.5rem; text-transform:uppercase; }
+  .bar{ display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+  label{ font-size:11px; color:#777; display:block; margin-bottom:2px; }
+  input,select{ font:inherit; font-size:13.5px; padding:6px 9px; border:1px solid #d0cec8; border-radius:6px; background:#fff; }
+  input:focus,select:focus{ outline:none; border-color:#1a1a1a; }
+  .btn{ font:inherit; font-size:13px; font-weight:600; padding:7px 14px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; }
+  .btn-p{ background:var(--acc); border-color:var(--acc); color:#fff; }
+  .btn:disabled{ opacity:.45; cursor:default; }
+  table{ border-collapse:collapse; width:100%; font-size:12.5px; }
+  th{ text-align:left; font-size:11px; color:#666; padding:5px 7px; border-bottom:1px solid var(--line); white-space:nowrap; background:#f4f3f0; position:sticky; top:0; }
+  td{ padding:4px 7px; border-bottom:1px solid #f0eeea; vertical-align:middle; }
+  td.n{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr.pick:hover td{ background:#fdfdf5; cursor:pointer; }
+  tr.on td{ background:#ecfeff; }
+  .muted{ color:#94a3b8; font-size:11.5px; }
+  .scroll{ overflow:auto; max-height:40vh; border:1px solid var(--line); border-radius:6px; }
+  .g{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:8px; }
+  .line input{ width:100%; padding:4px 6px; font-size:12.5px; }
+  .line td{ padding:2px 4px; }
+  .tot{ display:flex; gap:18px; justify-content:flex-end; font-size:13px; margin-top:.4rem; }
+  .tot b{ font-size:15px; }
+  .x{ border:1px solid #fca5a5; background:#fff; color:#b91c1c; border-radius:5px; font-size:11px; padding:1px 7px; cursor:pointer; font-family:inherit; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
+  .stat{ font-size:12px; color:#475569; }
+  .stat.err{ color:#b91c1c; font-weight:700; }
+  .stat.ok{ color:#15803d; }
+
+  /* ---- 印刷（3面） ---- */
+  #print{ display:none; }
+  @media print{
+    body{ background:#fff; }
+    header, main, #toast, #kz-btn, #kz-panel, #hubRefreshBtn, #hubLogBtn, #hubLogPanel, #hubUpBanner{ display:none !important; }
+    #print{ display:block; }
+    @page{ size:A4 portrait; margin:8mm 10mm; }
+  }
+  .men{ height:92mm; border-bottom:1px dashed #999; padding:2mm 0 0; font-size:9.5pt; color:#000; page-break-inside:avoid; position:relative; }
+  .men:last-child{ border-bottom:none; }
+  .men .ttl{ display:flex; align-items:baseline; gap:12px; }
+  .men .ttl h2{ margin:0; font-size:15pt; letter-spacing:.35em; font-weight:700; }
+  .men .ttl .no{ margin-left:auto; font-size:10pt; }
+  .men .hd{ display:flex; justify-content:space-between; margin-top:2mm; }
+  .men .to{ font-size:12pt; }
+  .men .to small{ font-size:8.5pt; display:block; color:#333; }
+  .men .co{ text-align:right; font-size:8.5pt; line-height:1.45; }
+  .men .co b{ font-size:10.5pt; }
+  .men .msg{ font-size:8.5pt; margin-top:1mm; }
+  .men table{ font-size:8.5pt; margin-top:1.5mm; }
+  .men th{ background:#eee; border:1px solid #999; padding:1px 4px; font-size:8pt; position:static; color:#000; }
+  .men td{ border:1px solid #999; padding:1px 4px; }
+  .men td.n{ text-align:right; }
+  .men .sum{ display:flex; justify-content:flex-end; gap:14px; margin-top:1.5mm; font-size:9pt; }
+  .men .sum b{ font-size:10.5pt; }
+  .men .stamp{ width:14mm; height:14mm; border:1px solid #999; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🧾</span>
+  <span class="tname">納品書</span>
+  <span style="font-size:11px;color:#94a3b8">FileMaker の受注から・GEN と同じ3面</span>
+  <a href="../index.html">← Hub</a>
+  <span class="user"><span id="hub-user"></span><span id="fm-who" style="color:#9ae6b4"></span><span id="fm-signin"></span></span>
+</header>
+
+<main>
+  <div class="sec">
+    <div class="st">1. FileMaker の受注を探す</div>
+    <div class="bar">
+      <div><label>得意先コード</label><input id="s-cust" style="width:120px" placeholder="例: N0052"></div>
+      <div><label>品名（一部）</label><input id="s-kw" style="width:200px"></div>
+      <div><label>期間（起票日）</label>
+        <select id="s-days"><option value="90">直近3か月</option><option value="365">直近1年</option><option value="1095">直近3年</option></select></div>
+      <div><label>件数</label><select id="s-n"><option>50</option><option>100</option><option>200</option></select></div>
+      <button class="btn btn-p" id="s-go">探す</button>
+      <label style="display:flex;align-items:center;gap:4px;margin:0"><input type="checkbox" id="s-undelivered" checked style="width:auto"> 納品日が空のものだけ</label>
+      <span class="stat" id="s-stat" style="margin-left:auto"></span>
+    </div>
+    <div class="scroll" style="margin-top:.6rem"><table>
+      <thead><tr><th></th><th>伝票番号</th><th>起票日</th><th>得意先</th><th>ユーザー</th><th>製品名</th><th class="n">数量</th><th class="n">売価</th><th>納品日</th></tr></thead>
+      <tbody id="s-rows"><tr><td colspan="9" class="muted" style="text-align:center;padding:1.2rem">得意先コードか品名を入れて「探す」</td></tr></tbody>
+    </table></div>
+    <div class="muted" style="margin-top:.4rem">行をクリックで選ぶ。同じ得意先のものだけを1枚に束ねられます。</div>
+  </div>
+
+  <div class="sec">
+    <div class="st">2. 納品書にする</div>
+    <div class="g">
+      <div><label>納品書番号</label><input id="d-no" placeholder="DE00000"></div>
+      <div><label>納品日</label><input id="d-date" type="date"></div>
+      <div><label>得意先コード（FileMaker）</label><input id="d-fmcode" readonly style="background:#f7f6f2"></div>
+      <div style="grid-column:span 2"><label>宛名</label><input id="d-name" list="d-name-dl" placeholder="得意先名"><datalist id="d-name-dl"></datalist></div>
+      <div><label>GEN 取引先コード</label><input id="d-cucode" placeholder="CU00000"></div>
+      <div><label>締め日</label><input id="d-shime" placeholder="例: 末"></div>
+    </div>
+    <div style="margin-top:.7rem"><table class="line">
+      <thead><tr><th style="width:44%">品名</th><th class="n">数量</th><th>単位</th><th class="n">単価</th><th class="n">金額</th><th>注文No.</th><th></th></tr></thead>
+      <tbody id="d-lines"><tr><td colspan="7" class="muted" style="text-align:center;padding:.8rem">上で受注を選ぶと、ここに並びます</td></tr></tbody>
+    </table></div>
+    <div class="tot">
+      <span>税抜 <b id="t-net">0</b></span><span>消費税(10%) <b id="t-tax">0</b></span><span>合計 <b id="t-all">0</b></span>
+    </div>
+    <div class="bar" style="margin-top:.8rem">
+      <button class="btn btn-p" id="d-issue" disabled>発行して印刷</button>
+      <label style="display:flex;align-items:center;gap:4px;margin:0"><input type="checkbox" id="d-writeback" style="width:auto"> FileMaker の各伝票に 納品日・納品書番号 を書き戻す</label>
+      <span class="stat" id="d-stat" style="margin-left:auto"></span>
+    </div>
+    <div class="muted" style="margin-top:.4rem">番号は GEN の続きから。最後に出した番号の次が入ります。違うときは直してください。</div>
+  </div>
+
+  <div class="sec">
+    <div class="st">発行したもの</div>
+    <div class="scroll" style="max-height:30vh"><table>
+      <thead><tr><th>番号</th><th>納品日</th><th>宛名</th><th class="n">明細</th><th class="n">合計</th><th>出した人</th><th></th></tr></thead>
+      <tbody id="h-rows"></tbody>
+    </table></div>
+  </div>
+</main>
+
+<div id="print"></div>
+<div id="toast"></div>
+
+<script>
+// ═════════ Tokiwa Hub 共有ヘルパー (全ツール共通・ここから下は原則編集しない) ═════════
+var HUB_DBKEY = 'murayama_v15';
+var HUB_AUTHKEY = 'murayama_auth';
+var HUB_TOOL_ID = 'nohin';
+// 本体(index.html)の CLOUD_CONFIG と同じ値。ツール単独でも全社クラウド(GAS)へ直接保存するために使う。
+var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
+var HUB_API_KEY = 'mitsumori-2024';
+
+function hubLoad(){
+  try { return JSON.parse(localStorage.getItem(HUB_DBKEY)) || null; }
+  catch(e){ console.error(e); return null; }
+}
+function hubAuth(){
+  try { return JSON.parse(localStorage.getItem(HUB_AUTHKEY)) || {}; } catch(e){ return {}; }
+}
+// 保存: 必ず「読み直し→変更→書き込み」の形で使う (mutator に最新DBを渡す)
+// localStorage容量対策: 問い合わせ本文(body)等はクラウド(Communications)が正なので、
+// 端末ミラーには一覧最小限だけ残す。容量超過時に本文を落として保存を通す。
+function _hubInqLite_(db){
+  if(!db || !Array.isArray(db.inquiries) || !db.inquiries.length) return db;
+  var KEEP=['id','subject','kind','status','priority','source_type','channel_company','from_name','from_email','from_company','custName','received_at','createdAt','updatedAt','assignee','category','isSpam','tags','linked_project_id','linked_quote_id','linked_invoice_id','cust_id','tel'];
+  var lite=db.inquiries.map(function(r){ if(!r||typeof r!=='object') return r; var o={}; KEEP.forEach(function(k){ if(k in r) o[k]=r[k]; }); o._lite=true; return o; });
+  return Object.assign({}, db, {inquiries:lite});
+}
+function hubSave(mutator){
+  var db = hubLoad();
+  if(!db){ hubToast('❌ 本体データが見つかりません。先に本体アプリへログインしてください'); return false; }
+  try { mutator(db); } catch(e){ hubToast('❌ 変更失敗: ' + e); return false; }
+  var _lok=false;
+  try { localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); _lok=true; }
+  catch(e){
+    try { localStorage.setItem(HUB_DBKEY, JSON.stringify(_hubInqLite_(db))); _lok=true; }
+    catch(e2){ try { var _b=_hubInqLite_(db); _b.inquiries=[]; _b.history=[]; localStorage.setItem(HUB_DBKEY, JSON.stringify(_b)); _lok=true; } catch(e3){} }
+    hubToast(_lok ? '💾 端末保存は軽量化しました（データはクラウドに保存）' : '⚠ 端末保存失敗・クラウドには保存します');
+  }
+  try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type:'db-updated', tool: HUB_TOOL_ID }); } catch(e){}
+  hubCloudPushSoon();   // ローカル保存の成否に関わらず全社クラウドへ反映（消失防止）
+  return true;
+}
+// ツール単独で全社クラウド(GAS saveAll)へ即保存。本体経由・BroadcastChannel依存をやめ、強制リロードで消えるのを防ぐ。
+// 注: 本体 saveToCloud と同じく localStorage の全DBを送る（=本体と同一の保存モデル）。
+// 更新時刻ベースの安全な保存: 先にクラウド最新を取得し、このツールが扱うコレクションだけ
+// 「レコードごとに新しい方」をマージして送る。他コレクションはクラウド最新をそのまま返す。
+// これにより、この端末が古いデータを持っていても他機能・他端末の新しい変更を上書きしない。
+function _tsval(r){ if(!r) return 0; var t=r._updatedAt||r.updatedAt||r.paidAt||r.matchedAt||r.createdAt||r._createdAt; var n=t?Date.parse(t):0; return isNaN(n)?0:n; }
+// 論理時計: PCの時計が他PCよりずれていても、直近の編集が必ず「より新しい」と判定される時刻を刻む。
+// 既存レコードを更新するときは必ず hubStamp(rec) を使うこと(new Date()直書き禁止)。
+function hubStamp(rec){ var t=new Date(Math.max(Date.now(), _tsval(rec)+1000)).toISOString(); if(rec) rec._updatedAt=t; return t; }
+function mergeNewestById(localArr, cloudArr){
+  var byId={}, order=[];
+  function take(r, isLocal){ if(!r||!r.id) return;
+    if(!(r.id in byId)){ order.push(r.id); byId[r.id]=r; return; }
+    var a=_tsval(r), b=_tsval(byId[r.id]);
+    if(a>b || (a===b && isLocal)) byId[r.id]=r;   // 同時刻/両方無しはローカル(=このツールの編集)を優先
+  }
+  (Array.isArray(cloudArr)?cloudArr:[]).forEach(function(r){ take(r,false); });
+  (Array.isArray(localArr)?localArr:[]).forEach(function(r){ take(r,true); });
+  return order.map(function(id){ return byId[id]; });
+}
+// このツールが編集の主体となるコレクション(ここだけローカルの新しい変更を反映する)
+function ownColls(){ return (typeof HUB_OWN_COLLS!=='undefined'&&HUB_OWN_COLLS) ? HUB_OWN_COLLS : ((typeof COLL!=='undefined'&&COLL) ? [COLL] : []); }
+async function hubCloudFetch(){
+  var auth=hubAuth(); if(!auth || !auth.loggedIn || !auth.companyId) return null;
+  var url=new URL(HUB_GAS_URL);
+  url.searchParams.set('action','syncAll'); url.searchParams.set('apiKey', HUB_API_KEY); url.searchParams.set('companyId', auth.companyId);
+  var res=await fetch(url.toString(), { method:'GET', redirect:'follow' });
+  var r=await res.json();
+  var d=r && (r.data||r);
+  return (d && typeof d==='object') ? d : null;
+}
+async function hubCloudPush(){
+  var db = hubLoad(), auth = hubAuth();
+  if(!db) return false;
+  if(!auth || !auth.loggedIn || !auth.companyId) return false;   // 未ログインはローカルのみ
+  var cloud=null; try{ cloud=await hubCloudFetch(); }catch(e){ cloud=null; }
+  db=hubLoad()||db;   // 通信待ちの間の入力を失わないよう読み直す
+  var data;
+  if(cloud){
+    data = Object.assign({}, cloud);                 // 他コレクションはクラウド最新を維持
+    ownColls().forEach(function(k){
+      var merged=mergeNewestById(db[k]||[], cloud[k]||[]);
+      data[k]=merged;
+      db[k]=merged;                                   // ローカルにも反映(他端末の新しい変更を取込)
+    });
+    try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){}
+  } else {
+    // クラウド取得失敗: 従来どおりローカル全体(最善努力・消失防止)
+    data = {
+      master: db.master, config: db.conf,
+      projects: db.projects||[], history: db.history||[], quotations: db.quotations||[],
+      intercoRequests: db.intercoRequests||[], intercoOrders: db.intercoOrders||[],
+      outsourceOrders: db.outsourceOrders||[], artesoCases: db.artesoCases||[],
+      calendarOrders: db.calendarOrders||[], inquiries: db.inquiries||[],
+      deliveryItems: db.deliveryItems||[], drivers: db.drivers||[],
+      inquirySettings: db.inquirySettings||{}, releaseConfig: db.releaseConfig||{},
+      toolCompanyConfig: db.toolCompanyConfig||{}, bookmarks: db.bookmarks||[],
+      bookmarkCategories: db.bookmarkCategories||[], leadTimeMaster: db.leadTimeMaster||{},
+      bookmarksDeleted: (db.bookmarksDeleted||[]).slice(-500),
+      bookmarkCategoriesDeleted: (db.bookmarkCategoriesDeleted||[]).slice(-200)
+    };
+  }
+  try {
+    var url = new URL(HUB_GAS_URL);
+    url.searchParams.set('action','saveAll');
+    url.searchParams.set('apiKey', HUB_API_KEY);
+    var res = await fetch(url.toString(), { method:'POST', body: JSON.stringify({ companyId: auth.companyId, data: data }), redirect:'follow' });
+    var r = await res.json();
+    return !!(r && r.success);
+  } catch(e){ console.warn('[Tool] cloud push failed', e); return false; }
+}
+// リアルタイム同期: 20秒ごと＋タブ復帰時にクラウド最新を取り込み、変更があれば再描画
+var _hubAutoBusy=false;
+async function hubAutoSync(){
+  if(_hubAutoBusy || document.hidden) return;
+  var ae=document.activeElement;
+  if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;   // 入力中は邪魔しない
+  _hubAutoBusy=true;
+  try{
+    var cloud=await hubCloudFetch();
+    if(cloud){
+      var db=hubLoad();
+      if(db){
+        var changed=false;
+        ownColls().forEach(function(k){
+          var before=JSON.stringify((db[k]||[]).map(function(r){return r&&r.id+':'+_tsval(r);}));
+          var merged=mergeNewestById(db[k]||[], cloud[k]||[]);
+          var after=JSON.stringify(merged.map(function(r){return r&&r.id+':'+_tsval(r);}));
+          if(after!==before){ db[k]=merged; changed=true; }
+        });
+        if(changed){
+          try{ localStorage.setItem(HUB_DBKEY, JSON.stringify(db)); }catch(e){}
+          try{ if(typeof render==='function') render(); else if(typeof renderResult==='function'){} }catch(e){}
+        }
+      }
+    }
+  }catch(e){}
+  _hubAutoBusy=false;
+}
+setInterval(hubAutoSync, 20000);
+window.addEventListener('focus', hubAutoSync);
+
+var _hubCloudTimer = null;
+function hubCloudPushSoon(){
+  if(_hubCloudTimer) clearTimeout(_hubCloudTimer);
+  _hubCloudTimer = setTimeout(function(){ _hubCloudTimer=null; hubCloudPush(); }, 1500);
+}
+// 配列コレクションへの追加ショートカット
+function hubAppend(key, record){
+  return hubSave(function(db){ if(!Array.isArray(db[key])) db[key] = []; db[key].push(record); });
+}
+function hubEsc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function hubToast(msg){
+  var t = document.getElementById('toast'); if(!t) return alert(msg);
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._tm); t._tm = setTimeout(function(){ t.style.display='none'; }, 2600);
+}
+function hubYen(n){ return '¥' + Number(n||0).toLocaleString(); }
+// ヘッダーにログインユーザー表示 + 未ログインガード
+(function(){
+  var a = hubAuth();
+  var el = document.getElementById('hub-user');
+  if(el) el.textContent = a.loggedIn ? ('👤 ' + (a.userName||'') + ' / ' + (a.companyName||'')) : '⚠ 本体未ログイン';
+})();
+// ═════════ 共有ヘルパーここまで ═════════
+</script>
+<!-- HUB共通: 最新データに更新するフローティングボタン（自動挿入） -->
+<style>
+#hubRefreshBtn{position:fixed;right:16px;bottom:16px;z-index:99999;display:inline-flex;align-items:center;gap:6px;
+  padding:9px 14px;font-size:13px;font-weight:700;font-family:inherit;color:#0f172a;background:#fde68a;
+  border:1px solid #f59e0b;border-radius:22px;box-shadow:0 3px 10px rgba(0,0,0,.22);cursor:pointer;line-height:1;}
+#hubRefreshBtn:hover{background:#fcd34d;}
+#hubRefreshBtn:disabled{opacity:.6;cursor:default;}
+@media print{#hubRefreshBtn{display:none!important;}}
+</style>
+<button id="hubRefreshBtn" title="クラウドの最新データに更新します" onclick="hubRefreshNow()">🔄 更新</button>
+<script>
+function hubRefreshNow(){
+  var b=document.getElementById('hubRefreshBtn');
+  var reset=function(){ if(b){ b.disabled=false; b.textContent='🔄 更新'; } };
+  if(b){ b.disabled=true; b.textContent='⏳ 更新中…'; }
+  // 入力中のセルを先に確定(保存)してから取り込む。未確定の入力がクラウドの古い値で消えるのを防ぐ。
+  try{ var ae=document.activeElement; if(ae && ae.blur && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) ae.blur(); }catch(e){}
+  try{
+    // クラウド取込関数を持つツール（カレンダー受注台帳など）は、再読込せず最新だけ取り込む
+    if(typeof hubCloudPull==='function'){
+      Promise.resolve(hubCloudPull()).then(function(){
+        try{ if(typeof _hubCacheClear==='function') _hubCacheClear(); }catch(e){}
+        try{ if(typeof buildYears==='function') buildYears(); }catch(e){}
+        try{ if(typeof buildCats==='function') buildCats(); }catch(e){}
+        try{ if(typeof render==='function') render(); }catch(e){}
+        try{ if(typeof hubToast==='function') hubToast('🔄 最新データに更新しました'); }catch(e){}
+        reset();
+      }).catch(function(){ location.reload(); });
+      return;
+    }
+  }catch(e){}
+  // それ以外のページはページごと再読込（本体アプリは再読込でクラウドから取り直す）
+  location.reload();
+}
+</script>
+<!-- HUB共通: アプリ自動更新＋更新履歴（自動挿入 hubUpdateKit） -->
+<style>
+#hubLogBtn{position:fixed;right:16px;bottom:58px;z-index:99999;width:38px;height:38px;border-radius:50%;
+  border:1px solid #cbd5e1;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.18);cursor:pointer;font-size:17px;line-height:1;}
+#hubLogBtn:hover{background:#f1f5f9;}
+#hubLogPanel{position:fixed;right:16px;bottom:104px;z-index:99999;width:min(360px,calc(100vw - 32px));max-height:60vh;overflow:auto;
+  background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:12px 14px;display:none;font-size:12px;color:#0f172a;text-align:left;}
+#hubLogPanel h3{margin:0 0 8px;font-size:13px;}
+#hubLogPanel .d{font-weight:700;margin:10px 0 3px;color:#0369a1;}
+#hubLogPanel ul{margin:0 0 4px;padding-left:17px;}
+#hubLogPanel li{margin:2px 0;line-height:1.45;}
+#hubUpBanner{position:fixed;left:50%;transform:translateX(-50%);top:10px;z-index:100000;display:none;align-items:center;gap:10px;
+  background:#0f172a;color:#fff;padding:9px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:13px;}
+#hubUpBanner button{font-family:inherit;font-size:12px;font-weight:700;border-radius:7px;border:0;padding:5px 11px;cursor:pointer;background:#fde68a;color:#0f172a;}
+@media print{#hubLogBtn,#hubLogPanel,#hubUpBanner{display:none!important;}}
+</style>
+<button id="hubLogBtn" title="更新履歴を表示" onclick="hubToggleLog()">📋</button>
+<div id="hubLogPanel"></div>
+<div id="hubUpBanner"><span>🆕 新しい版があります（<b id="hubUpCnt">15</b>秒後に自動更新）</span><button onclick="hubDoUpdate()">今すぐ更新</button><button style="background:#334155;color:#fff" onclick="hubCancelUpdate()">後で</button></div>
+<script>
+(function(){
+  var BASE = location.pathname.indexOf('/tools/')>=0 ? '../' : './';
+  // ===== 更新履歴 =====
+  window.hubToggleLog=function(){
+    var p=document.getElementById('hubLogPanel');
+    if(p.style.display==='block'){ p.style.display='none'; return; }
+    p.style.display='block'; p.innerHTML='<h3>📋 更新履歴</h3>読み込み中…';
+    fetch(BASE+'changelog.json?ts='+Date.now(), {cache:'no-store'}).then(function(r){return r.json();}).then(function(list){
+      var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
+      p.innerHTML='<h3>📋 更新履歴</h3>'+list.map(function(e){
+        return '<div class="d">'+esc(e.date)+'</div><ul>'+e.items.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>';
+      }).join('');
+    }).catch(function(){ p.innerHTML='<h3>📋 更新履歴</h3>取得できませんでした'; });
+  };
+  // ===== アプリ本体の自動更新 =====
+  // service-worker.js の版番号を定期取得し、変わっていたら再読込して新しい版に切り替える。
+  var curVer=null, timer=null;
+  function fetchVer(){
+    return fetch(BASE+'service-worker.js?ts='+Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.text(); })
+      .then(function(t){ var m=t.match(/CACHE_VERSION\s*=\s*'([^']+)'/); return m?m[1]:null; })
+      .catch(function(){ return null; });
+  }
+  window.hubDoUpdate=function(){ try{ sessionStorage.setItem('hubJustUpdated','1'); }catch(e){} location.reload(); };
+  window.hubCancelUpdate=function(){ if(timer){ clearInterval(timer); timer=null; } var b=document.getElementById('hubUpBanner'); if(b) b.style.display='none'; };
+  function showBanner(){
+    var b=document.getElementById('hubUpBanner'); if(!b || b.style.display==='flex') return;
+    b.style.display='flex';
+    var n=15, c=document.getElementById('hubUpCnt'); c.textContent=n;
+    timer=setInterval(function(){
+      var ae=document.activeElement;
+      if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName)>=0) return;   // 入力中はカウントを止める
+      n--; c.textContent=n;
+      if(n<=0){ clearInterval(timer); hubDoUpdate(); }
+    }, 1000);
+  }
+  function check(){
+    fetchVer().then(function(v){
+      if(!v) return;
+      if(curVer===null){ curVer=v; return; }
+      if(v===curVer) return;
+      // 新しい版を検知: 非表示タブは即時、表示中はバナー＋カウントダウンで自動更新
+      if(document.hidden){ hubDoUpdate(); } else { showBanner(); }
+    });
+  }
+  fetchVer().then(function(v){ curVer=v; });
+  setInterval(check, 180000);   // 3分ごとに版を確認
+  window.addEventListener('focus', check);
+  try{ if(sessionStorage.getItem('hubJustUpdated')){ sessionStorage.removeItem('hubJustUpdated'); } }catch(e){}
+})();
+</script>
+
+
+<script src="fm-bridge.js"></script>
+<script>
+// ═════════ 納品書 ═════════
+var COLL = 'nohinsho';
+var HUB_OWN_COLLS = ['nohinsho', 'nohinsho_conf'];
+var 自社 = {
+  名: 'トキワ印刷株式会社', 本社: '本社 浜松市中央区法枝町115', 営業所: '静岡営業所　静岡県葵区鷹匠2丁目8-10',
+  TEL: 'TEL 053-441-2784', FAX: 'FAX 053-442-1265'
+};
+
+var 検索結果 = [], 選択 = {}, 明細 = [], 宛名の得意先 = '';
+
+function $(id){ return document.getElementById(id); }
+function 円(n){ return Number(n||0).toLocaleString(); }
+function 状態(id, m, k){ var e=$(id); e.textContent=m||''; e.className='stat '+(k||''); }
+function 日付表示(v){ var m=/^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v||'')); return m? m[3]+'/'+m[1]+'/'+m[2] : (v||''); }
+function 和暦なし日付(iso){ if(!iso) return ''; var p=iso.split('-'); return p[0]+'年'+Number(p[1])+'月'+Number(p[2])+'日'; }
+function FM日付(iso){ if(!iso) return ''; var p=iso.split('-'); return p[1]+'/'+p[2]+'/'+p[0]; }
+
+// ---- 設定（次の番号）は共有データに
+function conf(){ var d=hubLoad(); return (d && d.nohinsho_conf) || {}; }
+function 次の番号(){
+  var c=conf(); if(c.next) return c.next;
+  // 発行済みの最大 + 1。何も無ければ GEN の最新（2026-09-11 時点 DE08305）の次
+  var mx=0; (hubLoad()||{})[COLL] && (hubLoad()[COLL]||[]).forEach(function(r){ var m=/^DE(\d+)$/.exec(r.番号||''); if(m) mx=Math.max(mx,Number(m[1])); });
+  return 'DE'+String((mx||8305)+1).padStart(5,'0');
+}
+function 番号を進める(発行した){
+  var m=/^DE(\d+)$/.exec(発行した); if(!m) return;
+  hubSave(function(d){ d.nohinsho_conf=d.nohinsho_conf||{}; d.nohinsho_conf.next='DE'+String(Number(m[1])+1).padStart(5,'0'); hubStamp(d.nohinsho_conf); });
+}
+
+// ---- 得意先の名前（Hub の得意先マスタ: code = FileMaker の得意先コード）
+function 得意先名(code){
+  var d=hubLoad(); if(!d||!d.master||!Array.isArray(d.master.cust)) return '';
+  var hit=d.master.cust.find(function(c){ return c && typeof c!=='string' && String(c.code||'')===String(code); });
+  return hit? (hit.org||'') : '';
+}
+function GENの取引先(名){
+  try{ var g=JSON.parse(localStorage.getItem('tokiwa_gen')||'{}'); var t=g['取引先']; if(!t) return null;
+    var rows=Object.keys(t.行).map(function(k){ return t.行[k]; });
+    return rows.find(function(r){ return String(r['取引先名']||'').replace(/\s/g,'')===String(名||'').replace(/\s/g,''); })||null; }catch(e){ return null; }
+}
+function 宛名候補(){
+  var dl=$('d-name-dl'); dl.innerHTML='';
+  try{ var g=JSON.parse(localStorage.getItem('tokiwa_gen')||'{}'); var t=g['取引先']; if(t){
+    Object.keys(t.行).slice(0,3000).forEach(function(k){ var r=t.行[k]; if(r['得意先']===true||r['得意先']==='true'){ var o=document.createElement('option'); o.value=r['取引先名']; dl.appendChild(o); } }); } }catch(e){}
+}
+
+// ---- 1. 探す
+function 探す(){
+  var 条件={ '得意先コード': $('s-cust').value.trim(), 'キーワード': $('s-kw').value.trim(), '日数': Number($('s-days').value), '件数': Number($('s-n').value) };
+  if(!条件['得意先コード'] && !条件['キーワード']){ 状態('s-stat','得意先コードか品名を入れてください','err'); return; }
+  状態('s-stat','探しています…'); $('s-go').disabled=true;
+  FM.呼ぶ('画面_一覧',[条件]).then(function(r){
+    検索結果=(r.行||[]);
+    if($('s-undelivered').checked) 検索結果=検索結果.filter(function(x){ return !x.納品日; });
+    描く一覧(); 状態('s-stat', 検索結果.length+' 件（'+(r.ミリ秒/1000).toFixed(1)+'秒）','ok');
+  }).catch(function(e){ 状態('s-stat',String(e.message||e),'err'); }).then(function(){ $('s-go').disabled=false; });
+}
+function 描く一覧(){
+  var tb=$('s-rows');
+  if(!検索結果.length){ tb.innerHTML='<tr><td colspan="9" class="muted" style="text-align:center;padding:1rem">見つかりません</td></tr>'; return; }
+  tb.innerHTML=検索結果.map(function(x){
+    var on=!!選択[x.recordId];
+    return '<tr class="pick'+(on?' on':'')+'" data-id="'+hubEsc(x.recordId)+'">'
+      +'<td><input type="checkbox" '+(on?'checked':'')+' style="width:auto"></td>'
+      +'<td>'+hubEsc(x.伝票番号||'')+'</td><td>'+hubEsc(日付表示(x.起票日))+'</td>'
+      +'<td>'+hubEsc(x.得意先コード||'')+'</td><td>'+hubEsc(x.ユーザー名||'')+'</td>'
+      +'<td>'+hubEsc(x.製品名||'')+'</td><td class="n">'+hubEsc(円(x.合計数1))+'</td>'
+      +'<td class="n">'+hubEsc(円(x.売価金額))+'</td><td>'+hubEsc(日付表示(x.納品日))+'</td></tr>';
+  }).join('');
+  Array.prototype.forEach.call(tb.querySelectorAll('tr.pick'),function(tr){ tr.onclick=function(){ 切替(tr.getAttribute('data-id')); }; });
+}
+function 切替(id){
+  var x=検索結果.find(function(r){ return String(r.recordId)===String(id); }); if(!x) return;
+  if(選択[id]){ delete 選択[id]; 明細=明細.filter(function(m){ return String(m.recordId)!==String(id); }); 描く一覧(); 描く明細(); return; }
+  // 同じ得意先だけ
+  var 既=Object.keys(選択).map(function(k){ return 選択[k]; })[0];
+  if(既 && String(既.得意先コード)!==String(x.得意先コード)){ hubToast('⚠ 得意先が違います。1枚には同じ得意先のものだけ束ねられます'); return; }
+  選択[id]=x; 描く一覧();
+  状態('d-stat','伝票 '+x.伝票番号+' を読んでいます…');
+  FM.呼ぶ('画面_recordIdで読む',[id]).then(function(r){
+    var f=r.record.fields;
+    var 数=Number(f['合計数1']||0), 単価=Number(f['売価単価']||0), 金額=Number(f['売価金額']||0);
+    if(!金額 && 数 && 単価) 金額=Math.round(数*単価);
+    if(!数 && 金額 && 単価) 数=Math.round(金額/単価);      // 合計数1 が空の伝票がある。売価÷単価で補う
+    if(!数) 数=Number(f['注残数']||0);
+    明細.push({ recordId:id, modId:r.record.modId, 伝票番号:f['伝票番号']||x.伝票番号, 品名:(f['伝票番号']||'')+'　'+(f['製品名']||''),
+                数量:数, 単位:f['単位']||'', 単価:単価, 金額:金額, 注文No:f['注文書No']||'' });
+    if(!宛名の得意先){ 宛名の得意先=String(f['得意先コード']||x.得意先コード||''); $('d-fmcode').value=宛名の得意先;
+      var 名=得意先名(宛名の得意先); if(名 && !$('d-name').value){ $('d-name').value=名; 宛名から埋める(); } }
+    描く明細(); 状態('d-stat','','');
+  }).catch(function(e){ delete 選択[id]; 描く一覧(); 状態('d-stat',String(e.message||e),'err'); });
+}
+function 宛名から埋める(){
+  var g=GENの取引先($('d-name').value); if(!g) return;
+  if(!$('d-cucode').value) $('d-cucode').value=g['取引先コード']||'';
+  if(!$('d-shime').value && g['請求方法']) $('d-shime').value=String(g['請求方法']).replace(/締め?/,'').trim()||'';
+}
+
+// ---- 2. 明細
+function 描く明細(){
+  var tb=$('d-lines');
+  if(!明細.length){ tb.innerHTML='<tr><td colspan="7" class="muted" style="text-align:center;padding:.8rem">上で受注を選ぶと、ここに並びます</td></tr>'; 合計(); $('d-issue').disabled=true; 宛名の得意先=''; $('d-fmcode').value=''; return; }
+  tb.innerHTML=明細.map(function(m,i){
+    return '<tr>'
+      +'<td><input value="'+hubEsc(m.品名)+'" oninput="明細['+i+'].品名=this.value"></td>'
+      +'<td><input type="number" value="'+hubEsc(m.数量)+'" style="text-align:right" oninput="明細['+i+'].数量=Number(this.value)||0;再計算('+i+')"></td>'
+      +'<td><input value="'+hubEsc(m.単位)+'" style="width:52px" oninput="明細['+i+'].単位=this.value"></td>'
+      +'<td><input type="number" step="0.01" value="'+hubEsc(m.単価)+'" style="text-align:right" oninput="明細['+i+'].単価=Number(this.value)||0;再計算('+i+')"></td>'
+      +'<td><input type="number" value="'+hubEsc(m.金額)+'" style="text-align:right" oninput="明細['+i+'].金額=Number(this.value)||0;合計()"></td>'
+      +'<td><input value="'+hubEsc(m.注文No)+'" style="width:90px" oninput="明細['+i+'].注文No=this.value"></td>'
+      +'<td><button class="x" onclick="切替(\''+hubEsc(m.recordId)+'\')">外す</button></td></tr>';
+  }).join('');
+  合計(); $('d-issue').disabled=false;
+}
+function 再計算(i){ var m=明細[i]; m.金額=Math.round(m.数量*m.単価); var tr=$('d-lines').rows[i]; if(tr) tr.cells[4].querySelector('input').value=m.金額; 合計(); }
+function 合計(){ var net=明細.reduce(function(a,m){ return a+(Number(m.金額)||0); },0); var tax=Math.floor(net*0.1);
+  $('t-net').textContent=円(net); $('t-tax').textContent=円(tax); $('t-all').textContent=円(net+tax); return {net:net,tax:tax,all:net+tax}; }
+
+// ---- 発行
+function 発行(){
+  if(!明細.length) return;
+  var no=$('d-no').value.trim(), 日=$('d-date').value, 名=$('d-name').value.trim();
+  if(!/^DE\d{5}$/.test(no)){ 状態('d-stat','納品書番号は DE + 5桁です','err'); return; }
+  if(!日){ 状態('d-stat','納品日を入れてください','err'); return; }
+  if(!名){ 状態('d-stat','宛名を入れてください','err'); return; }
+  var d=hubLoad(); if(d && (d[COLL]||[]).some(function(r){ return r.番号===no; })){ 状態('d-stat',no+' は発行済みです。番号を直してください','err'); return; }
+  var t=合計(); var a=hubAuth();
+  var rec={ id:'dl_'+Date.now().toString(36), 番号:no, 納品日:日, 宛名:名, FM得意先コード:$('d-fmcode').value, GEN取引先コード:$('d-cucode').value.trim(), 締め日:$('d-shime').value.trim(),
+            明細:明細.map(function(m){ return { 伝票番号:m.伝票番号, recordId:m.recordId, 品名:m.品名, 数量:m.数量, 単位:m.単位, 単価:m.単価, 金額:m.金額, 注文No:m.注文No }; }),
+            税抜:t.net, 消費税:t.tax, 合計:t.all, 出した人:a.userName||FM.名乗っている()||'', createdAt:new Date().toISOString() };
+  hubStamp(rec);
+  if(!hubAppend(COLL, rec)) return;
+  番号を進める(no);
+  状態('d-stat',no+' を発行しました','ok'); 発行済み();
+  印刷(rec);
+  if($('d-writeback').checked) 書き戻す(rec);
+  // 次へ
+  明細=[]; 選択={}; 宛名の得意先=''; $('d-name').value=''; $('d-cucode').value=''; $('d-shime').value=''; $('d-no').value=次の番号(); 描く一覧(); 描く明細();
+}
+function 書き戻す(rec){
+  var 残=rec.明細.length, ng=0;
+  rec.明細.forEach(function(m){
+    FM.呼ぶ('画面_recordIdで読む',[m.recordId]).then(function(r){
+      return FM.呼ぶ('画面_保存',[m.recordId, r.record.modId, { '納品日': FM日付(rec.納品日), '納品書番号': rec.番号 }]);
+    }).then(function(r){ if(r.conflict) ng++; }).catch(function(){ ng++; })
+      .then(function(){ if(--残===0) hubToast(ng? '⚠ FileMaker への書き戻しに '+ng+' 件失敗しました' : '✓ FileMaker の '+rec.明細.length+' 件に納品日・納品書番号を入れました'); });
+  });
+}
+
+// ---- 発行済み
+function 発行済み(){
+  var d=hubLoad(); var list=((d&&d[COLL])||[]).slice().sort(function(a,b){ return String(b.番号).localeCompare(String(a.番号)); });
+  $('h-rows').innerHTML = list.length ? list.slice(0,100).map(function(r){
+    return '<tr><td>'+hubEsc(r.番号)+'</td><td>'+hubEsc(r.納品日)+'</td><td>'+hubEsc(r.宛名)+'</td><td class="n">'+r.明細.length+'</td><td class="n">'+円(r.合計)+'</td><td>'+hubEsc(r.出した人||'')+'</td>'
+      +'<td><button class="btn" style="font-size:11px;padding:2px 8px" onclick="再印刷(\''+r.id+'\')">🖨 再印刷</button></td></tr>';
+  }).join('') : '<tr><td colspan="7" class="muted" style="text-align:center;padding:1rem">まだありません</td></tr>';
+}
+function 再印刷(id){ var r=((hubLoad()||{})[COLL]||[]).find(function(x){ return x.id===id; }); if(r) 印刷(r); }
+
+// ---- 印刷（3面）
+function 面(rec, 種){
+  var 控=種==='控', 受領=種==='受領';
+  var h='<div class="men"><div class="ttl"><h2>'+(受領?'受 領 書':'納　品　書'+(控?'（控）':''))+'</h2><span class="no">No. '+hubEsc(rec.番号)+'</span></div>';
+  h+='<div class="hd"><div class="to">'+hubEsc(rec.宛名)+'  御中'+(控?'<small>'+hubEsc(rec.GEN取引先コード||rec.FM得意先コード||'')+(rec.締め日?'　締め日：'+hubEsc(rec.締め日):'')+'</small>':'')
+    +(!控?'<small style="margin-top:2mm">いつもご愛顧いただきありがとうございます。<br>'+(受領?'下記の通り受領いたしました。':'下記の通り納品いたします。')+'</small>':'')+'</div>'
+    +'<div class="co">'+hubEsc(和暦なし日付(rec.納品日))+'<br><b>'+自社.名+'</b><br>'+自社.本社+'<br>'+自社.営業所+'<br>'+自社.TEL+'<br>'+自社.FAX+'</div></div>';
+  h+='<table><thead><tr><th style="width:46%">品　名</th><th class="n">数量</th><th>単位</th>'+(受領?'<th>受領印</th>':'<th class="n">単価</th><th class="n">金額</th><th>注文No.</th>')+'</tr></thead><tbody>';
+  rec.明細.forEach(function(m,i){
+    h+='<tr><td>'+hubEsc(m.品名)+'</td><td class="n">'+円(m.数量)+'</td><td>'+hubEsc(m.単位)+'</td>'
+      +(受領? (i===0?'<td rowspan="'+rec.明細.length+'" style="text-align:center;vertical-align:middle"><div class="stamp" style="margin:0 auto"></div></td>':'')
+             : '<td class="n">'+Number(m.単価).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</td><td class="n">'+円(m.金額)+'</td><td>'+hubEsc(m.注文No)+'</td>')+'</tr>';
+  });
+  h+='</tbody></table>';
+  if(!受領) h+='<div class="sum"><span>税抜金額 '+円(rec.税抜)+'</span><span>消費税(10%) '+円(rec.消費税)+'</span><span>合計 <b>'+円(rec.合計)+'</b></span></div>';
+  return h+'</div>';
+}
+function 印刷(rec){
+  $('print').innerHTML = 面(rec,'控') + 面(rec,'本') + 面(rec,'受領');
+  setTimeout(function(){ window.print(); }, 150);
+}
+
+// ---- 起動
+(function(){
+  FM.サインインのボタンを置く($('fm-signin'));
+  function 名(){ var m=FM.名乗っている(); $('fm-who').textContent=m?('FileMaker: '+m):''; }
+  名(); window.addEventListener('fm-signin', 名);
+  $('s-go').onclick=探す; $('d-issue').onclick=発行;
+  ['s-cust','s-kw'].forEach(function(id){ $(id).addEventListener('keydown',function(e){ if(e.key==='Enter') 探す(); }); });
+  $('d-name').addEventListener('change', 宛名から埋める);
+  $('d-date').value=new Date().toISOString().slice(0,10);
+  $('d-no').value=次の番号();
+  宛名候補(); 発行済み(); 描く明細();
+  try{ var q=new URLSearchParams(location.search); if(q.get('cust')){ $('s-cust').value=q.get('cust'); 探す(); } }catch(e){}
+})();
+</script>
+<script>window.KAIZEN_KEY = 'nohin';</script>
+<script src="kaizen.js"></script>
+</body>
+</html>
