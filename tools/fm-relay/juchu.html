@@ -1726,7 +1726,7 @@ function setPane(p){
   #fmdiff .close{ float:right; cursor:pointer; border:1px solid #b45309; background:#fff;
                   color:#7c2d12; border-radius:4px; padding:2px 9px; font-size:11.5px; }
   #fmerr{ display:none; background:#7a2018; color:#fff; padding:6px 12px; font-size:12.5px; }
-  #fmfind{ display:none; background:#f1f5f9; border-bottom:2px solid #64748b; padding:8px 14px; }
+  #fmfind{ display:block; background:#f1f5f9; border-bottom:2px solid #64748b; padding:8px 14px; }
   #fmfind .cond{ display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
   #fmfind label{ font-size:11px; color:#475569; display:block; margin-bottom:2px; }
   #fmfind input,#fmfind select{ font:inherit; font-size:13px; padding:4px 7px;
@@ -1775,7 +1775,7 @@ function setPane(p){
 <div id="fmerr"></div>
 <div id="fmfind">
   <div class="cond">
-    <div><label>品名で探す</label><input id="ff-kw" placeholder="製品名の一部（a12345 なら伝票番号）" autocomplete="off"></div>
+    <div><label>品名で探す</label><input id="ff-kw" placeholder="製品名の一部。a10000 なら伝票番号の前方一致" autocomplete="off"></div>
     <div><label>得意先コード</label><input id="ff-cust" style="width:110px" autocomplete="off"></div>
     <div><label>段階</label>
       <select id="ff-stage">
@@ -2113,16 +2113,17 @@ window.FM見た目 = function () {};
             && !confirm('保存していない編集があります。捨てて開きますか？')) return;
         待機(true); 状態('開いています…');
         呼ぶ('画面_recordIdで読む', [tr.getAttribute('data-id')])
-          .then(function (x) { 受け取る(x, '開きました'); 探し.style.display = 'none'; })
+          .then(function (x) { 受け取る(x, '開きました'); })
           .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
       };
     });
   }
 
   function 探す() {
-    // 伝票番号（a12345 のような形）を品名欄に入れたら、その番号をそのまま開く
+    // 伝票番号（a10000 のような形）を品名欄に入れたら、番号の前方一致で全期間から探す（中継が判断）
     var kw = $('ff-kw').value.trim();
-    if (/^[a-zA-Z]\d{4,}$/.test(kw)) { 番号欄.value = kw; $('ff-msg').textContent = '伝票番号として開きます: ' + kw; 読み込む(kw); return; }
+    var 番号らしい = /^[a-zA-Z]\d{3,}$/.test(kw);
+    if (番号らしい) $('ff-days').value = '0';
     var 条件 = {
       'キーワード': kw,
       '得意先コード': $('ff-cust').value.trim(),
@@ -2130,6 +2131,7 @@ window.FM見た目 = function () {};
       '日数': Number($('ff-days').value),
       '件数': Number($('ff-n').value || 50)
     };
+    if (番号らしい) 条件['伝票番号'] = kw;
     var 絞りなし = !条件['キーワード'] && !条件['得意先コード'] && !条件['段階'];
     if (絞りなし && 条件['日数'] === 0
         && !confirm('絞り込みなしで全部を並べ替えると、45秒ほどかかります。\n\n'
@@ -2137,15 +2139,19 @@ window.FM見た目 = function () {};
     $('ff-msg').textContent = '探しています…';
     $('ff-go').disabled = true;
     呼ぶ('画面_一覧', [条件])
-      .then(function (r) { 一覧を出す(r); })
+      .then(function (r) {
+        一覧を出す(r);
+        // 番号で探して 1 件だけなら、そのまま開く
+        if (番号らしい && r && r.行 && r.行.length === 1) { 番号欄.value = r.行[0]['伝票番号']; 読み込む(r.行[0]['伝票番号']); }
+      })
       .catch(function (e) { $('ff-msg').textContent = String(e.message || e); })
       .then(function () { $('ff-go').disabled = false; });
   }
 
   btnF.onclick = function () {
-    var 開く = 探し.style.display !== 'block';
+    var 開く = 探し.style.display === 'none';
     探し.style.display = 開く ? 'block' : 'none';
-    if (開く) { $('ff-kw').focus(); if (!$('ff-rows').innerHTML) 探す(); }
+    if (開く) { $('ff-kw').focus(); }
   };
   $('ff-go').onclick = 探す;
   $('ff-x').onclick = function () { 探し.style.display = 'none'; };

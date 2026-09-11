@@ -179,6 +179,10 @@ function 画面_一覧(条件) {
   var 日数 = Number(条件['日数']);
   if (isNaN(日数)) 日数 = 90;
 
+  // a10000 のような番号を入れたら、伝票番号の前方一致で探す（品名ではなく）
+  var 番号 = String(条件['伝票番号'] || '').trim();
+  if (!番号 && /^[a-zA-Z]\d{3,}$/.test(キーワード)) { 番号 = キーワード; キーワード = ''; }
+  if (番号)      q['伝票番号'] = 番号 + '*';
   if (キーワード) q['製品名'] = '*' + キーワード + '*';
   if (得意先)    q['得意先コード'] = '==' + 得意先;
   if (段階)      q['案件区分'] = '==' + 段階;
@@ -191,7 +195,7 @@ function 画面_一覧(条件) {
     q['起票日'] = '>=' + 日付_(から);
   }
 
-  var sort = [{ fieldName: '起票日', sortOrder: 'descend' }];
+  var sort = [{ fieldName: 番号 ? '伝票番号' : '起票日', sortOrder: 番号 ? 'ascend' : 'descend' }];
   var t0 = new Date();
   var rows = find_(lay, [q], 件数, 1, sort);
 
