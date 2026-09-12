@@ -20537,13 +20537,13 @@ function _dtpProcessPending_(){
         || (proj ? DB.proofings.find(function(x){ return x && x.projectId===proj.id; }) : null);
     var due=(typeof _fmDate_==='function') ? (_fmDate_(it.納期)||'') : '';
     if(p){
-      p.fmNo=no; if(it.note){ p.note=(p.note?p.note+'\n':'')+'【DTP】'+it.note; p.isDraft=false; }
+      p.fmNo=no; if(it.前回伝票番号 && !p.prevFmNo) p.prevFmNo=String(it.前回伝票番号); if(it.note){ p.note=(p.note?p.note+'\n':'')+'【DTP】'+it.note; p.isDraft=false; }
       if(!p.custName) p.custName=cust; if(!p.prodName) p.prodName=it.製品名||''; if(due&&!p.dueDate) p.dueDate=due;
       p.lastMoveAt=now; upd++;
     } else {
       p={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), custName:cust, prodName:it.製品名||'', endUser:it.ユーザー名||'', projectId:(proj?proj.id:''), fmNo:no,
           status:(_proofStatuses_()[0]||{}).key||'s_ask_wait', versions:[], createdAt:now, lastMoveAt:now, dueDate:due,
-          isDraft:!it.note, note:'FileMaker 受注 '+no+'（DTP有）より自動作成'+(it.user?'　by '+it.user:'')+(it.note?'\n【DTP】'+it.note:'') };
+          isDraft:!it.note, prevFmNo:String(it.前回伝票番号||''), note:'FileMaker 受注 '+no+'（DTP有）より自動作成'+(it.user?'　by '+it.user:'')+(it.note?'\n【DTP】'+it.note:'') };
       if(typeof _inheritMasterNo_==='function' && proj) try{ _inheritMasterNo_(p, proj); }catch(e){}
       DB.proofings.push(p);
       if(proj){ if(!proj.proofingIds) proj.proofingIds=[]; proj.proofingIds.push(p.id); }
@@ -20573,6 +20573,7 @@ try{
   _dtpBC.onmessage=function(ev){ if(ev.data&&ev.data.type==='dtp'){ setTimeout(_dtpProcessPending_, 200); } };
 }catch(e){}
 setTimeout(function(){ try{ _dtpProcessPending_(); }catch(e){ console.warn('[dtp]', e); } }, 4000);
+setTimeout(function(){ try{ var rs=_replyWaitProofings_(); if(rs.length && typeof _toastMsg==='function') _toastMsg('💬 返信できていない校正が '+rs.length+' 件あります（🚨 要注意 から開けます）'); }catch(e){} }, 7000);
 setInterval(function(){ try{ _dtpProcessPending_(); }catch(e){} }, 60*1000);
 
 // 校正ページ初期化
@@ -20760,18 +20761,35 @@ function renderProofingList(){
     + '</div>';
 
   // ── 表示切替トグル ── (既定=リスト, 選択は記憶)
-  if(!window._proofView_){ try{ window._proofView_ = localStorage.getItem('tokiwa_proof_view') || 'list'; }catch(e){ window._proofView_ = 'list'; } }
-  var vm = window._proofView_;
+  window._proofView_ = 'list';   // FMHUB-14: かんばんは廃止。一覧だけ
+  var vm = 'list';
   function _vbtn_(key,label,icon){ var on=(vm===key); return '<button onclick="event.stopPropagation();_proofSetViewMode_(\''+key+'\')" style="font-size:12px;padding:4px 12px;border-radius:5px;border:none;cursor:pointer;'+(on?'background:#1f1e1b;color:#fff;font-weight:600':'background:transparent;color:#6f6c64')+'">'+icon+' '+label+'</button>'; }
+  // FMHUB-14: 上のタブ（すべて／各分類／停滞／返信待ち／下書き／ファイル無し）
+  var tab = window._proofTab_ || '';
+  var flagN = { stale:0, reply:0, draft:0, nofile:0 };
+  all.forEach(function(p){ var fl=_proofFlags_(p); fl.forEach(function(f){ if(f.k in flagN) flagN[f.k]++; }); var mm=_proofStatusMeta_(_normProofStatus_(p.status)); if(!mm.done && !mm.wait && _daysSince_(_lastAt_(p))>=staleTh) flagN.stale++; });
+  function _tabBtn_(key,label,cnt,color){ var on=(tab===key); return '<button onclick="event.stopPropagation();_proofSetTab_(\''+key+'\')" style="font-size:12px;padding:5px 12px;border-radius:14px;border:1px solid '+(on?'#211f1c':'#d8d4c8')+';background:'+(on?'#211f1c':(color||'#fff'))+';color:'+(on?'#fff':'#211f1c')+';cursor:pointer;font-weight:'+(on?'700':'500')+'">'+label+' <span style="opacity:.7">'+cnt+'</span></button>'; }
+  var tabsHtml = _tabBtn_('','すべて',all.length)
+    + statuses.map(function(st){ return _tabBtn_(st.key, _escDiff(st.label), counts[st.key]||0, st.color); }).join('')
+    + _tabBtn_('stale','⚑ 停滞', flagN.stale, '#fee2e2') + _tabBtn_('reply','💬 返信待ち', flagN.reply, '#fef3c7') + _tabBtn_('draft','📝 下書き', flagN.draft, '#ede9fe') + _tabBtn_('nofile','📎 ファイル無し', flagN.nofile, '#fee2e2');
   var toggleHtml = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">'
-    + '<div style="display:flex;gap:3px;background:#ebe8e0;border-radius:7px;padding:3px">'+_vbtn_('list','リスト','▤')+_vbtn_('kanban','かんばん','▦')+'</div>'
+    + '<div style="display:flex;gap:4px;flex-wrap:wrap">'+tabsHtml+'</div>'
     + '<span style="display:flex;gap:6px">'
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#64748b" onclick="_proofOpenColConfig_()">▦ 列の設定</button>':'')
     + '<button class="btn" style="font-size:11px;color:#64748b" onclick="openProofStatusEditor()">⚙ 状態を編集</button></span></div>';
 
+  // FMHUB-14: タブで絞る
+  var shown = all.filter(function(p){
+    if(!tab) return true;
+    if(tab==='stale'){ var mm=_proofStatusMeta_(_normProofStatus_(p.status)); return !mm.done && !mm.wait && _daysSince_(_lastAt_(p))>=staleTh; }
+    if(tab==='reply'||tab==='draft'||tab==='nofile') return _proofFlags_(p).some(function(f){ return f.k===tab; });
+    return _normProofStatus_(p.status)===tab;
+  });
+  // 停滞・返信待ちを上に、あとは更新が古い順（放っておかれているものから）
+  shown.sort(function(a,b){ var fa=_proofFlags_(a).length?1:0, fb=_proofFlags_(b).length?1:0; if(fa!==fb) return fb-fa; return new Date(_lastAt_(a))-new Date(_lastAt_(b)); });
   var bodyHtml;
-  if(!all.length){
-    bodyHtml = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正データがありません</div>';
+  if(!shown.length){
+    bodyHtml = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">'+(tab?'この分類には校正がありません':'校正データがありません')+'</div>';
   } else if(vm === 'kanban'){
     var cols = statuses.map(function(s){
       var items = all.filter(function(p){ return _normProofStatus_(p.status) === s.key; });
@@ -20789,7 +20807,7 @@ function renderProofingList(){
       var al = (col.align==='center')?'center':'left';
       return '<th style="text-align:'+al+';padding:5px 8px;font-size:11px;font-weight:600'+(col.w?(';width:'+col.w):'')+'">'+col.label+'</th>';
     }).join('');
-    var rowsHtml = all.map(function(p){
+    var rowsHtml = shown.map(function(p){
       var k=_normProofStatus_(p.status), meta=_proofStatusMeta_(k);
       var info=_proofInfo_(p);
       var vc=(p.versions||[]).length, latest=(p.versions||[])[vc-1];
@@ -20804,7 +20822,7 @@ function renderProofingList(){
         var lb = (ci===0) ? ('border-left:8px solid '+bar+';') : '';
         return '<td style="padding:4px 8px;'+lb+'text-align:'+al+';vertical-align:middle">'+_proofCell_(col.key, ctx, statuses)+'</td>';
       }).join('');
-      var _selBg = (window._proofSelId_===p.id) ? '#e8eefb' : '#fff';
+      var _selBg = (window._proofSelId_===p.id) ? '#e8eefb' : (stalled ? '#fff5f5' : '#fff');
       return '<tr data-pid="'+p.id+'" style="background:'+_selBg+';border-bottom:1px solid #ece8df;cursor:pointer" onclick="_proofRowClick_(\''+p.id+'\',this)">'+tds+'</tr>';
     }).join('');
     bodyHtml = '<div style="overflow-x:auto;background:#f6f4ee;border:1px solid #e2ded4;border-radius:8px;padding:6px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:'+(actCols.length*108)+'px">'
@@ -20829,7 +20847,7 @@ function renderProofingList(){
         + '</div>';
     }
   } catch(e){}
-  var catchupHtml = ((typeof _proofCatchupBanner_==='function') ? _proofCatchupBanner_() : '') + ((typeof _proofDraftBanner_==='function') ? _proofDraftBanner_() : '');
+  var catchupHtml = ((typeof _proofReplyBanner_==='function') ? _proofReplyBanner_() : '') + ((typeof _proofCatchupBanner_==='function') ? _proofCatchupBanner_() : '') + ((typeof _proofDraftBanner_==='function') ? _proofDraftBanner_() : '');
   container.innerHTML = toggleHtml + catchupHtml + returnsHtml + metricsHtml + bodyHtml;
   if(typeof _updateAttentionBadge_ === 'function') try { _updateAttentionBadge_(); } catch(e){}
 }
@@ -20872,7 +20890,8 @@ function _proofDismissReturn_(inqId){
   if(typeof renderProofingList==='function') renderProofingList();
 }
 // 表示モード切替 (リスト/かんばん) ＋ 色を濃くするヘルパ
-function _proofSetViewMode_(v){ window._proofView_ = v; try{ localStorage.setItem('tokiwa_proof_view', v); }catch(e){} renderProofingList(); }
+function _proofSetViewMode_(v){ window._proofView_ = 'list'; renderProofingList(); }   // FMHUB-14: かんばん廃止
+function _proofSetTab_(k){ window._proofTab_ = k; renderProofingList(); }
 // 淡い状態色 → 同じ色相の「鮮やかな濃色」に変換 (左帯・ピル文字用)。単純暗転だと濁るのでHSLで彩度UP
 function _proofDarken_(hex){
   hex = String(hex||'#888888').replace('#','');
@@ -20885,9 +20904,51 @@ function _proofDarken_(hex){
   h*=60; if(h<0) h+=360;
   return 'hsl('+Math.round(h)+',62%,45%)';
 }
+// ═══ FMHUB-14: 校正の札（返信待ち・ファイル無し・戻りコメントのみ・下書き） ═══
+function _proofReplyWait_(p){
+  var vs=(p&&p.versions)||[]; if(!vs.length) return null;
+  var last=vs[vs.length-1]; if(last.kind!=='instruction') return null;
+  var txt=String(last.feedback||''); var m=/^【([^】]*)】\s*/.exec(txt); var who=m?m[1]:''; var body=m?txt.slice(m[0].length):txt;
+  if(p.replyDoneAt && new Date(p.replyDoneAt)>=new Date(last.uploadedAt||0)) return null;
+  if(!/[?？]|ください|下さい|ありません|ないです|無いです|どちら|どれ|どの|確認|教えて|お願い|いただけ|でしょうか|ますか|ませんか/.test(body)) return null;
+  return { who:who, text:body.replace(/\s+/g,' ').slice(0,80), days:_daysSince_(last.uploadedAt), at:last.uploadedAt };
+}
+function _proofHasFile_(p){ return ((p&&p.versions)||[]).some(function(v){ return v && (v.driveFileId||v.driveUrl||v.shareLink); }); }
+function _proofFlags_(p){
+  var out=[]; if(!p) return out;
+  var meta=_proofStatusMeta_(_normProofStatus_(p.status));
+  if(p.isDraft) out.push({ k:'draft', label:'📝 下書き', bg:'#ede9fe', fg:'#5b21b6', title:'内容が入っていません。開いて内容を入れるか、ステータスを進めてください' });
+  if(!_proofHasFile_(p) && !p.noFileOk && !meta.done) out.push({ k:'nofile', label:'📎 ファイル無し', bg:'#fee2e2', fg:'#991b1b', title:'支給データも校正データも入っていません。前回のデータを使うなら、詳細で「データ無しで依頼（前回データを参照）」に' });
+  var rw=_proofReplyWait_(p); if(rw) out.push({ k:'reply', label:'💬 返信待ち '+rw.days+'日', bg:'#fef3c7', fg:'#92400e', title:(rw.who?rw.who+': ':'')+rw.text });
+  var vs=p.versions||[], last=vs[vs.length-1];
+  if(last && last.kind==='instruction' && !last.driveFileId && !meta.done && /戻|校正中|修正/.test(meta.label||'')) out.push({ k:'cmtonly', label:'💬 戻りはコメントのみ', bg:'#e0f2fe', fg:'#075985', title:'戻りにファイルが付いていません。前のデータを直して次の校を出してください' });
+  return out;
+}
+function _proofFlagsHtml_(p){ return _proofFlags_(p).map(function(f){ return '<span title="'+_escDiff(f.title||'')+'" style="display:inline-block;font-size:10px;background:'+f.bg+';color:'+f.fg+';padding:1px 6px;border-radius:8px;margin:1px 2px 1px 0;font-weight:600;white-space:nowrap">'+f.label+'</span>'; }).join(''); }
+function _replyWaitProofings_(){ return (DB.proofings||[]).map(function(p){ return { p:p, rw:_proofReplyWait_(p) }; }).filter(function(x){ return x.rw; }).sort(function(a,b){ return b.rw.days-a.rw.days; }); }
+function _proofReplyDone_(id){ var p=(DB.proofings||[]).find(function(x){ return x.id===id; }); if(!p) return; p.replyDoneAt=new Date().toISOString(); if(typeof saveDB==='function') saveDB(); renderProofingList(); showProofingDetail(id); }
+function _proofNoFileOk_(id,on){ var p=(DB.proofings||[]).find(function(x){ return x.id===id; }); if(!p) return; p.noFileOk=!!on; if(typeof saveDB==='function') saveDB(); renderProofingList(); showProofingDetail(id); }
+// 前回データ: 前回伝票番号の校正（Drive）か、受注入力
+function _proofPrevLink_(p){
+  var prev=String(p.prevFmNo||'').trim(); if(!prev) return '';
+  var q=(DB.proofings||[]).find(function(x){ return x && String(x.fmNo||'')===prev; });
+  var url = q ? (q.driveFolderUrl || (function(){ var vs=(q.versions||[]).filter(function(v){ return v.driveUrl; }); return vs.length?vs[vs.length-1].driveUrl:''; })()) : '';
+  var h='<span style="font-size:11px;color:#475569">前回 <b>'+_escDiff(prev)+'</b>：</span> ';
+  if(url) h+='<a href="'+url+'" target="_blank" style="font-size:11px;color:#0369a1">📁 前回の校正データ（Drive）</a> ';
+  h+='<a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(prev)+'" target="_blank" style="font-size:11px;color:#0369a1">🗄 前回の受注入力</a>';
+  if(!url) h+=' <span style="font-size:10px;color:#94a3b8">（前回の校正カードは Hub に無いので Drive のリンクはありません）</span>';
+  return h;
+}
+function _proofReplyBanner_(){
+  var rs=_replyWaitProofings_(); if(!rs.length) return '';
+  var rows=rs.map(function(x){ var p=x.p; return '<span onclick="showProofingDetail(\''+p.id+'\')" title="'+_escDiff(x.rw.text)+'" style="cursor:pointer;background:#fff;border:1px solid #fcd34d;border-radius:6px;padding:2px 8px;font-size:11px;margin:2px;display:inline-block">'+_escDiff(p.fmNo||p.projectId||'')+' '+_escDiff(p.custName||'')+' '+_escDiff((p.prodName||'').slice(0,18))+' <b style="color:#b45309">'+x.rw.days+'日</b>'+(x.rw.who?' <span style="color:#92400e">← '+_escDiff(x.rw.who)+'</span>':'')+'</span>'; }).join('');
+  return '<div style="background:#fffbeb;border:2px solid #fbbf24;border-radius:9px;padding:9px 13px;margin:6px 0"><b style="font-size:13px;color:#92400e">💬 返信できていません '+rs.length+'件</b><span style="font-size:11px;color:#a16207;margin-left:8px">（質問・依頼のコメントに、まだ返事がありません。開いて返信するか「✅ 返信した」を）</span><div style="margin-top:6px">'+rows+'</div></div>';
+}
+
 // ── 校正リストの列定義・カスタマイズ ──
 var PROOF_COL_DEFS = [
   { key:'status',  en:'STATUS',  label:'状態',     always:true },
+  { key:'flags',   en:'FLAG',    label:'注意',     w:'150px' },
   { key:'seiban',  en:'NO',      label:'製番',     align:'center', w:'92px' },
   { key:'cust',    en:'CLIENT',  label:'得意先' },
   { key:'user',    en:'USER',    label:'ユーザー' },
@@ -20898,7 +20959,7 @@ var PROOF_COL_DEFS = [
 ];
 function _proofVisCols_(){
   try{ var s=JSON.parse(localStorage.getItem('tokiwa_proof_cols')||'null');
-    if(Array.isArray(s) && s.length){ if(s.indexOf('status')<0) s.unshift('status'); return s; } }catch(e){}
+    if(Array.isArray(s) && s.length){ if(s.indexOf('status')<0) s.unshift('status'); if(s.indexOf('flags')<0) s.splice(1,0,'flags'); return s; } }catch(e){}
   return PROOF_COL_DEFS.map(function(c){ return c.key; });
 }
 function _proofColsActive_(){
@@ -20909,8 +20970,9 @@ function _proofCell_(key, c, statuses){
     return '<select onclick="event.stopPropagation()" onchange="event.stopPropagation();updateProofingStatus(\''+c.p.id+'\',this.value)" style="font-size:11px;padding:2px 8px;border:1px solid '+c.bar+';border-radius:10px;background:'+c.meta.color+';color:'+c.bar+';font-weight:600;max-width:180px">'
       + statuses.map(function(s){ return '<option value="'+s.key+'"'+(s.key===c.k?' selected':'')+'>'+_escDiff(s.label)+'</option>'; }).join('') + '</select>';
   }
-  if(key==='seiban') return '<span style="font-family:monospace;font-size:11px;color:#6f6c64">'+_escDiff(String(c.info.seiban||'—'))+'</span>';
-  if(key==='cust')   return '<span style="font-size:12px">'+_escDiff(c.info.cust||'—')+'</span>';
+  if(key==='flags')  return _proofFlagsHtml_(c.p) || '<span style="color:#c4c0b5">—</span>';
+  if(key==='seiban') return '<span style="font-family:monospace;font-size:11px;color:#6f6c64">'+_escDiff(String(c.p.fmNo||c.info.seiban||'—'))+'</span>';
+  if(key==='cust')   return '<span style="font-size:12px">'+_escDiff(c.info.user||c.info.cust||'—')+'</span>'+(c.info.user&&c.info.cust?'<div style="font-size:10px;color:#94a3b8">'+_escDiff(c.info.cust)+'</div>':'');
   if(key==='user')   return '<span style="font-size:12px;color:#475569">'+_escDiff(c.info.user||'—')+'</span>';
   if(key==='prod')   return '<span style="font-weight:600;font-size:12.5px;word-break:break-word">'+_escDiff(c.info.prod||'—')+'</span>';
   if(key==='round')  return c.meta.done
@@ -21225,7 +21287,11 @@ function _dueSoonProjects_(){
 // 要注意パネルをモーダルで表示
 function showAttentionPanel(){
   var sp = _staleProofings_(), pj = _staleProjects_(), du = _dueSoonProjects_();
+  var rw = (typeof _replyWaitProofings_==='function') ? _replyWaitProofings_() : [];
   var th = _alertDays_();
+  var rwRows = rw.map(function(x){
+    return '<div onclick="document.getElementById(\'attention-modal\').remove();swPage(\'proofing\',document.querySelector(\'.tb-btn[data-page=proofing]\'));setTimeout(function(){showProofingDetail(\'' + x.p.id + '\')},200)" style="cursor:pointer;background:#fff;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:6px;padding:7px 10px;margin-bottom:5px;font-size:12px"><b>' + _escDiff(x.p.custName||'') + '</b> ' + _escDiff(x.p.prodName||'') + ' <span style="float:right;color:#b45309;font-weight:700">' + x.rw.days + '日</span><div style="font-size:10.5px;color:#92400e;margin-top:2px">' + (x.rw.who?_escDiff(x.rw.who)+'：':'') + _escDiff(x.rw.text) + '</div></div>';
+  }).join('');
   function card(title, color, rows){
     return '<div style="margin-bottom:12px"><div style="font-weight:800;font-size:13px;color:' + color + ';margin-bottom:5px">' + title + '</div>' + (rows || '<div style="font-size:11px;color:#94a3b8;padding:4px 8px">該当なし 👍</div>') + '</div>';
   }
@@ -21245,8 +21311,9 @@ function showAttentionPanel(){
   m.className = 'proof-modal'; m.id = 'attention-modal';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto';
   m.innerHTML = '<div style="background:#fff;border-radius:10px;max-width:640px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">'
-    + '<div style="padding:12px 18px;background:#b91c1c;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🚨 要注意・停滞 (' + (sp.length+pj.length+du.length) + '件)</b><button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    + '<div style="padding:12px 18px;background:#b91c1c;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🚨 要注意・停滞 (' + (sp.length+pj.length+du.length+rw.length) + '件)</b><button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
     + '<div style="overflow-y:auto;padding:14px 18px;flex:1">'
+    + card('💬 返信できていない校正 (' + rw.length + ')', '#b45309', rwRows)
     + card('📸 ' + th.proof + '日以上動いていない校正 (' + sp.length + ')', '#dc2626', proofRows)
     + card('📁 ' + th.project + '日以上進捗なしの案件 (' + pj.length + ')', '#ea580c', pjRows)
     + card('⏰ 納期 ' + th.due + '日以内・超過の案件 (' + du.length + ')', '#d97706', duRows)
@@ -21268,7 +21335,7 @@ function _saveAlertDays_(){
 }
 // ヘッダー等の🚨バッジ件数を更新
 function _updateAttentionBadge_(){
-  var n = _staleProofings_().length + _staleProjects_().length + _dueSoonProjects_().length;
+  var n = _staleProofings_().length + _staleProjects_().length + _dueSoonProjects_().length + ((typeof _replyWaitProofings_==='function')?_replyWaitProofings_().length:0);
   document.querySelectorAll('.attention-badge').forEach(function(el){
     el.textContent = n; el.style.display = n > 0 ? '' : 'none';
   });
@@ -21323,6 +21390,7 @@ function showProofingDetail(proofingId){
       </div>
       <div style="font-size:11px;color:#555;margin-top:4px">${v.fileName || 'ファイル名不明'}</div>
       <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center">
+        ${v.driveFileId ? `<a href="https://drive.google.com/uc?export=download&id=${v.driveFileId}" style="font-size:11px;color:#fff;background:#0369a1;padding:2px 8px;border-radius:4px;text-decoration:none" title="フォルダを開かずにダウンロード">⬇ 落とす</a>` : ''}
         ${v.driveUrl ? `<a href="${v.driveUrl}" target="_blank" style="font-size:11px;color:#0369a1">🔗 Drive</a>` : (v.shareLink ? `<a href="${v.shareLink}" target="_blank" style="font-size:11px;color:#0369a1">🔗 共有</a>` : '')}
         ${v.driveFileId ? `<button onclick="previewProofVersion('${proofingId}','${v.id}')" style="font-size:11px;padding:2px 8px;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;background:#fff">👁 プレビュー</button>` : ''}
         ${v.driveFileId ? `<button onclick="ocrProofVersion('${proofingId}','${v.id}')" style="font-size:11px;padding:2px 8px;border:1px solid #818cf8;border-radius:4px;cursor:pointer;background:#e0e7ff;color:#3730a3" title="PDF からテキストを抽出 (データ修正時のコピペ用)">📋 テキスト抽出</button>` : ''}
@@ -21362,11 +21430,20 @@ function showProofingDetail(proofingId){
     ? '<button class="btn btn-p" style="background:#0e7490;border-color:#0e7490" onclick="showSendProofToCustomerModal(\'' + p.id + '\')" title="問い合わせ管理経由でメール/LINE/LINE WORKS 送信">📧 お客様送信</button>'
     : '';
 
+  var _rw = (typeof _proofReplyWait_==='function') ? _proofReplyWait_(p) : null;
+  var _extraHead = '<div style="margin-bottom:.6rem;font-size:11.5px;display:flex;flex-direction:column;gap:4px">'
+    + (typeof _proofFlagsHtml_==='function' ? ('<div>'+_proofFlagsHtml_(p)+'</div>') : '')
+    + (_rw ? ('<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:5px 8px"><b style="color:#92400e">💬 返信待ち</b> '+(_rw.who?_escDiff(_rw.who)+'：':'')+_escDiff(_rw.text)+' <button class="btn" style="font-size:11px;padding:2px 8px;margin-left:6px" onclick="_proofReplyDone_(\''+p.id+'\')">✅ 返信した</button><span style="font-size:10px;color:#a16207;margin-left:6px">下のコメント欄で返しても消えます</span></div>') : '')
+    + (p.fmNo ? ('<div>🗄 伝票 <b>'+_escDiff(p.fmNo)+'</b> <a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">受注入力</a> ・ <a href="tools/sagyo.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">作業指示書</a></div>') : '')
+    + (typeof _proofPrevLink_==='function' && _proofPrevLink_(p) ? ('<div>'+_proofPrevLink_(p)+'</div>') : '')
+    + (!_proofHasFile_(p) ? ('<label style="display:flex;gap:6px;align-items:center;color:#991b1b"><input type="checkbox" '+(p.noFileOk?'checked':'')+' onchange="_proofNoFileOk_(\''+p.id+'\',this.checked)"> データ無しで依頼（文章だけの変更・前回データを参照）</label>') : '')
+    + '</div>';
   container.innerHTML = `
     <div style="margin-bottom:1rem">
-      <div style="font-weight:700;font-size:14px">${p.custName || '─'}</div>
+      <div style="font-weight:700;font-size:14px">${p.endUser || p.custName || '─'}${p.endUser && p.custName ? ' <span style="font-size:11px;color:#94a3b8;font-weight:400">（'+_escDiff(p.custName)+'）</span>' : ''}</div>
       <div style="font-size:12px;color:#555">${p.prodName || ''}</div>
     </div>
+    ${_extraHead}
     ${projectLinkHtml}
     <div style="margin-bottom:.6rem;font-size:11.5px">
       ${p.driveFolderUrl
@@ -21767,7 +21844,7 @@ function _buildProofFileName_(proofing, kind, round, subVersion, ext){
   // ファイル名で使えない文字を除去
   var safe = function(s){ return String(s || '').replace(/[\\\/:*?"<>|]/g, '_').replace(/\s+/g, '').slice(0, 40); };
   var roundLabel = _proofRoundLabel_(round, kind);
-  var vLabel = (kind === 'proof' || kind === 'final') ? '_v' + subVersion : '';
+  var vLabel = (kind === 'proof' || kind === 'final') ? '_' + subVersion : '';   // FMHUB-14: 初校_1・2校_1（内校で引っかかったら _2）
   var custPart = custName ? safe(custName) + '御中' : '';
   var parts = [safe(projNo), custPart, safe(itemName), roundLabel].filter(function(x){ return !!x; });
   var fileName = parts.join('_') + vLabel;
