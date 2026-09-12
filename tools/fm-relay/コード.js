@@ -553,6 +553,68 @@ function 画面_全項目(recordId) {
   return { ok: true, user: who.email, fields: getByDenpyo_複製用_({ recordId: recordId }) };
 }
 
+// ------------------------------------------------------------ 用紙注文書（FileMaker のテーブル。FileMaker と同じ入れ物に書く）
+var 用紙注文LAYOUT = '用紙注文書';
+
+/** 新しい順に一覧（注文先・日付・発注番号・分類・行数） */
+function 用紙注文_一覧(件数) {
+  var who = 画面_利用者_();
+  var r = find_(用紙注文LAYOUT, [{ '発注番号': 'y*' }], Number(件数 || 50), 1, [{ fieldName: '発注番号', sortOrder: 'descend' }]);
+  return { ok: true, user: who.email, 全体: r.total, 行: r.records.map(function (x) {
+    var f = x.fields, n = 0; for (var i = 1; i <= 9; i++) if (f['伝票番号' + i] || f['品名' + i]) n++;
+    return { recordId: x.recordId, modId: x.modId, 発注番号: f['発注番号'], 日付: f['日付'], 注文先: f['注文先'], 発注分類: f['発注分類'], 担当者: f['担当者'], 行数: n, 先頭: f['伝票番号1'] || f['品名1'] || '' };
+  }) };
+}
+function 用紙注文_読む(発注番号) {
+  var who = 画面_利用者_();
+  var r = find_(用紙注文LAYOUT, [{ '発注番号': '==' + 発注番号 }], 1, 1, null);
+  if (!r.records.length) throw new Error('見つかりません: ' + 発注番号);
+  var x = r.records[0];
+  return { ok: true, user: who.email, recordId: x.recordId, modId: x.modId, fields: x.fields };
+}
+/** 作る。発注番号は FileMaker の自動採番に任せる（付かなければ y の続きを付ける） */
+function 用紙注文_作る(fields) {
+  var who = 画面_利用者_();
+  fields = fields || {};
+  var allow = {}; fieldInfo_(用紙注文LAYOUT).writable.forEach(function (n) { allow[n] = true; });
+  var send = {}; Object.keys(fields).forEach(function (k) { if (allow[k] && fields[k] !== undefined && fields[k] !== null) send[k] = String(fields[k]); });
+  if (!send['日付']) send['日付'] = 日付_(new Date());
+  if (!send['書名']) send['書名'] = '用紙注文書';
+  var r = fmCall_('/layouts/' + encodeURIComponent(用紙注文LAYOUT) + '/records', 'post', { fieldData: send });
+  if (r.code !== '0') throw new Error('作れませんでした (' + r.code + ') ' + r.message);
+  var id = r.response.recordId;
+  var got = fmCall_('/layouts/' + encodeURIComponent(用紙注文LAYOUT) + '/records/' + id);
+  var d = got.response.data[0];
+  if (!d.fieldData['発注番号']) {
+    // 自動採番でなければ、いちばん大きい y 番号の続き
+    var last = find_(用紙注文LAYOUT, [{ '発注番号': 'y*' }], 1, 1, [{ fieldName: '発注番号', sortOrder: 'descend' }]);
+    var mx = 0; if (last.records.length) { var mm = /^y(\d+)$/.exec(String(last.records[0].fields['発注番号'] || '')); if (mm) mx = Number(mm[1]); }
+    var no = 'y' + String(mx + 1).padStart(6, '0');
+    var u = fmCall_('/layouts/' + encodeURIComponent(用紙注文LAYOUT) + '/records/' + id, 'patch', { fieldData: { '発注番号': no } });
+    if (u.code !== '0') throw new Error('番号を付けられませんでした (' + u.code + ') ' + u.message);
+    got = fmCall_('/layouts/' + encodeURIComponent(用紙注文LAYOUT) + '/records/' + id); d = got.response.data[0];
+  }
+  log_(who, 用紙注文LAYOUT, id, { '用紙注文書_作成': d.fieldData['発注番号'] }, {});
+  return { ok: true, user: who.email, recordId: d.recordId, modId: d.modId, fields: d.fieldData };
+}
+function 用紙注文_保存(recordId, modId, fields) {
+  var who = 画面_利用者_();
+  var r = update_(用紙注文LAYOUT, recordId, modId, fields, who);
+  if (r.conflict) throw new Error('読み込んだあとに誰かが直しています。読み直してください');
+  var got = fmCall_('/layouts/' + encodeURIComponent(用紙注文LAYOUT) + '/records/' + recordId); var d = got.response.data[0];
+  return { ok: true, user: who.email, recordId: d.recordId, modId: d.modId, fields: d.fieldData };
+}
+function 用紙注文_削除(recordId) {
+  var who = 画面_利用者_();
+  var got = fmCall_('/layouts/' + encodeURIComponent(用紙注文LAYOUT) + '/records/' + recordId);
+  if (got.code !== '0') throw new Error('読めません (' + got.code + ') ' + got.message);
+  var f = got.response.data[0].fieldData;
+  var d = 削除_(用紙注文LAYOUT, recordId);
+  if (d.code !== '0') throw new Error('削除に失敗 (' + d.code + ') ' + d.message);
+  log_(who, 用紙注文LAYOUT, recordId, { '用紙注文書_削除': String(f['発注番号'] || '') }, { 注文先: f['注文先'], 伝票番号1: f['伝票番号1'], 品名1: f['品名1'] });
+  return { ok: true, 発注番号: f['発注番号'] };
+}
+
 /** 種レコードの入力項目を、複製用レイアウトから全部読む */
 function getByDenpyo_複製用_(種) {
   var r = fmCall_('/layouts/' + encodeURIComponent(COPY_LAYOUT) + '/records/' + 種.recordId);
@@ -600,6 +662,11 @@ function handle_(action, req, who) {
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
     case '画面_全項目':       return 画面_全項目(req.recordId);
+    case '用紙注文_一覧':     return 用紙注文_一覧(req['件数']);
+    case '用紙注文_読む':     return 用紙注文_読む(req['発注番号']);
+    case '用紙注文_作る':     return 用紙注文_作る(req.fields);
+    case '用紙注文_保存':     return 用紙注文_保存(req.recordId, req.modId, req.fields);
+    case '用紙注文_削除':     return 用紙注文_削除(req.recordId);
     case 'マスタ_配る':       return マスタ_配る(req.layout);
     case 'マスタ_写す':       return マスタ_写す(req.layout);
     case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }

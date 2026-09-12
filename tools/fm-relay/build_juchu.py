@@ -212,6 +212,11 @@ window.FM見た目 = function () {};
     '画面_外注保存':       ['recordId', 'modId', '行'],
     '画面_外注作成':       ['伝票番号', '行'],
     '画面_全項目':         ['recordId'],
+    '用紙注文_一覧':       ['件数'],
+    '用紙注文_読む':       ['発注番号'],
+    '用紙注文_作る':       ['fields'],
+    '用紙注文_保存':       ['recordId', 'modId', 'fields'],
+    '用紙注文_削除':       ['recordId'],
     'マスタ_配る':         ['layout'],
     'マスタ_写す':         ['layout'],
     '画面_一覧':           ['条件'],
@@ -912,7 +917,7 @@ LOGIC = r"""
       .then(function () { 現在 = null; 番号欄.value = ''; if (typeof newRec === 'function') { try { newRec(); } catch (e) {} } 状態(no + ' を削除しました（記録に残しています）'); 待機(false); })
       .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }); }, '読み込んでいる伝票を FileMaker から消します（番号を打って確認）');
-  帯に付ける('注文書', function () { location.href = '../index.html?page=purchases'; }, 'Hub の仕入発注（注文書）へ');
+  帯に付ける('注文書', function () { var no = 現在 ? String(現在.fields['伝票番号'] || '') : ''; window.open('yoshi-chumon.html' + (no ? '?juchu=' + encodeURIComponent(no) : ''), '_blank'); }, '用紙注文書（FileMaker と同じ。読み込んでいる伝票が 1 行目に入ります）');
   帯に付ける('配送カレンダー', function () { location.href = '../index.html?page=delivery'; }, 'Hub の配送/納品へ');
   帯に付ける('外注入力', function () { location.href = '../index.html?page=outsource'; }, 'Hub の外注発注へ');
   // 作業指示書（FileMaker と同じ紙を Hub で出す）: 帯の「レイアウト編集」の前に足す
