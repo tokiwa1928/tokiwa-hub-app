@@ -20460,6 +20460,62 @@ function _roughApply_(projectId){
 
 // ═══════════════════ 校正BOX ══════════════════
 
+// ═══ FMHUB-12: DTP有（受注入力）→ 校正BOX にカードを自動で作る ═══
+// 受注入力（FileMaker の Web 版）が localStorage の fm_dtp_pending に積む。ここで拾ってカードにする。
+function _dtpProcessPending_(){
+  var q=[]; try{ q=JSON.parse(localStorage.getItem('fm_dtp_pending')||'[]'); }catch(e){ return; }
+  if(!Array.isArray(q)||!q.length) return;
+  if(!Array.isArray(DB.proofings)) DB.proofings=[];
+  var made=0, upd=0, now=new Date().toISOString();
+  q.forEach(function(it){
+    if(!it||!it.伝票番号) return;
+    var no=String(it.伝票番号);
+    var cust=(typeof _custNameOf_==='function' && _custNameOf_(it.得意先コード)) || '';
+    if(!cust){ try{ var fm=JSON.parse(localStorage.getItem('fm_master_得意先マスタ')||'null'); var h=fm&&fm.行&&fm.行.find(function(r){ return String(r['得意先コード'])===String(it.得意先コード); }); if(h) cust=h['得意先名']||''; }catch(e){} }   // FileMaker の得意先マスタ（作業指示書などが手元に置く）
+    if(!cust) cust=it.得意先コード||'';
+    var proj=(DB.projects||[]).find(function(p){ return p && p.fm && String(p.fm['fm-denpyo']||'')===no; });
+    var p=DB.proofings.find(function(x){ return x && String(x.fmNo||'')===no; })
+        || (proj ? DB.proofings.find(function(x){ return x && x.projectId===proj.id; }) : null);
+    var due=(typeof _fmDate_==='function') ? (_fmDate_(it.納期)||'') : '';
+    if(p){
+      p.fmNo=no; if(it.note){ p.note=(p.note?p.note+'\n':'')+'【DTP】'+it.note; p.isDraft=false; }
+      if(!p.custName) p.custName=cust; if(!p.prodName) p.prodName=it.製品名||''; if(due&&!p.dueDate) p.dueDate=due;
+      p.lastMoveAt=now; upd++;
+    } else {
+      p={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), custName:cust, prodName:it.製品名||'', endUser:it.ユーザー名||'', projectId:(proj?proj.id:''), fmNo:no,
+          status:(_proofStatuses_()[0]||{}).key||'s_ask_wait', versions:[], createdAt:now, lastMoveAt:now, dueDate:due,
+          isDraft:!it.note, note:'FileMaker 受注 '+no+'（DTP有）より自動作成'+(it.user?'　by '+it.user:'')+(it.note?'\n【DTP】'+it.note:'') };
+      if(typeof _inheritMasterNo_==='function' && proj) try{ _inheritMasterNo_(p, proj); }catch(e){}
+      DB.proofings.push(p);
+      if(proj){ if(!proj.proofingIds) proj.proofingIds=[]; proj.proofingIds.push(p.id); }
+      made++;
+    }
+  });
+  try{ localStorage.removeItem('fm_dtp_pending'); }catch(e){}
+  if(made||upd){
+    if(typeof saveDB==='function') saveDB();
+    if(typeof _toastMsg==='function') _toastMsg('📸 DTP有の受注を校正BOXへ: 新しく '+made+' 件'+(upd?('・更新 '+upd+' 件'):''));
+    try{ if(typeof renderProofingList==='function') renderProofingList(); }catch(e){}
+  }
+}
+// 下書きのまま動いていない校正（内容が空で作られ、その後 1 日以上動きが無い）
+function _draftProofings_(){
+  var th=24*3600*1000, now=Date.now();
+  return (DB.proofings||[]).filter(function(p){ if(!p||!p.isDraft) return false; var m=_proofStatusMeta_(_normProofStatus_(p.status)); if(m.done) return false; var la=p.lastMoveAt||p.createdAt; return la && (now-new Date(la).getTime())>th; });
+}
+function _proofDraftBanner_(){
+  var ds=_draftProofings_(); if(!ds.length) return '';
+  var rows=ds.map(function(p){ var days=Math.floor((Date.now()-new Date(p.lastMoveAt||p.createdAt).getTime())/86400000);
+    return '<span onclick="showProofingDetail(\''+p.id+'\')" style="cursor:pointer;background:#fff;border:1px solid #c4b5fd;border-radius:6px;padding:2px 8px;font-size:11px;margin:2px;display:inline-block">'+_escDiff(p.fmNo||p.projectId||'')+' '+_escDiff(p.custName||'')+' '+_escDiff((p.prodName||'').slice(0,20))+' <b style="color:#6d28d9">'+days+'日</b></span>'; }).join('');
+  return '<div style="background:#f5f3ff;border:2px solid #a78bfa;border-radius:9px;padding:9px 13px;margin:6px 0"><b style="font-size:13px;color:#5b21b6">📝 下書きのまま動いていない校正 '+ds.length+'件</b><span style="font-size:11px;color:#6d28d9;margin-left:8px">（DTP有で作られたが内容が入っていません。開いて内容を入れるか、ステータスを進めてください）</span><div style="margin-top:6px">'+rows+'</div></div>';
+}
+try{
+  var _dtpBC=new BroadcastChannel('tokiwa-hub-tools');
+  _dtpBC.onmessage=function(ev){ if(ev.data&&ev.data.type==='dtp'){ setTimeout(_dtpProcessPending_, 200); } };
+}catch(e){}
+setTimeout(function(){ try{ _dtpProcessPending_(); }catch(e){ console.warn('[dtp]', e); } }, 4000);
+setInterval(function(){ try{ _dtpProcessPending_(); }catch(e){} }, 60*1000);
+
 // 校正ページ初期化
 function initProofingPage(){
   renderProofingList();
@@ -20615,7 +20671,7 @@ function renderProofingList(){
         <span style="font-size:9.5px;font-family:monospace;color:#64748b">${info.seiban||'製番—'}</span>
         <span style="font-size:9px;color:#aaa">版${versionCount}${roundDisp}</span>
       </div>
-      <div style="font-weight:700;font-size:12.5px;margin-top:1px">${_escDiff(info.cust||'─')}${shareBadge}</div>
+      <div style="font-weight:700;font-size:12.5px;margin-top:1px">${_escDiff(info.cust||'─')}${shareBadge}${p.isDraft?'<span style="font-size:9px;background:#ede9fe;color:#5b21b6;padding:1px 5px;border-radius:8px;margin-left:3px;font-weight:600">📝 下書き</span>':''}${p.fmNo?'<span style="font-size:9px;color:#64748b;margin-left:3px;font-family:monospace">'+_escDiff(p.fmNo)+'</span>':''}</div>
       ${info.user?`<div style="font-size:11px;color:#475569">👤 ${_escDiff(info.user)}</div>`:''}
       <div style="font-size:11.5px;color:#555">${_escDiff(info.prod||'')}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:10px;margin-top:4px;align-items:center">
@@ -20714,7 +20770,7 @@ function renderProofingList(){
         + '</div>';
     }
   } catch(e){}
-  var catchupHtml = (typeof _proofCatchupBanner_==='function') ? _proofCatchupBanner_() : '';
+  var catchupHtml = ((typeof _proofCatchupBanner_==='function') ? _proofCatchupBanner_() : '') + ((typeof _proofDraftBanner_==='function') ? _proofDraftBanner_() : '');
   container.innerHTML = toggleHtml + catchupHtml + returnsHtml + metricsHtml + bodyHtml;
   if(typeof _updateAttentionBadge_ === 'function') try { _updateAttentionBadge_(); } catch(e){}
 }
@@ -21442,6 +21498,7 @@ function _doCreateProofingManual_(){
 
 // 校正ステータスを更新
 async function updateProofingStatus(proofingId, status){
+  try{ var _pd=(DB.proofings||[]).find(function(x){ return x && x.id===proofingId; }); if(_pd && _pd.isDraft){ _pd.isDraft=false; } }catch(e){}   // FMHUB-12: 動かしたら下書きではない
   const p = (DB.proofings || []).find(x => x.id === proofingId);
   if(p){
     var _prev = p.status;

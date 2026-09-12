@@ -1815,6 +1815,12 @@ function setPane(p){
   <button id="hs-go">配送</button>
   <a href="haiso-calendar.html" target="_blank" style="margin-left:6px">📅 配送カレンダーを開く</a>
   <span id="hs-msg" style="color:#1d4ed8"></span>
+  <span style="display:inline-block;width:100%;height:4px"></span>
+  <b>DTP</b>
+  <label>DTP有無 <select id="dtp-yn"><option value="">無</option><option value="有">有</option></select></label>
+  <label>校正の内容 <input id="dtp-note" style="width:320px" placeholder="何を校正に出すか（空なら校正BOXに下書きで入ります）"></label>
+  <button id="dtp-go" style="background:#7c3aed">校正BOXへ</button>
+  <span id="dtp-msg" style="color:#6d28d9"></span>
 </div>
 <div id="fmgaichu">
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px">
@@ -1979,7 +1985,34 @@ window.FM見た目 = function () {};
     待機(false);
     外注を読む(r.record.fields['伝票番号']);
     $('fmhaiso').style.display = 'block'; $('hs-msg').textContent = ''; $('hs-tanto').value = ''; $('hs-date').value = ''; $('hs-memo').value = '';
+    DTPを出す(r.record.fields['伝票番号']);
   }
+  // -------------------------------------------------- DTP有無 → 校正BOX（本体）へ
+  function DTP記録() { try { return JSON.parse(localStorage.getItem('fm_dtp') || '{}'); } catch (e) { return {}; } }
+  function DTPを出す(no) {
+    var m = DTP記録()[no] || {};
+    $('dtp-yn').value = m.dtp || ''; $('dtp-note').value = m.note || '';
+    $('dtp-msg').textContent = m.at ? ('校正BOXへ ' + new Date(m.at).toLocaleString('ja-JP') + (m.draft ? '（下書き）' : '')) : '';
+  }
+  function DTPを送る() {
+    if (!現在) return;
+    var no = String(現在.fields['伝票番号'] || ''), yn = $('dtp-yn').value, note = $('dtp-note').value.trim();
+    var all = DTP記録();
+    if (!yn) { delete all[no]; try { localStorage.setItem('fm_dtp', JSON.stringify(all)); } catch (e) {} $('dtp-msg').textContent = 'DTP 無にしました'; return; }
+    var item = { 伝票番号: no, 得意先コード: String(現在.fields['得意先コード'] || ''), ユーザー名: String(現在.fields['ユーザー名'] || ''), 製品名: String(現在.fields['製品名'] || ''),
+                 納期: String(現在.fields['納期'] || ''), 起票日: String(現在.fields['起票日'] || ''), note: note, dtp: '有', draft: !note, at: new Date().toISOString(),
+                 user: (window.FM名乗っている ? FM名乗っている() : '') };
+    all[no] = item;
+    try { localStorage.setItem('fm_dtp', JSON.stringify(all)); } catch (e) {}
+    // 本体が拾う待ち行列（伝票番号で 1 件）
+    var q = []; try { q = JSON.parse(localStorage.getItem('fm_dtp_pending') || '[]'); } catch (e) {}
+    q = q.filter(function (x) { return x.伝票番号 !== no; }); q.push(item);
+    try { localStorage.setItem('fm_dtp_pending', JSON.stringify(q)); } catch (e) {}
+    try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'dtp', 伝票番号: no }); } catch (e) {}
+    $('dtp-msg').textContent = '校正BOXへ送りました' + (note ? '' : '（内容が空なので下書き）') + '。本体を開いていれば今、閉じていれば次に開いたときにカードになります';
+  }
+  $('dtp-go').onclick = DTPを送る;
+  $('dtp-yn').addEventListener('change', function () { if ($('dtp-yn').value === '有') $('dtp-note').focus(); });
   $('hs-go').onclick = function () {
     if (!現在) return;
     var 担当 = $('hs-tanto').value.trim(), d = $('hs-date').value, メモ = $('hs-memo').value.trim();
