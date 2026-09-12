@@ -639,6 +639,66 @@ function 用紙注文_削除(recordId) {
   return { ok: true, 発注番号: f['発注番号'] };
 }
 
+// ------------------------------------------------------------ 配送カレンダー（FileMaker の「予定」テーブル）
+var 予定LAYOUT = '予定';
+function 予定_行_(x) { var f = x.fields; return { recordId: x.recordId, modId: x.modId, kp: f['kp予定'], 日付: f['日付'], 時刻: f['時刻'], タイトル: f['予定タイトル'] || '', 内容: f['予定内容'] || '' }; }
+/** 期間の予定（日付 MM/DD/YYYY） */
+function 予定_一覧(開始, 終了) {
+  var who = 画面_利用者_();
+  var r = find_(予定LAYOUT, [{ '日付': 開始 + '...' + 終了 }], 2000, 1, [{ fieldName: '日付', sortOrder: 'ascend' }, { fieldName: 'kp予定', sortOrder: 'ascend' }]);
+  return { ok: true, user: who.email, 開始: 開始, 終了: 終了, 行: r.records.map(予定_行_) };
+}
+function 予定_作る(日付, タイトル, 時刻) {
+  var who = 画面_利用者_();
+  if (!日付 || !タイトル) throw new Error('日付とタイトルが要ります');
+  var fields = { '日付': 日付, '予定タイトル': String(タイトル) }; if (時刻) fields['時刻'] = String(時刻);
+  var r = fmCall_('/layouts/' + encodeURIComponent(予定LAYOUT) + '/records', 'post', { fieldData: fields });
+  if (r.code !== '0') throw new Error('予定を作れませんでした (' + r.code + ') ' + r.message);
+  var got = fmCall_('/layouts/' + encodeURIComponent(予定LAYOUT) + '/records/' + r.response.recordId);
+  log_(who, 予定LAYOUT, r.response.recordId, { '予定_作成': 日付 + ' ' + String(タイトル).split(/\r?\n/)[0] }, {});
+  return { ok: true, user: who.email, 行: 予定_行_({ recordId: got.response.data[0].recordId, modId: got.response.data[0].modId, fields: got.response.data[0].fieldData }) };
+}
+function 予定_保存(recordId, modId, fields) {
+  var who = 画面_利用者_();
+  var r = update_(予定LAYOUT, recordId, modId, fields, who);
+  if (r.conflict) throw new Error('別の人が先に直しています。読み直してください');
+  return { ok: true, user: who.email, 行: 予定_行_({ recordId: r.recordId, modId: r.modId, fields: r.fields }) };
+}
+function 予定_削除(recordId) {
+  var who = 画面_利用者_();
+  var got = fmCall_('/layouts/' + encodeURIComponent(予定LAYOUT) + '/records/' + recordId);
+  if (got.code !== '0') throw new Error('読めません (' + got.code + ') ' + got.message);
+  var f = got.response.data[0].fieldData;
+  var d = 削除_(予定LAYOUT, recordId);
+  if (d.code !== '0') throw new Error('削除に失敗 (' + d.code + ') ' + d.message);
+  log_(who, 予定LAYOUT, recordId, { '予定_削除': String(f['日付'] || '') + ' ' + String(f['予定タイトル'] || '').split(/\r?\n/)[0] }, { タイトル: f['予定タイトル'] });
+  return { ok: true };
+}
+/**
+ * 受注入力の「配送」ボタン。予定を作り（1 行目: 伝票番号 得意先 品名 担当、2 行目以降: メモ）、
+ * 受注の 配送予定日・配送担当者・配送有無 も入れる（これらは複製用レイアウトにしか無い）。
+ */
+function 画面_配送登録(recordId, 担当, 日付, メモ) {
+  var who = 画面_利用者_();
+  if (!recordId) throw new Error('recordId がありません');
+  if (!日付) throw new Error('配送予定日を入れてください');
+  var all = getByDenpyo_複製用_({ recordId: recordId });
+  var 得意先 = '';
+  try { var g = find_('得意先マスタ', [{ '得意先コード': '==' + String(all['得意先コード'] || '') }], 1, 1, null); if (g.records.length) 得意先 = g.records[0].fields['得意先名'] || ''; } catch (e) {}
+  var 題 = [String(all['伝票番号'] || ''), 得意先, String(all['製品名'] || ''), String(担当 || '')].filter(function (x) { return x; }).join(' ');
+  if (メモ) 題 += '\r' + String(メモ);
+  var made = 予定_作る(日付, 題, '');
+  var upd = { '配送予定日': 日付, '配送担当者': String(担当 || ''), '配送有無': '有' };
+  var allow = {}; fieldInfo_(COPY_LAYOUT).writable.forEach(function (n) { allow[n] = true; });
+  var send = {}; Object.keys(upd).forEach(function (k) { if (allow[k]) send[k] = upd[k]; });
+  var cur = fmCall_('/layouts/' + encodeURIComponent(COPY_LAYOUT) + '/records/' + recordId);
+  var modId = cur.code === '0' ? cur.response.data[0].modId : '';
+  var u = fmCall_('/layouts/' + encodeURIComponent(COPY_LAYOUT) + '/records/' + recordId, 'patch', { fieldData: send, modId: String(modId) });
+  if (u.code !== '0') log_(who, COPY_LAYOUT, recordId, { '配送登録_受注側_失敗': u.message }, {});
+  else log_(who, COPY_LAYOUT, recordId, send, {});
+  return { ok: true, user: who.email, 予定: made.行, 受注側: u.code === '0' };
+}
+
 /** 種レコードの入力項目を、複製用レイアウトから全部読む */
 function getByDenpyo_複製用_(種) {
   var r = fmCall_('/layouts/' + encodeURIComponent(COPY_LAYOUT) + '/records/' + 種.recordId);
@@ -687,6 +747,11 @@ function handle_(action, req, who) {
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
     case '画面_全項目':       return 画面_全項目(req.recordId);
+    case '予定_一覧':         return 予定_一覧(req['開始'], req['終了']);
+    case '予定_作る':         return 予定_作る(req['日付'], req['タイトル'], req['時刻']);
+    case '予定_保存':         return 予定_保存(req.recordId, req.modId, req.fields);
+    case '予定_削除':         return 予定_削除(req.recordId);
+    case '画面_配送登録':     return 画面_配送登録(req.recordId, req['担当'], req['日付'], req['メモ']);
     case '用紙注文_一覧':     return 用紙注文_一覧(req['件数']);
     case '用紙注文_読む':     return 用紙注文_読む(req['発注番号']);
     case '用紙注文_作る':     return 用紙注文_作る(req.fields);
