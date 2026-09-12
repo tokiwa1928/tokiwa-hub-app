@@ -1857,6 +1857,8 @@ setTimeout(_removeBootLoader_, 5000);
       <a class="btn" href="tools/fm-juchu-hub.html" target="_blank" rel="noopener" style="text-align:left">🗄 受注入力（FileMaker 直結）</a>
       <a class="btn" href="tools/gen-import.html" target="_blank" rel="noopener" style="text-align:left">📥 GEN 取り込み</a>
       <button class="btn" onclick="_importGenCustomers_()" style="text-align:left;background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c" title="保管庫の GEN_取引先（3,000件）を得意先マスタに合流。同じ名前ならコード・住所・TEL/FAX・請求方法を足し、無ければ新しく作ります">👥 GEN の取引先を得意先マスタへ</button>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;padding:6px 4px"><input type="checkbox" id="fm-autocards" onchange="DB.conf=DB.conf||{};DB.conf.fmAutoCards=this.checked;saveDB();" title="FileMaker で新しく起票された受注を、案件管理のカードとして自動で作ります（5 分ごと）"> 🗄 FileMaker の新しい受注を案件カードに自動で作る</label>
+      <button class="btn" onclick="localStorage.removeItem('fm_autosync_since');_fmAutoSync_()" style="text-align:left" title="FileMaker で直った伝票を今すぐ取り、案件カードに反映します">🔄 いま FileMaker と合わせる</button>
       <a class="btn" href="tools/nohin.html" target="_blank" rel="noopener" style="text-align:left">🧾 納品書（FileMaker から）</a>
       <a class="btn" href="tools/seikyu.html" target="_blank" rel="noopener" style="text-align:left">📄 請求書（納品書から）</a>
       <a class="btn" href="tools/kaizen.html" target="_blank" rel="noopener" style="text-align:left">💡 気づいたこと・機能一覧</a>
@@ -20459,6 +20461,63 @@ function _roughApply_(projectId){
 }
 
 // ═══════════════════ 校正BOX ══════════════════
+
+// ═══ FMHUB-13: 案件カードを FileMaker と自動で合わせる（開いたとき＋5 分ごと） ═══
+// 写し_差分（修正日がその日以降の伝票）を取り、伝票番号がつながるカードを更新。無ければ新しい受注のカードを作る。
+function _fmAutoSyncSince_(){ try{ var s=localStorage.getItem('fm_autosync_since'); if(s) return s; }catch(e){} return ''; }
+function _fmDateToKey_(fm){ var m=/^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(fm||'')); return m?(m[3]+m[1]+m[2]):''; }
+function _fmAutoSync_(){
+  if(!window.FM || !FM.名乗っている || !FM.名乗っている()) return Promise.resolve();
+  if(window._fmAutoSyncBusy_) return Promise.resolve();
+  window._fmAutoSyncBusy_=true;
+  try{ var cb=document.getElementById('fm-autocards'); if(cb) cb.checked=!(DB.conf&&DB.conf.fmAutoCards===false); }catch(e){}
+  var since=_fmAutoSyncSince_();
+  var d=since?new Date(since):new Date(Date.now()-86400000); d=new Date(d.getTime()-86400000);   // 念のため 1 日戻す
+  var fmd=('0'+(d.getMonth()+1)).slice(-2)+'/'+('0'+d.getDate()).slice(-2)+'/'+d.getFullYear();
+  var startKey=since?_fmDateToKey_(('0'+(new Date(since).getMonth()+1)).slice(-2)+'/'+('0'+new Date(since).getDate()).slice(-2)+'/'+new Date(since).getFullYear()):'99999999';
+  return FM.呼ぶ('写し_差分',[fmd]).then(function(r){
+    var 列=r.列||[], rows=(r.行||[]).map(function(a){ var o={}; 列.forEach(function(c,i){ o[c]=a[i]; }); return o; });
+    if(!rows.length) return;
+    var byNo={}; (DB.projects||[]).forEach(function(p){ if(p&&p.fm&&p.fm['fm-denpyo']) byNo[String(p.fm['fm-denpyo'])]=p; });
+    var upd=0, made=0, autoCreate=!(DB.conf&&DB.conf.fmAutoCards===false);
+    rows.forEach(function(f){
+      var no=String(f['伝票番号']||''); if(!no) return;
+      var cust=_custNameOf_(f['得意先コード']);
+      if(!cust){ try{ var fm=JSON.parse(localStorage.getItem('fm_master_得意先マスタ')||'null'); var h=fm&&fm.行&&fm.行.find(function(x){ return String(x['得意先コード'])===String(f['得意先コード']); }); if(h) cust=h['得意先名']||''; }catch(e){} }
+      var qty=Number(f['合計数1']||0), 単価=Number(f['売価単価']||0), 金額=Number(f['売価金額']||0); if(!qty && 金額 && 単価) qty=Math.round(金額/単価);
+      var due=_fmDate_(f['納期'])||'';
+      var p=byNo[no];
+      if(p){
+        var ch=false;
+        if(f['製品名'] && p.item!==f['製品名']){ p.item=f['製品名']; ch=true; }
+        if(cust && p.cust!==cust){ p.cust=cust; ch=true; }
+        if(f['ユーザー名'] && p.endUser!==f['ユーザー名']){ p.endUser=f['ユーザー名']; ch=true; }
+        if(qty && Number(p.qty||0)!==qty){ p.qty=qty; ch=true; }
+        if(f['単位'] && p.unit!==f['単位']){ p.unit=f['単位']; ch=true; }
+        if(due && p.dueDate!==due){ p.dueDate=due; ch=true; }
+        if(金額 && Number(p.exTax||0)!==金額){ p.exTax=金額; ch=true; }
+        if(ch){ p.fm=p.fm||{}; p.fm['fm-denpyo']=no; p.fmSyncedAt=new Date().toISOString(); p.updatedAt=p.fmSyncedAt; upd++; }
+      } else if(autoCreate){
+        // 新しい受注（同期を始めたあとに起票された、案件区分が受注か空）だけカードにする
+        var k=_fmDateToKey_(f['起票日']); var kind=String(f['案件区分']||'');
+        if(!k || k<startKey) return; if(kind && kind!=='受注') return;
+        var proj={ id:no, master_no:(typeof _nextMasterNo_==='function'?_nextMasterNo_():''), companyId:(currentAuth&&currentAuth.companyId)||'COMP002', companyCode:(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'',
+          orderDate:_fmDate_(f['起票日'])||new Date().toISOString().slice(0,10), dueDate:due, cust:cust||String(f['得意先コード']||''), endUser:String(f['ユーザー名']||''), item:String(f['製品名']||''), spec:'', qty:qty, unit:String(f['単位']||'部'),
+          exTax:金額, grand:金額, status:'データ作成中', assignee:'', memo:'FileMaker 受注 '+no+' から自動作成', steps:{版下:'─',校了:'─',印刷:'─',加工:'─',納品:'─'}, stepDates:{}, createdAt:new Date().toISOString(),
+          fm:{ 'fm-denpyo':no, 'fm-no':no, 'fm-custcd':String(f['得意先コード']||''), 'fm-tantocd':String(f['担当者コード']||'') }, fmSyncedAt:new Date().toISOString(), fromFm:true };
+        if(!DB.projects) DB.projects=[]; DB.projects.push(proj); byNo[no]=proj; made++;
+      }
+    });
+    try{ localStorage.setItem('fm_autosync_since', new Date().toISOString()); }catch(e){}
+    if(upd||made){
+      if(typeof saveDB==='function') saveDB();
+      if(typeof _toastMsg==='function') _toastMsg('🗄 FileMaker と合わせました: 更新 '+upd+' 件'+(made?('・新しい受注のカード '+made+' 件'):''));
+      try{ if(typeof renderProjects==='function') renderProjects(); }catch(e){}
+    }
+  }).catch(function(e){ console.warn('[fm autosync]', e); }).then(function(){ window._fmAutoSyncBusy_=false; });
+}
+setTimeout(function(){ _fmAutoSync_(); }, 6000);
+setInterval(function(){ _fmAutoSync_(); }, 5*60*1000);
 
 // ═══ FMHUB-12: DTP有（受注入力）→ 校正BOX にカードを自動で作る ═══
 // 受注入力（FileMaker の Web 版）が localStorage の fm_dtp_pending に積む。ここで拾ってカードにする。
