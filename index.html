@@ -5095,6 +5095,7 @@ function _showAutoEstimateToast_(count, ids){
 async function saveToCloud() {
   if (!currentAuth.loggedIn) return false;
   try { _genArchiveSettle_(); } catch(e){}   // FMHUB-8: 直した GEN の行は保存に乗せる
+  try { (DB.proofings||[]).forEach(function(p){ if(p && p._driveFiles) delete p._driveFiles; }); } catch(e){}   // FMHUB-15: Drive の中身の控えは保存しない
   // 🛡 SAVE-GUARD (2026-07-04): クラウドから一度も同期していない端末は保存禁止。
   // 空/古いDBでの全量上書き事故（品目・参考原価・アート案件が消えた）を再発させない。
   if (!window._cloudHydrated_) { console.warn('saveToCloud skipped: not hydrated from cloud yet'); return false; }
@@ -20548,6 +20549,7 @@ function _dtpProcessPending_(){
       DB.proofings.push(p);
       if(proj){ if(!proj.proofingIds) proj.proofingIds=[]; proj.proofingIds.push(p.id); }
       made++;
+      (function(pid){ setTimeout(function(){ try{ if(typeof ensureProofDriveFolder==='function') ensureProofDriveFolder(pid, true); }catch(e){} }, 500); })(p.id);
     }
   });
   try{ localStorage.removeItem('fm_dtp_pending'); }catch(e){}
@@ -20913,7 +20915,7 @@ function _proofReplyWait_(p){
   if(!/[?？]|ください|下さい|ありません|ないです|無いです|どちら|どれ|どの|確認|教えて|お願い|いただけ|でしょうか|ますか|ませんか/.test(body)) return null;
   return { who:who, text:body.replace(/\s+/g,' ').slice(0,80), days:_daysSince_(last.uploadedAt), at:last.uploadedAt };
 }
-function _proofHasFile_(p){ return ((p&&p.versions)||[]).some(function(v){ return v && (v.driveFileId||v.driveUrl||v.shareLink); }); }
+function _proofHasFile_(p){ return ((p&&p.versions)||[]).some(function(v){ return v && !v.mailPdf && (v.driveFileId||v.driveUrl||v.shareLink); }); }
 function _proofFlags_(p){
   var out=[]; if(!p) return out;
   var meta=_proofStatusMeta_(_normProofStatus_(p.status));
@@ -20921,7 +20923,7 @@ function _proofFlags_(p){
   if(!_proofHasFile_(p) && !p.noFileOk && !meta.done) out.push({ k:'nofile', label:'📎 ファイル無し', bg:'#fee2e2', fg:'#991b1b', title:'支給データも校正データも入っていません。前回のデータを使うなら、詳細で「データ無しで依頼（前回データを参照）」に' });
   var rw=_proofReplyWait_(p); if(rw) out.push({ k:'reply', label:'💬 返信待ち '+rw.days+'日', bg:'#fef3c7', fg:'#92400e', title:(rw.who?rw.who+': ':'')+rw.text });
   var vs=p.versions||[], last=vs[vs.length-1];
-  if(last && last.kind==='instruction' && !last.driveFileId && !meta.done && /戻|校正中|修正/.test(meta.label||'')) out.push({ k:'cmtonly', label:'💬 戻りはコメントのみ', bg:'#e0f2fe', fg:'#075985', title:'戻りにファイルが付いていません。前のデータを直して次の校を出してください' });
+  if(last && last.kind==='instruction' && (!last.driveFileId || last.mailPdf) && !meta.done && /戻|校正中|修正/.test(meta.label||'')) out.push({ k:'cmtonly', label:'💬 戻りはコメントのみ', bg:'#e0f2fe', fg:'#075985', title:'戻りにファイルが付いていません。前のデータを直して次の校を出してください' });
   return out;
 }
 function _proofFlagsHtml_(p){ return _proofFlags_(p).map(function(f){ return '<span title="'+_escDiff(f.title||'')+'" style="display:inline-block;font-size:10px;background:'+f.bg+';color:'+f.fg+';padding:1px 6px;border-radius:8px;margin:1px 2px 1px 0;font-weight:600;white-space:nowrap">'+f.label+'</span>'; }).join(''); }
@@ -21342,6 +21344,81 @@ function _updateAttentionBadge_(){
   return n;
 }
 
+// ═══ FMHUB-15: 段階フォルダ（Drive）に Hub から直接入れる ═══
+// 今の校（初校=1）に応じて 入稿／出／戻／校了 の 4 枠。放り込むと会社 GAS 経由で Drive に入り、校正の版としても記録する
+function _proofStageSet_(p){
+  var r = 1; try { r = _calcCurrentProofRound_(p, 'proof').round || 1; } catch(e){}
+  var st = PROOF_STAGE_FOLDERS[r] || PROOF_STAGE_FOLDERS[3];
+  return { round:r, list:[
+    { name:'01_入稿データ', label:'支給データ', kind:'manuscript', hint:'先方からもらったデータ・前回データ' },
+    { name:st.out, label:st.label+' 出', kind:'proof', hint:'制作者が作った校正データ（内校・校正用 PDF もここ）' },
+    { name:st.ret, label:st.label+' 戻り', kind:'instruction', hint:'先方から戻ってきた指示・赤字' },
+    { name:'09_校了', label:'校了', kind:'final', hint:'校了データ（印刷に回すもの）' }
+  ] };
+}
+function _proofStageFoldersHtml_(p){
+  if(!p.driveSubFolders) return '<div style="margin-bottom:.6rem;font-size:11px;color:#94a3b8">📁 Drive の保存先を用意すると、ここに「支給データ／出／戻り／校了」の枠が出ます（放り込むだけで Drive に入ります）</div>';
+  var ss = _proofStageSet_(p);
+  var cache = p._driveFiles || {};
+  var cols = ss.list.map(function(sf){
+    var sub = p.driveSubFolders[sf.name] || {};
+    var files = (cache[sf.name] && cache[sf.name].files) || [];
+    var fl = files.length ? files.slice(0,8).map(function(f){ return '<div style="display:flex;gap:4px;align-items:center;font-size:10.5px;line-height:1.3;margin-top:2px"><a href="'+f.downloadUrl+'" title="クリックで落ちてきます" style="color:#0369a1;text-decoration:none">⬇</a><a href="'+f.url+'" target="_blank" style="color:#334155;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">'+_escDiff(f.name)+'</a></div>'; }).join('') + (files.length>8?'<div style="font-size:10px;color:#94a3b8">…ほか '+(files.length-8)+'</div>':'')
+      : '<div style="font-size:10px;color:#b4b0a4;margin-top:2px">'+(cache[sf.name]?'（空）':'')+'</div>';
+    var bg = sf.kind==='instruction' ? '#fff7ed' : sf.kind==='final' ? '#f0fdf4' : sf.kind==='proof' ? '#eff6ff' : '#fefce8';
+    var bd = sf.kind==='instruction' ? '#fdba74' : sf.kind==='final' ? '#86efac' : sf.kind==='proof' ? '#93c5fd' : '#fde68a';
+    return '<div ondragover="event.preventDefault();this.style.outline=\'2px dashed #1e293b\'" ondragleave="this.style.outline=\'\'" ondrop="event.preventDefault();this.style.outline=\'\';_proofDropFiles_(\''+p.id+'\',\''+sf.name+'\',\''+sf.kind+'\',event.dataTransfer.files)" style="background:'+bg+';border:1px solid '+bd+';border-radius:8px;padding:7px 8px;min-width:0">'
+      + '<div style="display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700"><span style="flex:1">'+_escDiff(sf.label)+'</span>'+(sub.url?'<a href="'+sub.url+'" target="_blank" title="'+_escDiff(sf.name)+' を Drive で開く" style="color:#0369a1;text-decoration:none;font-size:11px">📁</a>':'')+'</div>'
+      + '<div style="font-size:9.5px;color:#64748b;margin:1px 0 4px">'+_escDiff(sf.hint)+'</div>'
+      + '<label style="display:block;text-align:center;font-size:11px;padding:5px 4px;border:1px dashed '+bd+';border-radius:6px;background:#fff;cursor:pointer" title="ファイルを選ぶか、ここに放り込む">＋ 放り込む<input type="file" multiple style="display:none" onchange="_proofDropFiles_(\''+p.id+'\',\''+sf.name+'\',\''+sf.kind+'\',this.files);this.value=\'\'"></label>'
+      + fl + '</div>';
+  }).join('');
+  return '<div style="margin-bottom:.75rem"><div style="display:flex;align-items:center;gap:8px;font-size:11.5px;margin-bottom:4px"><b>📁 段階フォルダ（Drive）</b><span style="color:#64748b">いまは '+_escDiff((PROOF_STAGE_FOLDERS[ss.round]||{}).label||'')+'</span>'
+    + '<button class="btn" style="font-size:10px;padding:2px 8px;margin-left:auto" onclick="_proofRefreshFiles_(\''+p.id+'\')">🔄 中身を読む</button></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px">'+cols+'</div></div>';
+}
+async function _proofRefreshFiles_(pid){
+  var p=(DB.proofings||[]).find(function(x){ return x.id===pid; }); if(!p||!p.driveSubFolders) return;
+  var ss=_proofStageSet_(p); p._driveFiles=p._driveFiles||{};
+  if(typeof _toastMsg==='function') _toastMsg('📁 Drive の中身を読んでいます…');
+  for(var i=0;i<ss.list.length;i++){ var sf=ss.list[i], sub=p.driveSubFolders[sf.name]; if(!sub||!sub.id) continue;
+    try{ var r=await callCloudAPI('listFolderFiles',{},{ folderId:sub.id }); if(r&&r.success) p._driveFiles[sf.name]={ files:r.files||[], at:new Date().toISOString() }; }catch(e){} }
+  showProofingDetail(pid);
+}
+function _proofReadBase64_(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ res(String(fr.result).split(',')[1]||''); }; fr.onerror=rej; fr.readAsDataURL(file); }); }
+async function _proofDropFiles_(pid, folderName, kind, files){
+  var p=(DB.proofings||[]).find(function(x){ return x.id===pid; }); if(!p) return;
+  if(!p.driveSubFolders){ await ensureProofDriveFolder(pid, true); if(!p.driveSubFolders){ alert('Drive の保存先を用意できませんでした（設定の Drive 保存先を確認）'); return; } }
+  var sub=p.driveSubFolders[folderName]; if(!sub||!sub.id){ alert('フォルダ '+folderName+' がありません。「📁 Drive保存先を用意」を押し直してください'); return; }
+  files=Array.prototype.slice.call(files||[]); if(!files.length) return;
+  var big=files.filter(function(f){ return f.size>25*1024*1024; }); if(big.length){ alert('25MB を超えるファイルは Drive に直接置いてください: '+big.map(function(f){return f.name;}).join(', ')); return; }
+  var who=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||'';
+  var okN=0;
+  for(var i=0;i<files.length;i++){
+    var f=files[i];
+    if(typeof _toastMsg==='function') _toastMsg('⬆ '+f.name+' を '+folderName+' へ…（'+(i+1)+'/'+files.length+'）');
+    try{
+      var rv=_calcCurrentProofRound_(p, kind==='instruction'?'instruction':kind);
+      var ext=(f.name.match(/\.([^.]+)$/)||['',''])[1];
+      var stLabel=(PROOF_STAGE_FOLDERS[rv.round]||{}).label||('第'+rv.round+'校');
+      var name = kind==='manuscript' ? f.name
+               : kind==='instruction' ? ((p.fmNo||p.projectId||'')+'_'+String(p.prodName||'').replace(/[\\\/:*?"<>|\s]/g,'').slice(0,30)+'_'+stLabel+'戻り_'+rv.subVersion+(ext?'.'+ext:''))
+               : _buildProofFileName_(p, kind, rv.round, rv.subVersion, ext||'pdf');
+      var b64=await _proofReadBase64_(f);
+      var r=await callCloudAPI('uploadProofFile',{},{ folderId:sub.id, name:name, mime:f.type||'application/octet-stream', base64:b64 });
+      if(!r||!r.success) throw new Error((r&&r.error)||'upload failed');
+      if(!p.versions) p.versions=[];
+      p.versions.push({ id:'VER'+Date.now()+i, fileName:r.name, kind:kind, round:rv.round, subVersion:rv.subVersion, driveFileId:r.fileId, driveUrl:r.url,
+        drivePreviewUrl:'https://drive.google.com/file/d/'+r.fileId+'/preview', uploadedAt:new Date().toISOString(), shareLink:r.url, feedback: kind==='instruction'?('【'+(who||'社内')+'】戻りデータ '+r.name):'', annotations:[], folder:folderName });
+      p.lastMoveAt=new Date().toISOString(); if(p.isDraft) p.isDraft=false;
+      p._driveFiles=p._driveFiles||{}; var c=p._driveFiles[folderName]||{files:[]}; c.files=[{ id:r.fileId, name:r.name, url:r.url, downloadUrl:r.downloadUrl, size:r.size, updated:new Date().toISOString() }].concat(c.files||[]); c.at=new Date().toISOString(); p._driveFiles[folderName]=c;
+      okN++;
+    }catch(e){ alert(f.name+' を入れられませんでした: '+(e&&e.message||e)); }
+  }
+  if(okN){ if(typeof saveDB==='function') saveDB(); if(typeof _toastMsg==='function') _toastMsg('✅ '+okN+' 件を '+folderName+' に入れました'); }
+  showProofingDetail(pid); if(typeof renderProofingList==='function') renderProofingList();
+}
+
 // 校正詳細を表示
 // PPPPPP-18: 校正コメントの表示整形 — メールスレッドは最新のみ表示し「全文表示」で展開
 function _proofCommentHtml_(text, vid){
@@ -21450,6 +21527,7 @@ function showProofingDetail(proofingId){
         ? '📁 保存先: <a href="' + p.driveFolderUrl + '" target="_blank" style="color:#0369a1;font-weight:700">' + (p.custName||'') + ' / ' + ((DB.projects||[]).find(function(pr){return pr.id===p.projectId;})?.id || p.projectId || '') + ' フォルダを開く</a>'
         : '<button class="btn" style="font-size:11px;padding:3px 10px;background:#eef2ff;border-color:#a5b4fc;color:#3730a3" onclick="ensureProofDriveFolder(\'' + p.id + '\').then(function(){showProofingDetail(\'' + p.id + '\')})">📁 Drive保存先を用意 (会社名/製番_会社名_製品名)</button>'}
     </div>
+    ${(typeof _proofStageFoldersHtml_==='function') ? _proofStageFoldersHtml_(p) : ''}
     ${sharedHtml}
     ${_proofStatusMismatchHtml_(p)}
     <div class="f" style="margin-bottom:.75rem">
@@ -21635,6 +21713,7 @@ function _doCreateProofingManual_(){
 // 校正ステータスを更新
 async function updateProofingStatus(proofingId, status){
   try{ var _pd=(DB.proofings||[]).find(function(x){ return x && x.id===proofingId; }); if(_pd && _pd.isDraft){ _pd.isDraft=false; } }catch(e){}   // FMHUB-12: 動かしたら下書きではない
+  try{ var _pm=_proofStatusMeta_(status); if(_pd && /戻|校正中/.test(String(_pm.label||''))){ var _ss=_proofStageSet_(_pd); var _ret=_ss.list.filter(function(x){ return x.kind==='instruction'; })[0]; if(_ret && typeof _toastMsg==='function') _toastMsg('📥 戻りのデータは 詳細の「'+_ret.label+'」の枠（'+_ret.name+'）へ放り込んでください。メールだけの戻りは 📧 連絡を選んで修正指示に取込 で'); } }catch(e){}   // FMHUB-15
   const p = (DB.proofings || []).find(x => x.id === proofingId);
   if(p){
     var _prev = p.status;
@@ -22219,9 +22298,9 @@ async function ensureProofDriveFolder(proofingId, silent){
   if(!p) return null;
   if(p.driveFolderId && p.driveSubFolders){ return p; } // 既に用意済み
   var proj = (DB.projects || []).find(function(pr){ return pr.id === p.projectId; }) || {};
-  var seiban = proj.id || p.projectId || (p.id || '');
+  var seiban = p.fmNo || proj.id || p.projectId || (p.id || '');   // FMHUB-15: FileMaker の伝票番号を先頭に（LINE WORKS のノート名と同じ）
   var company = p.custName || proj.cust || '';
-  var product = proj.item || p.prodName || '';
+  var product = p.prodName || proj.item || '';
   try {
     var r = await callCloudAPI('ensureProofFolder', {}, { seiban: seiban, company: company, product: product });
     if(r && r.success){
@@ -22457,11 +22536,26 @@ function _doInsertInquiryToProofing_(inqId, proofId){
     });
   } else {
     var r = rv();
-    p.versions.push({
+    var _mailVer = {
       id: 'VER'+Date.now(), fileName: '先方指示', kind: 'instruction', round: r.round, subVersion: r.subVersion,
       uploadedAt: when, feedback: commentText, annotations: [], fromInquiry: true
-    });
+    };
+    p.versions.push(_mailVer);
     added++;
+    // FMHUB-15: メールだけの戻りは、本文を PDF にして 戻 フォルダに置く（データが無いことは印で分かるようにしておく）
+    try {
+      if(p.driveSubFolders){
+        var _ss = _proofStageSet_(p), _ret = _ss.list.filter(function(x){ return x.kind==='instruction'; })[0], _sub = _ret && p.driveSubFolders[_ret.name];
+        if(_sub && _sub.id){
+          var _esc = function(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+          var _html = '<h3>'+_esc(inq.subject||'(件名なし)')+'</h3><p>'+_esc((inq.from_name||'')+(inq.from_company?' ('+inq.from_company+')':''))+' / '+_esc(inq.received_at?new Date(inq.received_at).toLocaleString('ja-JP'):'')+'</p><hr><pre>'+_esc(_full||'(本文なし)')+'</pre>';
+          var _nm = (p.fmNo||p.projectId||'')+'_'+_ret.label.replace(/\s/g,'')+'_メール_'+String(when).slice(0,10);
+          callCloudAPI('saveHtmlAsPdf', {}, { folderId:_sub.id, name:_nm, html:_html }).then(function(rr){
+            if(rr && rr.success){ _mailVer.driveFileId=rr.fileId; _mailVer.driveUrl=rr.url; _mailVer.shareLink=rr.url; _mailVer.mailPdf=true; _mailVer.fileName=rr.name; if(typeof saveDB==='function') saveDB(); try{ showProofingDetail(proofId); }catch(e){} }
+          }).catch(function(){});
+        }
+      }
+    } catch(e){}
   }
   p.status = 'feedback'; // 修正指示が入った状態
   // 連絡側に紐付け + タイムライン
