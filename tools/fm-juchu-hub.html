@@ -1735,6 +1735,16 @@ function setPane(p){
         border:1px solid #334155; background:#334155; color:#fff; font-weight:700; }
   #fmfind button.plain{ background:#fff; color:#334155; font-weight:400; }
   #fmfind .hit{ font-size:12px; color:#475569; margin:6px 0 3px; }
+  #fmguide{ display:none; background:#f0fdf4; border-bottom:2px solid #15803d; padding:6px 14px; font-size:12px; }
+  #fmguide table{ border-collapse:collapse; margin-top:4px; }
+  #fmguide th{ background:#bbf7d0; padding:3px 8px; font-weight:600; text-align:right; white-space:nowrap; }
+  #fmguide th:first-child{ text-align:left; }
+  #fmguide td{ padding:2px 8px; border-bottom:1px solid #dcfce7; text-align:right; white-space:nowrap; }
+  #fmguide td:first-child{ text-align:left; }
+  #fmguide tr.now td{ background:#fef9c3; font-weight:700; }
+  #fmguide tr.pick{ cursor:pointer; } #fmguide tr.pick:hover td{ background:#dcfce7; }
+  #fmguide .k{ color:#166534; } #fmguide .warn{ color:#b45309; }
+  #fmguide input.n{ width:56px; font-size:11px; text-align:right; padding:1px 3px; border:1px solid #cbd5e1; border-radius:3px; }
   #fmhaiso{ display:none; background:#eef6ff; border-bottom:2px solid #1d4ed8; padding:6px 14px; font-size:12px; }
   #fmhaiso label{ margin-left:10px; } #fmhaiso input{ font-size:12px; padding:2px 4px; border:1px solid #cbd5e1; border-radius:3px; } #fmhaiso button{ font-size:12px; padding:3px 12px; margin-left:8px; background:#1d4ed8; color:#fff; border:0; border-radius:3px; cursor:pointer; }
   #fmgaichu{ display:none; background:#fdf6e3; border-bottom:2px solid #b45309; padding:6px 14px; font-size:12px; }
@@ -1806,6 +1816,16 @@ function setPane(p){
     <span class="hit" id="ff-msg" style="margin-left:auto"></span>
   </div>
   <div class="rows" id="ff-rows" style="display:none"></div>
+</div>
+<div id="fmguide">
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <b>💴 価格ガイド</b>
+    <span id="pg-src" style="color:#166534"></span>
+    <label>種にする伝票 <input id="pg-prev" style="width:80px;font-size:11px" placeholder="前回伝票番号"></label>
+    <button id="pg-go" style="font-size:11px;padding:2px 8px">出す</button>
+    <span style="margin-left:auto;color:#166534">目安: 昨年 <input class="n" id="pg-u1" value="5">% ／ 一昨年 <input class="n" id="pg-u2" value="10">% ／ それ以前 <input class="n" id="pg-u3" value="20">%　印刷代の固定分 <input class="n" id="pg-pf" value="30">%</span>
+  </div>
+  <div id="pg-body" style="margin-top:4px;color:#475569">得意先と品名（か前回伝票番号）を入れると、昨年の伝票を種に数量ごとの金額が出ます</div>
 </div>
 <div id="fmhaiso">
   <b>配送予定（FileMaker の配送カレンダーに登録）</b>
@@ -2156,8 +2176,94 @@ function setPane(p){
     待機(false);
     外注を読む(r.record.fields['伝票番号']);
     $('fmhaiso').style.display = 'block'; $('hs-msg').textContent = ''; $('hs-tanto').value = ''; $('hs-date').value = ''; $('hs-memo').value = '';
+    $('fmguide').style.display = 'block'; $('pg-prev').value = ''; ガイド種 = null; setTimeout(ガイドを出す, 300);
     DTPを出す(r.record.fields['伝票番号']);
   }
+  // -------------------------------------------------- 💴 価格ガイド（FMHUB-16）
+  var ガイド種 = null;   // 種にした前回伝票 { fields, 外注合計 }
+  function 数値(v){ var x = Number(String(v == null ? '' : v).replace(/,/g, '')); return isNaN(x) ? 0 : x; }
+  function 円(v){ return Math.round(v).toLocaleString(); }
+  function ガイドを消す(){ ガイド種 = null; $('pg-body').innerHTML = '得意先と品名（か前回伝票番号）を入れると、昨年の伝票を種に数量ごとの金額が出ます'; $('pg-src').textContent = ''; }
+  // 種を決める: 前回伝票番号 → 無ければ手元の索引で 同じ得意先コード＋同じ製品名 の最新（自分以外）
+  function 種の番号(){
+    var no = $('pg-prev').value.trim() || ($('f-lotno') ? $('f-lotno').value.trim() : '');
+    if (no) return no;
+    if (!索引) return '';
+    var cust = $('f-custcd') ? $('f-custcd').value.trim() : '', item = $('f-item') ? $('f-item').value.trim() : '';
+    var me = 現在 ? String(現在.fields['伝票番号'] || '') : '';
+    if (!cust || !item) return '';
+    var P = 索引位置, best = -1, bestKey = 0;
+    for (var i = 0; i < 索引.行.length; i++) { var r = 索引.行[i];
+      if (String(r[P['得意先コード']]) !== cust) continue; if (String(r[P['製品名']]) !== item) continue; if (String(r[P['伝票番号']]) === me) continue;
+      if (String(r[P['案件区分']] || '') && String(r[P['案件区分']]) !== '受注') continue;
+      if (索引日[i] > bestKey) { bestKey = 索引日[i]; best = i; } }
+    return best >= 0 ? String(索引.行[best][P['伝票番号']]) : '';
+  }
+  function ガイドを出す(){
+    var no = 種の番号(); if (!no) { ガイドを消す(); return; }
+    if (ガイド種 && ガイド種.番号 === no) { ガイドを描く(); return; }
+    $('pg-body').textContent = no + ' を読んでいます…';
+    呼ぶ('画面_読み込み', [no]).then(function (r) {
+      if (!r.record) throw new Error(no + ' が見つかりません');
+      ガイド種 = { 番号: no, fields: r.record.fields };
+      ガイドを描く();
+    }).catch(function (e) { $('pg-body').textContent = String(e.message || e); });
+  }
+  function ガイドを描く(){
+    var f = ガイド種.fields;
+    var q0 = 数値(f['ロット契約単位']) || 数値(f['合計数1']) || 1;
+    var 版 = 数値(f['版代']), 用紙 = 数値(f['用紙代']), 印刷 = 数値(f['印刷代']), 加工 = 数値(f['加工賃']), 梱包 = 数値(f['梱包代']), 配送 = 数値(f['配送代']), 人件 = 数値(f['人件費']);
+    var 原価0 = 数値(f['合計金額']); var 外注0 = Math.max(0, 原価0 - (版 + 用紙 + 印刷 + 加工 + 梱包 + 配送 + 人件));
+    var 売価0 = 数値(f['売価金額']) || (数値(f['売価単価']) * q0); var 単価0 = q0 ? 売価0 / q0 : 0;
+    var 率0 = 売価0 ? 原価0 / 売価0 : 0;
+    // 経過年の目安
+    var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(f['起票日'] || '')); var y0 = m ? Number(m[3]) : 0; var yNow = new Date().getFullYear();
+    var 経過 = y0 ? (yNow - y0) : 1;
+    var u = 経過 <= 1 ? 数値($('pg-u1').value) : 経過 === 2 ? 数値($('pg-u2').value) : 数値($('pg-u3').value);
+    // 用紙差: 種の 用紙単価n と、いまのフォームの 用紙単価n（紙質で引いた最新）を比べる
+    var 用紙差 = 0, 用紙注 = '';
+    try { var a = 0, bb = 0; for (var i = 1; i <= 9; i++) { var pu = 数値(f['用紙単価' + i]); var cu = 数値(($('p' + i + '-up') || {}).value); if (pu && cu) { a += pu; bb += cu; } }
+      if (a && bb) { 用紙差 = (bb / a - 1) * 100; 用紙注 = '用紙単価 ' + a.toFixed(2) + ' → ' + bb.toFixed(2) + '（' + (用紙差 >= 0 ? '+' : '') + 用紙差.toFixed(1) + '%）'; } } catch (e) {}
+    var 上げ = Math.max(u, 用紙差);   // 「用紙差以上」を保証
+    var pf = Math.min(100, Math.max(0, 数値($('pg-pf').value))) / 100;
+    var qNow = 数値(($('f-lotunit') || {}).value) || q0;
+    var 階段 = [500, 1000, 2000, 3000, 5000, 10000, qNow, Math.round(qNow * 0.8), Math.round(qNow * 1.2), Math.round(qNow * 0.5), Math.round(qNow * 1.5)]
+      .filter(function (x, i, arr) { return x > 0 && arr.indexOf(x) === i; }).sort(function (a, b) { return a - b; });
+    var rows = 階段.map(function (n) {
+      var k = n / q0;
+      var 用紙n = 用紙 * k * (1 + 用紙差 / 100), 印刷n = 印刷 * (pf + (1 - pf) * k), 加工n = 加工 * k, 外注n = 外注0 * k, 梱包n = (梱包 + 配送) * k, 人件n = 人件 * k;
+      var 原価n = 版 + 用紙n + 印刷n + 加工n + 外注n + 梱包n + 人件n;
+      var 売価n = 率0 ? (原価n / 率0) : 原価n * 1.5;   // 昨年の原価率を保つ
+      売価n = 売価n * (1 + 上げ / 100);
+      var 単価n = Math.round((売価n / n) * 10) / 10; 売価n = 単価n * n;
+      var 粗利 = 売価n ? (1 - 原価n / 売価n) * 100 : 0;
+      return { n: n, 原価: 原価n, 売価: 売価n, 単価: 単価n, 粗利: 粗利, 前年比: 単価0 ? (単価n / 単価0 - 1) * 100 : 0 };
+    });
+    var h = '<div><span class="k">種:</span> <b>' + esc(ガイド種.番号) + '</b> ' + esc(f['製品名'] || '') + '　起票 ' + esc(日付(f['起票日'])) + '（' + 経過 + ' 年前 → 目安 +' + u + '%）'
+      + '　数量 ' + 円(q0) + '　単価 ' + (単価0 ? 単価0.toFixed(1) : '—') + '　売価 ¥' + 円(売価0) + '　原価 ¥' + 円(原価0) + '　原価率 ' + (率0 * 100).toFixed(1) + '%'
+      + (用紙注 ? '　<span class="warn">' + esc(用紙注) + '</span>' : '　<span style="color:#94a3b8">（用紙差は、いまの用紙単価が入っていれば出ます）</span>')
+      + '　<span class="k">今回の上げ幅 <b>+' + 上げ.toFixed(1) + '%</b></span></div>'
+      + '<div style="color:#64748b;font-size:11px">内訳（種）: 版 ' + 円(版) + '／用紙 ' + 円(用紙) + '／印刷 ' + 円(印刷) + '／加工 ' + 円(加工) + '／外注 ' + 円(外注0) + '／梱包・配送 ' + 円(梱包 + 配送) + '　※版代は固定、印刷代は ' + Math.round(pf * 100) + '% 固定、ほかは数量比例。段をクリックで数量と単価をフォームへ</div>'
+      + '<table><thead><tr><th>数量</th><th>原価</th><th>売価</th><th>単価</th><th>粗利率</th><th>前回単価比</th></tr></thead><tbody>'
+      + rows.map(function (r) { return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単価 + '"><td>' + 円(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円(r.原価) + '</td><td>¥' + 円(r.売価) + '</td><td>' + r.単価.toFixed(1) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td></tr>'; }).join('')
+      + '</tbody></table>';
+    $('pg-body').innerHTML = h; $('pg-src').textContent = '';
+    Array.prototype.forEach.call($('pg-body').querySelectorAll('tr.pick'), function (tr) {
+      tr.onclick = function () {
+        var n = Number(tr.getAttribute('data-n')), u2 = Number(tr.getAttribute('data-u'));
+        if ($('f-lotunit')) { $('f-lotunit').value = n; $('f-lotunit').dispatchEvent(new Event('input', { bubbles: true })); }
+        if ($('f-price')) { $('f-price').value = u2; $('f-price').dispatchEvent(new Event('input', { bubbles: true })); }
+        if ($('f-amt')) { $('f-amt').value = Math.round(u2 * n); }
+        try { if (typeof calc === 'function') calc(); } catch (e) {}
+        ガイドを描く();
+      };
+    });
+  }
+  ['f-custcd', 'f-item', 'f-lotno', 'f-lotunit'].forEach(function (id) { var el = $(id); if (!el) return; el.addEventListener('change', function () { if (id === 'f-lotunit' && ガイド種) ガイドを描く(); else ガイドを出す(); }); });
+  ['pg-u1', 'pg-u2', 'pg-u3', 'pg-pf'].forEach(function (id) { $(id).addEventListener('change', function () { if (ガイド種) ガイドを描く(); }); });
+  $('pg-go').onclick = function () { ガイド種 = null; ガイドを出す(); };
+  $('pg-prev').addEventListener('keydown', function (e) { if (e.key === 'Enter') { ガイド種 = null; ガイドを出す(); } });
+
   // -------------------------------------------------- DTP有無 → 校正BOX（本体）へ
   function DTP記録() { try { return JSON.parse(localStorage.getItem('fm_dtp') || '{}'); } catch (e) { return {}; } }
   function DTPを出す(no) {

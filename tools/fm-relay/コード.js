@@ -760,6 +760,15 @@ function handle_(action, req, who) {
     case 'マスタ_配る':       return マスタ_配る(req.layout);
     case 'マスタ_写す':       return マスタ_写す(req.layout);
     case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }
+    case '共有ドライブを作る': {   // Google の共有ドライブを名前で作る（あれば返す）。実行者 info@tokiwap-group.com の権限で
+      var nm = String(req['名前'] || '').trim(); if (!nm) throw new Error('名前が要ります');
+      var have = Drive.Drives.list({ pageSize: 100 }).drives || [];
+      var hit = have.filter(function (d) { return d.name === nm; })[0];
+      if (hit) return { ok: true, 既存: true, id: hit.id, name: hit.name, url: 'https://drive.google.com/drive/folders/' + hit.id };
+      var made = Drive.Drives.create({ name: nm }, Utilities.getUuid());
+      return { ok: true, 既存: false, id: made.id, name: made.name, url: 'https://drive.google.com/drive/folders/' + made.id };
+    }
+    case '共有ドライブ一覧': { return (Drive.Drives.list({ pageSize: 100 }).drives || []).map(function (d) { return { id: d.id, name: d.name }; }); }
     case '画面_一覧':         return 画面_一覧(req['条件']);
     // Hub 用の保管庫（FileMaker の写し）から読む。FileMaker を止めたあとの読み口
     case '写し_索引を配る':   return 写し_索引を配る();
