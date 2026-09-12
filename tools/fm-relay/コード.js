@@ -276,11 +276,35 @@ function 画面_recordIdで読む(recordId) {
 }
 
 /** 画面で変わった分だけを書く */
-function 画面_保存(recordId, modId, fields) {
+/**
+ * 保存。別の人が先に直していても（306）、同じ項目を触っていなければ最新の上に重ねて保存する。
+ *   元   … 画面を読み込んだときの値（fields と同じ鍵）。同じ項目を相手も直したかの判定に使う
+ *   強制 … true なら相手の値を見ずに自分の値で上書き
+ */
+function 画面_保存(recordId, modId, fields, 元, 強制) {
   var who = 画面_利用者_();
-  var r = update_(LAYOUTS.juchu, recordId, modId, fields, who);
-  r.ok = true;
-  return r;
+  var lay = LAYOUTS.juchu;
+  var r = update_(lay, recordId, modId, fields, who);
+  if (!r.conflict) { r.ok = true; return r; }
+  // 相手が先に保存している。最新を読む
+  var g = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records/' + recordId);
+  if (g.code !== '0') throw new Error('読み直せませんでした (' + g.code + ') ' + g.message);
+  var d = (g.response.data || [])[0]; var 今 = d.fieldData || {};
+  var 衝突 = {};
+  if (!強制 && 元) {
+    Object.keys(fields).forEach(function (k) {
+      if (!(k in 元)) return;
+      if (String(今[k] == null ? '' : 今[k]) !== String(元[k] == null ? '' : 元[k])) 衝突[k] = { 相手: 今[k], あなた: fields[k] };
+    });
+  }
+  if (Object.keys(衝突).length) {
+    return { ok: true, conflict: true, 衝突: 衝突, recordId: d.recordId, modId: d.modId, fields: 今,
+             message: '同じ項目を別の人も直しています: ' + Object.keys(衝突).join('、') };
+  }
+  var r2 = update_(lay, recordId, d.modId, fields, who);
+  if (r2.conflict) return r2;
+  r2.ok = true; r2.合流 = true;
+  return r2;
 }
 
 /** 次の段階に引き継がないもの（番号・段階・進み具合・実績） */
@@ -653,7 +677,8 @@ function handle_(action, req, who) {
     // 受注入力の画面から呼ぶもの。google.script.run と同じ中身を fetch でも使えるようにした
     case '画面_読み込み':     return 画面_読み込み(req['番号']);
     case '画面_recordIdで読む': return 画面_recordIdで読む(req.recordId);
-    case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields);
+    case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields, req['元'], req['強制']);
+    case '写し_差分':         return 写し_差分(req['日付']);
     case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);

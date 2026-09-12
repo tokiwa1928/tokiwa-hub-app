@@ -203,7 +203,8 @@ window.FM見た目 = function () {};
   var 引数名 = {
     '画面_読み込み':       ['番号'],
     '画面_recordIdで読む': ['recordId'],
-    '画面_保存':           ['recordId', 'modId', 'fields'],
+    '画面_保存':           ['recordId', 'modId', 'fields', '元', '強制'],
+    '写し_差分':           ['日付'],
     '画面_新規案件':       ['種別', '初期値'],
     '画面_新規段階':       ['案件ID', '種別'],
     '画面_Repeat登録':     ['recordId'],
@@ -667,11 +668,30 @@ LOGIC = r"""
       文 += '\n\n⚠ 次の項目は【空】になります: ' + 消す.join('、');
     }
     if (!confirm(文)) return;
+    // 読み込んだときの値（同じ項目を相手も直したかを中継が見る）
+    var 元 = {};
+    Object.keys(TO_FM).forEach(function (id) { var col = TO_FM[id]; if (col in 差) { var el = document.getElementById(id); 元[col] = 日付欄か(el) ? FMの日付へ(読込時[id] || '') : (読込時[id] || ''); } });
+    保存を送る(差, 元, false);
+  }
+  function 保存を送る(差, 元, 強制) {
+    var n = Object.keys(差).length;
     待機(true); 失敗(''); 状態('保存中… ' + n + ' 項目');
-    呼ぶ('画面_保存', [現在.recordId, 現在.modId, 差]).then(function (r) {
-      if (r.conflict) { 失敗(r.message); 状態('保存できませんでした', 'err'); 待機(false); return; }
+    呼ぶ('画面_保存', [現在.recordId, 現在.modId, 差, 元, 強制]).then(function (r) {
+      if (r.conflict) {
+        // 同じ項目を相手も直している。相手の値で読み直すか、自分の値で上書きするか
+        var 行 = Object.keys(r.衝突 || {}).map(function (k) { return k + '　相手: ' + (r.衝突[k].相手 == null ? '' : r.衝突[k].相手) + '　／　あなた: ' + (r.衝突[k].あなた == null ? '' : r.衝突[k].あなた); });
+        待機(false); 状態('同じ項目を別の人も直しています', 'err');
+        if (confirm('別の人が同じ項目を先に直しています。\n\n' + 行.join('\n') + '\n\n[OK] 自分の値で上書きする　／　[キャンセル] 相手の値で読み直す（自分の編集は捨てます）')) {
+          現在.modId = r.modId;   // 最新の上に重ねる
+          保存を送る(差, 元, true);
+        } else {
+          流し込む({ recordId: r.recordId, modId: r.modId, fields: r.fields });
+          状態('相手の値で読み直しました', 'ok');
+        }
+        return;
+      }
       流し込む({ recordId: r.recordId, modId: r.modId, fields: r.fields });
-      状態(r.saved.length + ' 項目を保存しました（金額は再計算済み）', 'ok');
+      状態(r.saved.length + ' 項目を保存しました（金額は再計算済み）' + (r.合流 ? '　※別の人の変更の上に重ねました' : ''), 'ok');
       待機(false);
     }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }
@@ -777,7 +797,7 @@ LOGIC = r"""
       }).then(function (o) {
         if (o && o.行) { 索引を据える(o); 索引の状態(); }
         var 古い = !o || !o.取った || (Date.now() - new Date(o.取った).getTime()) > 有効;
-        if (!古い) return;
+        if (!古い) return 索引の差分を重ねる();
         if (!(window.FM名乗っている ? FM名乗っている() : true)) return;   // サインイン前なら次の機会に
         $('ff-msg').textContent = (索引 ? '索引を取り直しています…' : '索引を取っています（初回だけ 10〜20 秒）…');
         var t0 = Date.now();
@@ -787,6 +807,7 @@ LOGIC = r"""
           console.log('[索引] ' + j.件数 + ' 件 ' + Math.round((Date.now() - t0) / 1000) + '秒');
           try { db.transaction('idx', 'readwrite').objectStore('idx').put(j, 'juchu'); } catch (e) {}
           if ($('ff-kw').value.trim()) 手元で探す();
+          return 索引の差分を重ねる();
         });
       });
     }).catch(function (e) { console.warn('[索引]', e); });
@@ -831,6 +852,33 @@ LOGIC = r"""
     if (開いてよい && 番号らしい && out.length === 1) { 番号欄.value = String(out[0]['伝票番号']); 読み込む(String(out[0]['伝票番号'])); }
     return true;
   }
+  // 今日の分を重ねる: 索引の写し以降に FileMaker で直った伝票を取り、手元の索引に上書き／追加
+  var 差分を取った = 0;
+  function 索引の差分を重ねる() {
+    if (!索引 || !(window.FM名乗っている ? FM名乗っている() : true)) return Promise.resolve();
+    var 基 = 索引.作った ? new Date(索引.作った) : new Date(Date.now() - 24 * 3600 * 1000);
+    基 = new Date(基.getTime() - 24 * 3600 * 1000);   // 念のため 1 日戻す
+    var d = ('0' + (基.getMonth() + 1)).slice(-2) + '/' + ('0' + 基.getDate()).slice(-2) + '/' + 基.getFullYear();
+    return 呼ぶ('写し_差分', [d]).then(function (r) {
+      if (!r.行 || !r.行.length) return;
+      var P = 索引位置, id = P['recordId'], pos = {};
+      for (var i = 0; i < 索引.行.length; i++) pos[String(索引.行[i][id])] = i;
+      var 上書き = 0, 追加 = 0;
+      r.行.forEach(function (row) {
+        // 列の並びを手元の索引に合わせる
+        var v = 索引.列.map(function (c) { var j = r.列.indexOf(c); return j < 0 ? '' : row[j]; });
+        var at = pos[String(v[id])];
+        if (at !== undefined) { 索引.行[at] = v; 上書き++; } else { 索引.行.push(v); pos[String(v[id])] = 索引.行.length - 1; 追加++; }
+      });
+      索引を据える(索引);   // 起票日の数を作り直す
+      差分を取った = Date.now();
+      索引の状態();
+      $('ff-msg').textContent += '　今日の分 ' + r.件数 + ' 件を重ねました';
+      if ($('ff-kw').value.trim()) 手元で探す(false);
+    }).catch(function (e) { console.warn('[索引 差分]', e); });
+  }
+  setInterval(function () { if (索引 && Date.now() - 差分を取った > 5 * 60 * 1000) 索引の差分を重ねる(); }, 60 * 1000);
+
   var 打鍵タイマー = null;
   function 打ちながら() {
     clearTimeout(打鍵タイマー);

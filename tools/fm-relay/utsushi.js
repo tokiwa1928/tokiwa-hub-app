@@ -509,3 +509,21 @@ function マスタ_配る(layout) {
 
 /** 毎晩 3 時: 小さなマスタを写し直す（トリガー用） */
 function マスタ_毎晩() { return マスタ_写す(); }
+
+
+/** 索引の「今日の分」: 修正日がその日以降の伝票を FileMaker から取り、索引と同じ列で返す（画面が手元の索引に重ねる） */
+function 写し_差分(日付) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  var d = /^\d\d\/\d\d\/\d{4}$/.test(String(日付 || '')) ? 日付 : 日付_(new Date(Date.now() - 24 * 3600 * 1000));
+  var rows = find_(lay, [{ '修正日': '>=' + d }], 2000, 1, null);
+  var out = rows.records.map(function (r) {
+    var f = r.fields;
+    return 配る列.map(function (c) {
+      if (c === 'recordId') return r.recordId;
+      if (c === '年') return 年_(f['起票日']);
+      var v = f[c]; return (v === undefined || v === null) ? '' : v;
+    });
+  });
+  return { ok: true, user: who.email, 列: 配る列, 行: out, 件数: out.length, 以降: d, 取った: new Date().toISOString() };
+}
