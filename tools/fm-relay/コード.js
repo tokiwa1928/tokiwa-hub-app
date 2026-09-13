@@ -777,6 +777,12 @@ function handle_(action, req, who) {
     case '写し_状況':         return 写し_状況();
     // GEN のデータも同じ保管庫へ
     case 'GEN_取り込み':      return GEN_取り込み(req['画面'], req['見出し'], req['鍵列'], req['行']);
+    case 'GEN_ファイル取込':  { GEN_ファイルから取り込む(); return { ok: true }; }   // 保管庫の GEN取込_*.json を読み込む（エディタ不要）
+    case '保管庫のファイル': {   // 読むだけ: 保管庫フォルダにあるファイル名（Drive に同期済みかの確認用）
+      var pat = new RegExp(String(req['名前'] || '.')); var it2 = 写し_フォルダ_().getFiles(), out2 = [];
+      while (it2.hasNext()) { var f2 = it2.next(); if (pat.test(f2.getName())) out2.push({ name: f2.getName(), size: f2.getSize(), updated: f2.getLastUpdated().toISOString() }); }
+      return out2;
+    }
     case 'GEN_一覧':          return GEN_一覧(req['画面'], req['絞り込み'], req['件数']);
     case 'GEN_状況':          return GEN_状況();
   }

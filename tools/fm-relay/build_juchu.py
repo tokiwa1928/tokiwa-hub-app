@@ -261,6 +261,7 @@ window.FM見た目 = function () {};
     '用紙注文_保存':       ['recordId', 'modId', 'fields'],
     '用紙注文_削除':       ['recordId'],
     'マスタ_配る':         ['layout'],
+    'GEN_一覧':            ['画面', '絞り込み', '件数'],
     'マスタ_写す':         ['layout'],
     '画面_一覧':           ['条件'],
     '写し_索引を配る':     []
@@ -622,7 +623,8 @@ LOGIC = r"""
       + '<table><thead><tr><th>数量</th><th>原価</th><th>売価</th><th>単価</th><th>粗利率</th><th>前回単価比</th></tr></thead><tbody>'
       + rows.map(function (r) { return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単価 + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円整(r.原価) + '</td><td>¥' + 円整(r.売価) + '</td><td>' + r.単価.toFixed(1) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td></tr>'; }).join('')
       + '</tbody></table>';
-    $('pg-body').innerHTML = h; $('pg-src').textContent = '';
+    $('pg-body').innerHTML = h + '<div id="pg-quotes" style="margin-top:6px;color:#475569">前回の見積書を探しています…</div>'; $('pg-src').textContent = '';
+    見積実績を出す(f);
     Array.prototype.forEach.call($('pg-body').querySelectorAll('tr.pick'), function (tr) {
       tr.onclick = function () {
         var n = Number(tr.getAttribute('data-n')), u2 = Number(tr.getAttribute('data-u'));
@@ -633,6 +635,39 @@ LOGIC = r"""
         ガイドを描く();
       };
     });
+  }
+  // ---- 前回の見積書（保管庫「見積実績」）: 得意先名＋品名で引いて、受注との突合結果を並べる
+  var 得意先マスタ = null;
+  function 得意先マスタを用意() {
+    if (得意先マスタ) return Promise.resolve(得意先マスタ);
+    try { var c = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); if (c && c.取った && Date.now() - new Date(c.取った).getTime() < 24 * 3600 * 1000) { 得意先マスタ = c; return Promise.resolve(c); } } catch (e) {}
+    return 呼ぶ('マスタ_配る', ['得意先マスタ']).then(function (j) { j.取った = new Date().toISOString(); 得意先マスタ = j; try { localStorage.setItem('fm_master_得意先マスタ', JSON.stringify(j)); } catch (e) {} return j; });
+  }
+  function 得意先名(code) { var m = 得意先マスタ; if (!m) return ''; var h = m.行.filter(function (r) { return String(r['得意先コード']) === String(code); })[0]; return h ? String(h['得意先名'] || '') : ''; }
+  function 名の芯(s) { return String(s || '').normalize('NFKC').replace(/(株式会社|有限会社|合同会社|\(株\)|\(有\)|㈱|㈲|様|御中)/g, '').replace(/[\s　・･\-ー－/／_（）()]/g, ''); }
+  function 見積実績を出す(f) {
+    var box = function () { return $('pg-quotes'); };
+    得意先マスタを用意().then(function () {
+      var name = 得意先名(f['得意先コード']) || String(($('f-cust') || {}).value || '');
+      var key = 名の芯(name).slice(0, 6);
+      if (!key) { if (box()) box().textContent = '前回の見積書: 得意先名が分からないので探せません'; return; }
+      return 呼ぶ('GEN_一覧', ['見積実績', { 得意先: key }, 0]).then(function (r) {
+        var rows = (r.行 || []);
+        var item = 名の芯(f['製品名'] || ($('f-item') || {}).value || '');
+        var scored = rows.map(function (q) {
+          var qn = 名の芯(q['品名']); var sim = 0;
+          if (item && qn) { if (qn.indexOf(item) >= 0 || item.indexOf(qn) >= 0) sim = 1; else { var a = item.slice(0, 4), b2 = qn.slice(0, 4); sim = (a && qn.indexOf(a) >= 0) || (b2 && item.indexOf(b2) >= 0) ? 0.6 : 0; } }
+          return { q: q, sim: sim };
+        }).filter(function (x) { return x.sim > 0; }).sort(function (a, b) { return (b.sim - a.sim) || String(b.q['見積日']).localeCompare(String(a.q['見積日'])); }).slice(0, 6);
+        if (!box()) return;
+        if (!scored.length) { box().innerHTML = '<span style="color:#94a3b8">前回の見積書: ' + esc(name) + ' でこの品名の見積書は見つかりません（保管庫「見積実績」に ' + rows.length + ' 件）</span>'; return; }
+        var h = '<div><b style="color:#166534">前回の見積書</b>（Excel から読んだもの ↔ FileMaker の受注）</div><table><thead><tr><th style="text-align:left">見積日</th><th style="text-align:left">品名</th><th>数量</th><th>単価</th><th style="text-align:left">受注</th><th>受注単価</th><th style="text-align:left">結果</th></tr></thead><tbody>';
+        scored.forEach(function (x) { var q = x.q; var res = String(q['結果'] || ''); var col = res === '一致' ? '#166534' : res === '金額違い' ? '#b45309' : '#64748b';
+          h += '<tr><td style="text-align:left">' + esc(String(q['見積日'] || '').slice(0, 10)) + '</td><td style="text-align:left">' + esc(String(q['品名'] || '').slice(0, 24)) + '</td><td>' + esc(円整(Number(q['数量'] || 0))) + '</td><td>' + esc(q['単価'] == null || q['単価'] === '' ? '—' : Number(q['単価']).toLocaleString()) + '</td><td style="text-align:left">' + esc(q['伝票番号'] || '—') + '</td><td>' + esc(q['受注単価'] == null || q['受注単価'] === '' ? '—' : Number(q['受注単価']).toLocaleString()) + '</td><td style="text-align:left;color:' + col + ';font-weight:700">' + esc(res) + (res === '一致' ? '　← この金額を前回金額として使えます' : '') + '</td></tr>'; });
+        h += '</tbody></table>';
+        box().innerHTML = h;
+      });
+    }).catch(function (e) { if (box()) box().textContent = '前回の見積書: ' + String(e.message || e); });
   }
   ['f-custcd', 'f-item', 'f-lotno', 'f-lotunit'].forEach(function (id) { var el = $(id); if (!el) return; el.addEventListener('change', function () { if (id === 'f-lotunit' && ガイド種) ガイドを描く(); else ガイドを出す(); }); });
   ['pg-u1', 'pg-u2', 'pg-u3', 'pg-pf'].forEach(function (id) { $(id).addEventListener('change', function () { if (ガイド種) ガイドを描く(); }); });
