@@ -58,6 +58,11 @@
   .sk-chip:hover{ border-color:#0891b2; color:#0891b2; }
   .sk-chip.on{ background:#0891b2; border-color:#0891b2; color:#fff; }
   .sk-chip-add{ border-style:dashed; color:#94a3b8; }
+  .sk-pchip{ width:auto; border-radius:12px; padding:0 9px; height:24px; font-size:11px; }
+  .sk-prow{ padding:5px 10px; cursor:pointer; display:flex; gap:8px; align-items:center; }
+  .sk-prow:hover,.sk-prow.hi{ background:#ecfeff; }
+  .sk-prow b{ min-width:120px; }
+  .sk-prow.sel{ background:#dcfce7; }
   .sk-chip{ -webkit-touch-callout:none; user-select:none; }
   #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
 </style>
@@ -197,7 +202,11 @@
       <div><label>クワエ / クワエ尻 mm</label><div style="display:flex;gap:6px;align-items:center"><input type="number" id="sk-kw" value="10" style="text-align:right;flex:1;min-width:56px"><span>/</span><input type="number" id="sk-sh" value="10" style="text-align:right;flex:1;min-width:56px"></div><div style="display:flex;gap:10px"><div class="sk-chips" data-for="sk-kw" data-vals="5,8,10,12,15"></div><span class="muted" style="align-self:center">/</span><div class="sk-chips" data-for="sk-sh" data-vals="5,8,10,12,15"></div></div></div>
       <div><label>左右余白 mm（片側）</label><input type="number" id="sk-ml" value="10" style="text-align:right"><div class="sk-chips" data-for="sk-ml" data-vals="3,5,8,10,12,15"></div></div>
       <div><label>補正値 mm（0〜-10。用紙の実寸が小さいとき）</label><input type="number" id="sk-adj" value="0" min="-10" max="0" style="text-align:right"><div class="sk-chips" data-for="sk-adj" data-vals="0,-1,-2,-3,-5"></div></div>
-      <div><label>用紙（判 × 断裁 から選ぶ）</label><select id="sk-paper" onchange="skPaperSel(this.value)"><option value="">── 選ぶ（下の表を押しても同じ） ──</option></select></div>
+      <div style="position:relative"><label>用紙（判 × 断裁）: 打って絞る（例: A本 4切・菊 半・545）か、判のボタンで絞る</label>
+        <input type="text" id="sk-paper-q" placeholder="例: A本 4切" autocomplete="off" onfocus="skPaperList(true)" oninput="skPaperList(true)" onkeydown="skPaperKey(event)">
+        <div id="sk-paper-chips" class="sk-chips"></div>
+        <div id="sk-paper-list" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:40;max-height:260px;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 6px 16px rgba(0,0,0,.12);font-size:12.5px"></div>
+        <select id="sk-paper" style="display:none" onchange="skPaperSel(this.value)"><option value=""></option></select></div>
       <div><label>用紙 左右 × 天地 mm（手入力も可）</label><div style="display:flex;gap:6px;align-items:center"><input type="number" id="sk-pw" placeholder="左右" style="text-align:right;flex:1;min-width:64px"><span>×</span><input type="number" id="sk-ph" placeholder="天地" style="text-align:right;flex:1;min-width:64px"><button class="btn" style="padding:6px 8px;font-size:12px;white-space:nowrap" onclick="skSwapSheet()" title="用紙を縦横入れ替え">⇄</button></div></div>
     </div>
     <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;align-items:center">
@@ -1030,23 +1039,51 @@ function skV(id){ return parseFloat(document.getElementById(id).value)||0; }
 var SK_CHIPS='tokiwa_shikou_chips_v1';
 function skChipVals(box){ var id=box.getAttribute('data-for'); var saved=skJ(SK_CHIPS,{}); var vals=saved[id]||box.getAttribute('data-vals').split(',').map(Number); return vals.slice().sort(function(a,b){ return a-b; }); }
 function skChipSave(id,vals){ var saved=skJ(SK_CHIPS,{}); saved[id]=vals; localStorage.setItem(SK_CHIPS,JSON.stringify(saved)); }
-function skRenderChips(){ [].forEach.call(document.querySelectorAll('.sk-chips'),function(box){ var id=box.getAttribute('data-for');
+function skRenderChips(){ [].forEach.call(document.querySelectorAll('.sk-chips[data-for]'),function(box){ var id=box.getAttribute('data-for');
   box.innerHTML=skChipVals(box).map(function(v){ return '<button type="button" class="sk-chip" data-v="'+v+'" title="'+v+' を入れる（右クリック／長押しで消す）" onclick="skChip(&quot;'+id+'&quot;,'+v+')" oncontextmenu="skChipDel(event,&quot;'+id+'&quot;,'+v+')">'+v+'</button>'; }).join('')
     +'<button type="button" class="sk-chip sk-chip-add" title="よく使う値を足す" onclick="skChipAdd(&quot;'+id+'&quot;)">＋</button>'; }); skChipsHi(); }
 function skChipAdd(id){ var t=prompt('この欄によく使う値（mm）を足します。数字を入れてください'); if(t==null) return; var v=parseFloat(String(t).replace(/[０-９．－]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })); if(isNaN(v)){ toast('数字が読めません'); return; }
   var box=document.querySelector('.sk-chips[data-for="'+id+'"]'); var vals=skChipVals(box); if(vals.indexOf(v)<0) vals.push(v); skChipSave(id,vals); skRenderChips(); skChip(id,v); }
 function skChipDel(ev,id,v){ ev.preventDefault(); if(!confirm(v+' のボタンを消しますか?')) return; var box=document.querySelector('.sk-chips[data-for="'+id+'"]'); var vals=skChipVals(box).filter(function(x){ return x!==v; }); skChipSave(id,vals); skRenderChips(); }
 function skChip(id,v){ document.getElementById(id).value=v; skCalc(); }
-function skChipsHi(){ [].forEach.call(document.querySelectorAll('.sk-chips'),function(box){ var cur=String(parseFloat(document.getElementById(box.getAttribute('data-for')).value)); [].forEach.call(box.children,function(b){ b.classList.toggle('on', String(parseFloat(b.getAttribute('data-v')))===cur); }); }); }
+function skChipsHi(){ [].forEach.call(document.querySelectorAll('.sk-chips[data-for]'),function(box){ var cur=String(parseFloat(document.getElementById(box.getAttribute('data-for')).value)); [].forEach.call(box.children,function(b){ b.classList.toggle('on', String(parseFloat(b.getAttribute('data-v')))===cur); }); }); }
 function skJ(key,def){ try{ return JSON.parse(localStorage.getItem(key))||def; }catch(e){ return def; } }
 function skCustom(){ return skJ(SK_CUSTOM,[]); }
 function skPapers(o){ return SK_PAPERS.concat((o&&o.board)||document.getElementById('sk-board').checked?SK_BOARD:[]).concat(skCustom()); }
 function skCutSize(p,c){ var cw=Math.floor(p[1]/c[1]), ch=Math.floor(p[2]/c[2]); return [Math.min(cw,ch),Math.max(cw,ch)]; }
+function skPaperItems(){ var out=[]; skPapers().forEach(function(p,pi){ SK_CUTS.forEach(function(c,ci){ var d=skCutSize(p,c); out.push({ key:pi+'_'+ci, paper:p[0], cut:c[0], w:d[0], h:d[1], label:p[0]+' '+c[0]+' '+d[0]+'×'+d[1] }); }); }); return out; }
 function skRenderPaperSel(){
-  var sel=document.getElementById('sk-paper'); var cur=sel.value; var h='<option value="">── 選ぶ（下の表を押しても同じ） ──</option>';
-  skPapers().forEach(function(p,pi){ h+='<optgroup label="'+p[0]+' '+p[1]+'×'+p[2]+'">'; SK_CUTS.forEach(function(c,ci){ var d=skCutSize(p,c); h+='<option value="'+pi+'_'+ci+'">'+p[0]+' '+c[0]+' '+d[0]+'×'+d[1]+'</option>'; }); h+='</optgroup>'; });
-  sel.innerHTML=h; sel.value=cur;
+  var sel=document.getElementById('sk-paper'); var cur=sel.value; sel.innerHTML='<option value=""></option>'+skPaperItems().map(function(it){ return '<option value="'+it.key+'">'+it.label+'</option>'; }).join(''); sel.value=cur;
+  var q=document.getElementById('sk-paper-q'); var it=skPaperItems().filter(function(x){ return x.key===cur; })[0]; if(q && document.activeElement!==q) q.value=it?it.label:'';
+  skRenderPaperChips();
 }
+var SK_PFILTER='';
+function skRenderPaperChips(){ var box=document.getElementById('sk-paper-chips'); if(!box) return; var names=skPapers().map(function(p){ return p[0]; });
+  box.innerHTML='<button type="button" class="sk-chip sk-pchip'+(SK_PFILTER?'':' on')+'" onclick="skPaperFilter(\'\')">全部</button>'+names.map(function(nm){ return '<button type="button" class="sk-chip sk-pchip'+(SK_PFILTER===nm?' on':'')+'" onclick="skPaperFilter(\''+nm.replace(/'/g,'')+'\')">'+nm.replace(/(列本判|判)$/,'')+'</button>'; }).join(''); }
+function skPaperFilter(nm){ SK_PFILTER=nm; skRenderPaperChips(); skPaperList(true); document.getElementById('sk-paper-q').focus(); }
+function skNorm(t){ return String(t||'').normalize('NFKC').toLowerCase().replace(/[\s　]+/g,' ').replace(/x/g,'×').replace(/[列本判]/g,''); }
+function skPaperMatches(){ var q=skNorm(document.getElementById('sk-paper-q').value); var toks=q.split(' ').filter(Boolean);
+  var items=skPaperItems().filter(function(it){ return !(SK_PFILTER&&it.paper!==SK_PFILTER); });
+  toks.forEach(function(t){
+    if(/^\d+(\.\d+)?$/.test(t)){   // 数字: 断裁（4 → 4切）か寸法（545 → 545×788）。1 桁の数字は寸法の一部には当てない
+      items=items.filter(function(it){ var c=skNorm(it.cut); return c===t+'切' || String(it.w)===t || String(it.h)===t || (t.length>=3 && (String(it.w).indexOf(t)>=0||String(it.h).indexOf(t)>=0)); });
+    } else {   // 文字: 判の名前（a → A列本判、四六、菊 …）か断裁の名前（半、全）。名前がぴったり合う判があればそれだけ
+      var exact=items.filter(function(it){ return skNorm(it.paper)===t; });
+      items=exact.length?exact:items.filter(function(it){ return skNorm(it.paper).indexOf(t)>=0 || skNorm(it.cut).indexOf(t)>=0 || skNorm(it.label).indexOf(t)>=0; });
+    }
+  });
+  return items; }
+var SK_PHI=-1;
+function skPaperList(show){ var box=document.getElementById('sk-paper-list'); if(!show){ box.style.display='none'; return; }
+  var cur=document.getElementById('sk-paper').value; var list=skPaperMatches().slice(0,60); SK_PHI=-1;
+  box.innerHTML=list.length?list.map(function(it,i){ return '<div class="sk-prow'+(it.key===cur?' sel':'')+'" data-i="'+i+'" data-key="'+it.key+'" onmousedown="event.preventDefault();skPaperChoose(\''+it.key+'\')"><b>'+it.paper+' '+it.cut+'</b><span>'+it.w+'×'+it.h+' mm</span></div>'; }).join(''):'<div class="sk-prow" style="color:#94a3b8">当てはまる用紙がありません（自前の判は下の「＋ 判を足す」）</div>';
+  box.style.display='block'; }
+function skPaperKey(ev){ var box=document.getElementById('sk-paper-list'); var rows=box.querySelectorAll('.sk-prow[data-key]');
+  if(ev.key==='Escape'){ skPaperList(false); return; }
+  if(ev.key==='ArrowDown'||ev.key==='ArrowUp'){ ev.preventDefault(); if(box.style.display==='none') skPaperList(true); rows=box.querySelectorAll('.sk-prow[data-key]'); if(!rows.length) return; SK_PHI=(SK_PHI+(ev.key==='ArrowDown'?1:-1)+rows.length)%rows.length; [].forEach.call(rows,function(r,i){ r.classList.toggle('hi',i===SK_PHI); }); rows[SK_PHI].scrollIntoView({block:'nearest'}); return; }
+  if(ev.key==='Enter'){ ev.preventDefault(); var r=rows[SK_PHI>=0?SK_PHI:0]; if(r) skPaperChoose(r.getAttribute('data-key')); } }
+function skPaperChoose(key){ var it=skPaperItems().filter(function(x){ return x.key===key; })[0]; if(!it) return; document.getElementById('sk-paper').value=key; document.getElementById('sk-paper-q').value=it.label; skPaperList(false); skPaperSel(key); }
+document.addEventListener('click',function(e){ var w=document.getElementById('sk-paper-q'); if(w && !w.parentNode.contains(e.target)) skPaperList(false); });
 function skRenderCustom(){ var b=document.getElementById('sk-custom'); var list=skCustom();
   b.innerHTML='<span class="muted">自前の用紙（判）:</span>'+list.map(function(c,i){ return '<span style="border:1px solid #d0cec8;border-radius:12px;padding:2px 9px;background:#fff">'+c[0]+' '+c[1]+'×'+c[2]+' <span style="color:#b91c1c;cursor:pointer" onclick="skDelCustom('+i+')" title="消す">✕</span></span>'; }).join('')
     +'<button class="btn" style="padding:4px 10px;font-size:12px" onclick="skAddCustom()">＋ 判を足す</button>'; }
@@ -1131,7 +1168,7 @@ function skShowCurrent(){
 // 表のセルを押す → その用紙（向きも）を選ぶ
 function skPick(key,quiet){
   var r=(SK_LAST||[]).filter(function(x){ return x.key===key; })[0]; if(!r) return;
-  document.getElementById('sk-pw').value=r.sheetW; document.getElementById('sk-ph').value=r.sheetH; document.getElementById('sk-paper').value=key;
+  document.getElementById('sk-pw').value=r.sheetW; document.getElementById('sk-ph').value=r.sheetH; document.getElementById('sk-paper').value=key; document.getElementById('sk-paper-q').value=r.paper+' '+r.cut+' '+r.cutW+'×'+r.cutH; skRenderPaperSel();
   skCalc(); if(!quiet) document.getElementById('sk-view').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 // 面付エンジンが読む hidden の me-* に写す（版面の計算が図と同じになるように、余白にドブ分を足し、間隔＝ドブ×2）
@@ -1157,7 +1194,7 @@ function skApplySet(i){ if(i==='') return; var t=skSets()[+i]; if(!t) return; va
   SK_FIELDS.forEach(function(id){ if(v[id]!==undefined&&v[id]!=='') document.getElementById(id).value=v[id]; });
   if(v.rot!==undefined) document.getElementById('sk-rot').checked=!!v.rot; if(v.board!==undefined) document.getElementById('sk-board').checked=!!v.board;
   if(v.mode) document.getElementById('me-mode').value=v.mode; if(v.trim!==undefined) document.getElementById('me-trim').checked=!!v.trim; if(v.pnum!==undefined) document.getElementById('me-pnum').checked=!!v.pnum; if(v.mirror!==undefined) document.getElementById('me-mirror').checked=!!v.mirror; if(v.pages!==undefined) document.getElementById('me-pages').value=v.pages;
-  skRenderPaperSel(); if(v.paper) document.getElementById('sk-paper').value=v.paper; document.getElementById('sk-set-name').value=t.name; skCalc(); }
+  if(v.paper) document.getElementById('sk-paper').value=v.paper; skRenderPaperSel(); document.getElementById('sk-set-name').value=t.name; skCalc(); }
 function skDelSet(){ var sel=document.getElementById('sk-set'); if(sel.value===''){ toast('消すセットを選んでください'); return; } var list=skSets(); var t=list[+sel.value]; if(!confirm('「'+t.name+'」を消しますか?')) return; list.splice(+sel.value,1); localStorage.setItem(SK_SETS,JSON.stringify(list)); sel.value=''; skRenderSets(); }
 (function(){
   // 初回だけ例のセットを入れておく（自由に上書き・削除して構わない）
@@ -1166,7 +1203,7 @@ function skDelSet(){ var sel=document.getElementById('sk-set'); if(sel.value==='
     {name:'例: 感圧紙 A列本判 4切（A5）', v:{'sk-h':'210','sk-w':'148','sk-dv':'3','sk-dh':'3','sk-kw':'10','sk-sh':'10','sk-ml':'10','sk-adj':'0','sk-pw':'312','sk-ph':'440',paper:'2_3',rot:true,board:false,mode:'same',trim:true,pnum:false,mirror:false,pages:''}} ])); }
   try{ var o=JSON.parse(localStorage.getItem(SK_KEY)||'null'); if(o){ ['h','w','dv','dh','kw','sh','ml','adj','pw','ph'].forEach(function(k){ if(o[k]!==undefined&&o[k]!==0) document.getElementById('sk-'+k).value=o[k]; }); document.getElementById('sk-rot').checked=o.rot!==false; document.getElementById('sk-board').checked=!!o.board; document.getElementById('sk-showdim').checked=o.showdim!==false; } }catch(e){}
   try{ var q=new URLSearchParams(location.search); if(q.get('w')&&q.get('h')){ document.getElementById('sk-w').value=q.get('w'); document.getElementById('sk-h').value=q.get('h'); } }catch(e){}
-  SK_FIELDS.forEach(function(id){ document.getElementById(id).addEventListener('input',function(){ if(id==='sk-pw'||id==='sk-ph') document.getElementById('sk-paper').value=''; skCalc(); }); });
+  SK_FIELDS.forEach(function(id){ document.getElementById(id).addEventListener('input',function(){ if(id==='sk-pw'||id==='sk-ph'){ document.getElementById('sk-paper').value=''; document.getElementById('sk-paper-q').value=''; } skCalc(); }); });
   ['sk-rot','sk-board','sk-showdim'].forEach(function(id){ document.getElementById(id).addEventListener('change',function(){ if(id==='sk-board') skRenderPaperSel(); skCalc(); }); });
   if(!skV('sk-h')||!skV('sk-w')){ document.getElementById('sk-h').value=297; document.getElementById('sk-w').value=210; }
   skRenderChips(); skRenderCustom(); skRenderPaperSel(); skRenderSets(); skCalc(); })();
