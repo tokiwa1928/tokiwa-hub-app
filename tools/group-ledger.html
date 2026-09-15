@@ -333,6 +333,7 @@
       <details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:12px;color:var(--accent);font-weight:700">🏢 会社情報（帳票用・この会社の枠を編集／保存）</summary>
         <div class="grid" id="co-info-grid" style="padding:10px 0"></div>
       </details>
+      <div id="doc-amt-warn" style="display:none;margin:0 0 8px;padding:8px 12px;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;color:#991b1b;font-size:12.5px"></div>
       <div id="doc-preview" style="border:1px solid #ddd;border-radius:8px;overflow:auto;max-height:52vh;background:#f0f0ee;padding:10px;display:flex;justify-content:center"></div>
       <div style="margin-top:10px">
         <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:4px">🕘 出力履歴（この案件）</div>
@@ -1926,15 +1927,27 @@ function _quoteDateTag_(memo){ var m=String(memo==null?'':memo).match(/【見積
 function _docQty_(c){ var oq=_orderQtyTag_(c&&c.memo); return (oq!=='')?oq:((c&&c.qty!=null)?c.qty:''); }
 function _qtyDisp_(c){ var q=_docQty_(c); var n=Number(String(q).replace(/,/g,'')); return (q!==''&&!isNaN(n))?n.toLocaleString():String(q||''); }
 // 帳票金額: 受注数量が指定されていれば 単価×受注数量(＝相手＝中尾の売上)。無ければ従来。
+// 帳票に出すのは「自社」の単価・金額だけ。トキワの金額（仕入側）は相手に見せない（本多さん 2026-09-15）
 function _docAmt_(c){
   var oq=_orderQtyTag_(c&&c.memo);
-  var u=toNum(c.unitSelf)||toNum(c.unitTokiwa)||0;
-  if(oq!==''){ return u? Math.round(u*toNum(oq)) : (toNum(c.amtSelf)||toNum(c.amtTokiwa)||0); }
-  var a=toNum(c.amtSelf)||toNum(c.amtTokiwa)||0;
+  var u=toNum(c.unitSelf)||0;
+  if(oq!==''){ return u? Math.round(u*toNum(oq)) : (toNum(c.amtSelf)||0); }
+  var a=toNum(c.amtSelf)||0;
   if(!a){ a=u*(toNum(c.qty)||0); }
   return a;
 }
-function _docUnit_(c){ return toNum(c.unitSelf)||toNum(c.unitTokiwa)||''; }
+function _docUnit_(c){ return toNum(c.unitSelf)||''; }
+// 自社金額が入っていない案件（帳票に金額が出ない）
+function _docMissing_(list){ return (list||[]).filter(function(x){ return !(_docAmt_(x)>0); }); }
+function _docMissingWarn_(list){
+  var box=document.getElementById('doc-amt-warn'); if(!box) return;
+  var miss=_docMissing_(list);
+  if(!miss.length){ box.style.display='none'; box.innerHTML=''; return; }
+  var esc2=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  box.style.display='';
+  box.innerHTML='<b>⚠ 金額が入っていません（'+miss.length+'件）。</b>帳票の単価・金額が空のまま出ます。案件を開いて「自社」の単価・税抜金額を入れてから発行してください。'
+    +'<div style="margin-top:4px;font-size:11.5px">'+miss.slice(0,8).map(function(x){ return '・'+esc2(x.denpyo||'(番号なし)')+'　'+esc2((x.item||'').slice(0,30)); }).join('<br>')+(miss.length>8?'<br>…他 '+(miss.length-8)+' 件':'')+'</div>';
+}
 function _kanjiYen_(n){ return '金 '+ (Math.round(n)||0).toLocaleString() +' 円 也'; }
 function _panel3_(title, c, co, iss, isReceipt){
   var esc2=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
@@ -2089,6 +2102,7 @@ function genDoc(type){
   var c=_docState_.c, co=_docState_.co, iss=_docState_.issueDate; if(!c) return;
   var list=(_docState_.list&&_docState_.list.length)?_docState_.list:[c];
   _docState_.type=type;
+  _docMissingWarn_(list);
   _docState_.raw=false; _docState_.parts=null;
   var _ipb=document.getElementById('isshiki-print-btns');
   // 一式 = 縦ゴシック様式（納品書控/納品書/受領書 ＋ 改ページ請求書）→ ①②の別ジョブ印刷
@@ -2251,6 +2265,8 @@ function _docFileName_(type){
     .join('_').replace(/[\\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120);
 }
 function printDoc(part){
+  var _miss=_docMissing_((_docState_.list&&_docState_.list.length)?_docState_.list:(_docState_.c?[_docState_.c]:[]));
+  if(_miss.length && !confirm('金額が入っていない案件が '+_miss.length+' 件あります（帳票の金額が空のまま出ます）。\nこのまま印刷しますか？')) return;
   var _html=_docState_.html, _logType=_docState_.type, _which=null;
   if(part && _docState_.parts && _docState_.parts[part]){
     _html=_docState_.parts[part];
