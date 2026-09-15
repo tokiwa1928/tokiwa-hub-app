@@ -777,8 +777,8 @@ function _scopeKeys_(){
   if(IS_TK) return Object.keys(SHEET_CAPABLE);            // トキワ=対応済全社
   return (MY_KEY && SHEET_CAPABLE[MY_KEY]) ? [MY_KEY] : []; // 関連会社=自社のみ
 }
-async function loadAll(force){
-  var keys=_scopeKeys_();
+async function loadAll(force, onlyKeys){
+  var keys=(onlyKeys&&onlyKeys.length)?onlyKeys:_scopeKeys_();
   // 1 本で全社をもらう（6 本同時に投げると Google 側で 404 になり、やり直しで遅く・空になっていた）
   var results=null;
   try{ var all=await api('sheetLedgerLoadAll',{companies:keys.join(','), nocache:(force?'1':'')});
@@ -793,6 +793,7 @@ async function loadAll(force){
       var mm=String(rec.memo||''); if(/【複数梱包】/.test(mm)) rec.multiPack=true; if(/【複数納品先】/.test(mm)) rec.multiDest=true; var dm=mm.match(/【納品先:([^】]*)】/); if(dm) rec.deliverTo=dm[1];
     }); all=all.concat(x.r.records||[]); }
   });
+  if(onlyKeys&&onlyKeys.length){ return all; }   // 一部だけ読んだときは呼び出し側で合流する
   ALLCASES=all; _ALL_TS=Date.now();
   try{ sessionStorage.setItem(_cacheKey_(),JSON.stringify({t:_ALL_TS,c:ALLCASES})); }catch(e){}
   return ALLCASES||[];
@@ -819,8 +820,18 @@ async function loadList(force){
   var stale=force||!_ALL_TS||(Date.now()-_ALL_TS>_STALE_MS);
   if(!ALLCASES||stale){
     if(ALLCASES){ var st=document.getElementById('status'); st.textContent=st.textContent+'　（最新に更新中…）'; }
-    try{ await loadAll(!!force); _applyCompany_(); }
-    catch(e){ if(!ALLCASES) document.getElementById('status').textContent='読込失敗: '+e.message; }
+    var keys=_scopeKeys_(), myKey=NAMEKEY[COMPANY];
+    if(!ALLCASES && myKey && keys.length>1 && keys.indexOf(myKey)>=0){
+      // まず選んだ会社だけ読んで先に描く（全社 2.3MB を待たせない）。残りはそのあとで読んで合流
+      try{ var mine=await loadAll(!!force,[myKey]); ALLCASES=mine; _ALL_TS=0; _applyCompany_();
+        var st2=document.getElementById('status'); st2.textContent=st2.textContent+'　（他社分を読込中…）'; }catch(e){}
+      try{ var rest=await loadAll(!!force, keys.filter(function(k){ return k!==myKey; })); ALLCASES=(ALLCASES||[]).concat(rest); _ALL_TS=Date.now();
+        try{ sessionStorage.setItem(_cacheKey_(),JSON.stringify({t:_ALL_TS,c:ALLCASES})); }catch(e){} _applyCompany_(); }
+      catch(e){ if(!ALLCASES) document.getElementById('status').textContent='読込失敗: '+e.message; }
+    } else {
+      try{ await loadAll(!!force); _applyCompany_(); }
+      catch(e){ if(!ALLCASES) document.getElementById('status').textContent='読込失敗: '+e.message; }
+    }
   }
   _bgLoads_();
 }
