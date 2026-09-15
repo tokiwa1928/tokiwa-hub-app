@@ -991,13 +991,14 @@ LOGIC = r"""
     var h = '<div style="display:flex;gap:8px;align-items:center;margin:2px 0 4px;font-size:12px">'
       + '<button id="ff-group" style="padding:3px 10px" title="チェックした伝票の 案件ID を同じにします（空なら いちばん古い受注の伝票番号）">☑ 選んだ伝票を 1 つの案件にまとめる</button>'
       + '<input id="ff-group-id" placeholder="案件ID（空なら自動）" style="width:150px;padding:3px 6px"><span style="color:#64748b">「案件」列が同じ伝票が、予算見積→見積→受注の 1 つの案件です</span></div>';
-    h += '<table><thead><tr><th></th>';
+    h += '<table><thead><tr><th></th><th></th>';
     列.forEach(function (k) { h += '<th>' + esc(k.h) + '</th>'; });
     h += '</tr></thead><tbody>';
     var 一度に = 500, 描いた = Math.min(一度に, r.行.length);
     function 行の札(row) {
       var t = '<tr class="r" data-id="' + esc(row.recordId) + '">';
       t += '<td onclick="event.stopPropagation()"><input type="checkbox" class="pick" data-id="' + esc(row.recordId) + '"></td>';
+      t += '<td><button type="button" class="open" data-id="' + esc(row.recordId) + '" style="font:inherit;font-size:11px;padding:1px 8px;border:1px solid #94a3b8;border-radius:4px;background:#fff;cursor:pointer">表示</button></td>';
       列.forEach(function (k) {
         var v = row[k.c];
         if (k.badge) { var cls = STAGE_CLASS[v] || ''; t += '<td>' + (v ? '<span class="badge ' + cls + '">' + esc(v) + '</span>' : '') + '</td>'; }
@@ -1041,7 +1042,7 @@ LOGIC = r"""
     $('ff-msg').textContent = r.件数 + ' 件'
       + (r.全体 && r.全体 > r.件数 ? '（あてはまる ' + r.全体.toLocaleString() + ' 件のうち）' : '')
       + (r.日数 ? '　起票日 直近' + r.日数 + '日' : '')
-      + '　' + (r.源 === '索引' ? r.ミリ秒 + 'ms（手元の索引）' : (r.ミリ秒 / 1000).toFixed(1) + '秒') + '　行をクリックで開きます';
+      + '　' + (r.源 === '索引' ? r.ミリ秒 + 'ms（手元の索引）' : (r.ミリ秒 / 1000).toFixed(1) + '秒') + '　「表示」かダブルクリックで開きます（1 回クリックはチェック）';
 
     $('ff-group').onclick = function () {
       var ids = Array.prototype.map.call(box.querySelectorAll('input.pick:checked'), function (x) { return x.getAttribute('data-id'); });
@@ -1060,15 +1061,20 @@ LOGIC = r"""
         });
       }).catch(function (e) { $('ff-msg').textContent = String(e.message || e); });
     };
+    function 行を開く(id) {
+      if (Object.keys(変更分()).length
+          && !confirm('保存していない編集があります。捨てて開きますか？')) return;
+      待機(true); 状態('開いています…');
+      呼ぶ('画面_recordIdで読む', [id])
+        .then(function (x) { 受け取る(x, '開きました'); })
+        .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+    }
     行を結ぶ = function (tr) {
-      tr.onclick = function () {
-        if (Object.keys(変更分()).length
-            && !confirm('保存していない編集があります。捨てて開きますか？')) return;
-        待機(true); 状態('開いています…');
-        呼ぶ('画面_recordIdで読む', [tr.getAttribute('data-id')])
-          .then(function (x) { 受け取る(x, '開きました'); })
-          .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
-      };
+      var id = tr.getAttribute('data-id');
+      // 1 回クリック＝チェックを付け外し、ダブルクリック＝開く、「表示」ボタン＝開く
+      tr.onclick = function (ev) { if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'BUTTON')) return; var ck = tr.querySelector('input.pick'); if (ck) ck.checked = !ck.checked; };
+      tr.ondblclick = function (ev) { if (ev.target && ev.target.tagName === 'INPUT') return; var ck = tr.querySelector('input.pick'); if (ck) ck.checked = !ck.checked; 行を開く(id); };
+      var ob = tr.querySelector('button.open'); if (ob) ob.onclick = function (ev) { ev.stopPropagation(); 行を開く(id); };
     };
     Array.prototype.forEach.call(box.querySelectorAll('tr.r'), 行を結ぶ);
   }
@@ -1254,6 +1260,7 @@ LOGIC = r"""
     $(id).addEventListener('input', 打ちながら);
   });
   ['ff-stage', 'ff-days', 'ff-n', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2'].forEach(function (id) { $(id).addEventListener('change', function () { 手元で探す(false); }); });
+  探し.addEventListener('keydown', function (e) { if (e.key !== 'Enter') return; var t = e.target; if (!t || !(t.tagName === 'INPUT' || t.tagName === 'SELECT')) return; if (t.closest('#ff-rows')) return; e.preventDefault(); 探す(); });
   // -------------------------------------------------- FileMaker のボタンを本物の動きに（FMHUB-9）
   function 帯のボタン(文言) {
     return Array.prototype.filter.call(document.querySelectorAll('.hdrow .fb'), function (x) { return x.textContent.trim() === 文言; })[0];
