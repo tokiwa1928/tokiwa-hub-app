@@ -768,6 +768,18 @@ function handle_(action, req, who) {
       var made = Drive.Drives.create({ name: nm }, Utilities.getUuid());
       return { ok: true, 既存: false, id: made.id, name: made.name, url: 'https://drive.google.com/drive/folders/' + made.id };
     }
+    case '共有ドライブの件数': {   // 読むだけ: 共有ドライブ（id）の中のファイル数・フォルダ数を 1000 件ずつ数える。続き があれば再開
+      var did = String(req['id'] || '').trim(); if (!did) throw new Error('id が要ります');
+      var t0 = Date.now(), tok = req['続き'] || null, files = Number(req['ファイル'] || 0), folders = Number(req['フォルダ'] || 0), bytes = Number(req['バイト'] || 0), pages = 0;
+      var sub = String(req['親'] || '');   // 任意: 特定フォルダ（id）配下だけ数えるときは q に parents は使えないので全体を数える
+      do {
+        var res = Drive.Files.list({ driveId: did, corpora: 'drive', includeItemsFromAllDrives: true, supportsAllDrives: true, pageSize: 1000, pageToken: tok,
+                                     q: 'trashed = false', fields: 'nextPageToken, files(mimeType, size)' });
+        (res.files || []).forEach(function (f) { if (f.mimeType === 'application/vnd.google-apps.folder') folders++; else { files++; bytes += Number(f.size || 0); } });
+        tok = res.nextPageToken || null; pages++;
+      } while (tok && Date.now() - t0 < 270 * 1000);
+      return { id: did, ファイル: files, フォルダ: folders, 合計: files + folders, GB: Math.round(bytes / 1024 / 1024 / 1024 * 10) / 10, ページ: pages, 秒: Math.round((Date.now() - t0) / 1000), 続き: tok, 終わり: !tok };
+    }
     case '共有ドライブ一覧': { return (Drive.Drives.list({ pageSize: 100 }).drives || []).map(function (d) { return { id: d.id, name: d.name }; }); }
     case '画面_一覧':         return 画面_一覧(req['条件']);
     // Hub 用の保管庫（FileMaker の写し）から読む。FileMaker を止めたあとの読み口
