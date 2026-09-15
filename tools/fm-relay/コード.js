@@ -800,6 +800,7 @@ function handle_(action, req, who) {
     case 'マスタ_配る':       return マスタ_配る(req.layout);
     case 'マスタ_写す':       return マスタ_写す(req.layout);
     case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }
+    case '写し_毎晩':         return 写し_毎晩(req['以降']);   // 手で動かす（止まっていた分の追いつき）。以降 'MM/DD/YYYY'
     case '共有ドライブを作る': {   // Google の共有ドライブを名前で作る（あれば返す）。実行者 info@tokiwap-group.com の権限で
       var nm = String(req['名前'] || '').trim(); if (!nm) throw new Error('名前が要ります');
       var have = Drive.Drives.list({ pageSize: 100 }).drives || [];

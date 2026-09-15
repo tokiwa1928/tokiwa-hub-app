@@ -178,10 +178,10 @@ function トリガーを外す_(fn) {
 // ------------------------------------------------------------ 毎晩の差分
 
 /** 修正日が昨日以降のものを写し直す（索引・年別の該当行を置き換える） */
-function 写し_毎晩() {
+function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日からの修正を取り込む（止まっていた分の追いつき用）。省略時は昨日から
   var lay = LAYOUTS.juchu;
   var d = new Date(); d.setDate(d.getDate() - 1);
-  var 昨日 = 日付_(d);
+  var 昨日 = String(以降 || '').trim() || 日付_(d);
   var rows = find_(lay, [{ '修正日': '>=' + 昨日 }], 2000, 1, null);
   if (!rows.records.length) { Logger.log('昨日以降の修正はありません'); return 0; }
 
@@ -220,7 +220,7 @@ function 写し_毎晩() {
   });
   索引キャッシュを捨てる_(); 写し_索引_();   // 索引の json を作り直しておく（朝一番の人を待たせない）
   Logger.log('毎晩の写し: 更新 ' + 更新 + '・追加 ' + 追加 + '（修正日 ' + 昨日 + ' 以降 ' + rows.records.length + ' 件）');
-  return rows.records.length;
+  return { 件数: rows.records.length, 更新: 更新, 追加: 追加, 以降: 昨日 };
 }
 
 function 写し_毎晩を登録() {
