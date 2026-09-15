@@ -779,9 +779,13 @@ function _scopeKeys_(){
 }
 async function loadAll(force){
   var keys=_scopeKeys_();
-  var results=await Promise.all(keys.map(function(k){
-    return api('sheetLedgerLoad',{company:k, nocache:(force?'1':'')}).then(function(r){ return {k:k,r:r}; }).catch(function(){ return {k:k,r:null}; });
-  }));
+  // 1 本で全社をもらう（6 本同時に投げると Google 側で 404 になり、やり直しで遅く・空になっていた）
+  var results=null;
+  try{ var all=await api('sheetLedgerLoadAll',{companies:keys.join(','), nocache:(force?'1':'')});
+    if(all&&all.success&&all.results){ results=keys.map(function(k){ return {k:k, r:all.results[k]||null}; }); } }catch(e){}
+  if(!results){ // 予備: 1 社ずつ順番に（同時には投げない）
+    results=[]; for(var i=0;i<keys.length;i++){ var k=keys[i]; try{ results.push({k:k, r:await api('sheetLedgerLoad',{company:k, nocache:(force?'1':'')})}); }catch(e){ results.push({k:k,r:null}); } }
+  }
   var all=[];
   results.forEach(function(x){
     if(x.r&&x.r.success){ (x.r.records||[]).forEach(function(rec){ rec._key=x.k; rec.id=x.k+'#'+rec._row;
@@ -807,9 +811,7 @@ function _applyCompany_(){
 }
 async function loadList(force){
   if(!COMPANY) return; // 会社未選択（トキワの選択画面待ち）
-  if(ARRIVALS===null){ ARRIVALS=[]; loadArrivals(); } // 到着予定日メール台帳を背景で読込(初回のみ)
-  if(DOCLOGS===null){ DOCLOGS=[]; loadDocLogs(); } // 帳票出力日(DocLog)も背景で読込(初回のみ)
-  if(!IS_TK && LINKS_BY_DEN===null){ LINKS_BY_DEN={}; loadLinkMap(); } // 関連会社: 他社リンク到着予定日(社名は伏せる)
+  // 背景の読み込み（到着予定・帳票ログ・リンク）は本体の一覧を出したあとに順番に（同時に投げない）
   // 1) メモリ→セッションの順でまず即描画（stale-while-revalidate）
   if(!ALLCASES){ var cc=_sessionCache_(); if(cc){ ALLCASES=cc.c; _ALL_TS=cc.t; } }
   if(ALLCASES) _applyCompany_(); else document.getElementById('status').textContent='読込中…';
@@ -820,6 +822,17 @@ async function loadList(force){
     try{ await loadAll(!!force); _applyCompany_(); }
     catch(e){ if(!ALLCASES) document.getElementById('status').textContent='読込失敗: '+e.message; }
   }
+  _bgLoads_();
+}
+var _bgBusy_=false;
+async function _bgLoads_(){
+  if(_bgBusy_) return; _bgBusy_=true;
+  try{
+    if(ARRIVALS===null){ ARRIVALS=[]; await loadArrivals(); }   // 到着予定日メール台帳(初回のみ)
+    if(DOCLOGS===null){ DOCLOGS=[]; await loadDocLogs(); }      // 帳票出力日(DocLog)(初回のみ)
+    if(!IS_TK && LINKS_BY_DEN===null){ LINKS_BY_DEN={}; await loadLinkMap(); }   // 関連会社: 他社リンク到着予定日
+  }catch(e){}
+  _bgBusy_=false;
 }
 // 状況をクリックしたときだけ、そのセルを選択欄に差し替える（必要な1つだけ作る）
 function stEdit(el){
