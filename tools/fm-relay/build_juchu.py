@@ -438,6 +438,8 @@ LOGIC = r"""
     TO_FM[id] = col;
     (FROM_FM[col] = FROM_FM[col] || []).push(id);
   });
+  // FMHUB-23: 見積番号・区分（案件区分）は画面の頭に直接置いた欄（FMUSE には無い）
+  [['f-mitsuno', '見積番号'], ['f-kubun', '案件区分']].forEach(function (p) { TO_FM[p[0]] = p[1]; (FROM_FM[p[1]] = FROM_FM[p[1]] || []).push(p[0]); });
   var MONEY = ['合計金額','売価金額','用紙代','印刷代','版代','加工賃','梱包代','配送代','人件費',
                '用紙代1','用紙代2','用紙代3','印刷代1','印刷代2','印刷代3','売価単価'];
   var STAGE_CLASS = { '予算見積':'yosan', '見積':'mitsu', '受注':'juchu', '失注':'shitchu' };
