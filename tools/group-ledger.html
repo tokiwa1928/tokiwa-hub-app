@@ -542,7 +542,16 @@ function _memoHtml_(c){
 //   市役所は「○○市××課」に納品して、請求と入札の本見積は「○○市長」宛、
 //   見積書（予算・随意契約）は「○○市 契約課」宛、というのが多いので自動で出す。
 //   設定は本体（マスター＞取引先）と共有（同じ端末の保存領域を読む）。
-function _blDB_(){ try{ return JSON.parse(localStorage.getItem('murayama_v15')||'null')||{}; }catch(e){ return {}; } }
+// 本体の保存データ（4MB）は読むたびに JSON.parse すると重い（1 セルごとに呼ばれ画面が固まっていた）。3 秒だけ覚えておく
+var _blCache_=null, _blCacheT_=0;
+function _blDB_(){
+  var now=Date.now(); if(_blCache_ && now-_blCacheT_<3000) return _blCache_;
+  try{ _blCache_=JSON.parse(localStorage.getItem('murayama_v15')||'null')||{}; }catch(e){ _blCache_={}; }
+  _blCacheT_=now; return _blCache_;
+}
+window.addEventListener('storage', function(e){ if(!e || !e.key || e.key==='murayama_v15'){ _blCache_=null; _blCacheT_=0; _colMemo_={}; } });
+// 宛名の計算結果は得意先名ごとに 1 回の描画の間だけ覚える（同じ得意先の行が多い）
+var _colMemo_={};
 function _blConf_(){ var c=(_blDB_().conf)||{}; return {
   auto:(c.billAutoChief!==false),
   dept:(c.billQuoteDept==null?'契約課':String(c.billQuoteDept).trim()),
@@ -639,8 +648,13 @@ function _qtoUi_(dst){
   if(!can && s) s.value='asis';
 }
 function getColVal(c,k){
-  if(k==='_billTo'){ var b=blAddrFor(c.customer,'bill'); return (b&&b!==String(c.customer||'').trim())?b:''; }
-  if(k==='_quoteTo'){ var q=quoteAddrFor(c.customer); return (q&&q!==String(c.customer||'').trim())?q:''; }
+  if(k==='_billTo'||k==='_quoteTo'){
+    var mk=k+'|'+String(c.customer||'').trim(); if(_colMemo_[mk]!==undefined) return _colMemo_[mk];
+    var r;
+    if(k==='_billTo'){ var b=blAddrFor(c.customer,'bill'); r=(b&&b!==String(c.customer||'').trim())?b:''; }
+    else { var q=quoteAddrFor(c.customer); r=(q&&q!==String(c.customer||'').trim())?q:''; }
+    _colMemo_[mk]=r; return r;
+  }
   if(k==='multiPack') return (c.multiPack===true||c.multiPack==='true'||c.multiPack==='TRUE')?'⚠ 複数梱包':'';
   if(k==='multiDest') return c.multiDest?'⚠ 複数納品先':'';
   if(k==='_vendor') return _vendVal_(c);
@@ -1150,6 +1164,7 @@ function _sortV_(V){
   return V;
 }
 function render(){
+  _colMemo_={};   // 宛名の覚え書きは描画ごとに作り直す（本体側で宛名の設定を変えたときに追従）
   var V=_sortV_(filtered());
   var shown=V.slice(0,DISPLAY_CAP);
   // ヘッダー2段: ①ラベル＋▼(値選択/並べ替え) ②列内ワード検索
