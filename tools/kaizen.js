@@ -203,7 +203,8 @@
     msg.className = ''; msg.textContent = '送っています…';
     panel.querySelector('#kz-send').disabled = true;
 
-    雲へ上げる().then(function (ok) {
+    // KAIZEN-FAST: 1 件だけを送る（12MB の全データ同期はしない）。だめなら従来の同期
+    軽く送る(rec).then(function (ok) { return ok ? true : 雲へ上げる(); }).then(function (ok) {
       panel.querySelector('#kz-send').disabled = false;
       msg.className = ok ? 'ok' : '';
       msg.textContent = ok ? '✓ 送りました。ありがとうございます'
@@ -213,6 +214,15 @@
     });
   }
 
+  function 軽く送る(rec) {
+    var u = new URL(GAS);
+    u.searchParams.set('action', 'kaizenAdd');
+    u.searchParams.set('apiKey', KEY);
+    return fetch(u.toString(), { method: 'POST', body: JSON.stringify({ rec: rec }), redirect: 'follow' })
+      .then(function (r) { return r.json(); })
+      .then(function (r) { return !!(r && r.success); })
+      .catch(function () { return false; });
+  }
   // 全社クラウドへ。kaizen だけを新しい方で混ぜ、他はクラウドの最新をそのまま返す
   function 雲へ上げる() {
     var a = auth();
