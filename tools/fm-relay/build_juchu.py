@@ -1071,6 +1071,7 @@ LOGIC = r"""
     索引日 = j.行.map(function (r) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(r[d] || '')); return m ? Number(m[3] + m[1] + m[2]) : 0; });
     try { setTimeout(案件管理表として出す, 0); } catch (e) {}
   }
+  var 索引待ち = 0;
   function 索引を用意() {
     var 有効 = 24 * 60 * 60 * 1000;
     return 索引を開くDB().then(function (db) {
@@ -1081,7 +1082,9 @@ LOGIC = r"""
         if (o && o.行) { 索引を据える(o); 索引の状態(); }
         var 古い = !o || !o.取った || (Date.now() - new Date(o.取った).getTime()) > 有効 || (o.列 && o.列.indexOf('案件ID') < 0);   // 列が増えたら取り直す
         if (!古い) return 索引の差分を重ねる();
-        if (!(window.FM名乗っている ? FM名乗っている() : true)) return;   // サインイン前なら次の機会に
+        if (!(window.FM名乗っている ? FM名乗っている() : true)) {   // サインイン前なら、サインインを待ってもう一度（最大 20 回・1 分）
+          索引待ち = (索引待ち || 0) + 1; if (索引待ち <= 20) setTimeout(索引を用意, 3000); return;
+        }
         $('ff-msg').textContent = (索引 ? '索引を取り直しています…' : '索引を取っています（初回だけ 10〜20 秒）…');
         var t0 = Date.now();
         return 呼ぶ('写し_索引を配る', []).then(function (j) {
