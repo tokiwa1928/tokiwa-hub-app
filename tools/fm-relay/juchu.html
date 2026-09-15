@@ -1937,15 +1937,30 @@ window.FM見た目 = function () {};
       if (日付欄か(el)) v = 画面の日付へ(v);
       s(id, v); 読込時[id] = v; el.classList.remove('fm-dirty');
     });
-    var 区分 = rec.fields['案件区分'] || '受注';
-    段階札.textContent = 区分 + '  ' + (rec.fields['見積番号'] || rec.fields['伝票番号'] || '');
-    段階札.className = STAGE_CLASS[区分] || '';
+    札を出す(rec);
     try { calc(); } catch (e) {}
     try { onInk(); } catch (e) {}
     try { applyRowVis(); } catch (e) {}
     try { refreshNote(); } catch (e) {}
   }
 
+  function 札を出す(rec) {
+    var 区分 = rec.fields['案件区分'] || '受注';
+    var 案件 = String(rec.fields['案件ID'] || '');
+    段階札.textContent = 区分 + '  ' + (rec.fields['見積番号'] || rec.fields['伝票番号'] || '') + (案件 ? '　案件 ' + 案件 : '　（案件IDなし）');
+    段階札.className = STAGE_CLASS[区分] || '';
+    段階札.style.cursor = 'pointer';
+    段階札.title = '押すと、この伝票の 案件ID を入れ直せます（同じ案件IDの伝票が「この案件の段階」に並びます）';
+    段階札.onclick = function () {
+      if (!現在) return;
+      var v = prompt('この伝票の 案件ID（予算見積・見積・受注をくくる番号）\n空にすると、この伝票自身の番号を案件IDにします', 案件 || String(rec.fields['伝票番号'] || ''));
+      if (v === null) return;
+      呼ぶ('画面_案件にまとめる', [[String(現在.recordId)], v.trim(), 0]).then(function (r) {
+        現在.fields['案件ID'] = r.案件ID; 札を出す(現在); 履歴を出す(r.履歴); 状態('案件 ' + r.案件ID + ' にしました');
+        if (索引) { var P = 索引位置; for (var i = 0; i < 索引.行.length; i++) { if (String(索引.行[i][P['recordId']]) === String(現在.recordId)) 索引.行[i][P['案件ID']] = r.案件ID; } }
+      }).catch(function (e) { 状態(String(e.message || e), 'err'); });
+    };
+  }
   function 履歴を出す(list) {
     履歴欄.innerHTML = '';
     if (!list || !list.length) { 履歴欄.innerHTML = '<option>—</option>'; return; }
@@ -2365,6 +2380,7 @@ window.FM見た目 = function () {};
     { c:'伝票番号',   h:'伝票番号' },
     { c:'見積番号',   h:'見積番号' },
     { c:'案件区分',   h:'段階', badge:true },
+    { c:'案件ID',     h:'案件' },
     { c:'起票日',     h:'起票日', date:true },
     { c:'得意先コード', h:'得意先' },
     { c:'製品名',     h:'製品名' },
@@ -2394,11 +2410,15 @@ window.FM見た目 = function () {};
       $('ff-msg').textContent = '見つかりませんでした';
       return;
     }
-    var h = '<table><thead><tr>';
+    var h = '<div style="display:flex;gap:8px;align-items:center;margin:2px 0 4px;font-size:12px">'
+      + '<button id="ff-group" style="padding:3px 10px" title="チェックした伝票の 案件ID を同じにします（空なら いちばん古い受注の伝票番号）">☑ 選んだ伝票を 1 つの案件にまとめる</button>'
+      + '<input id="ff-group-id" placeholder="案件ID（空なら自動）" style="width:150px;padding:3px 6px"><span style="color:#64748b">「案件」列が同じ伝票が、予算見積→見積→受注の 1 つの案件です</span></div>';
+    h += '<table><thead><tr><th></th>';
     列.forEach(function (k) { h += '<th>' + esc(k.h) + '</th>'; });
     h += '</tr></thead><tbody>';
     r.行.forEach(function (row) {
       h += '<tr class="r" data-id="' + esc(row.recordId) + '">';
+      h += '<td onclick="event.stopPropagation()"><input type="checkbox" class="pick" data-id="' + esc(row.recordId) + '"></td>';
       列.forEach(function (k) {
         var v = row[k.c];
         if (k.badge) {
@@ -2422,6 +2442,23 @@ window.FM見た目 = function () {};
       + (r.日数 ? '　起票日 直近' + r.日数 + '日' : '')
       + '　' + (r.源 === '索引' ? r.ミリ秒 + 'ms（手元の索引）' : (r.ミリ秒 / 1000).toFixed(1) + '秒') + '　行をクリックで開きます';
 
+    $('ff-group').onclick = function () {
+      var ids = Array.prototype.map.call(box.querySelectorAll('input.pick:checked'), function (x) { return x.getAttribute('data-id'); });
+      if (ids.length < 1) { alert('まとめる伝票を左のチェックで選んでください（1 件でも可＝案件IDを入れ直す）'); return; }
+      var 指定 = $('ff-group-id').value.trim();
+      $('ff-msg').textContent = '案を作っています…';
+      呼ぶ('画面_案件にまとめる', [ids, 指定, 1]).then(function (a) {
+        var 文 = '案件ID「' + a.案件ID + '」でまとめます。\n\n' + a.案.map(function (x) { return (x.変える ? '変更 ' : '同じ ') + x.区分 + ' ' + x.番号 + '（' + (x.今 || '案件IDなし') + '）'; }).join('\n') + '\n\nFileMaker に書き込みます。よろしいですか？';
+        if (!confirm(文)) { $('ff-msg').textContent = 'やめました'; return; }
+        return 呼ぶ('画面_案件にまとめる', [ids, a.案件ID, 0]).then(function (r) {
+          // 手元の索引にも反映
+          if (索引) { var P = 索引位置; for (var i = 0; i < 索引.行.length; i++) { if (ids.indexOf(String(索引.行[i][P['recordId']])) >= 0) 索引.行[i][P['案件ID']] = r.案件ID; } }
+          $('ff-msg').textContent = '案件 ' + r.案件ID + ' にまとめました（' + r.更新 + ' 件を更新）';
+          if (現在 && ids.indexOf(String(現在.recordId)) >= 0) { 現在.fields['案件ID'] = r.案件ID; 札を出す(現在); 履歴を出す(r.履歴); }
+          手元で探す(false);
+        });
+      }).catch(function (e) { $('ff-msg').textContent = String(e.message || e); });
+    };
     Array.prototype.forEach.call(box.querySelectorAll('tr.r'), function (tr) {
       tr.onclick = function () {
         if (Object.keys(変更分()).length
@@ -2523,7 +2560,7 @@ window.FM見た目 = function () {};
       if (tanto && String(r[P['担当者コード']]) !== tanto) continue;
       if (hinshu && String(r[P['品種']]).toLowerCase().indexOf(hinshu) < 0) continue;
       if (kw) {
-        if (番号らしい) { if (String(r[P['伝票番号']]).toLowerCase().indexOf(kwl) !== 0) continue; }
+        if (番号らしい) { if (String(r[P['伝票番号']]).toLowerCase().indexOf(kwl) !== 0 && String(r[P['案件ID']] || '').toLowerCase().indexOf(kwl) !== 0 && String(r[P['見積番号']] || '').toLowerCase().indexOf(kwl) !== 0) continue; }
         else if (String(r[P['製品名']]).toLowerCase().indexOf(kwl) < 0 && String(r[P['ユーザー名']]).toLowerCase().indexOf(kwl) < 0) continue;
       }
       hits.push(i);

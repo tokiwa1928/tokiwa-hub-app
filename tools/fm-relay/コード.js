@@ -708,6 +708,45 @@ function getByDenpyo_複製用_(種) {
   return d.fieldData || {};
 }
 
+/**
+ * 選んだ伝票を 1 つの案件にまとめる（案件ID を揃える）。FileMaker 側で作った古い伝票には 案件ID が無いので、これで後からくくる。
+ *   recordIds: まとめる伝票の recordId の配列
+ *   案件ID:    空なら自動。いちばん古い「受注」の伝票番号（受注が無ければいちばん古い伝票の番号から -YM01/-M01 を除いたもの）
+ *   確認:      1 なら書かずに「この案件IDでこう揃える」案だけ返す
+ */
+function 画面_案件にまとめる(recordIds, 案件ID, 確認) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  var ids = (recordIds || []).map(String).filter(Boolean);
+  if (!ids.length) throw new Error('まとめる伝票を選んでください');
+  var recs = ids.map(function (id) {
+    var r = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records/' + id);
+    if (r.code !== '0') throw new Error('読み込みに失敗 (' + r.code + ') ' + id);
+    var d = (r.response.data || [])[0]; if (!d) throw new Error('レコードが見つかりません: ' + id);
+    return { recordId: d.recordId, modId: d.modId, fields: d.fieldData };
+  });
+  function 日(s) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(s || '')); return m ? Number(m[3] + m[1] + m[2]) : 99999999; }
+  var sorted = recs.slice().sort(function (a, b) { return 日(a.fields['起票日']) - 日(b.fields['起票日']); });
+  案件ID = String(案件ID || '').trim();
+  if (!案件ID) {
+    var ju = sorted.filter(function (r) { return !r.fields['案件区分'] || r.fields['案件区分'] === '受注'; });
+    var base = ju[0] || sorted[0];
+    案件ID = String(base.fields['案件ID'] || base.fields['伝票番号'] || String(base.fields['見積番号'] || '').replace(/-(YM|M)\d+$/, '')).trim();
+  }
+  if (!案件ID) throw new Error('案件IDが決められません（伝票番号も見積番号も空）');
+  var 案 = recs.map(function (r) { return { recordId: r.recordId, 番号: r.fields['伝票番号'] || r.fields['見積番号'] || '', 区分: r.fields['案件区分'] || '', 起票日: r.fields['起票日'] || '', 今: r.fields['案件ID'] || '', 変える: String(r.fields['案件ID'] || '') !== 案件ID }; });
+  if (確認 === 1 || 確認 === '1' || 確認 === true) return { ok: true, 案件ID: 案件ID, 確認: true, 案: 案 };
+  var n = 0;
+  recs.forEach(function (r) {
+    if (String(r.fields['案件ID'] || '') === 案件ID) return;
+    var up = update_(lay, r.recordId, r.modId, { '案件ID': 案件ID }, who);
+    if (up.conflict) throw new Error('だれかが同時に直しています: ' + (r.fields['伝票番号'] || r.recordId));
+    n++;
+  });
+  log_(who, lay, ids.join(','), { '案件にまとめる': 案件ID, 件数: n }, { 伝票: 案.map(function (x) { return x.番号; }).join(' ') });
+  return { ok: true, 案件ID: 案件ID, 更新: n, 案: 案, 履歴: 案件の履歴_(lay, 案件ID) };
+}
+
 function 番号と段階を入れる_(lay, rec, 案件ID, 種別, who) {
   var upd = { '案件ID': 案件ID, '案件区分': 種別 };
   var def = 段階[種別];
@@ -743,6 +782,7 @@ function handle_(action, req, who) {
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
     case '画面_削除':         return 画面_削除(req.recordId, req.modId);
+    case '画面_案件にまとめる': return 画面_案件にまとめる(req.recordIds, req['案件ID'], req['確認']);   // FMHUB-21: 選んだ伝票の 案件ID を揃える
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
