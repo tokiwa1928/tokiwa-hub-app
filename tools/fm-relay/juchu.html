@@ -1796,7 +1796,12 @@ function setPane(p){
 <div id="fmfind">
   <div class="cond">
     <div><label>品名で探す</label><input id="ff-kw" placeholder="打つと出ます。a10000 なら伝票番号の前方一致" autocomplete="off"></div>
-    <div><label>得意先コード</label><input id="ff-cust" style="width:110px" autocomplete="off"></div>
+    <div><label>得意先（コードか名前）</label><input id="ff-cust" style="width:150px" placeholder="5465 か 中尾" autocomplete="off"></div>
+    <div><label>ユーザー名</label><input id="ff-user" style="width:120px" placeholder="花井寺" autocomplete="off"></div>
+    <div><label>担当者コード</label><input id="ff-tanto" style="width:60px" autocomplete="off"></div>
+    <div><label>品種</label><input id="ff-hinshu" style="width:70px" autocomplete="off"></div>
+    <div><label>起票日 から／まで</label><input type="date" id="ff-d1" style="width:130px"><input type="date" id="ff-d2" style="width:130px"></div>
+    <div><label>納品日 から／まで</label><input type="date" id="ff-n1" style="width:130px"><input type="date" id="ff-n2" style="width:130px"></div>
     <div><label>段階</label>
       <select id="ff-stage">
         <option value="">すべて</option>
@@ -2441,6 +2446,16 @@ window.FM見た目 = function () {};
       q.onsuccess = function () { res(q.result); }; q.onerror = function () { rej(q.error); };
     });
   }
+  // 日付の文字（MM/DD/YYYY か YYYY-MM-DD）→ yyyymmdd の数。読めなければ 0
+  function 日を数に(s) { s = String(s || '').trim(); if (!s) return 0; var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(s); if (m) return Number(m[3] + m[1] + m[2]); m = /^(\d{4})-(\d\d)-(\d\d)$/.exec(s); return m ? Number(m[1] + m[2] + m[3]) : 0; }
+  // 得意先の名前（一部でよい）→ 当てはまる得意先コードの集合。マスタが手元に無ければ null
+  function 得意先コードを名前で(nm) {
+    var m = 得意先マスタ; if (!m) { try { var c = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); if (c && c.行) { 得意先マスタ = c; m = c; } } catch (e) {} }
+    if (!m) return null;
+    var key = String(nm).toLowerCase(), out = {}, n = 0;
+    m.行.forEach(function (r) { if (String(r['得意先名'] || '').toLowerCase().indexOf(key) >= 0) { out[String(r['得意先コード'])] = 1; n++; } });
+    return out;
+  }
   function 索引を据える(j) {
     索引 = j; 索引位置 = {}; j.列.forEach(function (c, i) { 索引位置[c] = i; });
     var d = 索引位置['起票日'];
@@ -2483,9 +2498,15 @@ window.FM見た目 = function () {};
     if (!索引) return false;
     var kw = $('ff-kw').value.trim(), cust = $('ff-cust').value.trim(), 段階 = $('ff-stage').value;
     var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 50);
+    var user = $('ff-user').value.trim().toLowerCase(), tanto = $('ff-tanto').value.trim(), hinshu = $('ff-hinshu').value.trim().toLowerCase();
+    var d1 = 日を数に($('ff-d1').value), d2 = 日を数に($('ff-d2').value), n1 = 日を数に($('ff-n1').value), n2 = 日を数に($('ff-n2').value);
+    // 得意先: 数字ならコード、それ以外は得意先マスタの名前で前方一致→該当コードの集合
+    var custSet = null;
+    if (cust && !/^\d+$/.test(cust)) { custSet = 得意先コードを名前で(cust); if (!custSet) { $('ff-msg').textContent = '得意先マスタを読んでいます…'; 得意先マスタを用意().then(function () { 手元で探す(false); }); return true; } }
     var 番号らしい = /^[a-zA-Z]?\d{2,}$/.test(kw);
     if (番号らしい) 日数 = 0;
-    if (!kw && !cust && !段階 && !全件モード) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    if (d1 || d2) 日数 = 0;   // 日付を指定したら「期間」は使わない
+    if (!kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
     全件モード = false;
     var から = 0;
     if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')); }
@@ -2493,8 +2514,13 @@ window.FM見た目 = function () {};
     for (var i = 0; i < 行.length; i++) {
       var r = 行[i];
       if (から && 索引日[i] < から) continue;
-      if (cust && String(r[P['得意先コード']]) !== cust) continue;
+      if (d1 && 索引日[i] < d1) continue; if (d2 && 索引日[i] > d2) continue;
+      if (n1 || n2) { var nd = 日を数に(r[P['納品日']]); if (!nd) continue; if (n1 && nd < n1) continue; if (n2 && nd > n2) continue; }
+      if (custSet) { if (!custSet[String(r[P['得意先コード']])]) continue; } else if (cust && String(r[P['得意先コード']]) !== cust) continue;
       if (段階 && String(r[P['案件区分']]) !== 段階) continue;
+      if (user && String(r[P['ユーザー名']]).toLowerCase().indexOf(user) < 0) continue;
+      if (tanto && String(r[P['担当者コード']]) !== tanto) continue;
+      if (hinshu && String(r[P['品種']]).toLowerCase().indexOf(hinshu) < 0) continue;
       if (kw) {
         if (番号らしい) { if (String(r[P['伝票番号']]).toLowerCase().indexOf(kwl) !== 0) continue; }
         else if (String(r[P['製品名']]).toLowerCase().indexOf(kwl) < 0 && String(r[P['ユーザー名']]).toLowerCase().indexOf(kwl) < 0) continue;
@@ -2580,11 +2606,11 @@ window.FM見た目 = function () {};
   };
   $('ff-go').onclick = 探す;
   $('ff-x').onclick = function () { 探し.style.display = 'none'; };
-  ['ff-kw', 'ff-cust'].forEach(function (id) {
+  ['ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu'].forEach(function (id) {
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') 探す(); });
     $(id).addEventListener('input', 打ちながら);
   });
-  ['ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { $(id).addEventListener('change', function () { 手元で探す(false); }); });
+  ['ff-stage', 'ff-days', 'ff-n', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2'].forEach(function (id) { $(id).addEventListener('change', function () { 手元で探す(false); }); });
   // -------------------------------------------------- FileMaker のボタンを本物の動きに（FMHUB-9）
   function 帯のボタン(文言) {
     return Array.prototype.filter.call(document.querySelectorAll('.hdrow .fb'), function (x) { return x.textContent.trim() === 文言; })[0];
@@ -2607,6 +2633,7 @@ window.FM見た目 = function () {};
   帯に付ける('全体表示', function () {
     探し.style.display = 'block';
     $('ff-kw').value = ''; $('ff-cust').value = ''; $('ff-stage').value = ''; $('ff-days').value = '0'; $('ff-n').value = '200';
+    ['ff-user', 'ff-tanto', 'ff-hinshu', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2'].forEach(function (id) { $(id).value = ''; });
     全件モード = true;
     if (!手元で探す(false)) 探す();
   }, '新しい順に 200 件を出します');
