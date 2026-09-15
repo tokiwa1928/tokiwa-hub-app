@@ -1170,8 +1170,9 @@ LOGIC = r"""
   var モード = (function () { try { return new URLSearchParams(location.search).get('mode') || ''; } catch (e) { return ''; } })();
   var 起こす種別 = モード === 'mitsu' ? '見積' : '受注';
   if (モード) {
-    var 名札 = document.querySelector('.hdrow .ttl'); if (名札) 名札.textContent = (モード === 'mitsu' ? '見積登録' : モード === 'ichiran' ? '案件管理表（FileMaker）' : '受注登録');
-    document.title = (モード === 'mitsu' ? '見積登録' : モード === 'ichiran' ? '案件管理表（FileMaker）' : '受注登録') + ' | Tokiwa Hub';
+    var 見出し = (モード === 'mitsu' ? '見積入力' : モード === 'ichiran' ? '案件管理表（FileMaker）' : '受注入力');
+    var 名札 = document.querySelector('.hdrow .ttl'); if (名札) 名札.textContent = 見出し;
+    document.title = 見出し + ' | Tokiwa Hub';
   }
   // 案件管理表モード: 開いたら探す窓を出して、直近 3 か月・200 件を新しい順に（索引が来たら自動で）
   var 一覧を出した = false;
@@ -1182,10 +1183,28 @@ LOGIC = r"""
     $('ff-days').value = '90'; $('ff-n').value = '200'; 全件モード = true;
     手元で探す(false);
   }
+  // 見積入力では「予算見積」か「見積書」かを選んで起こす。番号（-YM01／-M01）と区分は中継が付ける
+  function 種別を選んで起こす() {
+    var old = document.getElementById('fm-kind-pick'); if (old) old.remove();
+    var m = document.createElement('div'); m.id = 'fm-kind-pick';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:flex;align-items:center;justify-content:center';
+    var 案件 = 現在 && 現在.fields['案件ID'] ? ('案件 ' + 現在.fields['案件ID'] + ' の続きとして') : 'まっさらな案件として';
+    m.innerHTML = '<div style="background:#fff;border-radius:10px;padding:16px 18px;width:min(460px,94vw);font-size:13px">'
+      + '<div style="font-weight:700;font-size:14px;margin-bottom:6px">何を起こしますか？</div>'
+      + '<div style="color:#475569;margin-bottom:12px">' + 案件 + '起こします。番号と区分は FileMaker 側で付きます。</div>'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap">'
+      + '<button data-kind="予算見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #b45309;background:#fffbeb;color:#92400e;border-radius:8px;cursor:pointer">予算見積<br><span style="font-weight:400;font-size:11px">番号 aNNNNNN-YM01（概算・予算どり）</span></button>'
+      + '<button data-kind="見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #1d4ed8;background:#eff6ff;color:#1e3a8a;border-radius:8px;cursor:pointer">見積書<br><span style="font-weight:400;font-size:11px">番号 aNNNNNN-M01（提出する見積）</span></button>'
+      + '</div><div style="text-align:right;margin-top:10px"><button id="fm-kind-x" style="font:inherit;padding:5px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer">やめる</button></div></div>';
+    document.body.appendChild(m);
+    m.querySelector('#fm-kind-x').onclick = function () { m.remove(); };
+    Array.prototype.forEach.call(m.querySelectorAll('button[data-kind]'), function (x) { x.onclick = function () { var kind = x.getAttribute('data-kind'); m.remove(); var n = document.querySelector('#fmbar button.new[data-kind="' + kind + '"]'); if (n) n.click(); }; });
+  }
   帯に付ける('新規作成', function () {
+    if (モード === 'mitsu') { 種別を選んで起こす(); return; }
     var n = document.querySelector('#fmbar button.new[data-kind="' + 起こす種別 + '"]') || document.querySelector('#fmbar button.new');
     if (n) n.click();
-  }, 'FileMaker に新しい' + 起こす種別 + 'を起こします（黒帯の「' + 起こす種別 + '」と同じ）');
+  }, モード === 'mitsu' ? '予算見積か見積書かを選んで、FileMaker に新しく起こします（番号は自動）' : 'FileMaker に新しい' + 起こす種別 + 'を起こします（黒帯の「' + 起こす種別 + '」と同じ）');
   帯に付ける('検索モード', function () { 探し.style.display = 'block'; $('ff-kw').focus(); $('ff-kw').select(); }, '探す窓に移ります。打つと出ます');
   帯に付ける('全体表示', function () {
     探し.style.display = 'block';
