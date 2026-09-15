@@ -981,8 +981,21 @@ LOGIC = r"""
     return (v === '' || v === undefined || v === null || isNaN(x)) ? '' : x.toLocaleString();
   }
 
+  var 最後の件数 = 0;
+  function 結果を畳む() {
+    var box = $('ff-rows'); if (!box || box.style.display === 'none') return;
+    box.style.display = 'none';
+    var old = document.getElementById('ff-fold'); if (old) old.remove();
+    var bar = document.createElement('div'); bar.id = 'ff-fold';
+    bar.style.cssText = 'margin:4px 0;padding:5px 10px;background:#e2e8f0;border-radius:6px;font-size:12px;cursor:pointer;color:#1e293b;font-weight:700';
+    bar.textContent = '▸ 検索結果（' + 最後の件数.toLocaleString() + ' 件）を開く';
+    bar.onclick = function () { box.style.display = 'block'; bar.remove(); };
+    box.parentNode.insertBefore(bar, box);
+  }
   function 一覧を出す(r) {
     var box = $('ff-rows');
+    var fold = document.getElementById('ff-fold'); if (fold) fold.remove();
+    最後の件数 = (r && r.行) ? r.行.length : 0;
     if (!r.行 || !r.行.length) {
       box.style.display = 'none';
       $('ff-msg').textContent = '見つかりませんでした';
@@ -1066,7 +1079,7 @@ LOGIC = r"""
           && !confirm('保存していない編集があります。捨てて開きますか？')) return;
       待機(true); 状態('開いています…');
       呼ぶ('画面_recordIdで読む', [id])
-        .then(function (x) { 受け取る(x, '開きました'); })
+        .then(function (x) { 受け取る(x, '開きました'); 結果を畳む(); })
         .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
     }
     行を結ぶ = function (tr) {
