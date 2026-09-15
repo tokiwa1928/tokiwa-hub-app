@@ -1909,7 +1909,7 @@ window.FM見た目 = function () {};
   function 失敗(m) { err.textContent = m || ''; err.style.display = m ? 'block' : 'none'; }
   function 待機(on) {
     btnL.disabled = on;
-    btnS.disabled = on || !現在;
+    btnS.disabled = on;   // 伝票が無いときに押すと、新しく起こしてから保存する（FMHUB-24）
     btnR.disabled = on || !現在;
     Array.prototype.forEach.call(document.querySelectorAll('#fmbar button.new'),
       function (b) { b.disabled = on; });
@@ -2310,7 +2310,7 @@ window.FM見た目 = function () {};
            + '前回の ' + 種別 + ' があれば、変わったところを表示します。')
         : ('まっさらな案件として ' + 種別 + ' を起こします。\n\n'
            + '既にある案件の続きにしたいときは、先にその番号を読み込んでください。');
-      if (!confirm(文)) return;
+      if (!confirm(文)) { 起こした後 = null; return; }
 
       待機(true); 失敗(''); diff.style.display = 'none';
       状態((案件ID ? '起こしています… ' : '新規案件を起こしています… ') + 種別);
@@ -2320,7 +2320,8 @@ window.FM見た目 = function () {};
       p.then(function (r) {
         var no = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
         受け取る(r, 種別 + ' を起こしました  ' + no, Date.now() - t0);
-      }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+        if (起こした後) { var f = 起こした後; 起こした後 = null; try { f(); } catch (e) {} }
+      }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); 起こした後 = null; });
     };
   });
 
@@ -2350,8 +2351,23 @@ window.FM見た目 = function () {};
     return 消す;
   }
 
+  // 起こしたあとに続けてやること（空の画面から保存したとき）
+  var 起こした後 = null;
+  function 空から起こして保存() {
+    var 値 = {};
+    Object.keys(TO_FM).forEach(function (id) { var el = document.getElementById(id); if (!el) return; var v = String(el.value == null ? '' : el.value).trim(); if (v !== '') 値[id] = el.value; });
+    if (!Object.keys(値).length) { alert('内容を入れてから「保存」を押してください（伝票番号は自動で付きます）。\n先に空の伝票を起こすなら緑の「新規作成」です'); return; }
+    起こした後 = function () {
+      var n = 0;
+      Object.keys(値).forEach(function (id) { var el = document.getElementById(id); if (!el) return; if (String(読込時[id] || '') !== String(値[id])) { el.value = 値[id]; el.classList.add('fm-dirty'); n++; } });
+      if (n) { try { calc(); } catch (e) {} 保存(); } else { 状態('起こしました（打った内容は最初から入っていました）', 'ok'); }
+    };
+    if (モード === 'mitsu') { 種別を選んで起こす(); return; }
+    var n = document.querySelector('#fmbar button.new[data-kind="' + 起こす種別 + '"]') || document.querySelector('#fmbar button.new');
+    if (n) n.click();
+  }
   function 保存() {
-    if (!現在) return;
+    if (!現在) { 空から起こして保存(); return; }
     var 差 = 変更分(), n = Object.keys(差).length;
     if (!n) { 状態('変更はありません', ''); return; }
     var 消す = 空にする項目(差);
@@ -2730,7 +2746,7 @@ window.FM見た目 = function () {};
       + '<button data-kind="見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #1d4ed8;background:#eff6ff;color:#1e3a8a;border-radius:8px;cursor:pointer">見積書<br><span style="font-weight:400;font-size:11px">番号 aNNNNNN-M01（提出する見積）</span></button>'
       + '</div><div style="text-align:right;margin-top:10px"><button id="fm-kind-x" style="font:inherit;padding:5px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer">やめる</button></div></div>';
     document.body.appendChild(m);
-    m.querySelector('#fm-kind-x').onclick = function () { m.remove(); };
+    m.querySelector('#fm-kind-x').onclick = function () { m.remove(); 起こした後 = null; };
     Array.prototype.forEach.call(m.querySelectorAll('button[data-kind]'), function (x) { x.onclick = function () { var kind = x.getAttribute('data-kind'); m.remove(); var n = document.querySelector('#fmbar button.new[data-kind="' + kind + '"]'); if (n) n.click(); }; });
   }
   帯に付ける('新規作成', function () {
