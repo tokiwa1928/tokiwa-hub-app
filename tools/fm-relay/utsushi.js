@@ -185,7 +185,11 @@ function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日
   var rows = find_(lay, [{ '修正日': '>=' + 昨日 }], 2000, 1, null);
   if (!rows.records.length) { Logger.log('昨日以降の修正はありません'); return 0; }
 
-  var p = 進捗_(); if (!p || !p.列) throw new Error('先に 写し_始める で写しを作ってください');
+  var p = 進捗_();
+  if (p && !p.列) {   // 列の並びが進捗に残っていないときは、年別シートの見出しから拾って覚え直す（9/11 以降の毎晩がこれで止まっていた）
+    try { var sh0 = 写し_開く_(写し.年別名 + new Date().getFullYear()); p.列 = sh0.getRange(1, 1, 1, sh0.getLastColumn()).getValues()[0].map(String); 進捗を書く_(p); } catch (e) {}
+  }
+  if (!p || !p.列) throw new Error('先に 写し_始める で写しを作ってください');
   var 索引 = 写し_帳簿_(写し.索引名, 写し.索引の列).getSheets()[0];
   var 索引値 = 索引.getDataRange().getValues();
   var 索引位置 = {}; for (var i = 1; i < 索引値.length; i++) 索引位置[String(索引値[i][0])] = i + 1;
