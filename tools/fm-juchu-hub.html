@@ -1815,7 +1815,7 @@ function setPane(p){
         <option value="0">すべて（遅い）</option>
       </select></div>
     <div><label>件数</label>
-      <select id="ff-n"><option>50</option><option>100</option><option>200</option></select></div>
+      <select id="ff-n"><option value="0" selected>すべて</option><option>50</option><option>100</option><option>200</option></select></div>
     <button id="ff-go">探す</button>
     <button class="plain" id="ff-x">閉じる</button>
     <span class="hit" id="ff-msg" style="margin-left:auto"></span>
@@ -2589,7 +2589,21 @@ function setPane(p){
     h += '<table><thead><tr><th></th>';
     列.forEach(function (k) { h += '<th>' + esc(k.h) + '</th>'; });
     h += '</tr></thead><tbody>';
-    r.行.forEach(function (row) {
+    var 一度に = 500, 描いた = Math.min(一度に, r.行.length);
+    function 行の札(row) {
+      var t = '<tr class="r" data-id="' + esc(row.recordId) + '">';
+      t += '<td onclick="event.stopPropagation()"><input type="checkbox" class="pick" data-id="' + esc(row.recordId) + '"></td>';
+      列.forEach(function (k) {
+        var v = row[k.c];
+        if (k.badge) { var cls = STAGE_CLASS[v] || ''; t += '<td>' + (v ? '<span class="badge ' + cls + '">' + esc(v) + '</span>' : '') + '</td>'; }
+        else if (k.date) { t += '<td>' + esc(日付(v)) + '</td>'; }
+        else if (k.money || k.num) { t += '<td class="num">' + esc(円(v)) + '</td>'; }
+        else { t += '<td>' + esc(v == null ? '' : v) + '</td>'; }
+      });
+      return t + '</tr>';
+    }
+    r.行.slice(0, 描いた).forEach(function (row) { h += 行の札(row); });
+    if (false) r.行.forEach(function (row) {
       h += '<tr class="r" data-id="' + esc(row.recordId) + '">';
       h += '<td onclick="event.stopPropagation()"><input type="checkbox" class="pick" data-id="' + esc(row.recordId) + '"></td>';
       列.forEach(function (k) {
@@ -2608,8 +2622,17 @@ function setPane(p){
       h += '</tr>';
     });
     h += '</tbody></table>';
+    if (r.行.length > 描いた) h += '<div style="padding:6px"><button id="ff-more" style="padding:4px 12px">続きを出す（残り ' + (r.行.length - 描いた).toLocaleString() + ' 件）</button></div>';
     box.innerHTML = h;
     box.style.display = 'block';
+    var 行を結ぶ;   // 行クリックの付け直し（下で定義）
+    var moreBtn = $('ff-more');
+    if (moreBtn) moreBtn.onclick = function () {
+      var 次 = r.行.slice(描いた, 描いた + 一度に); 描いた += 次.length;
+      var tb = box.querySelector('tbody'); var frag = document.createElement('tbody'); frag.innerHTML = 次.map(行の札).join('');
+      Array.prototype.forEach.call(Array.prototype.slice.call(frag.children), function (tr) { tb.appendChild(tr); 行を結ぶ(tr); });
+      if (描いた >= r.行.length) moreBtn.parentNode.remove(); else moreBtn.textContent = '続きを出す（残り ' + (r.行.length - 描いた).toLocaleString() + ' 件）';
+    };
     $('ff-msg').textContent = r.件数 + ' 件'
       + (r.全体 && r.全体 > r.件数 ? '（あてはまる ' + r.全体.toLocaleString() + ' 件のうち）' : '')
       + (r.日数 ? '　起票日 直近' + r.日数 + '日' : '')
@@ -2632,7 +2655,7 @@ function setPane(p){
         });
       }).catch(function (e) { $('ff-msg').textContent = String(e.message || e); });
     };
-    Array.prototype.forEach.call(box.querySelectorAll('tr.r'), function (tr) {
+    行を結ぶ = function (tr) {
       tr.onclick = function () {
         if (Object.keys(変更分()).length
             && !confirm('保存していない編集があります。捨てて開きますか？')) return;
@@ -2641,7 +2664,8 @@ function setPane(p){
           .then(function (x) { 受け取る(x, '開きました'); })
           .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
       };
-    });
+    };
+    Array.prototype.forEach.call(box.querySelectorAll('tr.r'), 行を結ぶ);
   }
 
   // ---- 手元の索引（写しの 受注_索引 を一度もらって IndexedDB に置く。打っている最中に出せる速さ）
@@ -2680,7 +2704,7 @@ function setPane(p){
         r.onsuccess = function () { res(r.result || null); }; r.onerror = function () { res(null); };
       }).then(function (o) {
         if (o && o.行) { 索引を据える(o); 索引の状態(); }
-        var 古い = !o || !o.取った || (Date.now() - new Date(o.取った).getTime()) > 有効;
+        var 古い = !o || !o.取った || (Date.now() - new Date(o.取った).getTime()) > 有効 || (o.列 && o.列.indexOf('案件ID') < 0);   // 列が増えたら取り直す
         if (!古い) return 索引の差分を重ねる();
         if (!(window.FM名乗っている ? FM名乗っている() : true)) return;   // サインイン前なら次の機会に
         $('ff-msg').textContent = (索引 ? '索引を取り直しています…' : '索引を取っています（初回だけ 10〜20 秒）…');
@@ -2708,7 +2732,7 @@ function setPane(p){
   function 手元で探す(開いてよい) {
     if (!索引) return false;
     var kw = $('ff-kw').value.trim(), cust = $('ff-cust').value.trim(), 段階 = $('ff-stage').value;
-    var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 50);
+    var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 0);   // 0 = すべて
     var user = $('ff-user').value.trim().toLowerCase(), tanto = $('ff-tanto').value.trim(), hinshu = $('ff-hinshu').value.trim().toLowerCase();
     var d1 = 日を数に($('ff-d1').value), d2 = 日を数に($('ff-d2').value), n1 = 日を数に($('ff-n1').value), n2 = 日を数に($('ff-n2').value);
     // 得意先: 数字ならコード、それ以外は得意先マスタの名前で前方一致→該当コードの集合
@@ -2741,7 +2765,7 @@ function setPane(p){
     var 全体 = hits.length;
     if (番号らしい) hits.sort(function (a, b) { return String(行[a][P['伝票番号']]) < String(行[b][P['伝票番号']]) ? -1 : 1; });
     else hits.sort(function (a, b) { return (索引日[b] - 索引日[a]) || (Number(行[b][P['recordId']]) - Number(行[a][P['recordId']])); });
-    hits = hits.slice(0, 件数);
+    if (件数 > 0) hits = hits.slice(0, 件数);
     var out = hits.map(function (i) { var o = {}; 索引.列.forEach(function (c, ci) { o[c] = 行[i][ci]; }); o.recordId = String(o.recordId); return o; });
     一覧を出す({ 行: out, 件数: out.length, 全体: 全体, 日数: 日数, ミリ秒: Date.now() - t0, 源: '索引' });
     if (開いてよい && 番号らしい && out.length === 1) { 番号欄.value = String(out[0]['伝票番号']); 読み込む(String(out[0]['伝票番号'])); }
