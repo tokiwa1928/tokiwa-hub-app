@@ -4143,7 +4143,7 @@ function isOwnCompanyData(item){
   return item.companyId === currentAuth.companyId;
 }
 
-function loadDB(){try{const s=localStorage.getItem(DBKEY);if(s){const d=JSON.parse(s);
+function loadDB(src){try{const s=(src!==undefined&&src!==null)?src:localStorage.getItem(DBKEY);if(s){const d=JSON.parse(s);
   var _didMigrate=false; // 移行で変更したら最後にsaveDB()で永続化する
   // Merge: keep init data as fallback if DB is empty
   if(d.master){
@@ -4324,12 +4324,50 @@ function _localMirror_(db, level){
 }
 // DB を localStorage へ保存する唯一の入口。容量超過時は段階的に削って必ずどこかで成功させる。
 // 返り値: 使ったレベル(0=通常) / 全滅なら -1。
+// ── LOCAL-IDB-1: 端末の控えは IndexedDB（localStorage は 5MB までしか入らず、本体は 10MB を超えた） ──
+var _IDB_NAME='tokiwa_hub_local', _IDB_STORE='kv', _IDB_KEY='db';
+var _idbLoaded_=false, _dbSource_='ls', _idbSaveTimer=null, _idbLastOk=0, _idbLastErr='', _lsFailAt_=0, _lsKeySig_=null;
+function _idbOpen_(){ return new Promise(function(res,rej){ try{ var r=indexedDB.open(_IDB_NAME,1); r.onupgradeneeded=function(e){ var d=e.target.result; if(!d.objectStoreNames.contains(_IDB_STORE)) d.createObjectStore(_IDB_STORE); }; r.onsuccess=function(){ res(r.result); }; r.onerror=function(){ rej(r.error); }; }catch(e){ rej(e); } }); }
+function _idbGet_(key){ return _idbOpen_().then(function(d){ return new Promise(function(res,rej){ var tx=d.transaction(_IDB_STORE,'readonly'); var q=tx.objectStore(_IDB_STORE).get(key); q.onsuccess=function(){ res(q.result); }; q.onerror=function(){ rej(q.error); }; tx.oncomplete=function(){ d.close(); }; }); }); }
+function _idbPut_(key,val){ return _idbOpen_().then(function(d){ return new Promise(function(res,rej){ var tx=d.transaction(_IDB_STORE,'readwrite'); tx.objectStore(_IDB_STORE).put(val,key); tx.oncomplete=function(){ d.close(); res(true); }; tx.onerror=function(){ rej(tx.error); }; }); }); }
+function _idbSaveNow_(){
+  if(_idbSaveTimer){ clearTimeout(_idbSaveTimer); _idbSaveTimer=null; }
+  try{ var s=JSON.stringify(_genArchiveStrip_(DB)); }catch(e){ _idbLastErr=String(e&&e.message||e); return Promise.resolve(false); }
+  return _idbPut_(_IDB_KEY, { at:Date.now(), json:s }).then(function(){ _idbLastOk=Date.now(); _idbLastErr=''; return true; })
+    .catch(function(e){ _idbLastErr=String(e&&e.message||e); console.warn('[IDB] 保存失敗', e); return false; });
+}
+function _idbSaveSoon_(){ if(_idbSaveTimer) clearTimeout(_idbSaveTimer); _idbSaveTimer=setTimeout(function(){ _idbSaveTimer=null; _idbSaveNow_(); }, 400); }
+try{ window.addEventListener('pagehide', function(){ if(_idbSaveTimer) _idbSaveNow_(); }); }catch(e){}
+// 項目ごとの「中身の印」（ツールが localStorage の控えのどこを変えたかを見分ける）
+function _lsSigOf_(obj){ var out={}; Object.keys(obj||{}).forEach(function(k){ var s; try{ s=JSON.stringify(obj[k]); }catch(e){ s=''; } s=s||''; var h=5381; for(var i=0;i<s.length;i++) h=((h*33)^s.charCodeAt(i))|0; out[k]=s.length+':'+h; }); return out; }
+// 起動直後: IndexedDB の控えがあれば、それで本体を置き換える（localStorage の控えより新しい）
+function _idbBoot_(){
+  try{ var _r=localStorage.getItem(DBKEY); _lsKeySig_=_r?_lsSigOf_(JSON.parse(_r)):null; }catch(e){ _lsKeySig_=null; }
+  return _idbGet_(_IDB_KEY).catch(function(e){ console.warn('[IDB] 読めず', e); return null; }).then(function(rec){
+    if(rec && rec.json){
+      try{ loadDB(rec.json); _dbSource_='idb'; }catch(e){ console.warn('[IDB] 控えが壊れています', e); }
+    }
+    _idbLoaded_=true;
+    if(_dbSource_!=='idb'){ _idbSaveNow_(); return; }   // 初回: 今の控えを IndexedDB に写す
+    // 表示中のページを描き直す（クラウド同期の初回と同じやり方）
+    try{ if(DB.conf&&DB.conf.appName){ var _t=document.getElementById('app-title'); if(_t) _t.textContent=DB.conf.appName; } }catch(e){}
+    try{ var _ab=document.querySelector('.tb-btn.act'); var _cur=_ab?_ab.getAttribute('data-page'):''; if(_cur && typeof swPage==='function'){ window._navIgnore=true; swPage(_cur,_ab); } }catch(e){}
+    try{ ['renderProjects','renderEstimates','renderInvoices','renderPayments','renderHistory','renderRealtimeView'].forEach(function(fn){ try{ if(typeof window[fn]==='function') window[fn](); }catch(_){} }); }catch(e){}
+    console.log('[IDB] 端末の控えから読みました', new Date(rec.at||0).toLocaleString('ja-JP'));
+  });
+}
 function _persistLocal_(){
   try { _genArchiveSettle_(); } catch(e){}
+  if(_idbLoaded_) _idbSaveSoon_();   // 主: IndexedDB（起動直後に控えを読み終わるまでは書かない＝古い方で上書きしない）
+  // 従: localStorage（ツールが読む控え）。入らないときは 60 秒に 1 回だけ試す
+  var now=Date.now();
+  if(_lsFailAt_ && now-_lsFailAt_<60000) return _idbLoaded_?0:-1;
   for(let lvl=0; lvl<=2; lvl++){
-    try{ localStorage.setItem(DBKEY, JSON.stringify(_localMirror_(DB, lvl))); return lvl; }
+    try{ var _m=_localMirror_(DB, lvl); localStorage.setItem(DBKEY, JSON.stringify(_m)); _lsFailAt_=0; try{ _lsKeySig_=_lsSigOf_(_m); }catch(_){} return lvl; }
     catch(e){ /* さらに削って再試行 */ }
   }
+  _lsFailAt_=now;
+  if(_idbLoaded_) return 0;   // IndexedDB に入っているので成功扱い
   try{ _toastMsg('⚠ ローカル保存に失敗（クラウドには保存されます）'); }catch(_){}
   return -1;
 }
@@ -28579,7 +28617,13 @@ try {
     try {
       var raw = localStorage.getItem(DBKEY);
       if(!raw) return;
-      DB = JSON.parse(raw);
+      // LOCAL-IDB-1: 丸ごと入れ替えない。ツールが変えた項目（控えの中身が変わった項目）だけ本体に取り込む
+      var _ls=JSON.parse(raw), _sig=_lsSigOf_(_ls), _changed=[];
+      if(_lsKeySig_){ Object.keys(_sig).forEach(function(k){ if(_sig[k]!==_lsKeySig_[k]){ _changed.push(k); DB[k]=_ls[k]; } }); }
+      _lsKeySig_=_sig;
+      if(!_changed.length){ console.log('[Tools] 変わった項目なし'); return; }
+      console.log('[Tools] 取り込んだ項目:', _changed.join(', '));
+      _idbSaveSoon_();
       // 見えているページを軽く再描画
       ['renderProjects','renderEstimates','renderInvoices','renderPayments','renderHistory','renderRealtimeView']
         .forEach(function(fn){ try { if(typeof window[fn] === 'function') window[fn](); } catch(_){} });
@@ -50148,6 +50192,7 @@ function showMasterHistory(masterType, index) {
 
 // ═══════════════════ 起動 ════════════════════
 loadDB();
+try{ _idbBoot_(); }catch(e){ console.warn('[IDB] boot', e); _idbLoaded_=true; }   // LOCAL-IDB-1: 端末の控え（IndexedDB）で置き換える
 // FMHUB-8: GEN の全記録をこの PC の IndexedDB から本体の一覧へ（古ければ保管庫から取り直す）
 setTimeout(function(){ if(window.GENARC) GENARC.準備(function(){ _genArchiveMerge_(); _genArchiveRerender_(); }); }, 800);
 loadAuth();
