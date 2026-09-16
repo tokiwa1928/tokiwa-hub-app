@@ -209,7 +209,7 @@ BAR = r"""
   <span id="hs-msg" style="color:#1d4ed8"></span>
   <span style="display:inline-block;width:100%;height:4px"></span>
   <b>DTP</b>
-  <label>DTP有無 <select id="dtp-yn"><option value="">無</option><option value="有">有</option></select></label>
+  <span style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap">DTP有無 <label style="cursor:pointer"><input type="radio" name="dtp-yn-r" value="" checked> 無</label><label style="cursor:pointer;font-weight:700;color:#5b21b6"><input type="radio" name="dtp-yn-r" value="有"> 有</label></span><input type="hidden" id="dtp-yn" value="">
   <label>校正の内容 <input id="dtp-note" style="width:320px" placeholder="何を校正に出すか（空なら校正BOXに下書きで入ります）"></label>
   <button id="dtp-go" style="background:#7c3aed">校正BOXへ</button>
   <span id="dtp-msg" style="color:#6d28d9"></span>
@@ -784,9 +784,12 @@ LOGIC = r"""
 
   // -------------------------------------------------- DTP有無 → 校正BOX（本体）へ
   function DTP記録() { try { return JSON.parse(localStorage.getItem('fm_dtp') || '{}'); } catch (e) { return {}; } }
+  // KOSEI-DTP-2: ラジオ（無／有）。値は hidden #dtp-yn に集め、今までの処理はそのまま
+  function DTPラジオ同期() { var v = $('dtp-yn').value; Array.prototype.forEach.call(document.querySelectorAll('input[name="dtp-yn-r"]'), function (r) { r.checked = (r.value === v); }); }
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="dtp-yn-r"]'), function (r) { r.addEventListener('change', function () { if (!r.checked) return; $('dtp-yn').value = r.value; $('dtp-yn').dispatchEvent(new Event('change')); }); });
   function DTPを出す(no) {
     var m = DTP記録()[no] || {};
-    $('dtp-yn').value = m.dtp || ''; $('dtp-note').value = m.note || '';
+    $('dtp-yn').value = m.dtp || ''; $('dtp-note').value = m.note || ''; DTPラジオ同期();
     $('dtp-msg').textContent = m.at ? ('校正BOXへ ' + new Date(m.at).toLocaleString('ja-JP') + (m.draft ? '（下書き）' : '')) : '';
   }
   // KOSEI-DTP-1: 伝票の値（fields か 一覧の行）から校正BOXへ送る。無にしたら記録を消す。戻り値は表示用の文
