@@ -226,8 +226,20 @@
             <span id="dropSub">ページ順に並んだ単ページPDF</span>
           </div>
           <input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden>
+          <div class="row" style="margin-top:8px"><label for="pdfx">PDF/X-4</label>
+            <div>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="pdfx"> PDF/X-4 で書き出す（TrimBox／BleedBox・出力条件・XMP・PDF 1.6）</label>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px">
+                <input type="file" id="iccFile" accept=".icc,.icm" style="font-size:12px;max-width:260px">
+                <span id="iccName" style="font-size:12px;color:var(--muted)">出力条件の ICC: 未設定</span>
+                <button type="button" id="iccClear" style="font:inherit;font-size:11px;padding:2px 8px;border:1px solid var(--rule-strong);border-radius:6px;background:var(--surface);cursor:pointer;display:none">外す</button>
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-top:3px">例: C:\Windows\System32\spool\drivers\color\JapanColor2001Coated.icc（一度選べばこのブラウザが覚えます）。原稿のフォントは原稿側で埋め込まれている必要があります。</div>
+            </div>
+          </div>
           <button class="primary" id="go" disabled>面付PDFを書き出す</button>
           <p class="status" id="status">原稿PDFを読み込むと書き出せます。</p>
+          <p style="font-size:11px;color:var(--muted);margin:4px 0 0">原稿のページは中身をそのまま埋め込みます（描き直し・画像の再圧縮なし）。「原寸のまま」なら 100%、「縮拡」なら倍率だけ変わり、画像の解像度はその倍率ぶんだけ変わります。フッター（版面情報）にはファイル名が入ります。</p>
         </div>
       </section>
     </div>
@@ -582,7 +594,7 @@
         bottom: cy - lay.ph / 2 - it.loc.bottom, top: cy + lay.ph / 2 + it.loc.top
       };
     });
-    const embedded = pages.length ? await out.embedPages(pages, undefined, boxes) : [];
+    const embedded = pages.length ? await out.embedPages(pages, boxes) : [];   // pdf-lib: 2 つ目が切り出し枠（3 つ目に渡すと変換行列扱いになり、中身が出ない）
     const embMap = new Map(); keys.forEach((k, i) => embMap.set(k, embedded[i]));
 
     /* --- 描画 --- */
@@ -620,19 +632,73 @@
         if (cfg.marks.blockCenter) centerMarks(sheet, block, bleed, bleed, Lx, Ly, mw, color, clip);
         // 背丁マーク
         if (cfg.marks.spineMark) drawSpineMarks(sheet, lay, cfg, s, nSig, color);
-        // 情報
+        // 情報（フッター）: ファイル名・ジョブ名・折・表裏・面付・仕上がり・ドブ・日付
         if (cfg.marks.info) {
-          // 標準フォントは欧文のみ。日本語は落として版面情報を壊さない。
-          const ascii = (v) => String(v == null ? '' : v).replace(/[^\x20-\x7E -ÿ]/g, '').trim();
-          const t = `${ascii(cfg.jobName)}  SIG ${s + 1}/${nSig}  ${side === 'front' ? 'FRONT' : 'BACK'}  ${cfg.cols}x${cfg.rows}  ${cfg.pageW}x${cfg.pageH}mm  bleed${cfg.bleed}/nodo${cfg.nodo}  ${ascii(cfg.stamp)}`;
-          sheet.drawText(t, { x: 3 * MM, y: 1.6 * MM, size: 5.5, font, color });
+          const t = `${cfg.fileName || ''}  ${cfg.jobName || ''}  ${s + 1}台／${nSig}台 ${side === 'front' ? '表' : '裏'}  P${s * per + 1}〜${Math.min((s + 1) * per, nSrc)}  ${cfg.cols}×${cfg.rows}  ${cfg.pageW}×${cfg.pageH}mm  塗り足し${cfg.bleed}／ノド${cfg.nodo}  ${cfg.stamp}`;   // 1台目から連番
+          const img = await footerImage(out, t);
+          if (img) { const h = 2.0 * MM, w = h * img.width / img.height; sheet.drawImage(img, { x: 3 * MM, y: 1.2 * MM, width: w, height: h }); }
+          else { const ascii = (v) => String(v == null ? '' : v).replace(/[^\x20-\x7E -ÿ]/g, '').trim(); sheet.drawText(ascii(t), { x: 3 * MM, y: 1.6 * MM, size: 5.5, font, color }); }
         }
+        if (cfg.pdfx && cfg.pdfx.on) { sheet.setTrimBox(0, 0, lay.sheetW, lay.sheetH); sheet.setBleedBox(0, 0, lay.sheetW, lay.sheetH); }
         report.push(rec);
         if (onProgress) onProgress((s * 2 + (side === 'front' ? 1 : 2)) / (nSig * 2));
       }
     }
-    const bytes = await out.save();
+    let bytes;
+    if (cfg.pdfx && cfg.pdfx.on) { applyPdfX4(out, cfg); bytes = await out.save({ useObjectStreams: false }); if (bytes[5] === 0x31 && bytes[6] === 0x2e) bytes[7] = 0x36; }   // %PDF-1.7 → 1.6（PDF/X-4 の版）
+    else bytes = await out.save();
     return { bytes, report, scheme, nSig, perSheet: per, srcPages: nSrc, lay, markLen: { x: Lx / MM, y: Ly / MM } };
+  }
+
+  /* フッターの文字をブラウザの字で描いて画像に（日本語が出せる・フォント埋め込みが要らない） */
+  const _footerCache = new Map();
+  async function footerImage(doc, text) {
+    try {
+      if (typeof document === 'undefined') return null;
+      const key = text; if (_footerCache.has(key)) return _footerCache.get(key);
+      const scale = 8, fs = 5.5 * scale;   // 5.5pt 相当を 8 倍で描く（約 580dpi）
+      const cv = document.createElement('canvas'); const cx = cv.getContext('2d');
+      cx.font = `${fs}px "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif`;
+      const w = Math.ceil(cx.measureText(text).width) + fs; cv.width = w; cv.height = Math.ceil(fs * 1.4);
+      cx.font = `${fs}px "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif`; cx.fillStyle = '#000'; cx.textBaseline = 'middle';
+      cx.fillText(text, fs * 0.5, cv.height / 2);
+      const png = await new Promise(res => cv.toBlob(b => res(b), 'image/png'));
+      const img = await doc.embedPng(await png.arrayBuffer());
+      _footerCache.set(key, img); return img;
+    } catch (e) { return null; }
+  }
+
+  /* PDF/X-4: 出力条件（ICC）・XMP（GTS_PDFXVersion）・Trapped・タイトル */
+  function applyPdfX4(doc, cfg) {
+    const { PDFName, PDFString, PDFHexString } = PDFLib;
+    const ctx = doc.context;
+    const title = cfg.fileName ? cfg.fileName.replace(/\.pdf$/i, '') + ' 面付' : (cfg.jobName || 'imposed');
+    doc.setTitle(title); doc.setCreator('Tokiwa Hub 折丁面付台'); doc.setProducer('pdf-lib');
+    const now = new Date(); const iso = now.toISOString().replace(/\.\d+Z$/, 'Z');
+    const infoRef = ctx.trailerInfo.Info; const info = infoRef ? ctx.lookup(infoRef) : null;
+    if (info && info.set) { info.set(PDFName.of('Trapped'), PDFName.of('False')); info.set(PDFName.of('GTS_PDFXVersion'), PDFString.of('PDF/X-4')); }
+    const esc = (v) => String(v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const xmp = '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+      + '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+      + '<rdf:Description rdf:about="" xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+      + '<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>'
+      + `<xmp:CreateDate>${iso}</xmp:CreateDate><xmp:ModifyDate>${iso}</xmp:ModifyDate><xmp:MetadataDate>${iso}</xmp:MetadataDate>`
+      + '<xmp:CreatorTool>Tokiwa Hub 折丁面付台</xmp:CreatorTool><pdf:Producer>pdf-lib</pdf:Producer><pdf:Trapped>False</pdf:Trapped>'
+      + `<dc:title><rdf:Alt><rdf:li xml:lang="x-default">${esc(title)}</rdf:li></rdf:Alt></dc:title>`
+      + '</rdf:Description></rdf:RDF></x:xmpmeta>' + ' '.repeat(200) + '<?xpacket end="w"?>';
+    const xmpBytes = new TextEncoder().encode(xmp);
+    const meta = ctx.stream(xmpBytes, { Type: 'Metadata', Subtype: 'XML' });
+    doc.catalog.set(PDFName.of('Metadata'), ctx.register(meta));
+    const icc = cfg.pdfx.icc;
+    if (icc && icc.bytes) {
+      const u8 = new Uint8Array(icc.bytes);
+      const cs = String.fromCharCode(u8[16], u8[17], u8[18], u8[19]).trim();   // ICC ヘッダの色空間
+      const N = cs === 'CMYK' ? 4 : cs === 'GRAY' ? 1 : 3;
+      const prof = ctx.stream(u8, { N });
+      const cond = icc.name.replace(/\.(icc|icm)$/i, '');
+      const oi = ctx.obj({ Type: 'OutputIntent', S: 'GTS_PDFX', OutputConditionIdentifier: PDFString.of(cond), Info: PDFString.of(cond), RegistryName: PDFString.of('http://www.color.org'), DestOutputProfile: ctx.register(prof) });
+      doc.catalog.set(PDFName.of('OutputIntents'), ctx.obj([ctx.register(oi)]));
+    }
   }
 
   /* 背丁マーク：背のドブに、折丁ごとに位置をずらして黒バーを置く */
@@ -694,8 +760,18 @@
   const FIELDS = ['job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
     'foldFirst', 'foldV', 'foldH', 'flipMode', 'bleed', 'nodo', 'markLen', 'markWeight',
     'spineW', 'spineL', 'spineStart', 'spineStep', 'fit',
-    'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo'];
+    'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo', 'pdfx'];
   const KEY = 'menzuke-dai-v1';
+  /* ---- 出力条件の ICC（このブラウザの IndexedDB に覚える） ---- */
+  let iccData = null;   // { name, bytes }
+  function iccDb() { return new Promise((res, rej) => { try { const r = indexedDB.open('menzuke_icc', 1); r.onupgradeneeded = (e) => { const d = e.target.result; if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } }); }
+  function iccSave(v) { return iccDb().then(d => new Promise((res, rej) => { const tx = d.transaction('kv', 'readwrite'); if (v) tx.objectStore('kv').put(v, 'icc'); else tx.objectStore('kv').delete('icc'); tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); })).catch(() => false); }
+  function iccLoad() { return iccDb().then(d => new Promise((res, rej) => { const q = d.transaction('kv', 'readonly').objectStore('kv').get('icc'); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); })).catch(() => null); }
+  function iccShow() {
+    const nm = $('iccName'), cl = $('iccClear'); if (!nm) return;
+    if (iccData) { nm.textContent = '出力条件の ICC: ' + iccData.name + '（' + Math.round(iccData.bytes.byteLength / 1024) + 'KB）'; nm.style.color = 'var(--ok)'; cl.style.display = ''; }
+    else { nm.textContent = '出力条件の ICC: 未設定'; nm.style.color = 'var(--muted)'; cl.style.display = 'none'; }
+  }
 
   function saveState() {
     try {
@@ -732,6 +808,8 @@
       spineBarW: num('spineW', 1.2), spineBarL: num('spineL', 8),
       spineBarStart: num('spineStart', 12), spineBarStep: num('spineStep', 10),
       stamp: new Date().toISOString().slice(0, 10),
+      fileName: srcName ? srcName + '.pdf' : '',
+      pdfx: { on: $('pdfx').checked, icc: iccData },
       marks: {
         faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked,
         blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked,
@@ -939,6 +1017,7 @@
 
   async function generate() {
     if (!srcBytes || !lastCfg) return;
+    if ($('pdfx').checked && !iccData) { $('status').textContent = 'PDF/X-4 には出力条件の ICC が要ります。「ファイルを選択」で JapanColor2001Coated.icc などを選んでください。'; return; }
     $('go').disabled = true;
     $('status').textContent = '面付中…';
     try {
@@ -946,7 +1025,7 @@
       const res = await ImposePdf.impose(srcBytes.slice(0), cfg, (p) => {
         $('status').textContent = `面付中… ${Math.round(p * 100)}%`;
       });
-      const name = `${(cfg.jobName || srcName || 'imposed').replace(/[\\/:*?"<>|]/g, '_')}_面付_${cfg.cols}x${cfg.rows}.pdf`;
+      const name = `${(cfg.jobName || srcName || 'imposed').replace(/[\\/:*?"<>|]/g, '_')}_面付_${cfg.cols}x${cfg.rows}${cfg.pdfx.on ? '_X4' : ''}.pdf`;
       await saveFile(res.bytes, name);
     } catch (err) {
       $('status').textContent = '面付に失敗しました：' + (err && err.message ? err.message : err);
@@ -981,6 +1060,11 @@
   ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('hot'); }));
   drop.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) loadPdf(f); });
   $('go').addEventListener('click', generate);
+  $('iccFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (!f) return; const bytes = await f.arrayBuffer(); const u8 = new Uint8Array(bytes); const sig = String.fromCharCode(u8[36], u8[37], u8[38], u8[39]);
+    if (sig !== 'acsp') { $('status').textContent = 'ICC プロファイルではないようです（' + f.name + '）'; e.target.value = ''; return; }
+    iccData = { name: f.name, bytes }; await iccSave(iccData); iccShow(); $('status').textContent = '出力条件の ICC を覚えました: ' + f.name; e.target.value = ''; });
+  $('iccClear').addEventListener('click', async () => { iccData = null; await iccSave(null); iccShow(); });
+  iccLoad().then(v => { if (v && v.bytes) iccData = v; iccShow(); });
 
   window.hubPresetFukunaga = function () {
     const set = (id, v) => { const el = $(id); if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; };
