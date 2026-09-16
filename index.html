@@ -22528,10 +22528,11 @@ function _inqInsertToProofing_(inqId){
     var proj = p.projectId ? ('案件 '+p.projectId) : '案件未リンク';
     var vc = (p.versions||[]).length;
     var hit = (pid && p.projectId===pid);
-    var dataText = ((p.id||'')+' '+nm+' '+prod+' '+(p.projectId||'')).toLowerCase();
-    return '<div class="inq-proof-pick" data-text="'+dataText.replace(/"/g,'&quot;')+'" onclick="_doInsertInquiryToProofing_(\''+inqId+'\',\''+p.id+'\')" style="padding:10px 12px;border:1px solid '+(hit?'#67e8f9':'#e5e7eb')+';border-radius:6px;margin-bottom:6px;cursor:pointer;background:'+(hit?'#ecfeff':'#fff')+'" onmouseover="this.style.background=\'#f0fdfa\'" onmouseout="this.style.background=\''+(hit?'#ecfeff':'#fff')+'\'">'+
+    var no = p.fmNo || '';   // KOSEI-MAIL-1: 伝票番号（案件番号）で選べるように
+    var dataText = ((p.id||'')+' '+no+' '+nm+' '+prod+' '+(p.projectId||'')).toLowerCase();
+    return '<div class="inq-proof-pick" data-text="'+dataText.replace(/"/g,'&quot;')+'" onclick="_inqPickProofSlot_(\''+inqId+'\',\''+p.id+'\')" style="padding:10px 12px;border:1px solid '+(hit?'#67e8f9':'#e5e7eb')+';border-radius:6px;margin-bottom:6px;cursor:pointer;background:'+(hit?'#ecfeff':'#fff')+'" onmouseover="this.style.background=\'#f0fdfa\'" onmouseout="this.style.background=\''+(hit?'#ecfeff':'#fff')+'\'">'+
       '<div style="display:flex;justify-content:space-between;gap:8px">'+
-        '<div style="min-width:0"><div style="font-weight:700;font-size:12px">'+(hit?'⭐ ':'')+_escDiff(prod)+'</div>'+
+        '<div style="min-width:0"><div style="font-weight:700;font-size:12px">'+(hit?'⭐ ':'')+(no?'<span style="font-family:monospace;background:#1a1a1a;color:#fff;border-radius:4px;padding:0 6px;margin-right:6px">'+_escDiff(no)+'</span>':'')+_escDiff(prod)+'</div>'+
         '<div style="font-size:11px;color:#555;margin-top:2px">'+_escDiff(nm)+' · '+proj+'</div></div>'+
         '<div style="text-align:right;font-size:10px;color:#888;white-space:nowrap">'+(p.status||'')+'<br>'+vc+' 版</div>'+
       '</div></div>';
@@ -22542,10 +22543,10 @@ function _inqInsertToProofing_(inqId){
   modal.innerHTML =
     '<div style="background:#fff;width:100%;max-width:620px;max-height:88vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">'+
       '<div style="padding:14px 20px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center">'+
-        '<div><strong>📐 既存の校正案件に「先方の指示」を転記</strong><div style="font-size:11px;opacity:.85;margin-top:2px">挿入先の校正セッションを選択 (本文＋添付を修正指示として追加)</div></div>'+
+        '<div><strong>📐 送り先: 校正BOX → 案件番号を選ぶ</strong><div style="font-size:11px;opacity:.85;margin-top:2px">この連絡（本文＋添付）を入れる校正を選びます。次に「支給データ／N校 出／N校 戻り／校了」のどれに入れるかを選べます</div></div>'+
         '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>'+
       '</div>'+
-      '<div style="padding:12px 20px 0"><input id="inq-proof-search" placeholder="🔍 校正案件を絞り込み (得意先・品名・案件番号)" oninput="document.querySelectorAll(\'.inq-proof-pick\').forEach(function(el){el.style.display=(!this.value||el.dataset.text.indexOf(this.value.toLowerCase())>=0)?\'\':\'none\'}.bind(this))" style="width:100%;font-size:12px;padding:8px 10px;border:1px solid #ccc;border-radius:6px"></div>'+
+      '<div style="padding:12px 20px 0"><input id="inq-proof-search" placeholder="🔍 伝票番号（a1xxxxx）・得意先・品名で絞り込み" oninput="document.querySelectorAll(\'.inq-proof-pick\').forEach(function(el){el.style.display=(!this.value||el.dataset.text.indexOf(this.value.toLowerCase())>=0)?\'\':\'none\'}.bind(this))" style="width:100%;font-size:12px;padding:8px 10px;border:1px solid #ccc;border-radius:6px"></div>'+
       '<div style="overflow-y:auto;flex:1;padding:12px 20px">'+rows+'</div>'+
       '<div style="padding:10px 20px;border-top:1px solid #eee;text-align:right">'+
         '<button class="btn" onclick="var id=\''+inqId+'\';this.closest(\'.proof-modal\').remove();forwardInquiryToProofing(id)" style="font-size:12px">＋ 新規校正として作成</button>'+
@@ -22573,11 +22574,45 @@ function _trimEmailBody_(text){
   return trimmed.length >= 8 ? trimmed : text.trim();
 }
 
-function _doInsertInquiryToProofing_(inqId, proofId){
+// KOSEI-MAIL-1: 校正を選んだら、どの枠に入れるか（支給データ／N校 出／N校 戻り／校了）と校数を選ぶ
+function _inqPickProofSlot_(inqId, proofId){
+  var p = (DB.proofings||[]).find(function(x){ return x.id===proofId; }); if(!p){ alert('校正が見つかりません'); return; }
+  var cur = 1; try { cur = _calcCurrentProofRound_(p, 'instruction').round || 1; } catch(e){}
+  var no = p.fmNo || p.projectId || p.id;
+  var rounds = [1,2,3].map(function(r){ return '<option value="'+r+'"'+(r===cur?' selected':'')+'>'+PROOF_STAGE_FOLDERS[r].label+'</option>'; }).join('');
+  var btn = function(kind, label, hint, color){ return '<button type="button" onclick="_inqInsertWithSlot_(\''+inqId+'\',\''+proofId+'\',\''+kind+'\')" style="display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:6px;border:1px solid '+color+';border-radius:6px;background:#fff;cursor:pointer;font:inherit"><b style="font-size:13px">'+label+'</b><div style="font-size:11px;color:#555;margin-top:2px">'+hint+'</div></button>'; };
+  var old = document.querySelector('.proof-modal'); if(old) old.remove();
+  var modal = document.createElement('div'); modal.className = 'proof-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  modal.innerHTML =
+    '<div style="background:#fff;width:100%;max-width:520px;border-radius:10px;overflow:hidden">'+
+      '<div style="padding:14px 20px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center">'+
+        '<div><strong>📐 '+_escDiff(no)+' のどの枠に入れますか</strong><div style="font-size:11px;opacity:.85;margin-top:2px">'+_escDiff((p.custName||'')+' '+(p.prodName||''))+'</div></div>'+
+        '<button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button>'+
+      '</div>'+
+      '<div style="padding:14px 20px">'+
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px"><span>校数</span><select id="inq-slot-round" style="font:inherit;padding:3px 6px">'+rounds+'</select><span style="color:#64748b">（今は '+(PROOF_STAGE_FOLDERS[cur]||{}).label+'）</span></div>'+
+        btn('manuscript','📄 支給データ','先方からもらったデータ（入稿データ）として入れる','#cbd5e1')+
+        btn('proof','📤 N校 出','こちらから出した校正データとして入れる（校数は上で選ぶ）','#67e8f9')+
+        btn('instruction','📥 N校 戻り','先方から戻ってきた指示・赤字として入れる（いちばん多い）','#0e7490')+
+        btn('final','✅ 校了','校了データ（印刷に回すもの）として入れる','#86efac')+
+      '</div>'+
+      '<div style="padding:8px 20px 12px;border-top:1px solid #eee;text-align:right"><button class="btn" onclick="this.closest(\'.proof-modal\').remove();_inqInsertToProofing_(\''+inqId+'\')" style="font-size:12px">← 別の案件番号を選ぶ</button></div>'+
+    '</div>';
+  document.body.appendChild(modal);
+}
+function _inqInsertWithSlot_(inqId, proofId, kind){
+  var sel = document.getElementById('inq-slot-round'); var round = sel ? (parseInt(sel.value,10)||1) : 1;
+  _doInsertInquiryToProofing_(inqId, proofId, { kind: kind, round: round });
+}
+function _doInsertInquiryToProofing_(inqId, proofId, slot){
   var inq = (DB.inquiries||[]).find(function(i){ return i.id===inqId; });
   var p = (DB.proofings||[]).find(function(x){ return x.id===proofId; });
   if(!inq || !p){ alert('対象が見つかりません'); return; }
   if(!p.versions) p.versions = [];
+  // KOSEI-MAIL-1: 枠（kind）と校数。指定が無ければ従来どおり「戻り（指示）」の今の校数
+  var K = (slot && slot.kind) || 'instruction';
+  var KLABEL = { manuscript:'支給データ', proof:(PROOF_STAGE_FOLDERS[(slot&&slot.round)||1]||{}).label+' 出', instruction:(PROOF_STAGE_FOLDERS[(slot&&slot.round)||1]||{}).label+' 戻り', final:'校了' }[K] || K;
   var when = new Date().toISOString();
   var _full = inq.body || '';
   var _msg = _trimEmailBody_(_full);
@@ -22588,7 +22623,7 @@ function _doInsertInquiryToProofing_(inqId, proofId){
     '──────────────\n' + (_msg || '(本文なし)') +
     (_trimmed ? '\n──────────────\n※ 最新メッセージのみ抜粋（全文は元の問い合わせ参照）' : '');
   var atts = (inq.attachments || []);
-  function rv(){ try { return _calcCurrentProofRound_(p, 'instruction'); } catch(e){ return {round:1, subVersion:1}; } }
+  function rv(){ if(slot && slot.round){ var sv = 1; try { (p.versions||[]).forEach(function(v){ if(v && v.kind===K && v.round===slot.round) sv = Math.max(sv, (v.subVersion||1)+1); }); } catch(e){} return { round: slot.round, subVersion: sv }; } try { return _calcCurrentProofRound_(p, K); } catch(e){ return {round:1, subVersion:1}; } }
   var added = 0;
   if(atts.length){
     atts.forEach(function(a, i){
@@ -22596,8 +22631,8 @@ function _doInsertInquiryToProofing_(inqId, proofId){
       var fid = a.driveFileId || a.fileId || '';
       var r = rv();
       p.versions.push({
-        id: 'VER'+Date.now()+'-'+i, fileName: (a.name||a.fileName||('先方指示'+(i+1))),
-        kind: 'instruction', round: r.round, subVersion: r.subVersion,
+        id: 'VER'+Date.now()+'-'+i, fileName: (a.name||a.fileName||(KLABEL+(i+1))),
+        kind: K, round: r.round, subVersion: r.subVersion,
         driveFileId: fid, driveUrl: url, drivePreviewUrl: fid?('https://drive.google.com/file/d/'+fid+'/preview'):url,
         shareLink: url, data: (a.data||''), mimeType: (a.mimeType||a.type||''),
         uploadedAt: when, feedback: (i===0 ? commentText : ''), annotations: [], fromInquiry: true
@@ -22607,7 +22642,7 @@ function _doInsertInquiryToProofing_(inqId, proofId){
   } else {
     var r = rv();
     var _mailVer = {
-      id: 'VER'+Date.now(), fileName: '先方指示', kind: 'instruction', round: r.round, subVersion: r.subVersion,
+      id: 'VER'+Date.now(), fileName: (K==='instruction'?'先方指示':KLABEL+'（メール）'), kind: K, round: r.round, subVersion: r.subVersion,
       uploadedAt: when, feedback: commentText, annotations: [], fromInquiry: true
     };
     p.versions.push(_mailVer);
@@ -22615,7 +22650,10 @@ function _doInsertInquiryToProofing_(inqId, proofId){
     // FMHUB-15: メールだけの戻りは、本文を PDF にして 戻 フォルダに置く（データが無いことは印で分かるようにしておく）
     try {
       if(p.driveSubFolders){
-        var _ss = _proofStageSet_(p), _ret = _ss.list.filter(function(x){ return x.kind==='instruction'; })[0], _sub = _ret && p.driveSubFolders[_ret.name];
+        var _st = PROOF_STAGE_FOLDERS[(slot&&slot.round)||1] || PROOF_STAGE_FOLDERS[1];
+        var _ret = { manuscript:{ name:'01_入稿データ', label:'支給データ' }, proof:{ name:_st.out, label:_st.label+' 出' }, instruction:{ name:_st.ret, label:_st.label+' 戻り' }, final:{ name:'09_校了', label:'校了' } }[K];
+        if(!slot){ var _ss = _proofStageSet_(p); _ret = _ss.list.filter(function(x){ return x.kind==='instruction'; })[0]; }
+        var _sub = _ret && p.driveSubFolders[_ret.name];
         if(_sub && _sub.id){
           var _esc = function(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
           var _html = '<h3>'+_esc(inq.subject||'(件名なし)')+'</h3><p>'+_esc((inq.from_name||'')+(inq.from_company?' ('+inq.from_company+')':''))+' / '+_esc(inq.received_at?new Date(inq.received_at).toLocaleString('ja-JP'):'')+'</p><hr><pre>'+_esc(_full||'(本文なし)')+'</pre>';
@@ -22627,17 +22665,19 @@ function _doInsertInquiryToProofing_(inqId, proofId){
       }
     } catch(e){}
   }
-  p.status = 'feedback'; // 修正指示が入った状態
+  if(K==='instruction') p.status = 'feedback'; // 修正指示が入った状態（支給データ・出・校了のときは状態を動かさない）
   // 連絡側に紐付け + タイムライン
   inq.linked_proofing_id = inq.linked_proofing_id || proofId;
   if(!inq.timeline) inq.timeline = [];
-  inq.timeline.push({ type:'forward', date: when, by: (currentAuth&&currentAuth.userName)||'', text: '校正案件 '+proofId+' に先方指示を転記 ('+added+'件)' });
+  inq.timeline.push({ type:'forward', date: when, by: (currentAuth&&currentAuth.userName)||'', text: '校正BOX '+(p.fmNo||proofId)+'（'+KLABEL+'）に入れました ('+added+'件)' });
+  // KOSEI-MAIL-1: 連絡のコメント欄にも「伝票番号・枠」を挿入（後から見て分かるように）
+  try { var _line = '📐 校正BOX '+(p.fmNo||proofId)+' / '+KLABEL+'  '+new Date(when).toLocaleString('ja-JP'); inq.memo = (inq.memo ? inq.memo+'\n' : '') + _line; } catch(e){}
   if(typeof _addAuditLog_==='function') try { _addAuditLog_('forward','inquiry:'+inqId,'校正 '+proofId+' に指示転記'); } catch(e){}
   if(typeof saveDB==='function') saveDB();
   if(typeof saveToCloud==='function') try { saveToCloud(); } catch(e){}
   document.querySelectorAll('.proof-modal').forEach(function(x){ x.remove(); });
   if(typeof closeInquiryDetail==='function') closeInquiryDetail();
-  alert('✅ 校正案件 '+proofId+' に先方の指示を転記しました ('+added+'件を修正指示として追加)');
+  alert('✅ 校正BOX '+(p.fmNo||proofId)+' の「'+KLABEL+'」に入れました ('+added+'件)');
   if(typeof jumpToProofing==='function') jumpToProofing(proofId);
 }
 
@@ -53177,7 +53217,7 @@ function openInquiryDetail(id) {
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;padding:10px 12px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;align-items:center">
       <span style="font-size:11px;font-weight:700;color:#15803d;white-space:nowrap">📋 この問い合わせを転記:</span>
       <button class="btn" style="background:#15803d;color:#fff;border-color:#15803d;font-size:13px;font-weight:700;padding:6px 16px" onclick="_inqAiExtractAndTransfer_('${inq.id}')" title="内容を自動で読み取り、見積作成画面へ転記 → 種別(見積/受注)は登録画面で選択">📝 見積・受注へ転記</button>
-      <button class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490;font-size:13px;font-weight:700;padding:6px 16px" onclick="_inqInsertToProofing_('${inq.id}')" title="既存の校正案件を選び、先方の指示(本文+添付)を修正指示として挿入します">📐 校正へ転記 (既存に指示)</button>
+      <button class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490;font-size:13px;font-weight:700;padding:6px 16px" onclick="_inqInsertToProofing_('${inq.id}')" title="送り先を校正BOXにして、案件番号（伝票番号）を選び、支給データ／N校 出／N校 戻り／校了 のどれに入れるかを選びます">📐 校正BOXへ（案件番号を選ぶ）</button>
       ${inq.linked_project_id ? `<span style="font-size:11px;color:#15803d;margin-left:auto">✅ 案件 ${inq.linked_project_id} に転記済</span>` : ''}
     </div>
 
