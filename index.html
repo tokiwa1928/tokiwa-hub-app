@@ -4617,6 +4617,26 @@ async function loadFromCloud() {
     DB.calendarOrders = calDedupe(_coOrder.filter(function(id){ var r=_coById[id]; if(_coTomb[id]) return false; if(r && !r._manual && _coSig[typeof calSigOf==='function'?calSigOf(r):'']) return false; return true; }).map(function(id){ return _coById[id]; }));   // CAL-DUP-1: 内容が同じ行は 1 行に
   }
 
+  // KOSEI-SYNC-1: 校正BOX のカード。id 単位で「動いた時刻が新しい方」を残し、版(versions)は id の和集合。削除 ID は除く
+  if (Array.isArray(result.data.proofingsDeleted)) {
+    var _pdIn = {}; (DB.proofingsDeleted||[]).concat(result.data.proofingsDeleted).forEach(function(id){ if(id) _pdIn[id]=1; });
+    DB.proofingsDeleted = Object.keys(_pdIn).slice(-2000);
+  }
+  if (Array.isArray(result.data.proofings)) {
+    var _pfTs=function(p){ var t=p&&(p.lastMoveAt||p._updatedAt||p.createdAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var _pfById={}, _pfOrder=[];
+    var _pfTake=function(p){ if(!p||!p.id) return; if(!(p.id in _pfById)){ _pfOrder.push(p.id); _pfById[p.id]=p; return; }
+      var cur=_pfById[p.id]; var base=(_pfTs(p)>_pfTs(cur))?p:cur, other=(base===p)?cur:p;
+      // 版は両方の和集合（片方だけに入った校正データを落とさない）
+      var vs=[], seen={}; (base.versions||[]).concat(other.versions||[]).forEach(function(v){ if(!v||!v.id||seen[v.id]) return; seen[v.id]=1; vs.push(v); });
+      vs.sort(function(a,b){ return String(a.uploadedAt||'').localeCompare(String(b.uploadedAt||'')); });
+      var out=Object.assign({}, base); out.versions=vs; _pfById[p.id]=out; };
+    (Array.isArray(DB.proofings)?DB.proofings:[]).forEach(_pfTake);   // ローカル
+    result.data.proofings.forEach(_pfTake);                            // クラウド（新しければ上書き）
+    var _pfDel={}; (DB.proofingsDeleted||[]).forEach(function(id){ _pfDel[id]=1; });
+    DB.proofings = _pfOrder.filter(function(id){ return !_pfDel[id]; }).map(function(id){ return _pfById[id]; });
+  }
+
   // 連絡宛先マスタ（LW/メール宛先・全社共有／会社別閲覧権限）
   if (Array.isArray(result.data.contactTargets)) {
     DB.contactTargets = result.data.contactTargets;
@@ -5163,6 +5183,8 @@ async function saveToCloud() {
     calendarOrders: DB.calendarOrders || [],
     calendarOrdersDeleted: (DB.calendarOrdersDeleted || []).slice(-12000),
     calendarOrdersDeletedSig: (DB.calendarOrdersDeletedSig || []).slice(-2000),
+    proofings: DB.proofings || [],                                   // KOSEI-SYNC-1: 校正BOX のカードも全社保存
+    proofingsDeleted: (DB.proofingsDeleted || []).slice(-2000),
     inquiries: DB.inquiries || [],
     deliveryItems: DB.deliveryItems || [],
     drivers: DB.drivers || [],
@@ -22431,6 +22453,8 @@ function _proofRemind_(proofingId, sndId){
 function deleteProofing(proofingId){
   if(!confirm('この校正データを削除しますか？')) return;
   DB.proofings = (DB.proofings || []).filter(p => p.id !== proofingId);
+  if(!Array.isArray(DB.proofingsDeleted)) DB.proofingsDeleted = [];
+  if(DB.proofingsDeleted.indexOf(proofingId) < 0) DB.proofingsDeleted.push(proofingId);   // KOSEI-SYNC-1: 他の PC から戻らないように
   saveDB();
   renderProofingList();
   document.getElementById('proofing-detail').innerHTML = '<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正を選択してください</div>';
@@ -22666,6 +22690,7 @@ function _doInsertInquiryToProofing_(inqId, proofId, slot){
     } catch(e){}
   }
   if(K==='instruction') p.status = 'feedback'; // 修正指示が入った状態（支給データ・出・校了のときは状態を動かさない）
+  p.lastMoveAt = when;   // KOSEI-SYNC-1
   // 連絡側に紐付け + タイムライン
   inq.linked_proofing_id = inq.linked_proofing_id || proofId;
   if(!inq.timeline) inq.timeline = [];
