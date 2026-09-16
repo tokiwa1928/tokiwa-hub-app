@@ -20882,6 +20882,7 @@ function renderProofingList(){
   var toggleHtml = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">'
     + '<div style="display:flex;gap:4px;flex-wrap:wrap">'+tabsHtml+'</div>'
     + '<span style="display:flex;gap:6px">'
+    + (vm==='list'?'<button class="btn" style="font-size:11px;background:#5b21b6;color:#fff;border-color:#4c1d95" onclick="_proofMergeSelected_()" title="一覧でチェックした校正を 1 枚にまとめます（名刺 4 件を一緒に校正するときなど）。伝票番号・校正データ・備考を合わせ、残りのカードは消えます">📎 選んだカードをまとめる</button>':'')
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#64748b" onclick="_proofOpenColConfig_()">▦ 列の設定</button>':'')
     + '<button class="btn" style="font-size:11px;color:#64748b" onclick="openProofStatusEditor()">⚙ 状態を編集</button></span></div>';
 
@@ -20914,6 +20915,7 @@ function renderProofingList(){
       var al = (col.align==='center')?'center':'left';
       return '<th style="text-align:'+al+';padding:5px 8px;font-size:11px;font-weight:600'+(col.w?(';width:'+col.w):'')+'">'+col.label+'</th>';
     }).join('');
+    thHtml = '<th style="width:26px;padding:5px 4px" title="チェックして「📎 まとめる」で 1 枚の校正に"><input type="checkbox" onclick="event.stopPropagation();document.querySelectorAll(\'#proofing-list input.pf-pick\').forEach(function(c){ c.checked=this.checked; }.bind(this))" title="全部にチェック"></th>' + thHtml;   // KOSEI-GROUP-2
     var rowsHtml = shown.map(function(p){
       var k=_normProofStatus_(p.status), meta=_proofStatusMeta_(k);
       var info=_proofInfo_(p);
@@ -20930,7 +20932,7 @@ function renderProofingList(){
         return '<td style="padding:4px 8px;'+lb+'text-align:'+al+';vertical-align:middle">'+_proofCell_(col.key, ctx, statuses)+'</td>';
       }).join('');
       var _selBg = (window._proofSelId_===p.id) ? '#e8eefb' : (stalled ? '#fff5f5' : '#fff');
-      return '<tr data-pid="'+p.id+'" style="background:'+_selBg+';border-bottom:1px solid #ece8df;cursor:pointer" onclick="_proofRowClick_(\''+p.id+'\',this)">'+tds+'</tr>';
+      return '<tr data-pid="'+p.id+'" style="background:'+_selBg+';border-bottom:1px solid #ece8df;cursor:pointer" onclick="_proofRowClick_(\''+p.id+'\',this)"><td onclick="event.stopPropagation()" style="padding:4px 4px;text-align:center"><input type="checkbox" class="pf-pick" data-pid="'+p.id+'"></td>'+tds+'</tr>';
     }).join('');
     bodyHtml = '<div style="overflow-x:auto;background:#f6f4ee;border:1px solid #e2ded4;border-radius:8px;padding:6px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:'+(actCols.length*108)+'px">'
       + '<thead><tr style="background:#211f1c;color:#cfcabd">'+thHtml+'</tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
@@ -22496,6 +22498,36 @@ function _proofRemind_(proofingId, sndId){
   _composeProofConfirmMail_(proofingId, s ? s.to : '');
 }
 // 校正を削除
+// KOSEI-GROUP-2: 一覧でチェックした校正を 1 枚にまとめる。残す 1 枚＝校正データ(版)が多い→古い順。伝票番号・版・備考を合わせ、残りは削除扱い（他の PC からも消える）
+function _proofMergeSelected_(){
+  var ids=[].map.call(document.querySelectorAll('#proofing-list input.pf-pick:checked'), function(c){ return c.getAttribute('data-pid'); });
+  var cards=(DB.proofings||[]).filter(function(p){ return p && ids.indexOf(p.id)>=0; });
+  if(cards.length<2){ alert('まとめる校正を一覧の左のチェックで 2 枚以上選んでください'); return; }
+  cards.sort(function(a,b){ var d=((b.versions||[]).length)-((a.versions||[]).length); if(d) return d; return String(a.createdAt||'').localeCompare(String(b.createdAt||'')); });
+  var base=cards[0], others=cards.slice(1);
+  var nosOf=function(p){ var a=(p.fmNos&&p.fmNos.length)?p.fmNos.slice():[]; if(p.fmNo && a.indexOf(p.fmNo)<0) a.unshift(p.fmNo); return a.map(String); };
+  var nos=nosOf(base); others.forEach(function(o){ nosOf(o).forEach(function(n){ if(nos.indexOf(n)<0) nos.push(n); }); });
+  var custs={}; cards.forEach(function(p){ if(p.custName) custs[p.custName]=1; });
+  var lines=cards.map(function(p){ return (p===base?'★ ':'　')+(nosOf(p).join('・')||'伝票なし')+'　'+(p.prodName||'')+'　版'+((p.versions||[]).length); }).join('\n');
+  if(!confirm(cards.length+' 枚を 1 枚の校正にまとめます（★ に残りをまとめます）。\n\n'+lines+(Object.keys(custs).length>1?'\n\n⚠ 得意先が違うカードが混ざっています':'')+'\n\n伝票番号・校正データ・備考は合わせます。残りのカードは消えます（他の PC からも）。よろしいですか？')) return;
+  var when=new Date().toISOString();
+  base.fmNos=nos; if(!base.fmNo && nos.length) base.fmNo=nos[0];
+  var vs=(base.versions||[]).slice(), seen={}; vs.forEach(function(v){ if(v&&v.id) seen[v.id]=1; });
+  others.forEach(function(o){ (o.versions||[]).forEach(function(v){ if(v&&v.id&&!seen[v.id]){ seen[v.id]=1; vs.push(v); } }); });
+  vs.sort(function(a,b){ return String(a.uploadedAt||'').localeCompare(String(b.uploadedAt||'')); }); base.versions=vs;
+  others.forEach(function(o){ if(o.note && String(base.note||'').indexOf(o.note)<0) base.note=(base.note?base.note+'\n':'')+'【'+(nosOf(o).join('・')||o.id)+'】'+o.note; if(!base.endUser&&o.endUser) base.endUser=o.endUser; if(!base.dueDate&&o.dueDate) base.dueDate=o.dueDate; if(o.dueDate&&base.dueDate&&o.dueDate<base.dueDate) base.dueDate=o.dueDate; if(!base.prevFmNo&&o.prevFmNo) base.prevFmNo=o.prevFmNo; if(!o.isDraft) base.isDraft=false; });
+  if(nos.length>1 && String(base.prodName||'').indexOf('まとめた校正')<0) base.prodName=(base.prodName||'')+'（ほか '+(nos.length-1)+' 件をまとめた校正）';
+  base.note=(base.note?base.note+'\n':'')+'📎 '+new Date(when).toLocaleString('ja-JP')+' '+cards.length+' 枚をまとめた（'+nos.join('・')+'）';
+  base.lastMoveAt=when;
+  if(!Array.isArray(DB.proofingsDeleted)) DB.proofingsDeleted=[];
+  others.forEach(function(o){ if(DB.proofingsDeleted.indexOf(o.id)<0) DB.proofingsDeleted.push(o.id); });
+  var gone={}; others.forEach(function(o){ gone[o.id]=1; });
+  DB.proofings=(DB.proofings||[]).filter(function(p){ return !(p && gone[p.id]); });
+  (DB.projects||[]).forEach(function(pr){ if(pr&&pr.proofingIds){ pr.proofingIds=pr.proofingIds.filter(function(x){ return !gone[x]; }); if(pr.proofingIds.indexOf(base.id)<0 && others.some(function(o){ return o.projectId===pr.id; })) pr.proofingIds.push(base.id); } });
+  saveDB(); renderProofingList();
+  try{ showProofingDetail(base.id); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('📎 '+cards.length+' 枚を 1 枚にまとめました（'+nos.join('・')+'）');
+}
 function deleteProofing(proofingId){
   if(!confirm('この校正データを削除しますか？')) return;
   DB.proofings = (DB.proofings || []).filter(p => p.id !== proofingId);
