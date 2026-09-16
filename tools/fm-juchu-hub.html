@@ -1770,6 +1770,12 @@ function setPane(p){
   #fmfind .badge.juchu{ background:#1d6f3f; }
   #fmfind .badge.shitchu{ background:#6b2320; }
   .fm-dirty{ outline:2px solid #d97706 !important; outline-offset:-2px; }
+  .fm-changed{ outline:2px solid #dc2626 !important; outline-offset:-2px; background:#fff1f2 !important; }
+  #fmrireki{ display:none; background:#fff7ed; border-bottom:2px solid #c2410c; padding:6px 14px; font-size:12px; }
+  #fmrireki table{ border-collapse:collapse; } #fmrireki th{ background:#fed7aa; padding:2px 6px; text-align:left; font-weight:600; white-space:nowrap; }
+  #fmrireki td{ padding:2px 6px; border-bottom:1px solid #fde68a; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis; }
+  #fmrireki .chk{ display:inline-flex; align-items:center; gap:4px; margin-right:12px; padding:2px 8px; border:1px solid #fdba74; border-radius:12px; background:#fff; cursor:pointer; }
+  #fmrireki .chk.done{ background:#dcfce7; border-color:#86efac; color:#166534; }
 </style>
 
 <div id="fmbar">
@@ -1834,6 +1840,20 @@ function setPane(p){
   </div>
   <div id="pg-body" style="margin-top:4px;color:#475569">得意先と品名（か前回伝票番号）を入れると、昨年の伝票を種に数量ごとの金額が出ます</div>
 </div>
+<div id="fmrireki">
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <b>📜 変更履歴</b><span id="rk-sum" style="color:#9a3412"></span>
+    <button id="rk-toggle" style="font-size:11px;padding:2px 8px">全部見る</button>
+    <span style="margin-left:auto"></span>
+    <b>関連会社の売価（Hub 側）</b>
+    <label>単価 <input id="sp-unit" type="number" step="any" style="width:80px"></label>
+    <label>金額 <input id="sp-amt" type="number" style="width:100px"></label>
+    <button id="sp-save" style="font-size:11px;padding:2px 8px">保存</button>
+    <span id="sp-msg" style="color:#166534"></span>
+  </div>
+  <div id="rk-check" style="margin-top:4px"></div>
+  <div id="rk-list" style="display:none;margin-top:4px;max-height:220px;overflow:auto"></div>
+</div>
 <div id="fmhaiso">
   <b>配送予定（FileMaker の配送カレンダーに登録）</b>
   <label>担当 <input id="hs-tanto" list="hs-tanto-dl" style="width:80px" placeholder="倫子"><datalist id="hs-tanto-dl"><option>倫子</option><option>郵送</option><option>直送</option><option>引取</option><option>宅配</option></datalist></label>
@@ -1882,6 +1902,9 @@ function setPane(p){
     '画面_新規案件':       ['種別', '初期値'],
     '画面_新規段階':       ['案件ID', '種別'],
     '画面_案件にまとめる': ['recordIds', '案件ID', '確認'],
+    '画面_履歴':           ['recordId', '伝票番号'],
+    '先方売価_読む':       ['伝票番号'],
+    '先方売価_書く':       ['伝票番号', '会社', '単価', '金額', 'メモ'],
     '画面_Repeat登録':     ['recordId'],
     '画面_削除':           ['recordId', 'modId'],
     '画面_外注':           ['伝票番号'],
@@ -2206,7 +2229,53 @@ function setPane(p){
     $('fmhaiso').style.display = 'block'; $('hs-msg').textContent = ''; $('hs-tanto').value = ''; $('hs-date').value = ''; $('hs-memo').value = '';
     $('fmguide').style.display = 'block'; $('pg-prev').value = ''; ガイド種 = null; setTimeout(ガイドを出す, 300);
     DTPを出す(r.record.fields['伝票番号']);
+    履歴を読む(r.record.recordId, r.record.fields['伝票番号']);
+    先方売価を読む(r.record.fields['伝票番号']);
   }
+  // ---- GRP-1: 変更履歴（赤枠・チェックリスト）と関連会社の売価
+  function 会社名() { try { var a = JSON.parse(localStorage.getItem('murayama_auth') || '{}'); return String(a.companyName || ''); } catch (e) { return ''; } }
+  var 会社の得意先コード = { '村山': '5236', '中尾': '5465', '北上': '5463', 'ヤマウチ': '5451', 'アート': '5427', '津島': '5525' };
+  function 自社の得意先コード() { var nm = 会社名(); var hit = ''; Object.keys(会社の得意先コード).forEach(function (k) { if (nm.indexOf(k) >= 0) hit = 会社の得意先コード[k]; }); return hit; }
+  var 重要語 = ['数', '納期', '納品', '製品名', 'サイズ', '横', '縦', '色', '用紙', '紙', '加工', 'パーツ', '仕様', '版', '単価', '金額'];
+  function 履歴を読む(recordId, no) {
+    var box = $('fmrireki'); if (!box) return;
+    Array.prototype.forEach.call(document.querySelectorAll('.fm-changed'), function (el) { el.classList.remove('fm-changed'); el.title = ''; });
+    $('rk-sum').textContent = '読んでいます…'; $('rk-list').innerHTML = ''; $('rk-check').innerHTML = ''; box.style.display = 'block';
+    呼ぶ('画面_履歴', [String(recordId), no]).then(function (r) {
+      var 行 = r.行 || []; var 週 = Date.now() - 7 * 24 * 3600 * 1000; var 最近 = 行.filter(function (h) { return new Date(h.日時).getTime() >= 週; });
+      if (!行.length) { $('rk-sum').textContent = 'Hub からの変更はまだありません（FileMaker で直した分は載りません）'; }
+      else { var l = 行[0]; $('rk-sum').textContent = '直近 7 日で ' + 最近.length + ' 項目 ／ 全部で ' + 行.length + ' 項目。最後: ' + 日時短(l.日時) + ' ' + esc(l.誰.split('@')[0]) + ' が ' + esc(l.項目); }
+      // 欄に赤枠（7 日以内）
+      var 重要 = false;
+      最近.forEach(function (h) { (FROM_FM[h.項目] || []).forEach(function (id) { var el = document.getElementById(id); if (!el) return; el.classList.add('fm-changed'); el.title = 日時短(h.日時) + ' ' + h.誰 + ' が変更: 「' + (h.前 == null ? '' : h.前) + '」→「' + h.後 + '」'; }); if (重要語.some(function (w) { return String(h.項目).indexOf(w) >= 0; })) 重要 = true; });
+      // 出し直しチェック（数量・仕様・納期・金額に変更があったとき）
+      if (重要) {
+        var key = 'fm_check_' + no + '_' + (最近[0] ? 最近[0].日時.slice(0, 10) : ''); var st = {}; try { st = JSON.parse(localStorage.getItem(key) || '{}'); } catch (e) {}
+        var items = ['外注指示書を出し直した', '内製指示書を出し直した', '外注先へ変更を連絡した', '関連会社へ変更を連絡した'];
+        $('rk-check').innerHTML = '<span style="color:#9a3412;font-weight:700">⚠ 数量・仕様・納期・金額のどれかが 7 日以内に変わっています。伝え漏れの確認:</span> ' + items.map(function (t, i) { return '<label class="chk' + (st[i] ? ' done' : '') + '"><input type="checkbox" data-i="' + i + '"' + (st[i] ? ' checked' : '') + '> ' + esc(t) + '</label>'; }).join('');
+        Array.prototype.forEach.call($('rk-check').querySelectorAll('input'), function (ck) { ck.onchange = function () { st[ck.getAttribute('data-i')] = ck.checked; try { localStorage.setItem(key, JSON.stringify(st)); } catch (e) {} ck.parentNode.classList.toggle('done', ck.checked); }; });
+      }
+      var h = '<table><tr><th>いつ</th><th>誰</th><th>項目</th><th>前</th><th>後</th></tr>';
+      行.slice(0, 200).forEach(function (x) { var 古い = new Date(x.日時).getTime() < 週; h += '<tr' + (古い ? '' : ' style="color:#b91c1c;font-weight:700"') + '><td>' + esc(日時短(x.日時)) + '</td><td>' + esc(String(x.誰).split('@')[0]) + '</td><td>' + esc(x.項目) + '</td><td title="' + esc(x.前 == null ? '' : x.前) + '">' + esc(String(x.前 == null ? '' : x.前).slice(0, 30)) + '</td><td title="' + esc(x.後) + '">' + esc(String(x.後).slice(0, 30)) + '</td></tr>'; });
+      $('rk-list').innerHTML = h + '</table>';
+    }).catch(function (e) { $('rk-sum').textContent = '履歴を読めませんでした: ' + String(e.message || e); });
+  }
+  function 日時短(iso) { var d = new Date(iso); if (isNaN(d.getTime())) return String(iso); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+  $('rk-toggle').onclick = function () { var l = $('rk-list'); var open = l.style.display === 'none'; l.style.display = open ? 'block' : 'none'; $('rk-toggle').textContent = open ? '閉じる' : '全部見る'; };
+  function 先方売価を読む(no) {
+    $('sp-unit').value = ''; $('sp-amt').value = ''; $('sp-msg').textContent = '';
+    呼ぶ('先方売価_読む', [no]).then(function (r) {
+      var 行 = r.行 || []; if (!行.length) return; var my = 会社名(); var hit = 行.filter(function (x) { return my && String(x.会社) === my; })[0] || 行[0];
+      $('sp-unit').value = hit.単価 === '' ? '' : hit.単価; $('sp-amt').value = hit.金額 === '' ? '' : hit.金額;
+      $('sp-msg').textContent = (hit.会社 ? hit.会社 + '　' : '') + (hit.更新日 ? 日時短(hit.更新日) + ' ' + String(hit.更新者 || '').split('@')[0] : '');
+    }).catch(function () {});
+  }
+  $('sp-save').onclick = function () {
+    if (!現在) { alert('先に伝票を開いてください'); return; }
+    var no = String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''); var 会社 = 会社名() || 'トキワ印刷';
+    $('sp-msg').textContent = '保存中…';
+    呼ぶ('先方売価_書く', [no, 会社, $('sp-unit').value, $('sp-amt').value, '']).then(function () { $('sp-msg').textContent = '保存しました（' + 会社 + '）'; }).catch(function (e) { $('sp-msg').textContent = String(e.message || e); });
+  };
   // 得意先コード → 得意先名（得意先マスタ）。FileMaker の画面は名前欄がコードから引く作りなので、こちらも同じに
   function 得意先名を入れる() {
     var cd = $('f-custcd') ? $('f-custcd').value.trim() : '', box = $('f-cust'); if (!box) return;
@@ -2925,6 +2994,8 @@ function setPane(p){
     一覧を出した = true;
     探し.style.display = 'block';
     $('ff-days').value = '90'; $('ff-n').value = '0'; 全件モード = true;
+    var 自社 = 自社の得意先コード();   // 関連会社のアカウントなら、その会社が得意先の伝票だけ（トキワは全部）
+    if (自社) { $('ff-cust').value = 自社; $('ff-msg').textContent = 会社名() + '（得意先 ' + 自社 + '）の伝票だけを出しています'; }
     手元で探す(false);
   }
   // 見積入力では「予算見積」か「見積書」かを選んで起こす。番号（-YM01／-M01）と区分は中継が付ける

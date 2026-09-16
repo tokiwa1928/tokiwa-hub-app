@@ -747,6 +747,41 @@ function 画面_案件にまとめる(recordIds, 案件ID, 確認) {
   return { ok: true, 案件ID: 案件ID, 更新: n, 案: 案, 履歴: 案件の履歴_(lay, 案件ID) };
 }
 
+/** 伝票ごとの変更履歴（中継が保存のたびに記録している「前の値」と「送った値」から、項目単位で組む）GRP-1 */
+function 画面_履歴(recordId, 伝票番号) {
+  var who = 画面_利用者_(); var lay = LAYOUTS.juchu;
+  var sh = 記録の置き場_().getSheets()[0]; var last = sh.getLastRow(); if (last < 2) return { ok: true, user: who.email, 行: [] };
+  var from = Math.max(2, last - 4000 + 1);
+  var v = sh.getRange(from, 1, last - from + 1, 7).getValues(); var out = [];
+  for (var i = v.length - 1; i >= 0; i--) {
+    var r = v[i]; if (String(r[3]) !== String(recordId) || String(r[2]) !== lay) continue;
+    var sent = {}, 前 = {}; try { sent = JSON.parse(r[5] || '{}'); } catch (e) {} try { 前 = JSON.parse(r[6] || '{}'); } catch (e) {}
+    var 日時 = (r[0] instanceof Date) ? r[0].toISOString() : String(r[0]);
+    Object.keys(sent).forEach(function (k) { out.push({ 日時: 日時, 誰: String(r[1] || ''), 項目: k, 前: (前[k] === undefined ? null : 前[k]), 後: sent[k] }); });
+    if (out.length > 300) break;
+  }
+  return { ok: true, user: who.email, 行: out };
+}
+/** 関連会社の売価（FileMaker に項目が無いので Hub 側＝保管庫の「関連会社売価」シートに持つ）GRP-1 */
+var 先方売価列 = ['伝票番号', '会社', '先方売価単価', '先方売価金額', '更新者', '更新日', 'メモ'];
+function 先方売価_帳簿_() { return 写し_帳簿_('関連会社売価', 先方売価列).getSheets()[0]; }
+function 先方売価_読む(伝票番号) {
+  var who = 画面_利用者_(); var sh = 先方売価_帳簿_(); var v = sh.getDataRange().getValues(); var out = [];
+  for (var i = 1; i < v.length; i++) { if (String(v[i][0]) !== String(伝票番号)) continue;
+    out.push({ 会社: v[i][1], 単価: v[i][2], 金額: v[i][3], 更新者: v[i][4], 更新日: (v[i][5] instanceof Date) ? v[i][5].toISOString() : String(v[i][5] || ''), メモ: v[i][6] }); }
+  return { ok: true, user: who.email, 行: out };
+}
+function 先方売価_書く(伝票番号, 会社, 単価, 金額, メモ) {
+  var who = 画面_利用者_(); 伝票番号 = String(伝票番号 || '').trim(); if (!伝票番号) throw new Error('伝票番号が要ります');
+  var sh = 先方売価_帳簿_(); var v = sh.getDataRange().getValues(); var at = 0;
+  for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === 伝票番号 && String(v[i][1]) === String(会社 || '')) { at = i + 1; break; } }
+  var n = function (x) { return (x === '' || x === null || x === undefined) ? '' : Number(String(x).replace(/,/g, '')); };
+  var row = [伝票番号, String(会社 || ''), n(単価), n(金額), who.email, new Date(), String(メモ || '')];
+  if (at) sh.getRange(at, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+  log_(who, '関連会社売価', 伝票番号, { 会社: 会社, 先方売価単価: n(単価), 先方売価金額: n(金額) }, {});
+  return { ok: true, user: who.email };
+}
+
 function 番号と段階を入れる_(lay, rec, 案件ID, 種別, who) {
   var upd = { '案件ID': 案件ID, '案件区分': 種別 };
   var def = 段階[種別];
@@ -783,6 +818,9 @@ function handle_(action, req, who) {
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
     case '画面_削除':         return 画面_削除(req.recordId, req.modId);
     case '画面_案件にまとめる': return 画面_案件にまとめる(req.recordIds, req['案件ID'], req['確認']);   // FMHUB-21: 選んだ伝票の 案件ID を揃える
+    case '画面_履歴':         return 画面_履歴(req.recordId, req['伝票番号']);          // GRP-1: 伝票ごとの変更履歴（読むだけ）
+    case '先方売価_読む':     return 先方売価_読む(req['伝票番号']);                  // GRP-1: 関連会社の売価（Hub 側）
+    case '先方売価_書く':     return 先方売価_書く(req['伝票番号'], req['会社'], req['単価'], req['金額'], req['メモ']);
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
