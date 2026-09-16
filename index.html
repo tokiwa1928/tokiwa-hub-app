@@ -3721,35 +3721,55 @@ const ENVELOPE_INIT=[{"nm":"長3 クラフト50","sp":"長3,クラフト50g","p"
 
 
 // ── CAL-DUP-1: カレンダー受注台帳の「内容が同じ行」を 1 行に束ねる（tools/calendar-juchu.html と同じ決め方） ──
-function calNormCust_(s){ s=String(s==null?'':s).normalize('NFKC'); s=s.replace(/株式会社|有限会社|合資会社|学校法人/g,''); s=s.replace(/[(](株|有|資)[)]/g,''); s=s.replace(/(様|さま|さん|御中|担当者?|営業所|営業部|本店|支店).*$/,''); s=s.replace(/[\s　・.,，、]+/g,''); return s.trim(); }
+function calNormCust_(s){ s=String(s==null?'':s).normalize('NFKC'); s=s.replace(/[（(][^）)]*[）)]/g,''); s=s.replace(/株式会社|有限会社|合資会社|学校法人/g,''); s=s.replace(/[(](株|有|資)[)]/g,''); s=s.replace(/(様|さま|さん|御中|担当者?|営業所|営業部|本店|支店).*$/,''); s=s.replace(/[\s　・.,，、]+/g,''); return s.trim(); }
 function calNormProd_(p){ p=String(p==null?'':p).normalize('NFKC'); p=p.replace(/^20\d\d\s*年?カレンダー[_\s]*/,''); p=p.replace(/[\s　_\-・（）()【】.,，、]+/g,''); return p.toLowerCase(); }
 function calSigOf(r){ if(!r) return ''; return [r.category||'', r.year||'', calNormCust_(r.cust||''), calNormProd_(r.product||''), String(r.denpyoNo||''), String(r.orderQty||''), String(r.orderPrice||'')].join('|'); }
 function calFilled_(r){ var n=0; for(var k in r){ if(k.charAt(0)==='_'||k==='id') continue; var v=r[k]; if(v!==''&&v!=null&&v!==false) n++; } return n; }
 function calDedupe(arr){
   if(!Array.isArray(arr)) return [];
+  var NC=calNormCust_, NP=calNormProd_, SIG=calSigOf;
+  var key=function(r){ return [r.category||'', r.year||'', NC(r.cust||''), NC(r.user||''), NP(r.product||'')].join('|'); };
+  var RANK={ '納品済':5, '発注済':4, '受注':3, 'TEL済':2, '未着手':1, '失注':0 };
+  var rank=function(r){ var v=RANK[String(r.status||'')]; return v==null?1:v; };
+  var better=function(a,b){ var d=rank(b)-rank(a); if(d) return d; d=calFilled_(b)-calFilled_(a); if(d) return d; if(!!a._manual!==!!b._manual) return a._manual?-1:1; return String(a.id)<String(b.id)?-1:1; };
+  var mergeInto=function(pool){   // pool[0] を残し、残りの空欄を補う
+    pool=pool.slice().sort(better);
+    var base=Object.assign({}, pool[0]); var maxTs=Date.parse(base._updatedAt||'')||0;
+    pool.slice(1).forEach(function(o){
+      for(var k in o){ if(k.charAt(0)==='_'||k==='id') continue; var v=o[k], cur=base[k];
+        if(cur===''||cur==null){ base[k]=v; }
+        else if((k==='note'||k==='memo') && v && String(v)!==String(cur) && String(cur).indexOf(String(v))<0){ base[k]=String(cur)+' ／ '+String(v); } }
+      if(o._fts){ base._fts=Object.assign({}, base._fts||{}); for(var f in o._fts){ if(!base._fts[f]||Date.parse(o._fts[f])>Date.parse(base._fts[f])) base._fts[f]=o._fts[f]; } }
+      if(o._edited){ base._edited=Object.assign({}, base._edited||{}, o._edited); }
+      var t=Date.parse(o._updatedAt||'')||0; if(t>maxTs) maxTs=t;
+    });
+    if(maxTs) base._updatedAt=new Date(maxTs).toISOString();
+    var man=pool.filter(function(r){ return r._manual; }).sort(function(a,b){ return String(a.id)<String(b.id)?-1:1; });
+    if(man.length){ base._manual=true; base.id=man[0].id; }
+    return base;
+  };
   var groups={}, order=[], out=[];
-  arr.forEach(function(r){ if(!r||!r.id) return; var s=calSigOf(r); if(!s){ out.push(r); return; } if(!groups[s]){ groups[s]=[]; order.push(s); } groups[s].push(r); });
+  arr.forEach(function(r){ if(!r||!r.id) return; var s=key(r); if(!NC(r.cust||'')&&!NP(r.product||'')){ out.push(r); return; } if(!groups[s]){ groups[s]=[]; order.push(s); } groups[s].push(r); });
   order.forEach(function(s){
     var g=groups[s];
     if(g.length<2){ out.push(g[0]); return; }
-    var manual=g.filter(function(r){ return r._manual; }).sort(function(a,b){ return String(a.id)<String(b.id)?-1:1; }), auto=g.filter(function(r){ return !r._manual; });
-    var keep=manual.length?manual.slice():[];
-    if(auto.length){
-      var pool=(manual.length?[manual[0]]:[]).concat(auto);
-      pool.sort(function(a,b){ var d=calFilled_(b)-calFilled_(a); if(d) return d; if(!!a._manual!==!!b._manual) return a._manual?-1:1; return String(a.id)<String(b.id)?-1:1; });
-      var base=Object.assign({}, pool[0]); var maxTs=Date.parse(base._updatedAt||'')||0;
-      pool.slice(1).forEach(function(o){
-        for(var k in o){ if(k.charAt(0)==='_'||k==='id') continue; var v=o[k], cur=base[k];
-          if(cur===''||cur==null){ base[k]=v; }
-          else if((k==='note'||k==='memo') && v && String(v)!==String(cur) && String(cur).indexOf(String(v))<0){ base[k]=String(cur)+' ／ '+String(v); } }
-        if(o._fts){ base._fts=Object.assign({}, base._fts||{}); for(var f in o._fts){ if(!base._fts[f]||Date.parse(o._fts[f])>Date.parse(base._fts[f])) base._fts[f]=o._fts[f]; } }
-        if(o._edited){ base._edited=Object.assign({}, base._edited||{}, o._edited); }
-        var t=Date.parse(o._updatedAt||'')||0; if(t>maxTs) maxTs=t;
-      });
-      if(maxTs) base._updatedAt=new Date(maxTs).toISOString();
-      if(manual.length){ base._manual=true; base.id=manual[0].id; keep[0]=base; } else keep.push(base);   // 手入力の行があればその ID と印を残す
-    }
-    keep.forEach(function(r){ out.push(r); });
+    // 伝票番号ごとに分ける。番号の無い行は、番号が 1 種類だけならそこへ、無ければ 1 つの組に
+    var byNo={}, nos=[], noNo=[];
+    g.forEach(function(r){ var n=String(r.denpyoNo||'').trim(); if(!n){ noNo.push(r); return; } if(!byNo[n]){ byNo[n]=[]; nos.push(n); } byNo[n].push(r); });
+    var sets=[];
+    if(nos.length===0){ sets.push(noNo); }
+    else if(nos.length===1){ sets.push(byNo[nos[0]].concat(noNo)); }
+    else { nos.forEach(function(n){ sets.push(byNo[n]); }); if(noNo.length){ // 番号が複数ある組: 番号なしは内容が同じ番号付きにだけ寄せる
+        noNo.forEach(function(r){ var hit=null; nos.forEach(function(n){ if(!hit && byNo[n].some(function(x){ return SIG(x)===SIG(r); })) hit=n; }); if(hit) byNo[hit].push(r); else sets.push([r]); }); } }
+    sets.forEach(function(set){
+      if(set.length<2){ out.push(set[0]); return; }
+      var manual=set.filter(function(r){ return r._manual; }), auto=set.filter(function(r){ return !r._manual; });
+      if(!auto.length){ set.forEach(function(r){ out.push(r); }); return; }   // 手入力どうしは束ねない
+      // 手入力が複数あれば、最初の 1 行にだけ自動行を寄せ、他の手入力はそのまま
+      var keepManual=manual.slice().sort(function(a,b){ return String(a.id)<String(b.id)?-1:1; });
+      out.push(mergeInto((keepManual.length?[keepManual[0]]:[]).concat(auto)));
+      keepManual.slice(1).forEach(function(r){ out.push(r); });
+    });
   });
   return out;
 }
