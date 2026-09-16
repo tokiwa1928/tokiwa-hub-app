@@ -215,6 +215,7 @@
         <option value="orderedNotDelivered">受注済・未納品</option>
       </select>
       <input type="file" id="imp" accept=".xlsx,.xls" style="display:none" onchange="importFile(this)">
+      <button class="btn btn-p" onclick="addRow()" title="コピーせずに、まっさらな今年の行を作ります（得意先・ユーザー・製品名）。新規案件は前年比を出しません">＋ 新規</button>
       <button class="btn" onclick="applyFixedPrices()" title="前年と数量が同じ＝今年の金額は確定。表示中の行の受注単価に今年の確定単価(値上込)を一括で入れます（既に入力済みの行は触りません）">⚡ 確定価格を一括反映</button>
       <button class="btn btn-g" onclick="exportXlsx()">📤 書出</button>
       <button class="btn" id="fClear" onclick="clearFilters()" title="すべての列の絞り込みを解除します">✕ フィルタクリア</button>
@@ -491,6 +492,9 @@
     <label>得意先名（入力すると候補が出ます。検索して選択）</label>
     <input id="amCust" list="custDL" autocomplete="off" placeholder="社名を入力・検索" oninput="amOnCust()">
     <datalist id="custDL"></datalist>
+    <label>ユーザー（任意。得意先が印刷会社で、その先の会社があるとき）</label>
+    <input id="amUser" list="userDL" autocomplete="off" placeholder="例：有限会社川村組">
+    <datalist id="userDL"></datalist>
     <label>担当者（任意）</label>
     <input id="amContact" list="contactDL" autocomplete="off" placeholder="例：山田様">
     <datalist id="contactDL"></datalist>
@@ -499,6 +503,7 @@
     <datalist id="prodDL"></datalist>
     <label>伝票番号（任意・あとで入力できます）</label>
     <input id="amDenpyo" autocomplete="off" placeholder="GENの伝票番号">
+    <label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer"><input type="checkbox" id="amNew" checked> 新規案件（前年がないので前年比・前年の履歴を出さない）</label>
     <div class="abtns">
       <button class="btn" onclick="closeAddModal()">キャンセル</button>
       <button class="btn btn-p" onclick="submitAddModal()">追加する</button>
@@ -1297,8 +1302,8 @@ function moveRow(id, dir){
     (db[COLL]||[]).forEach(function(r){ if(pos[r.id]!=null && r.ord!==pos[r.id]){ r.ord=pos[r.id]; stampField(r,'ord'); } });
   })) render();
 }
-function prevRecOf(g, r){ var best=null, same=null; g.recs.forEach(function(x){ if(x.year<r.year && mPrice(x)!==''){ if(!best||x.year>best.year) best=x; if(x.product===r.product && (!same||x.year>same.year)) same=x; } }); return same||best; }
-function prevAnyRecOf(g, r){ var best=null; g.recs.forEach(function(x){ if(x.year<r.year){ if(!best||x.year>best.year) best=x; } }); return best; }
+function prevRecOf(g, r){ if(r&&r._new) return null; var best=null, same=null; g.recs.forEach(function(x){ if((x.user||'')!==(r.user||'')) return; if(x.year<r.year && mPrice(x)!==''){ if(!best||x.year>best.year) best=x; if(x.product===r.product && (!same||x.year>same.year)) same=x; } }); return same||best; }
+function prevAnyRecOf(g, r){ if(r&&r._new) return null; var best=null; g.recs.forEach(function(x){ if((x.user||'')!==(r.user||'')) return; if(x.year<r.year){ if(!best||x.year>best.year) best=x; } }); return best; }
 // ===== 販売基本仕様(簡易案件シート): 行ごとの仕様を記録し、＋追加で翌年へ引き継ぐ =====
 var SPEC_FIELDS=[['spSize','size'],['spPaper','paper'],['spColors','colors'],['spKako','kako'],['spNaire','naire'],['spData','data'],['spPack','pack'],['spMemo','memo']];
 var _specId=null;
@@ -1462,6 +1467,7 @@ function renderMatrix(){
       var prevP='',prevC='';
       for(var j=yi+1;j<years.length;j++){ if(prevP===''){ var pp=mPrice(g.byYear[years[j]]); if(pp!=='') prevP=pp; } if(prevC===''){ var cc=mCost(g.byYear[years[j]]); if(cc!=='') prevC=cc; } }
       var r=g.byYear[y];
+      if(r&&r._new){ prevP=''; prevC=''; }   // CAL-NEW-1: 新規案件は前年比なし
       if(y===cur) return r ? curSubs(r,prevP,prevC) : '<td class="s yb cur addtd" colspan="8"><button class="btn addcur" onclick="matrixAddCur('+i+')">＋入力</button></td>';
       return pastSubs(r,prevP,prevC);
     }).join('');
@@ -1522,7 +1528,8 @@ function curCell(g, r, gi, prevR, prevP, prevC){
   var nums='<div class="frow">'+ff('数量(冊)','orderQty','num')+ff('売価¥','orderPrice','num')+ff('仕入¥','cost','num')+'</div>';
   // 指標: 売価前年比 / 仕入前年比 / 原価率
   var curP=mPrice(r), curC=mCost(r), cr=costRatioVal(r);
-  var metrics='<div class="mrow">売価'+deltaInline(curP,prevP,'#b45309')+' ／ 仕入'+deltaInline(curC,prevC,'#dc2626')+' ／ 原価率 '+(cr!==''?'<b style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'">'+fmtPct(cr)+'</b>':'<span class="dim">—</span>')+'</div>';
+  if(r._new){ prevP=''; prevC=''; prevR=null; }   // CAL-NEW-1
+  var metrics='<div class="mrow">'+(r._new?'<span class="chip on" style="background:#5b21b6;border-color:#5b21b6;color:#fff;font-size:10px" title="新規案件（前年がないので前年比は出しません）">新規</span> ':'')+'売価'+deltaInline(curP,prevP,'#b45309')+' ／ 仕入'+deltaInline(curC,prevC,'#dc2626')+' ／ 原価率 '+(cr!==''?'<b style="color:'+(cr>=0.7?'#dc2626':cr>=0.5?'#b45309':'#16a34a')+'">'+fmtPct(cr)+'</b>':'<span class="dim">—</span>')+'</div>';
   // 前年の履歴(参考): いつ電話/受注/納品したか＋数量×単価
   var hist='';
   if(prevR){ var hd=[]; if(prevR.telDate)hd.push('TEL'+mYmd(prevR.telDate)); if(prevR.orderDate)hd.push('受'+mYmd(prevR.orderDate)); if(prevR.delivDate)hd.push('納'+mYmd(prevR.delivDate));
@@ -2118,14 +2125,15 @@ function openAddModal(){
   buildCustIndex();
   document.getElementById('amYear').textContent=curYear();
   document.getElementById('amCat').innerHTML=CATORDER.map(function(c){ return '<option'+(c===(curCat()||'カレンダー')?' selected':'')+'>'+hubEsc(c)+'</option>'; }).join('');
-  var contacts={}, prods={};
-  loadAll().forEach(function(r){ if(r.contact) contacts[r.contact]=true; if(r.product) prods[cleanProd(r.product)]=true; });
+  var contacts={}, prods={}, users={};
+  loadAll().forEach(function(r){ if(r.contact) contacts[r.contact]=true; if(r.product) prods[cleanProd(r.product)]=true; if(r.user) users[r.user]=true; });
+  document.getElementById('userDL').innerHTML=Object.keys(users).sort(function(a,b){return a.localeCompare(b,'ja');}).map(function(c){ return '<option value="'+hubEsc(c)+'">'; }).join('');
   var _cidx={}; Object.keys(_custIndex).forEach(function(c){ _cidx[c]=1; });
   hubCustNames().forEach(function(c){ _cidx[c]=1; });   // 本体の得意先マスタからも候補
   document.getElementById('custDL').innerHTML=Object.keys(_cidx).sort(function(a,b){return a.localeCompare(b,'ja');}).map(function(c){ return '<option value="'+hubEsc(c)+'">'; }).join('');
   document.getElementById('contactDL').innerHTML=Object.keys(contacts).sort().map(function(c){ return '<option value="'+hubEsc(c)+'">'; }).join('');
   document.getElementById('prodDL').innerHTML=Object.keys(prods).sort().map(function(c){ return '<option value="'+hubEsc(c)+'">'; }).join('');
-  document.getElementById('amCust').value=''; document.getElementById('amContact').value=''; document.getElementById('amProduct').value=''; document.getElementById('amDenpyo').value='';
+  document.getElementById('amCust').value=''; document.getElementById('amContact').value=''; document.getElementById('amProduct').value=''; document.getElementById('amDenpyo').value=''; document.getElementById('amUser').value=''; document.getElementById('amNew').checked=true;
   document.getElementById('addModal').style.display='flex';
   setTimeout(function(){ var el=document.getElementById('amCust'); if(el) el.focus(); }, 50);
 }
@@ -2143,8 +2151,11 @@ function submitAddModal(){
   var product=(document.getElementById('amProduct').value||'').trim();
   var denpyoNo=(document.getElementById('amDenpyo').value||'').trim();
   var pc=parseCust(nmRaw); var cust=pc.company; if(!contact && pc.contact) contact=pc.contact;
-  var rec=newRecord({ year:curYear(), category:cat, cust:cust, contact:contact, product:product, denpyoNo:denpyoNo });
-  if(hubAppend(COLL, rec)){ closeAddModal(); document.getElementById('q').value=cust; hubToast('＋ '+cust+' を追加しました'); buildCats(); render(); }
+  var user=(document.getElementById('amUser').value||'').trim(); var isNew=!!document.getElementById('amNew').checked;
+  // CAL-NEW-1: 手入力の行（取込で消されない）。新規案件は _new＝前年比・前年の履歴を出さない
+  var rec=newRecord({ year:curYear(), category:cat, cust:cust, user:user, contact:contact, product:product, denpyoNo:denpyoNo, _manual:true, _new:isNew, note:(isNew?'新規案件':'') });
+  if(hubAppend(COLL, rec)){ closeAddModal(); document.getElementById('q').value=user||cust; hubToast('＋ '+cust+(user?' / '+user:'')+' を追加しました'+(isNew?'（新規案件・前年比なし）':'')); buildCats(); render();
+    if(_hubCloudTimer){ clearTimeout(_hubCloudTimer); _hubCloudTimer=null; } hubCloudPush(); }
 }
 // ───── 見積書の作成（PDF/Excel ダウンロード）─────
 var QUOTE_ROWS = 13;   // 添付書式の明細行数(Excel r20〜r32)
