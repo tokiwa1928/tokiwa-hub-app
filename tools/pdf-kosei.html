@@ -91,6 +91,7 @@
     <button class="pk-sc" onclick="_pkJump('sec-merge')">🔗 連結</button>
     <button class="pk-sc" onclick="_pkJump('sec-split')">✂ 分割</button>
     <button class="pk-sc" onclick="_pkJump('sec-rotate')">🔄 回転</button>
+    <button class="pk-sc" onclick="_pkJump('sec-compress')">🗜 圧縮</button>
     <button class="pk-sc" onclick="_pkJump('sec-mentu')">🗂 面付（試行錯誤・確認・ダウンロード）</button>
     <button class="pk-sc" onclick="_pkJump('sec-size')">📐 校正枠</button>
     <button class="pk-sc" onclick="_pkJump('sec-fuchi')">🖨 余白チェック</button>
@@ -134,6 +135,30 @@
       <button class="btn" onclick="rotateAll(-90)">↺ 左90°</button>
       <button class="btn" onclick="rotateAll(180)">↕ 180°</button>
     </div>
+  </div>
+
+  <!-- PDFT-10: 圧縮 -->
+  <div class="sec" id="sec-compress">
+    <div class="st">🗜 圧縮（一番上のファイル。チェックしてあればそのファイル全部）</div>
+    <div class="muted" style="margin-bottom:8px" id="cp-now">📂 ファイルを入れると、いまの大きさが出ます</div>
+    <div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+      <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fff">
+        <div style="font-weight:700;margin-bottom:4px">A. そのまま軽く（劣化なし）</div>
+        <div class="muted" style="margin-bottom:8px">中身は変えず、ファイルの構造だけ整理します。文字は文字のまま、画像もそのまま。減り方は小さめ（数%〜3割）。印刷データはこちら。</div>
+        <button class="btn btn-c" onclick="compressLossless()">🗜 そのまま軽くしてダウンロード</button>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fff">
+        <div style="font-weight:700;margin-bottom:4px">B. 画像にして軽く（校正・メール用）</div>
+        <div class="muted" style="margin-bottom:6px">各ページを指定の解像度で描き直して JPEG にします。大きく減りますが、<b>文字は画像になり</b>検索・コピーができません。印刷データには使わないでください。</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:12.5px">
+          <label>解像度 <select id="cp-dpi"><option value="72">72 dpi（画面用・最小）</option><option value="100">100 dpi</option><option value="150" selected>150 dpi（校正用）</option><option value="200">200 dpi</option><option value="300">300 dpi（大きめ）</option></select></label>
+          <label>画質 <select id="cp-q"><option value="0.5">低（小さい）</option><option value="0.7" selected>中</option><option value="0.85">高（きれい）</option></select></label>
+          <label class="chk"><input type="checkbox" id="cp-gray"> グレースケール</label>
+        </div>
+        <button class="btn btn-c" onclick="compressRaster()">🗜 画像にして軽くしてダウンロード</button>
+      </div>
+    </div>
+    <div class="muted" id="cp-status" style="margin-top:8px"></div>
   </div>
 
   <div class="sec" id="sec-size">
@@ -496,6 +521,52 @@ async function rotateAll(deg){
   var f=files[0];
   try{ var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true}); src.getPages().forEach(function(p){ var cur=p.getRotation().angle||0; p.setRotation(PDFLib.degrees(((cur+deg)%360+360)%360)); }); dl(await src.save(), f.name.replace(/\.pdf$/i,'')+'_回転.pdf'); toast('✅ 回転しました'); }catch(e){ toast('❌ '+(e.message||e)); }
 }
+
+// ── PDFT-10: 圧縮 ──
+function _cpMB(n){ return n>=1048576 ? (n/1048576).toFixed(2)+' MB' : Math.round(n/1024)+' KB'; }
+function _cpTargets(){ if(!files.length) return []; var t=selCount()>0?selected():[files[0]]; return t; }
+function _cpShowNow(){ var el=document.getElementById('cp-now'); if(!el) return; if(!files.length){ el.textContent='📂 ファイルを入れると、いまの大きさが出ます'; return; } var t=_cpTargets(); el.innerHTML='いまの大きさ: '+t.map(function(f){ return '<b>'+esc(f.name)+'</b> '+_cpMB(f.buf.byteLength)+'（'+(f.pages||'?')+' ページ）'; }).join('　／　')+(selCount()>0?'　（チェックした '+t.length+' 件）':''); }
+function _cpDone(list, st){ st.innerHTML='✅ '+list.map(function(r){ var pct=Math.round((1-r.after/r.before)*100); return esc(r.name)+': '+_cpMB(r.before)+' → <b>'+_cpMB(r.after)+'</b>（'+(pct>0?'-'+pct+'%':'減りませんでした')+'）'; }).join('<br>'); }
+async function compressLossless(){
+  var t=_cpTargets(); if(!t.length){ toast('PDFを入れてください'); return; }
+  var st=document.getElementById('cp-status'); st.textContent='⏳ 整理しています…'; var list=[];
+  try{
+    for(var i=0;i<t.length;i++){ var f=t[i];
+      var src=await PDFLib.PDFDocument.load(f.buf,{ignoreEncryption:true, updateMetadata:false});
+      var bytes=await src.save({useObjectStreams:true, addDefaultPage:false});
+      if(bytes.byteLength>=f.buf.byteLength*0.98){ list.push({name:f.name, before:f.buf.byteLength, after:f.buf.byteLength, same:true}); continue; }   // 減らないなら出さない
+      dl(bytes, f.name.replace(/\.pdf$/i,'')+'_軽量.pdf'); list.push({name:f.name, before:f.buf.byteLength, after:bytes.byteLength});
+    }
+    _cpDone(list, st); if(list.some(function(r){ return r.same; })) st.innerHTML+='<br><span style="color:#b45309">減らなかったファイルは、もともと整理済みです。大きく減らすなら B（画像にして軽く）をどうぞ。</span>';
+  }catch(e){ st.textContent=''; toast('❌ 圧縮失敗: '+(e.message||e)); }
+}
+async function compressRaster(){
+  var t=_cpTargets(); if(!t.length){ toast('PDFを入れてください'); return; }
+  if(typeof pdfjsLib==='undefined'){ toast('pdf.js読込中。少し待って再実行してください'); return; }
+  var dpi=parseInt(document.getElementById('cp-dpi').value,10)||150, q=parseFloat(document.getElementById('cp-q').value)||0.7, gray=document.getElementById('cp-gray').checked;
+  var st=document.getElementById('cp-status'); var list=[];
+  try{
+    for(var i=0;i<t.length;i++){ var f=t[i];
+      var pdf=await pdfjsLib.getDocument({data:f.buf.slice(0)}).promise; var out=await PDFLib.PDFDocument.create();
+      for(var p=1;p<=pdf.numPages;p++){
+        st.textContent='⏳ '+f.name+'  '+p+' / '+pdf.numPages+' ページを '+dpi+'dpi で描いています…';
+        var page=await pdf.getPage(p); var vp1=page.getViewport({scale:1}); var vp=page.getViewport({scale:dpi/72});
+        var cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(vp.width)); cv.height=Math.max(1,Math.round(vp.height));
+        var cx=cv.getContext('2d'); cx.fillStyle='#fff'; cx.fillRect(0,0,cv.width,cv.height);
+        await page.render({canvasContext:cx, viewport:vp, intent:'print'}).promise;
+        if(gray){ var im=cx.getImageData(0,0,cv.width,cv.height), d=im.data; for(var j=0;j<d.length;j+=4){ var g=(d[j]*299+d[j+1]*587+d[j+2]*114)/1000; d[j]=d[j+1]=d[j+2]=g; } cx.putImageData(im,0,0); }
+        var blob=await new Promise(function(res){ cv.toBlob(res,'image/jpeg',q); }); var jpg=await out.embedJpg(await blob.arrayBuffer());
+        var pg=out.addPage([vp1.width, vp1.height]); pg.drawImage(jpg,{x:0,y:0,width:vp1.width,height:vp1.height});
+        cv.width=1; cv.height=1;
+      }
+      var bytes=await out.save();
+      if(bytes.byteLength>=f.buf.byteLength){ list.push({name:f.name, before:f.buf.byteLength, after:f.buf.byteLength, same:true, bigger:bytes.byteLength}); continue; }   // 元より大きくなるなら出さない
+      dl(bytes, f.name.replace(/\.pdf$/i,'')+'_圧縮'+dpi+'dpi.pdf'); list.push({name:f.name, before:f.buf.byteLength, after:bytes.byteLength});
+    }
+    _cpDone(list, st); if(list.some(function(r){ return r.same; })) st.innerHTML+='<br><span style="color:#b45309">画像にすると元より大きくなるファイルは出していません（元がもう小さい）。解像度を下げるか、元のままお使いください。</span>'; else st.innerHTML+='<br><span class="muted">文字は画像になっています（検索・コピー不可）。印刷データには元のファイルを使ってください。</span>';
+  }catch(e){ st.textContent=''; toast('❌ 圧縮失敗: '+(e.message||e)); }
+}
+try{ setInterval(_cpShowNow, 1500); }catch(e){}
 
 // ── 校正サイズ・枠付与 ──
 function readOpts(){
