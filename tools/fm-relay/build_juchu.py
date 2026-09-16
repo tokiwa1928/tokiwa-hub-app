@@ -569,6 +569,7 @@ LOGIC = r"""
     if (!r.record) { 現在 = null; 状態('見つかりません', 'err'); 待機(false); return; }
     流し込む(r.record);
     得意先名を入れる();
+    try { sessionStorage.setItem('fm_last_no', String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}
     履歴を出す(r['履歴']);
     番号欄.value = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
     差分を出す(r['参考'], r['差分']);
@@ -1168,6 +1169,7 @@ LOGIC = r"""
     var 番号らしい = /^[a-zA-Z]?\d{2,}$/.test(kw);
     if (番号らしい) 日数 = 0;
     if (d1 || d2) 日数 = 0;   // 日付を指定したら「期間」は使わない
+    try { var 条件 = {}; ['ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { 条件[id] = $(id).value; }); 条件.全件 = 全件モード; sessionStorage.setItem('fm_find', JSON.stringify(条件)); } catch (e) {}
     if (!kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
     全件モード = false;
     var から = 0;
@@ -1410,7 +1412,14 @@ LOGIC = r"""
   var q = '';
   try { q = new URLSearchParams(location.search).get('no') || ''; } catch (e) {}
   if (!q && window.FM初期番号) q = String(window.FM初期番号);
+  // 開き直したとき（指示書から戻る・F5）は、さっきの伝票と探す条件に戻す
+  var 復元 = null; try { 復元 = JSON.parse(sessionStorage.getItem('fm_find') || 'null'); } catch (e) {}
+  if (!q) { try { q = sessionStorage.getItem('fm_last_no') || ''; } catch (e) {} }
   if (q) { 番号欄.value = q; 読み込む(q); }
+  if (復元 && モード !== 'ichiran') {
+    var 何か = false; Object.keys(復元).forEach(function (id) { if (id === '全件') return; var el = $(id); if (el && 復元[id] != null && String(復元[id]) !== '') { el.value = 復元[id]; if (['ff-days', 'ff-n', 'ff-stage'].indexOf(id) < 0) 何か = true; } });
+    if (何か || 復元.全件) { 探し.style.display = 'block'; 全件モード = !!復元.全件; var 試す = 0; var t = setInterval(function () { 試す++; if (索引) { clearInterval(t); 手元で探す(false); if (q) 結果を畳む(); } else if (試す > 40) clearInterval(t); }, 500); }
+  }
 
   try { window.FM見た目(); } catch (e) {}
 })();
