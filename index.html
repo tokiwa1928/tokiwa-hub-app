@@ -20629,21 +20629,27 @@ function _dtpProcessPending_(){
   q.forEach(function(it){
     if(!it||!it.伝票番号) return;
     var no=String(it.伝票番号);
+    // KOSEI-GROUP-1: 伝票一覧（まとめた校正）。代表＝先頭。どれかの伝票のカードがあればそこにまとめる
+    var nos=Array.isArray(it.伝票一覧)&&it.伝票一覧.length ? it.伝票一覧.map(String).filter(Boolean) : [no];
+    if(nos.indexOf(no)<0) nos.unshift(no);
+    var _hasNo=function(x){ if(!x) return false; if(nos.indexOf(String(x.fmNo||''))>=0) return true; return (x.fmNos||[]).some(function(n){ return nos.indexOf(String(n))>=0; }); };
     var cust=(typeof _custNameOf_==='function' && _custNameOf_(it.得意先コード)) || '';
     if(!cust){ try{ var fm=JSON.parse(localStorage.getItem('fm_master_得意先マスタ')||'null'); var h=fm&&fm.行&&fm.行.find(function(r){ return String(r['得意先コード'])===String(it.得意先コード); }); if(h) cust=h['得意先名']||''; }catch(e){} }   // FileMaker の得意先マスタ（作業指示書などが手元に置く）
     if(!cust) cust=it.得意先コード||'';
     var proj=(DB.projects||[]).find(function(p){ return p && p.fm && String(p.fm['fm-denpyo']||'')===no; });
-    var p=DB.proofings.find(function(x){ return x && String(x.fmNo||'')===no; })
+    var p=DB.proofings.find(_hasNo)
         || (proj ? DB.proofings.find(function(x){ return x && x.projectId===proj.id; }) : null);
     var due=(typeof _fmDate_==='function') ? (_fmDate_(it.納期)||'') : '';
     if(p){
-      p.fmNo=no; if(it.前回伝票番号 && !p.prevFmNo) p.prevFmNo=String(it.前回伝票番号); if(it.note){ p.note=(p.note?p.note+'\n':'')+'【DTP】'+it.note; p.isDraft=false; }
+      if(!p.fmNo) p.fmNo=no;
+      if(nos.length>1 || (p.fmNos&&p.fmNos.length)){ var _m=(p.fmNos||[p.fmNo]).map(String); nos.forEach(function(n){ if(_m.indexOf(n)<0) _m.push(n); }); p.fmNos=_m; if(_m.length>1 && it.製品名 && String(p.prodName||'').indexOf(it.製品名)<0 && nos.length>1) p.prodName=it.製品名; }
+      if(it.前回伝票番号 && !p.prevFmNo) p.prevFmNo=String(it.前回伝票番号); if(it.note){ p.note=(p.note?p.note+'\n':'')+'【DTP】'+it.note; p.isDraft=false; }
       if(!p.custName) p.custName=cust; if(!p.prodName) p.prodName=it.製品名||''; if(due&&!p.dueDate) p.dueDate=due;
       p.lastMoveAt=now; upd++;
     } else {
-      p={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), custName:cust, prodName:it.製品名||'', endUser:it.ユーザー名||'', projectId:(proj?proj.id:''), fmNo:no,
+      p={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), custName:cust, prodName:it.製品名||'', endUser:it.ユーザー名||'', projectId:(proj?proj.id:''), fmNo:no, fmNos:(nos.length>1?nos:undefined),
           status:(_proofStatuses_()[0]||{}).key||'s_ask_wait', versions:[], createdAt:now, lastMoveAt:now, dueDate:due,
-          isDraft:!it.note, prevFmNo:String(it.前回伝票番号||''), note:'FileMaker 受注 '+no+'（DTP有）より自動作成'+(it.user?'　by '+it.user:'')+(it.note?'\n【DTP】'+it.note:'') };
+          isDraft:!it.note, prevFmNo:String(it.前回伝票番号||''), note:'FileMaker 受注 '+(nos.length>1?nos.join('・')+'（'+nos.length+' 件をまとめた校正）':no)+'（DTP有）より自動作成'+(it.user?'　by '+it.user:'')+(it.note?'\n【DTP】'+it.note:'') };
       if(typeof _inheritMasterNo_==='function' && proj) try{ _inheritMasterNo_(p, proj); }catch(e){}
       DB.proofings.push(p);
       if(proj){ if(!proj.proofingIds) proj.proofingIds=[]; proj.proofingIds.push(p.id); }
@@ -21072,7 +21078,7 @@ function _proofCell_(key, c, statuses){
       + statuses.map(function(s){ return '<option value="'+s.key+'"'+(s.key===c.k?' selected':'')+'>'+_escDiff(s.label)+'</option>'; }).join('') + '</select>';
   }
   if(key==='flags')  return _proofFlagsHtml_(c.p) || '<span style="color:#c4c0b5">—</span>';
-  if(key==='seiban') return '<span style="font-family:monospace;font-size:11px;color:#6f6c64">'+_escDiff(String(c.p.fmNo||c.info.seiban||'—'))+'</span>';
+  if(key==='seiban') return '<span style="font-family:monospace;font-size:11px;color:#6f6c64">'+_escDiff(String(c.p.fmNo||c.info.seiban||'—'))+((c.p.fmNos&&c.p.fmNos.length>1)?' <b style="color:#5b21b6" title="'+_escDiff(c.p.fmNos.join('・'))+'">ほか'+(c.p.fmNos.length-1)+'件</b>':'')+'</span>';
   if(key==='cust')   return '<span style="font-size:12px">'+_escDiff(c.info.user||c.info.cust||'—')+'</span>'+(c.info.user&&c.info.cust?'<div style="font-size:10px;color:#94a3b8">'+_escDiff(c.info.cust)+'</div>':'');
   if(key==='user')   return '<span style="font-size:12px;color:#475569">'+_escDiff(c.info.user||'—')+'</span>';
   if(key==='prod')   return '<span style="font-weight:600;font-size:12.5px;word-break:break-word">'+_escDiff(c.info.prod||'—')+'</span>';
@@ -21641,7 +21647,9 @@ function showProofingDetail(proofingId){
   var _extraHead = '<div style="margin-bottom:.6rem;font-size:11.5px;display:flex;flex-direction:column;gap:4px">'
     + (typeof _proofFlagsHtml_==='function' ? ('<div>'+_proofFlagsHtml_(p)+'</div>') : '')
     + (_rw ? ('<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:5px 8px"><b style="color:#92400e">💬 返信待ち</b> '+(_rw.who?_escDiff(_rw.who)+'：':'')+_escDiff(_rw.text)+' <button class="btn" style="font-size:11px;padding:2px 8px;margin-left:6px" onclick="_proofReplyDone_(\''+p.id+'\')">✅ 返信した</button><span style="font-size:10px;color:#a16207;margin-left:6px">下のコメント欄で返しても消えます</span></div>') : '')
-    + (p.fmNo ? ('<div>🗄 伝票 <b>'+_escDiff(p.fmNo)+'</b> <a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">受注入力</a> ・ <a href="tools/sagyo.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">作業指示書</a></div>') : '')
+    + (p.fmNo ? ('<div>🗄 伝票 <b>'+_escDiff(p.fmNo)+'</b> <a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">受注入力</a> ・ <a href="tools/sagyo.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">作業指示書</a>'
+        + ((p.fmNos&&p.fmNos.length>1) ? ('<div style="margin-top:3px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;padding:4px 8px"><b style="color:#5b21b6">📎 まとめた校正 '+p.fmNos.length+' 件:</b> '+p.fmNos.map(function(n){ return '<span style="font-family:monospace;margin-right:6px">'+_escDiff(n)+' <a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(n)+'" target="_blank" style="color:#0369a1;font-size:10px">受注</a> <a href="tools/sagyo.html?no='+encodeURIComponent(n)+'" target="_blank" style="color:#0369a1;font-size:10px">指示書</a></span>'; }).join('')+'<div style="font-size:10px;color:#6d28d9;margin-top:2px">校正・校了・印刷完了はこの 1 枚で動かします（全部の伝票に効きます）</div></div>') : '')
+        + '</div>') : '')
     + (typeof _proofPrevLink_==='function' && _proofPrevLink_(p) ? ('<div>'+_proofPrevLink_(p)+'</div>') : '')
     + (!_proofHasFile_(p) ? ('<label style="display:flex;gap:6px;align-items:center;color:#991b1b"><input type="checkbox" '+(p.noFileOk?'checked':'')+' onchange="_proofNoFileOk_(\''+p.id+'\',this.checked)"> データ無しで依頼（文章だけの変更・前回データを参照）</label>') : '')
     + '</div>';
@@ -22591,10 +22599,11 @@ function _inqInsertToProofing_(inqId){
     var vc = (p.versions||[]).length;
     var hit = (pid && p.projectId===pid);
     var no = p.fmNo || '';   // KOSEI-MAIL-1: 伝票番号（案件番号）で選べるように
-    var dataText = ((p.id||'')+' '+no+' '+nm+' '+prod+' '+(p.projectId||'')).toLowerCase();
+    var nosTxt = (p.fmNos&&p.fmNos.length>1) ? p.fmNos.join(' ') : '';
+    var dataText = ((p.id||'')+' '+no+' '+nosTxt+' '+nm+' '+prod+' '+(p.projectId||'')).toLowerCase();
     return '<div class="inq-proof-pick" data-text="'+dataText.replace(/"/g,'&quot;')+'" onclick="_inqPickProofSlot_(\''+inqId+'\',\''+p.id+'\')" style="padding:10px 12px;border:1px solid '+(hit?'#67e8f9':'#e5e7eb')+';border-radius:6px;margin-bottom:6px;cursor:pointer;background:'+(hit?'#ecfeff':'#fff')+'" onmouseover="this.style.background=\'#f0fdfa\'" onmouseout="this.style.background=\''+(hit?'#ecfeff':'#fff')+'\'">'+
       '<div style="display:flex;justify-content:space-between;gap:8px">'+
-        '<div style="min-width:0"><div style="font-weight:700;font-size:12px">'+(hit?'⭐ ':'')+(no?'<span style="font-family:monospace;background:#1a1a1a;color:#fff;border-radius:4px;padding:0 6px;margin-right:6px">'+_escDiff(no)+'</span>':'')+_escDiff(prod)+'</div>'+
+        '<div style="min-width:0"><div style="font-weight:700;font-size:12px">'+(hit?'⭐ ':'')+(no?'<span style="font-family:monospace;background:#1a1a1a;color:#fff;border-radius:4px;padding:0 6px;margin-right:6px">'+_escDiff(no)+(nosTxt?' ほか'+(p.fmNos.length-1)+'件':'')+'</span>':'')+_escDiff(prod)+'</div>'+
         '<div style="font-size:11px;color:#555;margin-top:2px">'+_escDiff(nm)+' · '+proj+'</div></div>'+
         '<div style="text-align:right;font-size:10px;color:#888;white-space:nowrap">'+(p.status||'')+'<br>'+vc+' 版</div>'+
       '</div></div>';

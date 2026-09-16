@@ -790,14 +790,16 @@ LOGIC = r"""
     $('dtp-msg').textContent = m.at ? ('校正BOXへ ' + new Date(m.at).toLocaleString('ja-JP') + (m.draft ? '（下書き）' : '')) : '';
   }
   // KOSEI-DTP-1: 伝票の値（fields か 一覧の行）から校正BOXへ送る。無にしたら記録を消す。戻り値は表示用の文
-  function DTP送信(f, yn, note) {
+  function DTP送信(f, yn, note, 一覧) {
     var no = String(f['伝票番号'] || ''); if (!no) return '';
     var all = DTP記録();
     if (yn !== '有') { delete all[no]; try { localStorage.setItem('fm_dtp', JSON.stringify(all)); } catch (e) {} return 'DTP 無にしました'; }
     var item = { 伝票番号: no, 前回伝票番号: String(f['前回伝票番号'] || ''), 得意先コード: String(f['得意先コード'] || ''), ユーザー名: String(f['ユーザー名'] || ''), 製品名: String(f['製品名'] || ''),
                  納期: String(f['納期'] || ''), 起票日: String(f['起票日'] || ''), note: note || '', dtp: '有', draft: !note, at: new Date().toISOString(),
                  user: (window.FM名乗っている ? FM名乗っている() : '') };
+    if (一覧 && 一覧.length > 1) { item.伝票一覧 = 一覧.map(String); item.製品名 = String(f['製品名'] || '') + '（ほか ' + (一覧.length - 1) + ' 件をまとめた校正）'; }
     all[no] = item;
+    if (一覧 && 一覧.length > 1) 一覧.forEach(function (n) { all[String(n)] = Object.assign({}, item, { 伝票番号: String(n) }); });
     try { localStorage.setItem('fm_dtp', JSON.stringify(all)); } catch (e) {}
     // 本体が拾う待ち行列（伝票番号で 1 件）
     var q = []; try { q = JSON.parse(localStorage.getItem('fm_dtp_pending') || '[]'); } catch (e) {}
@@ -808,7 +810,7 @@ LOGIC = r"""
   }
   // 校正BOX に入っているか（本体の DB は同じブラウザの localStorage にある）。'card'＝カードあり／'pending'＝送信済みで本体待ち／''＝無し
   function DTP状態(no) {
-    try { var db = JSON.parse(localStorage.getItem('murayama_v15') || 'null'); if (db && (db.proofings || []).some(function (p) { return p && String(p.fmNo || '') === String(no); })) return 'card'; } catch (e) {}
+    try { var db = JSON.parse(localStorage.getItem('murayama_v15') || 'null'); if (db && (db.proofings || []).some(function (p) { return p && (String(p.fmNo || '') === String(no) || (p.fmNos || []).map(String).indexOf(String(no)) >= 0); })) return 'card'; } catch (e) {}
     try { if ((JSON.parse(localStorage.getItem('fm_dtp_pending') || '[]')).some(function (x) { return String(x.伝票番号) === String(no); })) return 'pending'; } catch (e) {}
     var m = DTP記録()[no]; return (m && m.dtp === '有') ? 'sent' : '';
   }
@@ -1086,7 +1088,8 @@ LOGIC = r"""
     }
     var h = '<div style="display:flex;gap:8px;align-items:center;margin:2px 0 4px;font-size:12px">'
       + '<button id="ff-group" style="padding:3px 10px" title="チェックした伝票の 案件ID を同じにします（空なら いちばん古い受注の伝票番号）">☑ 選んだ伝票を 1 つの案件にまとめる</button>'
-      + '<input id="ff-group-id" placeholder="案件ID（空なら自動）" style="width:150px;padding:3px 6px"><span style="color:#64748b">「案件」列が同じ伝票が、予算見積→見積→受注の 1 つの案件です</span></div>';
+      + '<input id="ff-group-id" placeholder="案件ID（空なら自動）" style="width:150px;padding:3px 6px"><span style="color:#64748b">「案件」列が同じ伝票が、予算見積→見積→受注の 1 つの案件です</span>'
+      + '<button id="ff-proof-group" style="padding:3px 10px;margin-left:auto;background:#5b21b6;color:#fff;border:1px solid #4c1d95;border-radius:4px" title="チェックした伝票を 1 枚の校正カードにまとめて校正BOXへ（名刺 4 件を一緒に校正するときなど）">📎 選んだ伝票を 1 つの校正にまとめて校正BOXへ</button></div>';
     h += '<table><thead><tr><th></th><th></th>';
     列.forEach(function (k) { h += '<th>' + esc(k.h) + '</th>'; });
     h += '</tr></thead><tbody>';
@@ -1143,6 +1146,19 @@ LOGIC = r"""
       + (r.日数 ? '　起票日 直近' + r.日数 + '日' : '')
       + '　' + (r.源 === '索引' ? r.ミリ秒 + 'ms（手元の索引）' : (r.ミリ秒 / 1000).toFixed(1) + '秒') + '　「表示」かダブルクリックで開きます（1 回クリックはチェック）';
 
+    // KOSEI-GROUP-1: チェックした伝票を 1 枚の校正にまとめる
+    $('ff-proof-group').onclick = function () {
+      var ids = Array.prototype.map.call(box.querySelectorAll('input.pick:checked'), function (x) { return x.getAttribute('data-id'); });
+      var rows = (r.行 || []).filter(function (x) { return ids.indexOf(String(x.recordId)) >= 0; });
+      if (rows.length < 2) { alert('まとめる伝票を左のチェックで 2 件以上選んでください'); return; }
+      var nos = rows.map(function (x) { return String(x['伝票番号'] || ''); }).filter(Boolean);
+      var custs = {}; rows.forEach(function (x) { custs[String(x['得意先コード'] || '')] = 1; });
+      var 文 = nos.length + ' 件を 1 つの校正としてまとめて校正BOXへ送ります。\n\n' + rows.map(function (x) { return x['伝票番号'] + ' ' + (x['製品名'] || ''); }).join('\n') + (Object.keys(custs).length > 1 ? '\n\n⚠ 得意先が違う伝票が混ざっています' : '') + '\n\nよろしいですか？';
+      if (!confirm(文)) return;
+      var msg = DTP送信(rows[0], '有', '', nos);
+      $('ff-msg').textContent = nos.join('・') + ' をまとめて ' + msg;
+      Array.prototype.forEach.call(box.querySelectorAll('select.dtp-sel'), function (s) { if (nos.indexOf(s.getAttribute('data-no')) >= 0) { s.value = '有'; s.style.background = '#ede9fe'; s.style.color = '#5b21b6'; s.style.fontWeight = '700'; var mk = s.parentNode.querySelector('span'); if (mk) mk.remove(); s.insertAdjacentHTML('afterend', '<span title="まとめた校正として送信済み（本体を開くとカードになります）" style="font-size:11px;margin-left:3px;color:#a78bfa">📎⏳</span>'); } });
+    };
     $('ff-group').onclick = function () {
       var ids = Array.prototype.map.call(box.querySelectorAll('input.pick:checked'), function (x) { return x.getAttribute('data-id'); });
       if (ids.length < 1) { alert('まとめる伝票を左のチェックで選んでください（1 件でも可＝案件IDを入れ直す）'); return; }
