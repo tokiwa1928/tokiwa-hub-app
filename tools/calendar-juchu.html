@@ -581,7 +581,7 @@ function sigOf(r){
 }
 function localSig(){ try{ return JSON.parse(localStorage.getItem(CAL_SIG_KEY))||[]; }catch(e){ return []; } }
 function localSigAdd(sig){ try{ var a=localSig(); if(sig && a.indexOf(sig)<0){ a.push(sig); if(a.length>5000) a=a.slice(-5000); localStorage.setItem(CAL_SIG_KEY, JSON.stringify(a)); } }catch(e){} }
-function allSig(db){ var m={}; localSig().forEach(function(x){ m[x]=1; }); if(db && Array.isArray(db.calendarOrdersDeletedSig)) db.calendarOrdersDeletedSig.forEach(function(x){ m[x]=1; }); return _tombSane_(m,'内容 '); }
+function allSig(db){ return calTombUnion_([localSig(), db && db.calendarOrdersDeletedSig], '内容 '); }
 function localTomb(){ try{ return JSON.parse(localStorage.getItem(CAL_TOMB_KEY))||[]; }catch(e){ return []; } }
 function localTombAdd(id){ try{ var a=localTomb(); if(a.indexOf(id)<0){ a.push(id); if(a.length>5000) a=a.slice(-5000); localStorage.setItem(CAL_TOMB_KEY, JSON.stringify(a)); } }catch(e){} }
 // 🛡 墓石が異常に多い=一括削除の事故。まるごと無効にして、これ以上データを消さない。
@@ -593,12 +593,50 @@ function _tombSane_(m, what){
   console.warn('[墓石] '+(what||'')+n+'件は異常です。削除判定を無効化しました');
   return {};
 }
-// DB内の墓石と端末ローカル墓石の和集合
+// DB内の墓石と端末ローカル墓石の和集合（異常な一覧は捨てる）
 function allTomb(db){
-  var m={}; localTomb().forEach(function(id){ m[id]=1; });
-  if(db && Array.isArray(db.calendarOrdersDeleted)) db.calendarOrdersDeleted.forEach(function(id){ m[id]=1; });
-  return _tombSane_(m,'ID ');
+  return calTombUnion_([localTomb(), db && db.calendarOrdersDeleted], 'ID ');
 }
+// ── CAL-DUP-1: 内容が同じ行を 1 行に束ねる ──
+// 鍵は sigOf（分類|年|得意先|製品|伝票番号|受注数|受注単価）。手入力どうし(_manual)は束ねない（同じ内容でも意図して 2 行のことがある）。
+// 残す行＝埋まっている項目が多い方（同点なら手入力→ID の小さい方）。空欄は他の行から補い、備考が食い違えば「／」でつなぐ。
+// ID は残した行のもの。どの端末でも同じ決め方なので、同期で行き来しても同じ行が残り、削除マーカーは要らない。
+function calFilled_(r){ var n=0; for(var k in r){ if(k.charAt(0)==='_'||k==='id') continue; var v=r[k]; if(v!==''&&v!=null&&v!==false) n++; } return n; }
+function calDedupe(arr){
+  if(!Array.isArray(arr)) return [];
+  var groups={}, order=[], out=[];
+  arr.forEach(function(r){ if(!r||!r.id) return; var s=sigOf(r); if(!s) { out.push(r); return; } if(!groups[s]){ groups[s]=[]; order.push(s); } groups[s].push(r); });
+  order.forEach(function(s){
+    var g=groups[s];
+    if(g.length<2){ out.push(g[0]); return; }
+    var manual=g.filter(function(r){ return r._manual; }).sort(function(a,b){ return String(a.id)<String(b.id)?-1:1; }), auto=g.filter(function(r){ return !r._manual; });
+    // 手入力どうしは別行のまま。自動行は（手入力 1 行があればそこへ）まとめる
+    var keep=manual.length?manual.slice():[];
+    if(auto.length){
+      var pool=(manual.length?[manual[0]]:[]).concat(auto);
+      pool.sort(function(a,b){ var d=calFilled_(b)-calFilled_(a); if(d) return d; if(!!a._manual!==!!b._manual) return a._manual?-1:1; return String(a.id)<String(b.id)?-1:1; });
+      var base=Object.assign({}, pool[0]); var maxTs=Date.parse(base._updatedAt||'')||0;
+      pool.slice(1).forEach(function(o){
+        for(var k in o){ if(k.charAt(0)==='_'||k==='id') continue; var v=o[k], cur=base[k];
+          if(cur===''||cur==null){ base[k]=v; }
+          else if((k==='note'||k==='memo') && v && String(v)!==String(cur) && String(cur).indexOf(String(v))<0){ base[k]=String(cur)+' ／ '+String(v); } }
+        if(o._fts){ base._fts=Object.assign({}, base._fts||{}); for(var f in o._fts){ if(!base._fts[f]||Date.parse(o._fts[f])>Date.parse(base._fts[f])) base._fts[f]=o._fts[f]; } }
+        if(o._edited){ base._edited=Object.assign({}, base._edited||{}, o._edited); }
+        var t=Date.parse(o._updatedAt||'')||0; if(t>maxTs) maxTs=t;
+      });
+      if(maxTs) base._updatedAt=new Date(maxTs).toISOString();
+      if(manual.length){ base._manual=true; base.id=manual[0].id; keep[0]=base; } else keep.push(base);   // 手入力の行があればその ID と印を残す
+    }
+    keep.forEach(function(r){ out.push(r); });
+  });
+  return out;
+}
+// 削除マーカーの一覧を「正常なものだけ」和集合にする（異常＝TOMB_SANE_MAX 超は事故とみなして捨てる）
+function calTombUnion_(lists, what){
+  var m={}; (lists||[]).forEach(function(a){ if(!Array.isArray(a)) return; if(a.length>TOMB_SANE_MAX){ console.warn('[墓石] '+(what||'')+a.length+'件の一覧は異常なので捨てました'); return; } a.forEach(function(x){ if(x) m[x]=1; }); });
+  return m;
+}
+
 // 本体(index.html)の CLOUD_CONFIG と同じ値。ツール単独でも全社クラウド(GAS)へ直接保存するために使う。
 var HUB_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
 var HUB_API_KEY = 'mitsumori-2024';
@@ -693,12 +731,12 @@ function mergeCalById(localArr, cloudArr, tomb, sig){
   }
   (Array.isArray(cloudArr)?cloudArr:[]).forEach(function(r){ take(r,false); });   // 先にクラウド
   (Array.isArray(localArr)?localArr:[]).forEach(function(r){ take(r,true); });    // ローカルで新しい項目を上書き
-  return order.filter(function(id){
+  return calDedupe(order.filter(function(id){
     var r=byId[id];
     if(tomb && tomb[id]) return false;
     if(sig && r && !r._manual && sig[sigOf(r)]) return false;
     return true;
-  }).map(function(id){ return byId[id]; });
+  }).map(function(id){ return byId[id]; }));   // CAL-DUP-1: 内容が同じ行は 1 行に
 }
 async function hubCloudPush(){
   var db = hubLoad(), auth = hubAuth();
@@ -715,17 +753,12 @@ async function hubCloudPush(){
   }catch(e){ cloud=null; }
   db=hubLoad()||db;   // ★通信待ちの間に入力された項目を失わないよう、最新のローカルを読み直す
 
-  var tomb={}, sig={};
-  (db.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
-  localTomb().forEach(function(id){ tomb[id]=1; });
-  (db.calendarOrdersDeletedSig||[]).forEach(function(x){ sig[x]=1; });
-  localSig().forEach(function(x){ sig[x]=1; });
+  // CAL-DUP-1: 異常な一覧（500 件超）は和集合に入れない＝捨てる。正常な一覧だけを合わせる
+  var tomb=calTombUnion_([db.calendarOrdersDeleted, localTomb(), cloud&&cloud.calendarOrdersDeleted], 'ID ');
+  var sig=calTombUnion_([db.calendarOrdersDeletedSig, localSig(), cloud&&cloud.calendarOrdersDeletedSig], '内容 ');
 
   var data;
   if(cloud && typeof cloud==='object'){
-    (cloud.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
-    (cloud.calendarOrdersDeletedSig||[]).forEach(function(x){ sig[x]=1; });
-    tomb=_tombSane_(tomb,'ID '); sig=_tombSane_(sig,'内容 ');   // 異常なら空で送り、クラウドの壊れた墓石を消す
     var mergedCal=mergeCalById(db[COLL]||[], cloud.calendarOrders||[], tomb, sig);
     // マージ結果をローカルにも反映(他端末の新しい変更を取り込む)。※push誘発を避けるため直接書込。
     try{
@@ -770,6 +803,7 @@ async function hubCloudPush(){
 // セル編集など連発する保存はデバウンスして1回だけ送信。
 // 起動時にクラウド最新のカレンダーデータを取り込み、全PCの表示を一致させる。
 // ツールは従来「書くだけ」でPCごとにlocalStorageの古い値を表示していた(単価101/空欄の食い違い等)。
+var _cloudCalRows=-1;   // クラウドのカレンダー行数（-1＝まだ／繋がらなかった）
 async function hubCloudPull(){
   try{
     var auth=hubAuth();
@@ -783,15 +817,11 @@ async function hubCloudPull(){
     var d=r && (r.data||r);
     if(!d || !Array.isArray(d.calendarOrders)) return false;
     var db=hubLoad(); if(!db) return false;
-    // 墓石(端末ローカル ∪ DB ∪ クラウド)を統合
-    var tomb={}, sigp={};
-    (db.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
-    (d.calendarOrdersDeleted||[]).forEach(function(id){ tomb[id]=1; });
-    localTomb().forEach(function(id){ tomb[id]=1; });
-    (db.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
-    (d.calendarOrdersDeletedSig||[]).forEach(function(x){ sigp[x]=1; });
-    localSig().forEach(function(x){ sigp[x]=1; });
-    tomb=_tombSane_(tomb,'ID '); sigp=_tombSane_(sigp,'内容 ');   // 異常なら削除判定を無効化
+    _cloudCalRows=d.calendarOrders.length;   // CAL-DUP-1: 初期投入の判断に使う（クラウドに繋がった）
+    // 墓石(端末ローカル ∪ DB ∪ クラウド)を統合。CAL-DUP-1: 異常な一覧（500 件超）は捨てる
+    var localInsane=(db.calendarOrdersDeleted||[]).length>TOMB_SANE_MAX || (db.calendarOrdersDeletedSig||[]).length>TOMB_SANE_MAX;
+    var tomb=calTombUnion_([db.calendarOrdersDeleted, d.calendarOrdersDeleted, localTomb()], 'ID ');
+    var sigp=calTombUnion_([db.calendarOrdersDeletedSig, d.calendarOrdersDeletedSig, localSig()], '内容 ');
     // レコードごとに更新時刻の新しい方を採用(先祖返り防止)。墓石は除外。
     var keyOf=function(arr){ return arr.map(function(r){ return r.id+':'+(r._updatedAt||''); }).sort().join(','); };
     var before=keyOf(db[COLL]||[]);
@@ -801,8 +831,8 @@ async function hubCloudPull(){
     // 本体アプリ等が古いデータで丸ごと上書きした場合の自己回復。push側で再マージするためループしない。
     var cloudKey=keyOf((d.calendarOrders||[]).filter(function(r){ return r&&r.id&&!tomb[r.id]; }));
     if(after!==cloudKey){ try{ hubCloudPushSoon(); }catch(e){} }
-    // ローカルに変更が無ければ書き込み・再描画はしない
-    if(after===before) return false;
+    // ローカルに変更が無ければ書き込み・再描画はしない（壊れた削除マーカーを持っていたときは書き直す）
+    if(after===before && !localInsane) return false;
     // pushを誘発しない直接書き込み(クラウド由来なので再送不要)
     db[COLL]=merged;
     db.calendarOrdersDeleted=Object.keys(tomb).slice(-12000);
@@ -838,7 +868,7 @@ function byManual(a,b){
   var ao=(a.order==null?1e9:a.order), bo=(b.order==null?1e9:b.order); return ao-bo;
 }
 
-function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; var tomb=allTomb(db), sig=allSig(db); arr = arr.filter(function(r){ if(!r) return false; if(tomb[r.id]) return false; if(!r._manual && sig[sigOf(r)]) return false; return true; }); arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
+function loadAll(){ var db = hubLoad(); if(!db) return []; var arr = Array.isArray(db[COLL]) ? db[COLL] : []; var tomb=allTomb(db), sig=allSig(db); arr = calDedupe(arr.filter(function(r){ if(!r) return false; if(tomb[r.id]) return false; if(!r._manual && sig[sigOf(r)]) return false; return true; })); arr.forEach(function(r){ if(r && r.status==='見送り') r.status='失注'; }); return arr; }
 var BASE_YEAR = 2026;   // 今年（入力対象の基準年）
 function curYear(){ return BASE_YEAR; }   // 今年は固定(年度ドロップダウン廃止・表示年チェックで切替)
 function curCat(){ return document.getElementById('fCat').value || ''; }
@@ -2939,6 +2969,11 @@ function autoMigrate(){
   // 入れ直しが必要な場合は「📦 初期投入」を人が明示的に実行する。
   if(arr.length){
     hubToast('⚠ データの一部が未整備です。入れ直す場合は「📦 初期投入」を手動で実行してください');
+    return;
+  }
+  // CAL-DUP-1: クラウドに繋がって「0 件」と分かったときだけ自動投入する。繋がらないまま投入すると別 ID で二重になる
+  if(_cloudCalRows!==0){
+    hubToast(_cloudCalRows<0 ? '⚠ クラウドに繋がらないため初期投入しません。再読み込みしてください' : '☁ クラウドのデータを取り込み中…');
     return;
   }
   showBusy('🔄 データを準備中…');
