@@ -21566,9 +21566,10 @@ async function _proofDropFiles_(pid, folderName, kind, files){
       var rv=_calcCurrentProofRound_(p, kind==='instruction'?'instruction':kind);
       var ext=(f.name.match(/\.([^.]+)$/)||['',''])[1];
       var stLabel=(PROOF_STAGE_FOLDERS[rv.round]||{}).label||('第'+rv.round+'校');
-      var name = kind==='manuscript' ? f.name
-               : kind==='instruction' ? ((p.fmNo||p.projectId||'')+'_'+String(p.prodName||'').replace(/[\\\/:*?"<>|\s]/g,'').slice(0,30)+'_'+stLabel+'戻り_'+rv.subVersion+(ext?'.'+ext:''))
-               : _buildProofFileName_(p, kind, rv.round, rv.subVersion, ext||'pdf');
+      // KOSEI-NAME-1: 規則「伝票番号_得意先(ユーザー)_品名_段階」に自動で付け直す。まとめた校正はどの伝票かを判定
+      var noFor=_proofPickNoForFile_(p, f.name); if(noFor===null){ if(typeof _toastMsg==='function') _toastMsg('やめました: '+f.name); continue; }
+      var stage = kind==='manuscript' ? '支給データ' : kind==='instruction' ? (stLabel+'戻り_'+rv.subVersion) : kind==='final' ? ('校了_'+rv.subVersion) : (stLabel+'出_'+rv.subVersion);
+      var name = (p.fmNo || (p.fmNos&&p.fmNos.length)) ? (_proofBaseName_(p, noFor)+'_'+stage+(ext?'.'+ext:'')) : (kind==='manuscript' ? f.name : _buildProofFileName_(p, kind, rv.round, rv.subVersion, ext||'pdf'));
       var b64=await _proofReadBase64_(f);
       var r=await callCloudAPI('uploadProofFile',{},{ folderId:sub.id, name:name, mime:f.type||'application/octet-stream', base64:b64 });
       if(!r||!r.success) throw new Error((r&&r.error)||'upload failed');
@@ -21677,7 +21678,8 @@ function showProofingDetail(proofingId){
     + (typeof _proofFlagsHtml_==='function' ? ('<div>'+_proofFlagsHtml_(p)+'</div>') : '')
     + (_rw ? ('<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:5px 8px"><b style="color:#92400e">💬 返信待ち</b> '+(_rw.who?_escDiff(_rw.who)+'：':'')+_escDiff(_rw.text)+' <button class="btn" style="font-size:11px;padding:2px 8px;margin-left:6px" onclick="_proofReplyDone_(\''+p.id+'\')">✅ 返信した</button><span style="font-size:10px;color:#a16207;margin-left:6px">下のコメント欄で返しても消えます</span></div>') : '')
     + (p.fmNo ? ('<div>🗄 伝票 <b>'+_escDiff(p.fmNo)+'</b> <a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">受注入力</a> ・ <a href="tools/sagyo.html?no='+encodeURIComponent(p.fmNo)+'" target="_blank" style="color:#0369a1">作業指示書</a>'
-        + ((p.fmNos&&p.fmNos.length>1) ? ('<div style="margin-top:3px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;padding:4px 8px"><b style="color:#5b21b6">📎 まとめた校正 '+p.fmNos.length+' 件</b><table style="border-collapse:collapse;font-size:11px;margin-top:3px">'+p.fmNos.map(function(n){ var it=(p.fmItems||[]).filter(function(x){ return x.no===n; })[0]; return '<tr><td style="font-family:monospace;padding:1px 8px 1px 0">'+_escDiff(n)+'</td><td style="padding:1px 8px 1px 0">'+_escDiff(it&&it.name?it.name:'')+'</td><td><a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(n)+'" target="_blank" style="color:#0369a1;font-size:10px">受注</a> <a href="tools/sagyo.html?no='+encodeURIComponent(n)+'" target="_blank" style="color:#0369a1;font-size:10px;margin-left:4px">指示書</a></td></tr>'; }).join('')+'</table><div style="font-size:10px;color:#6d28d9;margin-top:2px">校正・校了・印刷完了はこの 1 枚で動かします（全部の伝票に効きます）</div></div>') : '')
+        + ((p.fmNos&&p.fmNos.length>1) ? '' : (' ・ <button class="btn" style="font-size:10px;padding:1px 7px" onclick="_proofCopyName_(\''+p.id+'\')" title="'+_escDiff(_proofBaseName_(p))+'">📋 ファイル名をコピー</button><span style="font-size:10px;color:#94a3b8;margin-left:4px">'+_escDiff(_proofBaseName_(p))+'</span>'))
+        + ((p.fmNos&&p.fmNos.length>1) ? ('<div style="margin-top:3px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;padding:4px 8px"><b style="color:#5b21b6">📎 まとめた校正 '+p.fmNos.length+' 件</b><table style="border-collapse:collapse;font-size:11px;margin-top:3px">'+p.fmNos.map(function(n){ var it=(p.fmItems||[]).filter(function(x){ return x.no===n; })[0]; return '<tr><td style="font-family:monospace;padding:1px 8px 1px 0">'+_escDiff(n)+'</td><td style="padding:1px 8px 1px 0">'+_escDiff(it&&it.name?it.name:'')+'</td><td style="white-space:nowrap"><a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(n)+'" target="_blank" style="color:#0369a1;font-size:10px">受注</a> <a href="tools/sagyo.html?no='+encodeURIComponent(n)+'" target="_blank" style="color:#0369a1;font-size:10px;margin-left:4px">指示書</a> <button class="btn" style="font-size:10px;padding:0 6px;margin-left:6px" onclick="_proofCopyName_(\''+p.id+'\',\''+_escDiff(n)+'\')" title="'+_escDiff(_proofBaseName_(p,n))+'">📋 名前</button></td></tr>'; }).join('')+'</table><div style="font-size:10px;color:#6d28d9;margin-top:2px">校正・校了・印刷完了はこの 1 枚で動かします（全部の伝票に効きます）。📋 名前＝ファイル名の規則「伝票番号_得意先(ユーザー)_品名」をコピー。段階フォルダに放り込んだファイルは、この規則に自動で付け直します（どの伝票かはファイル名の番号や名前から判定、分からなければ聞きます）</div></div>') : '')
         + '</div>') : '')
     + (typeof _proofPrevLink_==='function' && _proofPrevLink_(p) ? ('<div>'+_proofPrevLink_(p)+'</div>') : '')
     + (!_proofHasFile_(p) ? ('<label style="display:flex;gap:6px;align-items:center;color:#991b1b"><input type="checkbox" '+(p.noFileOk?'checked':'')+' onchange="_proofNoFileOk_(\''+p.id+'\',this.checked)"> データ無しで依頼（文章だけの変更・前回データを参照）</label>') : '')
@@ -22082,6 +22084,37 @@ function _calcCurrentProofRound_(proofing, forKind){
 }
 
 // ファイル名生成: 案件番号_社名御中_案件名_初校_v1
+// KOSEI-NAME-1: ファイル名の規則「伝票番号_得意先(ユーザー)_品名」（FileMaker のノート用タイトルと同じ）
+function _proofSafeName_(s){ return String(s==null?'':s).replace(/[\\\/:*?"<>|]/g,'_').replace(/[\r\n\t]+/g,' ').trim(); }
+function _proofBaseName_(p, no){
+  no = no || (p && p.fmNo) || '';
+  var it = (p && p.fmItems || []).filter(function(x){ return String(x.no)===String(no); })[0];
+  var item = (it && it.name) || (p && p.prodName) || '';
+  if(!it && p && p.fmNos && p.fmNos.length>1 && p.fmItems && p.fmItems.length) item = p.prodName || '';
+  var cust = (p && p.custName) || '', user = (p && p.endUser) || '';
+  return [no, _proofSafeName_(cust) + (user ? '(' + _proofSafeName_(user) + ')' : ''), _proofSafeName_(item)].filter(Boolean).join('_');
+}
+function _proofCopyName_(pid, no){
+  var p=(DB.proofings||[]).find(function(x){ return x.id===pid; }); if(!p) return;
+  var name=_proofBaseName_(p, no);
+  var done=function(){ if(typeof _toastMsg==='function') _toastMsg('📋 コピーしました: '+name); };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(name).then(done, function(){ prompt('コピーしてください', name); });
+  else prompt('コピーしてください', name);
+}
+// まとめた校正: 放り込んだファイルがどの伝票のものか（ファイル名の伝票番号や名前から自動。分からなければ聞く）
+function _proofPickNoForFile_(p, fileName){
+  var nos=(p.fmNos&&p.fmNos.length>1)?p.fmNos.map(String):[String(p.fmNo||'')];
+  if(nos.length<2) return nos[0];
+  var fn=String(fileName||'').normalize('NFKC');
+  var hit=nos.filter(function(n){ return n && fn.indexOf(n)>=0; }); if(hit.length===1) return hit[0];
+  var byName=nos.filter(function(n){ var it=(p.fmItems||[]).filter(function(x){ return String(x.no)===n; })[0]; if(!it||!it.name) return false;
+    var m=String(it.name).normalize('NFKC').match(/[（(](.+?)[）)]/); var key=(m?m[1]:it.name).replace(/様$/,'').replace(/[\s　]+/g,''); var sur=key.slice(0,2);
+    return key && (fn.replace(/[\s　]+/g,'').indexOf(key)>=0 || (sur.length===2 && fn.indexOf(sur)>=0)); });
+  if(byName.length===1) return byName[0];
+  var lines=nos.map(function(n,i){ var it=(p.fmItems||[]).filter(function(x){ return String(x.no)===n; })[0]; return (i+1)+': '+n+'  '+(it&&it.name?it.name:''); });
+  var a=prompt('「'+fileName+'」はどの伝票のファイルですか？ 番号を入れてください\n\n'+lines.join('\n'), '1');
+  if(a===null) return null; var idx=parseInt(a,10)-1; return nos[idx]||nos[0];
+}
 function _buildProofFileName_(proofing, kind, round, subVersion, ext){
   var project = (DB.projects || []).find(function(p){ return p.id === proofing.projectId; });
   var projNo  = project ? project.id : (proofing.projectId || 'PRJ');
