@@ -1864,7 +1864,7 @@ function setPane(p){
   <span id="hs-msg" style="color:#1d4ed8"></span>
   <span style="display:inline-block;width:100%;height:4px"></span>
   <b>DTP</b>
-  <label>DTP有無 <select id="dtp-yn"><option value="">無</option><option value="有">有</option></select></label>
+  <span style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap">DTP有無 <label style="cursor:pointer"><input type="radio" name="dtp-yn-r" value="" checked> 無</label><label style="cursor:pointer;font-weight:700;color:#5b21b6"><input type="radio" name="dtp-yn-r" value="有"> 有</label></span><input type="hidden" id="dtp-yn" value="">
   <label>校正の内容 <input id="dtp-note" style="width:320px" placeholder="何を校正に出すか（空なら校正BOXに下書きで入ります）"></label>
   <button id="dtp-go" style="background:#7c3aed">校正BOXへ</button>
   <span id="dtp-msg" style="color:#6d28d9"></span>
@@ -2235,30 +2235,56 @@ window.FM見た目 = function () {};
 
   // -------------------------------------------------- DTP有無 → 校正BOX（本体）へ
   function DTP記録() { try { return JSON.parse(localStorage.getItem('fm_dtp') || '{}'); } catch (e) { return {}; } }
+  // KOSEI-DTP-2: ラジオ（無／有）。値は hidden #dtp-yn に集め、今までの処理はそのまま
+  function DTPラジオ同期() { var v = $('dtp-yn').value; Array.prototype.forEach.call(document.querySelectorAll('input[name="dtp-yn-r"]'), function (r) { r.checked = (r.value === v); }); }
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="dtp-yn-r"]'), function (r) { r.addEventListener('change', function () { if (!r.checked) return; $('dtp-yn').value = r.value; $('dtp-yn').dispatchEvent(new Event('change')); }); });
   function DTPを出す(no) {
     var m = DTP記録()[no] || {};
-    $('dtp-yn').value = m.dtp || ''; $('dtp-note').value = m.note || '';
+    $('dtp-yn').value = m.dtp || ''; $('dtp-note').value = m.note || ''; DTPラジオ同期();
     $('dtp-msg').textContent = m.at ? ('校正BOXへ ' + new Date(m.at).toLocaleString('ja-JP') + (m.draft ? '（下書き）' : '')) : '';
   }
-  function DTPを送る() {
-    if (!現在) return;
-    var no = String(現在.fields['伝票番号'] || ''), yn = $('dtp-yn').value, note = $('dtp-note').value.trim();
+  // KOSEI-DTP-1: 伝票の値（fields か 一覧の行）から校正BOXへ送る。無にしたら記録を消す。戻り値は表示用の文
+  function 校正まとめ名(items){
+    var names=(items||[]).map(function(x){ return String((x&&(x.製品名||x.name))||'').trim(); }).filter(Boolean);
+    if(!names.length) return '';
+    if(names.length===1) return names[0];
+    var pre=names[0].split(/[（(]/)[0].trim();
+    var inner=names.map(function(n){ var m=n.match(/[（(](.+?)[）)]/); return (m?m[1]:n).replace(/様$/,'').trim(); });
+    if(pre && names.every(function(n){ return n.indexOf(pre)===0; })) return pre+' '+names.length+'件（'+inner.join('・')+'）';
+    return names[0]+' ほか'+(names.length-1)+'件';
+  }
+  function DTP送信(f, yn, note, 一覧, 明細) {
+    var no = String(f['伝票番号'] || ''); if (!no) return '';
     var all = DTP記録();
-    if (!yn) { delete all[no]; try { localStorage.setItem('fm_dtp', JSON.stringify(all)); } catch (e) {} $('dtp-msg').textContent = 'DTP 無にしました'; return; }
-    var item = { 伝票番号: no, 前回伝票番号: String(現在.fields['前回伝票番号'] || ''), 得意先コード: String(現在.fields['得意先コード'] || ''), ユーザー名: String(現在.fields['ユーザー名'] || ''), 製品名: String(現在.fields['製品名'] || ''),
-                 納期: String(現在.fields['納期'] || ''), 起票日: String(現在.fields['起票日'] || ''), note: note, dtp: '有', draft: !note, at: new Date().toISOString(),
+    if (yn !== '有') { delete all[no]; try { localStorage.setItem('fm_dtp', JSON.stringify(all)); } catch (e) {} return 'DTP 無にしました'; }
+    var item = { 伝票番号: no, 前回伝票番号: String(f['前回伝票番号'] || ''), 得意先コード: String(f['得意先コード'] || ''), ユーザー名: String(f['ユーザー名'] || ''), 製品名: String(f['製品名'] || ''),
+                 納期: String(f['納期'] || ''), 起票日: String(f['起票日'] || ''), note: note || '', dtp: '有', draft: !note, at: new Date().toISOString(),
                  user: (window.FM名乗っている ? FM名乗っている() : '') };
+    if (一覧 && 一覧.length > 1) { item.伝票一覧 = 一覧.map(String); if (明細 && 明細.length) item.伝票明細 = 明細; item.製品名 = 校正まとめ名(明細 && 明細.length ? 明細 : 一覧.map(function (n) { return { 製品名: n === no ? String(f['製品名'] || '') : '' }; })) || String(f['製品名'] || ''); }
     all[no] = item;
+    if (一覧 && 一覧.length > 1) 一覧.forEach(function (n) { all[String(n)] = Object.assign({}, item, { 伝票番号: String(n) }); });
     try { localStorage.setItem('fm_dtp', JSON.stringify(all)); } catch (e) {}
     // 本体が拾う待ち行列（伝票番号で 1 件）
     var q = []; try { q = JSON.parse(localStorage.getItem('fm_dtp_pending') || '[]'); } catch (e) {}
     q = q.filter(function (x) { return x.伝票番号 !== no; }); q.push(item);
     try { localStorage.setItem('fm_dtp_pending', JSON.stringify(q)); } catch (e) {}
     try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'dtp', 伝票番号: no }); } catch (e) {}
-    $('dtp-msg').textContent = '校正BOXへ送りました' + (note ? '' : '（内容が空なので下書き）') + '。本体を開いていれば今、閉じていれば次に開いたときにカードになります';
+    return '校正BOXへ送りました' + (note ? '' : '（内容が空なので下書き）') + '。本体を開いていれば今、閉じていれば次に開いたときにカードになります';
+  }
+  // 校正BOX に入っているか（本体の DB は同じブラウザの localStorage にある）。'card'＝カードあり／'pending'＝送信済みで本体待ち／''＝無し
+  function DTP状態(no) {
+    try { var db = JSON.parse(localStorage.getItem('murayama_v15') || 'null'); if (db && (db.proofings || []).some(function (p) { return p && (String(p.fmNo || '') === String(no) || (p.fmNos || []).map(String).indexOf(String(no)) >= 0); })) return 'card'; } catch (e) {}
+    try { if ((JSON.parse(localStorage.getItem('fm_dtp_pending') || '[]')).some(function (x) { return String(x.伝票番号) === String(no); })) return 'pending'; } catch (e) {}
+    var m = DTP記録()[no]; return (m && m.dtp === '有') ? 'sent' : '';
+  }
+  function DTPを送る() {
+    if (!現在) return;
+    $('dtp-msg').textContent = DTP送信(現在.fields, $('dtp-yn').value, $('dtp-note').value.trim());
   }
   $('dtp-go').onclick = DTPを送る;
-  $('dtp-yn').addEventListener('change', function () { if ($('dtp-yn').value === '有') $('dtp-note').focus(); });
+  // 有 を選んだ瞬間に送る（押し忘れで校正BOXに入らない、を無くす）。内容は後から入れて「校正BOXへ」で送り直せる
+  $('dtp-yn').addEventListener('change', function () { DTPを送る(); if ($('dtp-yn').value === '有') $('dtp-note').focus(); });
+  window.DTP送信 = DTP送信; window.DTP状態 = DTP状態;
   $('hs-go').onclick = function () {
     if (!現在) return;
     var 担当 = $('hs-tanto').value.trim(), d = $('hs-date').value, メモ = $('hs-memo').value.trim();
@@ -2488,7 +2514,9 @@ window.FM見た目 = function () {};
     { c:'売価金額',   h:'売価', money:true },
     { c:'合計金額',   h:'原価', money:true },
     { c:'納品日',     h:'納品日', date:true },
-    { c:'注残数',     h:'注残', num:true }
+    { c:'注残数',     h:'注残', num:true },
+    { c:'_dtp',       h:'DTP', dtp:true },   // KOSEI-DTP-1: 有にすると校正BOXへ
+    { c:'_sagyo',     h:'指示書', sagyo:true } // SAGYO-2: 外注／製造 の指示書を別タブで
   ];
 
   // FileMaker は MM/DD/YYYY で返す。日本の並びに直す
@@ -2524,7 +2552,8 @@ window.FM見た目 = function () {};
     }
     var h = '<div style="display:flex;gap:8px;align-items:center;margin:2px 0 4px;font-size:12px">'
       + '<button id="ff-group" style="padding:3px 10px" title="チェックした伝票の 案件ID を同じにします（空なら いちばん古い受注の伝票番号）">☑ 選んだ伝票を 1 つの案件にまとめる</button>'
-      + '<input id="ff-group-id" placeholder="案件ID（空なら自動）" style="width:150px;padding:3px 6px"><span style="color:#64748b">「案件」列が同じ伝票が、予算見積→見積→受注の 1 つの案件です</span></div>';
+      + '<input id="ff-group-id" placeholder="案件ID（空なら自動）" style="width:150px;padding:3px 6px"><span style="color:#64748b">「案件」列が同じ伝票が、予算見積→見積→受注の 1 つの案件です</span>'
+      + '<button id="ff-proof-group" style="padding:3px 10px;margin-left:auto;background:#5b21b6;color:#fff;border:1px solid #4c1d95;border-radius:4px" title="チェックした伝票を 1 枚の校正カードにまとめて校正BOXへ（名刺 4 件を一緒に校正するときなど）">📎 選んだ伝票を 1 つの校正にまとめて校正BOXへ</button></div>';
     h += '<table><thead><tr><th></th><th></th>';
     列.forEach(function (k) { h += '<th>' + esc(k.h) + '</th>'; });
     h += '</tr></thead><tbody>';
@@ -2535,6 +2564,10 @@ window.FM見た目 = function () {};
       t += '<td><button type="button" class="open" data-id="' + esc(row.recordId) + '" style="font:inherit;font-size:11px;font-weight:700;padding:2px 10px;border:1.5px solid #fff;outline:1px solid #1a1a1a;border-radius:4px;background:#1a1a1a;color:#fff;cursor:pointer;white-space:nowrap">表示</button></td>';
       列.forEach(function (k) {
         var v = row[k.c];
+        if (k.sagyo) { var sn = encodeURIComponent(String(row['伝票番号'] || '')); t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px"><a href="sagyo.html?no=' + sn + '" target="_blank" rel="noopener" title="外注指示書（FileMaker と同じ紙）" style="color:#0369a1">🖨外注</a> <a href="sagyo.html?no=' + sn + '&type=seizo" target="_blank" rel="noopener" title="製造指示書（内製用）" style="color:#0369a1;margin-left:4px">🖨製造</a></td>'; return; }
+        if (k.dtp) { var st = window.DTP状態 ? DTP状態(row['伝票番号']) : ''; var on = !!st;
+          t += '<td onclick="event.stopPropagation()" style="white-space:nowrap"><select class="dtp-sel" data-no="' + esc(row['伝票番号'] || '') + '" title="有にすると校正BOXにカードができます" style="font:inherit;font-size:11px;padding:1px 2px;' + (on ? 'background:#ede9fe;color:#5b21b6;font-weight:700' : '') + '"><option value=""' + (on ? '' : ' selected') + '>無</option><option value="有"' + (on ? ' selected' : '') + '>有</option></select>'
+             + (st === 'card' ? '<span title="校正BOXにカードがあります" style="font-size:11px;margin-left:3px">📸</span>' : st ? '<span title="送信済み（本体を開くとカードになります）" style="font-size:11px;margin-left:3px;color:#a78bfa">⏳</span>' : '') + '</td>'; return; }
         if (k.badge) { var cls = STAGE_CLASS[v] || ''; t += '<td>' + (v ? '<span class="badge ' + cls + '">' + esc(v) + '</span>' : '') + '</td>'; }
         else if (k.date) { t += '<td>' + esc(日付(v)) + '</td>'; }
         else if (k.money || k.num) { t += '<td class="num">' + esc(円(v)) + '</td>'; }
@@ -2578,6 +2611,19 @@ window.FM見た目 = function () {};
       + (r.日数 ? '　起票日 直近' + r.日数 + '日' : '')
       + '　' + (r.源 === '索引' ? r.ミリ秒 + 'ms（手元の索引）' : (r.ミリ秒 / 1000).toFixed(1) + '秒') + '　「表示」かダブルクリックで開きます（1 回クリックはチェック）';
 
+    // KOSEI-GROUP-1: チェックした伝票を 1 枚の校正にまとめる
+    $('ff-proof-group').onclick = function () {
+      var ids = Array.prototype.map.call(box.querySelectorAll('input.pick:checked'), function (x) { return x.getAttribute('data-id'); });
+      var rows = (r.行 || []).filter(function (x) { return ids.indexOf(String(x.recordId)) >= 0; });
+      if (rows.length < 2) { alert('まとめる伝票を左のチェックで 2 件以上選んでください'); return; }
+      var nos = rows.map(function (x) { return String(x['伝票番号'] || ''); }).filter(Boolean);
+      var custs = {}; rows.forEach(function (x) { custs[String(x['得意先コード'] || '')] = 1; });
+      var 文 = nos.length + ' 件を 1 つの校正としてまとめて校正BOXへ送ります。\n\n' + rows.map(function (x) { return x['伝票番号'] + ' ' + (x['製品名'] || ''); }).join('\n') + (Object.keys(custs).length > 1 ? '\n\n⚠ 得意先が違う伝票が混ざっています' : '') + '\n\nよろしいですか？';
+      if (!confirm(文)) return;
+      var msg = DTP送信(rows[0], '有', '', nos, rows.map(function (x) { return { 伝票番号: String(x['伝票番号'] || ''), 製品名: String(x['製品名'] || '') }; }));
+      $('ff-msg').textContent = nos.join('・') + ' をまとめて ' + msg;
+      Array.prototype.forEach.call(box.querySelectorAll('select.dtp-sel'), function (s) { if (nos.indexOf(s.getAttribute('data-no')) >= 0) { s.value = '有'; s.style.background = '#ede9fe'; s.style.color = '#5b21b6'; s.style.fontWeight = '700'; var mk = s.parentNode.querySelector('span'); if (mk) mk.remove(); s.insertAdjacentHTML('afterend', '<span title="まとめた校正として送信済み（本体を開くとカードになります）" style="font-size:11px;margin-left:3px;color:#a78bfa">📎⏳</span>'); } });
+    };
     $('ff-group').onclick = function () {
       var ids = Array.prototype.map.call(box.querySelectorAll('input.pick:checked'), function (x) { return x.getAttribute('data-id'); });
       if (ids.length < 1) { alert('まとめる伝票を左のチェックで選んでください（1 件でも可＝案件IDを入れ直す）'); return; }
@@ -2609,6 +2655,14 @@ window.FM見た目 = function () {};
       tr.onclick = function (ev) { if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'BUTTON')) return; var ck = tr.querySelector('input.pick'); if (ck) ck.checked = !ck.checked; };
       tr.ondblclick = function (ev) { if (ev.target && ev.target.tagName === 'INPUT') return; var ck = tr.querySelector('input.pick'); if (ck) ck.checked = !ck.checked; 行を開く(id); };
       var ob = tr.querySelector('button.open'); if (ob) ob.onclick = function (ev) { ev.stopPropagation(); 行を開く(id); };
+      // KOSEI-DTP-1: 一覧の DTP 列。有にした瞬間に校正BOXへ（内容は本体のカードで入れる）
+      var ds = tr.querySelector('select.dtp-sel'); if (ds) ds.onchange = function (ev) { ev.stopPropagation();
+        var row = (r.行 || []).filter(function (x) { return String(x.recordId) === String(id); })[0] || {};
+        var msg = DTP送信(row, ds.value, ''); $('ff-msg').textContent = (row['伝票番号'] || '') + ' ' + msg;
+        ds.style.background = ds.value === '有' ? '#ede9fe' : ''; ds.style.color = ds.value === '有' ? '#5b21b6' : ''; ds.style.fontWeight = ds.value === '有' ? '700' : '';
+        var mark = ds.parentNode.querySelector('span'); if (mark) mark.remove(); if (ds.value === '有') ds.insertAdjacentHTML('afterend', '<span title="送信済み（本体を開くとカードになります）" style="font-size:11px;margin-left:3px;color:#a78bfa">⏳</span>');
+        if (現在 && String(現在.fields['伝票番号'] || '') === String(row['伝票番号'] || '')) DTPを出す(String(row['伝票番号'] || ''));
+      };
     };
     Array.prototype.forEach.call(box.querySelectorAll('tr.r'), 行を結ぶ);
   }
@@ -2886,10 +2940,14 @@ window.FM見た目 = function () {};
   帯に付ける('外注入力', function () { location.href = '../index.html?page=outsource'; }, 'Hub の外注発注へ');
   // 作業指示書（FileMaker と同じ紙を Hub で出す）: 帯の「レイアウト編集」の前に足す
   (function () {
-    var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('作業指示書')) return;
-    var b2 = document.createElement('button'); b2.className = 'fb or'; b2.textContent = '作業指示書'; b2.title = '読み込んでいる伝票の作業指示書（FileMaker と同じ形）を出します';
+    var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('外注指示書')) return;
+    // SAGYO-2: 外注指示書（FileMaker と同じ紙）と 製造指示書（内製用）を分けて出す
+    var b2 = document.createElement('button'); b2.className = 'fb or'; b2.textContent = '外注指示書'; b2.title = '読み込んでいる伝票の外注指示書（FileMaker の作業指示書と同じ形）を出します';
     b2.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')), '_blank'); }); };
     lay.parentNode.insertBefore(b2, lay);
+    var b3 = document.createElement('button'); b3.className = 'fb or'; b3.textContent = '製造指示書'; b3.title = '読み込んでいる伝票の製造指示書（内製用: 用紙→印刷→加工→製本・梱包→納品の順、工程チェック欄つき）を出します';
+    b3.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')) + '&type=seizo', '_blank'); }); };
+    lay.parentNode.insertBefore(b3, lay);
   })();
   帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '0'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
 

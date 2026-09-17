@@ -1064,7 +1064,8 @@ LOGIC = r"""
     { c:'合計金額',   h:'原価', money:true },
     { c:'納品日',     h:'納品日', date:true },
     { c:'注残数',     h:'注残', num:true },
-    { c:'_dtp',       h:'DTP', dtp:true }    // KOSEI-DTP-1: 有にすると校正BOXへ
+    { c:'_dtp',       h:'DTP', dtp:true },   // KOSEI-DTP-1: 有にすると校正BOXへ
+    { c:'_sagyo',     h:'指示書', sagyo:true } // SAGYO-2: 外注／製造 の指示書を別タブで
   ];
 
   // FileMaker は MM/DD/YYYY で返す。日本の並びに直す
@@ -1112,6 +1113,7 @@ LOGIC = r"""
       t += '<td><button type="button" class="open" data-id="' + esc(row.recordId) + '" style="font:inherit;font-size:11px;font-weight:700;padding:2px 10px;border:1.5px solid #fff;outline:1px solid #1a1a1a;border-radius:4px;background:#1a1a1a;color:#fff;cursor:pointer;white-space:nowrap">表示</button></td>';
       列.forEach(function (k) {
         var v = row[k.c];
+        if (k.sagyo) { var sn = encodeURIComponent(String(row['伝票番号'] || '')); t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px"><a href="sagyo.html?no=' + sn + '" target="_blank" rel="noopener" title="外注指示書（FileMaker と同じ紙）" style="color:#0369a1">🖨外注</a> <a href="sagyo.html?no=' + sn + '&type=seizo" target="_blank" rel="noopener" title="製造指示書（内製用）" style="color:#0369a1;margin-left:4px">🖨製造</a></td>'; return; }
         if (k.dtp) { var st = window.DTP状態 ? DTP状態(row['伝票番号']) : ''; var on = !!st;
           t += '<td onclick="event.stopPropagation()" style="white-space:nowrap"><select class="dtp-sel" data-no="' + esc(row['伝票番号'] || '') + '" title="有にすると校正BOXにカードができます" style="font:inherit;font-size:11px;padding:1px 2px;' + (on ? 'background:#ede9fe;color:#5b21b6;font-weight:700' : '') + '"><option value=""' + (on ? '' : ' selected') + '>無</option><option value="有"' + (on ? ' selected' : '') + '>有</option></select>'
              + (st === 'card' ? '<span title="校正BOXにカードがあります" style="font-size:11px;margin-left:3px">📸</span>' : st ? '<span title="送信済み（本体を開くとカードになります）" style="font-size:11px;margin-left:3px;color:#a78bfa">⏳</span>' : '') + '</td>'; return; }
@@ -1487,10 +1489,14 @@ LOGIC = r"""
   帯に付ける('外注入力', function () { location.href = '../index.html?page=outsource'; }, 'Hub の外注発注へ');
   // 作業指示書（FileMaker と同じ紙を Hub で出す）: 帯の「レイアウト編集」の前に足す
   (function () {
-    var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('作業指示書')) return;
-    var b2 = document.createElement('button'); b2.className = 'fb or'; b2.textContent = '作業指示書'; b2.title = '読み込んでいる伝票の作業指示書（FileMaker と同じ形）を出します';
+    var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('外注指示書')) return;
+    // SAGYO-2: 外注指示書（FileMaker と同じ紙）と 製造指示書（内製用）を分けて出す
+    var b2 = document.createElement('button'); b2.className = 'fb or'; b2.textContent = '外注指示書'; b2.title = '読み込んでいる伝票の外注指示書（FileMaker の作業指示書と同じ形）を出します';
     b2.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')), '_blank'); }); };
     lay.parentNode.insertBefore(b2, lay);
+    var b3 = document.createElement('button'); b3.className = 'fb or'; b3.textContent = '製造指示書'; b3.title = '読み込んでいる伝票の製造指示書（内製用: 用紙→印刷→加工→製本・梱包→納品の順、工程チェック欄つき）を出します';
+    b3.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')) + '&type=seizo', '_blank'); }); };
+    lay.parentNode.insertBefore(b3, lay);
   })();
   帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '0'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
 

@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>作業指示書 | Tokiwa Hub</title>
+<title>指示書 | Tokiwa Hub</title>
 <style>
   /* FileMaker の「作業指示書」（A4 縦）と同じ並び。画面では上に操作、印刷では紙だけ */
   body{ margin:0; font-family:"Noto Sans JP","Yu Gothic","Meiryo",sans-serif; background:#e5e7eb; color:#111; }
@@ -29,7 +29,11 @@
 <body>
 <div id="bar">
   <a href="fm-juchu-hub.html" onclick="var n=(document.getElementById('no')||{}).value; if(n){ this.href='fm-juchu-hub.html?no='+encodeURIComponent(n.trim()); }">← 受注入力</a>
-  <b>作業指示書</b>
+  <b id="kind-label">外注指示書</b>
+  <span style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;margin-left:6px">
+    <button type="button" id="k-gaichu" onclick="種類を変える('gaichu')" style="border:0;padding:3px 10px;cursor:pointer;background:#1a1a1a;color:#fff">外注</button>
+    <button type="button" id="k-seizo" onclick="種類を変える('seizo')" style="border:0;padding:3px 10px;cursor:pointer;background:#fff">製造</button>
+  </span>
   <input id="no" placeholder="伝票番号" autocomplete="off">
   <button id="go">出す</button>
   <button id="pr">🖨 印刷</button>
@@ -41,6 +45,15 @@
 <script src="fm-bridge.js"></script>
 <script>
 var $ = function (id) { return document.getElementById(id); };
+// SAGYO-2: 指示書の種類。gaichu＝外注指示書（FileMaker と同じ紙）／seizo＝製造指示書（内製用）
+var 種類 = 'gaichu', 直近 = null;
+function 種類を変える(k) { 種類 = (k === 'seizo') ? 'seizo' : 'gaichu';
+  $('kind-label').textContent = 種類 === 'seizo' ? '製造指示書' : '外注指示書';
+  $('k-gaichu').style.background = 種類 === 'gaichu' ? '#1a1a1a' : '#fff'; $('k-gaichu').style.color = 種類 === 'gaichu' ? '#fff' : '#1a1a1a';
+  $('k-seizo').style.background = 種類 === 'seizo' ? '#1a1a1a' : '#fff'; $('k-seizo').style.color = 種類 === 'seizo' ? '#fff' : '#1a1a1a';
+  try { var u = new URL(location.href); if (種類 === 'seizo') u.searchParams.set('type', 'seizo'); else u.searchParams.delete('type'); history.replaceState(null, '', u); } catch (e) {}
+  if (直近) 描く(直近);
+}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 function 数(v) { var x = Number(v); return (v === '' || v == null || isNaN(x)) ? '' : x.toLocaleString(); }
 function 和暦(d) { var y = d.getFullYear(), m = ('0' + (d.getMonth() + 1)).slice(-2), dd = ('0' + d.getDate()).slice(-2); var r = y - 2018; return '令和' + (r === 1 ? '元' : r) + '年' + m + '月' + dd + '日'; }
@@ -59,10 +72,12 @@ function 社員名(code) { var m = マスタ['社員マスタ']; if (!m) return 
 
 // ---- 紙を描く（FileMaker の作業指示書テーブルと同じ対応: 色数裏=色MAX、バック/カーボン色=スポット色、穴=ファイル穴、左中右=マージナルパンチa/b/c）
 function 描く(f) {
+  直近 = f;
+  if (種類 === 'seizo') { 製造を描く(f); return; }
   var パーツ = [1, 2, 3, 4, 5];
   function row(n) { return n === '表紙' ? 0 : n; }
   function v(k, n) { var x = f[k + row(n)]; return (x == null) ? '' : String(x); }
-  var h = '<h1>作業指示書</h1><div class="date">' + 和暦(new Date()) + '</div>';
+  var h = '<h1>外注指示書</h1><div class="date">' + 和暦(new Date()) + '</div>';
   h += '<table class="box">'
     + '<tr><td class="lbl">伝票番号</td><td colspan="8" class="c">' + esc(f['伝票番号']) + '</td></tr>'
     + '<tr><td class="lbl">得意先名</td><td colspan="8" class="c">' + esc(得意先名(f['得意先コード'])) + '</td></tr>'
@@ -113,6 +128,66 @@ function 描く(f) {
   $('paper').innerHTML = h;
 }
 
+// ---- 製造指示書（内製用）。同じ伝票の中身を、社内の工程の順（用紙→印刷→加工→製本・梱包→納品）に並べる
+function 製造を描く(f) {
+  var パーツ = [1, 2, 3, 4, 5];
+  function row(n) { return n === '表紙' ? 0 : n; }
+  function v(k, n) { var x = f[k + row(n)]; return (x == null) ? '' : String(x); }
+  function あり(n) { return ['紙質', '品名', 'サイズ', '合計数', '色数', 'インキ表'].some(function (k) { return v(k, n) !== ''; }); }
+  var 行 = パーツ.concat(['表紙']).filter(function (n) { return n === 1 || あり(n); });
+  var h = '<h1>製造指示書</h1><div class="date">' + 和暦(new Date()) + '</div>';
+  h += '<table class="box">'
+    + '<tr><td class="lbl">伝票番号</td><td colspan="3" class="c"><b>' + esc(f['伝票番号']) + '</b></td><td class="lbl">納期</td><td colspan="3" class="c"><b>' + esc(f['納期']) + '</b></td></tr>'
+    + '<tr><td class="lbl">得意先名</td><td colspan="3" class="c">' + esc(得意先名(f['得意先コード'])) + '</td><td class="lbl">納品日</td><td colspan="3" class="c">' + esc(f['納品日']) + '</td></tr>'
+    + '<tr><td class="lbl">ユーザ名</td><td colspan="3" class="c">' + esc(f['ユーザー名']) + '</td><td class="lbl">配送予定</td><td colspan="3" class="c">' + esc(f['配送予定日'] || '') + '　' + esc(f['配送有無'] || '') + '</td></tr>'
+    + '<tr><td class="lbl">品名</td><td colspan="7" class="c">' + esc(f['製品名']) + '</td></tr>'
+    + '<tr><td class="lbl">サイズ</td><td colspan="3" class="c">横 ' + esc(f['サイズ横']) + ' × 縦 ' + esc(f['サイズ縦']) + ' mm　パーツ ' + esc(f['パーツ数']) + '</td><td class="lbl">数量</td><td colspan="3" class="c">' + esc(数(f['ロット契約単位'])) + ' ' + esc(f['単位']) + '　× セット ' + esc(数(f['ロットセット数'])) + '</td></tr>'
+    + '<tr><td class="lbl">仕様変更</td><td class="c">' + esc(f['仕様変更']) + '</td><td class="lbl">版下変更</td><td class="c">' + esc(f['版下変更']) + '</td><td class="lbl">前回</td><td colspan="3" class="c">' + esc(f['前回伝票番号'] || '') + (f['前回起票日'] ? '（' + esc(f['前回起票日']) + '）' : '') + '</td></tr>'
+    + '</table>';
+  // 用紙
+  h += '<table class="box" style="margin-top:-1px"><colgroup><col style="width:20mm"><col style="width:34mm"><col style="width:22mm"><col style="width:26mm"><col style="width:16mm"><col style="width:10mm"><col style="width:10mm"><col style="width:14mm"><col style="width:12mm"><col style="width:14mm"><col></colgroup>'
+    + '<tr><th></th><th>紙質</th><th>メーカー</th><th>品名</th><th>サイズ</th><th>切数</th><th>面付</th><th>実用数</th><th>予備</th><th>合計数</th><th>版下</th></tr>';
+  行.forEach(function (n) {
+    h += '<tr><td class="l">' + (n === '表紙' ? '表紙' : n + 'パーツ目') + '</td><td class="c">' + esc(v('紙質', n)) + '</td><td class="c small">' + esc(v('メーカー', n)) + '</td><td class="c small">' + esc(v('品名', n)) + '</td><td class="c">' + esc(v('サイズ', n)) + '</td><td class="c">' + esc(v('切数', n)) + '</td><td class="c">' + esc(v('面付', n)) + '</td><td class="c">' + esc(数(v('実用数', n))) + '</td><td class="c">' + esc(数(v('標準予備数_加減算済', n))) + '</td><td class="c"><b>' + esc(数(v('合計数', n))) + '</b></td><td class="c">' + esc(v('版下', n)) + '</td></tr>';
+  });
+  h += '</table>';
+  // 印刷
+  h += '<table class="box" style="margin-top:-1px"><colgroup><col style="width:20mm"><col style="width:12mm"><col style="width:12mm"><col style="width:30mm"><col style="width:30mm"><col style="width:14mm"><col style="width:20mm"><col style="width:16mm"><col style="width:12mm"><col style="width:12mm"><col></colgroup>'
+    + '<tr><th rowspan="2"></th><th colspan="2">色数</th><th colspan="2">インキ</th><th rowspan="2">減感</th><th rowspan="2" class="tiny">バック<br>カーボン色</th><th colspan="4">ナンバリング</th></tr>'
+    + '<tr><th>表</th><th>裏</th><th>表</th><th>裏</th><th>種類</th><th>書体</th><th>桁数</th><th>色</th></tr>';
+  行.forEach(function (n) {
+    h += '<tr><td class="l">' + (n === '表紙' ? '表紙' : n + 'パーツ目') + '</td><td class="c">' + esc(v('色数', n)) + '</td><td class="c">' + esc(v('色MAX', n)) + '</td><td class="c">' + esc(v('インキ表', n)) + '</td><td class="c">' + esc(v('インキ裏', n)) + '</td><td class="c">' + esc(v('減感', n)) + '</td><td class="c small">' + esc(v('スポット色', n)) + '</td>'
+      + '<td class="c">' + esc(v('種類', n)) + '</td><td class="c">' + esc(v('書体', n)) + '</td><td class="c">' + esc(v('桁数', n)) + '</td><td class="c">' + esc(v('色', n)) + '</td></tr>';
+  });
+  h += '<tr><td class="lbl">ナンバー</td><td colspan="10" class="l">自 ' + esc(f['ナンバー自']) + '　至 ' + esc(f['ナンバー至']) + '</td></tr></table>';
+  // 加工
+  h += '<table class="box" style="margin-top:-1px"><colgroup><col style="width:20mm"><col style="width:6mm"><col style="width:6mm"><col style="width:6mm"><col style="width:9mm"><col style="width:8mm"><col style="width:10mm"><col style="width:10mm"><col style="width:10mm"><col style="width:12mm"><col></colgroup>'
+    + '<tr><th rowspan="3"></th><th colspan="9">加工</th><th rowspan="3">備考</th></tr>'
+    + '<tr><th colspan="3" class="tiny">ﾏｰｼﾞﾅﾙﾊﾟﾝﾁ</th><th rowspan="2" class="small">ﾌｧｲﾙ</th><th rowspan="2">穴</th><th rowspan="2" class="small">横ﾐｼﾝ</th><th rowspan="2" class="tiny">中間<br>横ﾐｼﾝ</th><th rowspan="2" class="small">縦ﾐｼﾝ</th><th rowspan="2" class="small">加工賃</th></tr>'
+    + '<tr><th>左</th><th>中</th><th>右</th></tr>';
+  行.forEach(function (n) {
+    h += '<tr><td class="l">' + (n === '表紙' ? '表紙' : n + 'パーツ目') + '</td><td class="c">' + esc(v('マージナルパンチa', n)) + '</td><td class="c">' + esc(v('マージナルパンチb', n)) + '</td><td class="c">' + esc(v('マージナルパンチc', n)) + '</td>'
+      + '<td class="c">' + esc(v('ファイル', n)) + '</td><td class="c">' + esc(v('ファイル穴', n)) + '</td><td class="c">' + esc(v('横ミシン', n)) + '</td><td class="c">' + esc(v('中間横ミシン', n)) + '</td><td class="c">' + esc(v('縦ミシン', n)) + '</td><td class="c">' + esc(v('加工賃', n)) + '</td>'
+      + '<td class="l small">' + esc(v('備考', n)) + '</td></tr>';
+  });
+  h += '</table>';
+  // 製本・梱包・納品
+  var 箱 = [f['箱サイズ横'], f['箱サイズ縦'], f['箱サイズ高さ']].map(function (x) { return x == null ? '' : String(x); });
+  h += '<table class="box" style="margin-top:-1px"><colgroup><col style="width:20mm"><col style="width:60mm"><col style="width:20mm"><col></colgroup>'
+    + '<tr><td class="lbl">製本加工</td><td colspan="3" class="small">' + esc(f['製本加工']) + '</td></tr>'
+    + '<tr><td class="lbl">内部備考</td><td colspan="3" class="small">' + esc(f['内装備考']) + '</td></tr>'
+    + '<tr><td class="lbl">カートン</td><td>' + esc(f['カートン型式']) + '　' + esc(f['カートン']) + '</td><td class="lbl">箱数／箱サイズ</td><td>' + esc(f['箱数']) + '　' + esc(箱[0]) + ' × ' + esc(箱[1]) + ' × ' + esc(箱[2]) + '</td></tr>'
+    + '<tr><td class="lbl">配送</td><td>' + esc(f['配送予定日'] || '') + '　' + esc(f['配送担当者'] || '') + '</td><td class="lbl">納品先</td><td class="small">' + esc(f['納品先'] || '') + '</td></tr>'
+    + '<tr><td class="lbl">備考</td><td colspan="3" class="small">' + esc(f['備考']) + '</td></tr>'
+    + '</table>';
+  // 工程チェック（社内で書き込む欄）
+  var 工程 = ['版', '印刷', '加工', '製本', '検品', '梱包', '出荷'];
+  h += '<table class="box" style="margin-top:-1px"><tr><th style="width:20mm">工程</th>' + 工程.map(function (k) { return '<th>' + k + '</th>'; }).join('') + '</tr>'
+    + '<tr><td class="lbl">担当／日</td>' + 工程.map(function () { return '<td style="height:9mm"></td>'; }).join('') + '</tr></table>';
+  h += '<div class="foot" style="text-align:right">トキワ印刷株式会社　担当: ' + esc(社員名(f['担当者コード'])) + '　起票 ' + esc(f['起票日'] || '') + '　印刷日 ' + 和暦(new Date()) + '</div>';
+  $('paper').innerHTML = h;
+}
+
 function 出す() {
   var no = $('no').value.trim(); if (!no) return;
   $('st').textContent = '読んでいます… ' + no;
@@ -122,7 +197,7 @@ function 出す() {
     return FM.呼ぶ('画面_全項目', [r.record.recordId]);
   }).then(function (j) {
     描く(j.fields);
-    document.title = '【作業指示書】' + no + '_' + esc(得意先名(j.fields['得意先コード'])) + '_' + esc(j.fields['製品名'] || '');
+    document.title = (種類 === 'seizo' ? '【製造指示書】' : '【外注指示書】') + no + '_' + esc(得意先名(j.fields['得意先コード'])) + '_' + esc(j.fields['製品名'] || '');
     $('st').textContent = '出しました（' + ((Date.now() - t0) / 1000).toFixed(1) + '秒）';
     try { history.replaceState(null, '', '?no=' + encodeURIComponent(no)); } catch (e) {}
   }).catch(function (e) { $('st').textContent = String(e.message || e); });
@@ -134,7 +209,7 @@ function 出す() {
   名(); window.addEventListener('fm-signin', 名);
   $('go').onclick = 出す; $('pr').onclick = function () { window.print(); };
   $('no').addEventListener('keydown', function (e) { if (e.key === 'Enter') 出す(); });
-  var q = new URLSearchParams(location.search); if (q.get('no')) { $('no').value = q.get('no'); setTimeout(出す, 300); }
+  var q = new URLSearchParams(location.search); if (q.get('type') === 'seizo') 種類を変える('seizo'); if (q.get('no')) { $('no').value = q.get('no'); setTimeout(出す, 300); }
 })();
 </script>
 <script>window.KAIZEN_KEY = 'sagyo';</script>
