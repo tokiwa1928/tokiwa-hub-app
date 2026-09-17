@@ -139,6 +139,11 @@
   <div class="cols">
     <!-- ============ 設定 ============ -->
     <div class="stack">
+      <div id="modeTabs" style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="modeTab" data-mode="booklet" style="font:inherit;font-size:13px;font-weight:700;padding:8px 14px;border:1px solid var(--accent);border-radius:10px;background:var(--accent);color:#fff;cursor:pointer">📖 冊子（折り丁）</button>
+        <button type="button" class="modeTab" data-mode="plain" style="font:inherit;font-size:13px;font-weight:700;padding:8px 14px;border:1px solid var(--rule-strong);border-radius:10px;background:var(--surface);color:var(--ink);cursor:pointer">🗂 その他（同一データ多面付け・他面付け）</button>
+        <input type="hidden" id="mode" value="booklet">
+      </div>
       <section class="panel">
         <h2>用紙と仕上がり</h2>
         <div class="body stack">
@@ -165,7 +170,24 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="plainPanel" style="display:none">
+        <h2>並べ方（その他）</h2>
+        <div class="body stack">
+          <fieldset>
+            <div class="row"><label for="plainKind">種類</label><select id="plainKind">
+              <option value="same">同一データ多面付け（各ページを 1 枚ずつ全面に並べる）</option>
+              <option value="multi">他面付け（ページを順に並べる。1 枚に 列×段 ページ）</option>
+            </select></div>
+            <div class="row"><label for="plainCols">面付（列×段）</label><div class="pair"><input type="number" id="plainCols" min="1" max="20" step="1" value="4"><span class="x">×</span><input type="number" id="plainRows" min="1" max="20" step="1" value="2"><span class="unit">面</span></div></div>
+            <div class="row"><label for="plainRot">向き</label><label class="chk" style="margin:0"><input type="checkbox" id="plainRot"> 仕上がりを 90° 回して置く</label></div>
+            <div class="row"><label>用紙を比べる</label><div><button type="button" id="plainCompare" style="font:inherit;font-size:12px;padding:5px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);cursor:pointer;font-weight:700">📊 どの用紙に何面入るか</button><span style="font-size:11px;color:var(--muted);margin-left:8px">今の仕上がり＋塗り足しで、各用紙の面数と紙の使用率を出します。行を押すとその用紙・面付になります</span></div></div>
+            <div id="plainCmp" style="display:none;overflow-x:auto"></div>
+            <p class="note">面と面の間はすべて「塗り足し×2」のドブ。ノド削りと背丁は使いません。表面だけを書き出します（裏は同じ手順でもう一度）。</p>
+          </fieldset>
+        </div>
+      </section>
+
+      <section class="panel" id="bookletPanel">
         <h2>折りと面付</h2>
         <div class="body stack">
           <fieldset>
@@ -196,14 +218,14 @@
         <div class="body stack">
           <fieldset>
             <div class="row"><label for="bleed">塗り足し</label><div class="pair"><input type="number" id="bleed" step="0.5" value="3"><span class="unit">mm</span><span></span><span></span></div></div>
-            <div class="row"><label for="nodo">ノド削り</label><div class="pair"><input type="number" id="nodo" step="0.5" value="1"><span class="unit">mm</span><span></span><span></span></div></div>
-            <p class="note">背をはさむ2面の間は「ノド削り×2」、それ以外の面間は「塗り足し×2」で自動的にドブを取ります。</p>
+            <div class="row" id="nodoRow"><label for="nodo">ノド削り</label><div class="pair"><input type="number" id="nodo" step="0.5" value="1"><span class="unit">mm</span><span></span><span></span></div></div>
+            <p class="note" id="gapNote">背をはさむ2面の間は「ノド削り×2」、それ以外の面間は「塗り足し×2」で自動的にドブを取ります。</p>
             <div class="checks">
               <label class="chk"><input type="checkbox" id="mFaceCorner" checked>各面コーナートンボ</label>
               <label class="chk"><input type="checkbox" id="mBlockCenter" checked>版センタートンボ</label>
               <label class="chk"><input type="checkbox" id="mBlockCorner" checked>版コーナートンボ</label>
               <label class="chk"><input type="checkbox" id="mFaceCenter">各面センタートンボ</label>
-              <label class="chk"><input type="checkbox" id="mSpine" checked>背丁マーク</label>
+              <label class="chk" id="spineOpt"><input type="checkbox" id="mSpine" checked>背丁マーク</label>
               <label class="chk"><input type="checkbox" id="mInfo" checked>版面情報</label>
             </div>
             <p class="note">版面情報は用紙の左下に半角英数で入ります（ジョブ名の日本語は省かれます）。</p>
@@ -559,7 +581,7 @@
     const font = await out.embedFont(StandardFonts.Helvetica);
 
     _footerCache.clear();   // 文字画像は PDF ごとに作り直す（前の PDF の画像を使い回すと壊れる）
-    const scheme = Core.buildScheme(cfg);
+    const scheme = cfg.scheme || Core.buildScheme(cfg);   // その他モードは画面で作った並び（折りなし）をそのまま使う
     const lay = Core.layout(cfg);
     const per = scheme.perSheet;
     const nSrc = src.getPageCount();
@@ -586,8 +608,9 @@
 
     /* --- 配置プランを作り、必要な埋め込みをまとめて生成 --- */
     const plan = [];
+    const sides = (scheme.back && scheme.back.length) ? ['front', 'back'] : ['front'];
     for (let s = 0; s < nSig; s++) {
-      for (const side of ['front', 'back']) {
+      for (const side of sides) {
         for (const e of scheme[side]) {
           const srcIdx = s * per + e.page - 1;
           if (srcIdx >= nSrc) { plan.push(null); continue; }
@@ -624,7 +647,7 @@
     const report = [];
     let pi = 0;
     for (let s = 0; s < nSig; s++) {
-      for (const side of ['front', 'back']) {
+      for (const side of sides) {
         const sheet = out.addPage([lay.sheetW, lay.sheetH]);
         const rec = { sig: s + 1, side: side === 'front' ? '表' : '裏', items: [] };
         for (const e of scheme[side]) {
@@ -654,13 +677,15 @@
         if (cfg.marks.blockCorner) cornerMarks(sheet, block, bleed, bleed, Lx, Ly, mw, color, clip);
         if (cfg.marks.blockCenter) centerMarks(sheet, block, bleed, bleed, Lx, Ly, mw, color, clip);
         // 背丁マーク
-        if (cfg.marks.spineMark) drawSpineMarks(sheet, lay, cfg, s, nSig, color);
+        if (cfg.marks.spineMark && !scheme.plain) drawSpineMarks(sheet, lay, cfg, s, nSig, color);
         // 情報（フッター）: ファイル名・ジョブ名・折・表裏・面付・仕上がり・ドブ・日付
         if (cfg.marks.info) {
           const circledF = (n) => n <= 20 ? String.fromCharCode(0x2460 + n - 1) : n <= 35 ? String.fromCharCode(0x3251 + n - 21) : n <= 50 ? String.fromCharCode(0x32B1 + n - 36) : '(' + n + ')';
-          const plateF = s * 2 + (side === 'front' ? 1 : 2);
+          const plateF = sides.length === 2 ? s * 2 + (side === 'front' ? 1 : 2) : s + 1;
+          const unitF = sides.length === 2 ? `${s + 1}台 ${side === 'front' ? '表' : '裏'}` : `${s + 1}枚目／${nSig}枚`;
+          const pagesF = scheme.plain === 'same' ? `P${s + 1}` : `P${s * per + 1}〜${Math.min((s + 1) * per, nSrc)}`;
           // 欄外の情報はこの 1 行だけ（下の帯）。版番号 ①②③… を先頭に
-          const t = `${circledF(plateF)} ${s + 1}台 ${side === 'front' ? '表' : '裏'}　${cfg.fileName || ''}  ${cfg.jobName || ''}  P${s * per + 1}〜${Math.min((s + 1) * per, nSrc)}  ${cfg.cols}×${cfg.rows}  ${cfg.pageW}×${cfg.pageH}mm  塗り足し${cfg.bleed}／ノド${cfg.nodo}  ${cfg.stamp}`;
+          const t = `${circledF(plateF)} ${unitF}　${cfg.fileName || ''}  ${cfg.jobName || ''}  ${pagesF}  ${cfg.cols}×${cfg.rows}  ${cfg.pageW}×${cfg.pageH}mm  塗り足し${cfg.bleed}${scheme.plain ? '' : '／ノド' + cfg.nodo}  ${cfg.stamp}`;
           const img = await footerImage(out, t);
           if (img) { const h = 2.0 * MM, w = h * img.width / img.height; sheet.drawImage(img, { x: 3 * MM, y: 1.2 * MM, width: w, height: h }); }
           else { const ascii = (v) => String(v == null ? '' : v).replace(/[^\x20-\x7E -ÿ]/g, '').trim(); sheet.drawText(ascii(t), { x: 3 * MM, y: 1.6 * MM, size: 5.5, font, color }); }
@@ -673,16 +698,16 @@
           const y = band >= sq + 1.2 * MM ? lay.sheetH - 0.8 * MM - sq : lay.sheetH - 0.5 * MM - sq;   // 帯が狭くても紙端に寄せて置く
           const x = lay.colX[0] + lay.pw * 0.12;                              // 左端のコマの中（角トンボと中央トンボの間）
           sheet.drawRectangle({ x, y, width: sq, height: sq, color });
-          rec.plate = s * 2 + (side === 'front' ? 1 : 2);
+          rec.plate = sides.length === 2 ? s * 2 + (side === 'front' ? 1 : 2) : s + 1;
         } catch (e) { /* 印が描けなくても面付は出す */ }
         report.push(rec);
-        if (onProgress) onProgress((s * 2 + (side === 'front' ? 1 : 2)) / (nSig * 2));
+        if (onProgress) onProgress((s * sides.length + (side === 'front' ? 1 : 2)) / (nSig * sides.length));
       }
     }
     let bytes;
     if (cfg.pdfx && cfg.pdfx.on) { applyPdfX4(out, cfg); bytes = await out.save({ useObjectStreams: false }); if (bytes[5] === 0x31 && bytes[6] === 0x2e) bytes[7] = 0x36; }   // %PDF-1.7 → 1.6（PDF/X-4 の版）
     else bytes = await out.save();
-    return { bytes, report, scheme, nSig, perSheet: per, srcPages: nSrc, lay, markLen: { x: Lx / MM, y: Ly / MM } };
+    return { bytes, report, scheme, nSig, perSheet: per, srcPages: nSrc, lay, sides, markLen: { x: Lx / MM, y: Ly / MM } };
   }
 
   /* フッターの文字をブラウザの字で描いて画像に（日本語が出せる・フォント埋め込みが要らない） */
@@ -793,7 +818,7 @@
   PAGES.forEach(([n, w, h], i) => $('pagePreset').add(new Option(n === 'カスタム' ? n : `${n}　${w}×${h}`, i)));
   GRIDS.forEach(([c, r], i) => $('grid').add(new Option(`${c}列 × ${r}段　＝ ${c * r * 2}ページ折り（${c * r}面付）`, i)));
 
-  const FIELDS = ['job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
+  const FIELDS = ['mode', 'plainKind', 'plainCols', 'plainRows', 'plainRot', 'job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
     'foldFirst', 'foldV', 'foldH', 'flipMode', 'bleed', 'nodo', 'markLen', 'markWeight',
     'spineW', 'spineL', 'spineStart', 'spineStep', 'fit',
     'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo', 'pdfx'];
@@ -829,9 +854,31 @@
     return ImposeCore.crossFolds(cols, rows, $('foldFirst').value, $('foldV').value, $('foldH').value);
   }
 
+  function isPlain() { return $('mode').value === 'plain'; }
+  function plainScheme(cols, rows, kind) {
+    const front = []; for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) front.push({ col: c, row: r, page: kind === 'same' ? 1 : r * cols + c + 1, rot: 0 });
+    return { front, back: [], perSheet: kind === 'same' ? 1 : cols * rows, plain: kind };
+  }
   function readConfig() {
-    const [cols, rows] = GRIDS[+$('grid').value];
     const bleed = num('bleed', 3), nodo = num('nodo', 1);
+    if (isPlain()) {
+      const cols = Math.max(1, Math.min(20, parseInt($('plainCols').value, 10) || 1)), rows = Math.max(1, Math.min(20, parseInt($('plainRows').value, 10) || 1));
+      const rot = $('plainRot').checked; const pw0 = num('pageW', 148), ph0 = num('pageH', 210);
+      const scheme = plainScheme(cols, rows, $('plainKind').value || 'same');
+      return {
+        jobName: $('job').value, sheetW: num('sheetW', 625), sheetH: num('sheetH', 440),
+        pageW: rot ? ph0 : pw0, pageH: rot ? pw0 : ph0, cols, rows, folds: [],
+        flipMode: 'LR', bleed, nodo: 0,
+        colGaps: new Array(Math.max(0, cols - 1)).fill(bleed * 2), rowGaps: new Array(Math.max(0, rows - 1)).fill(bleed * 2), _colSpine: new Array(Math.max(0, cols - 1)).fill(false), _rowSpine: new Array(Math.max(0, rows - 1)).fill(false),
+        fit: $('fit').value, markLen: num('markLen', 10), markWeight: num('markWeight', .15),
+        spineBarW: 0, spineBarL: 0, spineBarStart: 0, spineBarStep: 0,
+        stamp: new Date().toISOString().slice(0, 10),
+        fileName: srcName ? srcName + '.pdf' : '',
+        pdfx: { on: $('pdfx').checked, icc: iccData },
+        marks: { faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked, blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked, spineMark: false, info: $('mInfo').checked }, scheme
+      };
+    }
+    const [cols, rows] = GRIDS[+$('grid').value];
     const folds = foldsOf(cols, rows);
     const scheme = ImposeCore.buildScheme({ cols, rows, folds, flipMode: $('flipMode').value });
     const g = ImposeCore.autoGaps(scheme, cols, rows, bleed, nodo);
@@ -958,7 +1005,31 @@
 
   let lastCfg = null, srcBytes = null, srcName = '';
 
+  function applyModeUI() {
+    const plain = isPlain();
+    $('plainPanel').style.display = plain ? '' : 'none'; $('bookletPanel').style.display = plain ? 'none' : '';
+    $('nodoRow').style.display = plain ? 'none' : ''; $('spineOpt').style.display = plain ? 'none' : ''; $('gapNote').style.display = plain ? 'none' : '';
+    $('tabBack').style.display = plain ? 'none' : '';
+    if (plain && side === 'back') { side = 'front'; $('tabFront').setAttribute('aria-pressed', 'true'); $('tabBack').setAttribute('aria-pressed', 'false'); }
+    document.querySelectorAll('.modeTab').forEach(b => { const on = b.getAttribute('data-mode') === (plain ? 'plain' : 'booklet'); b.style.background = on ? 'var(--accent)' : 'var(--surface)'; b.style.color = on ? '#fff' : 'var(--ink)'; b.style.borderColor = on ? 'var(--accent)' : 'var(--rule-strong)'; });
+    $('dropSub').textContent = plain ? ($('plainKind').value === 'same' ? '各ページを 1 枚ずつ全面に並べます' : 'ページを順に並べます') : 'ページ順に並んだ単ページPDF';
+  }
+  function plainCompare() {
+    const W = num('pageW', 148), H = num('pageH', 210), b = num('bleed', 3);
+    const rows = [];
+    SHEETS.forEach(([n, sw, sh], i) => { if (!sw) return;
+      [[sw, sh], [sh, sw]].forEach((o, oi) => { [[W, H, false], [H, W, true]].forEach(([pw, ph, rot]) => {
+        const cols = Math.floor(o[0] / (pw + 2 * b)), rws = Math.floor(o[1] / (ph + 2 * b)); if (cols < 1 || rws < 1) return;
+        rows.push({ name: n, i, sw: o[0], sh: o[1], cols, rows: rws, n: cols * rws, use: cols * rws * W * H / (o[0] * o[1]), rot }); }); });
+    });
+    rows.sort((a, c) => c.use - a.use || c.n - a.n);
+    const box = $('plainCmp'); box.style.display = 'block';
+    box.innerHTML = '<table style="border-collapse:collapse;font-size:12px;margin-top:6px"><tr><th style="text-align:left;padding:3px 8px">用紙</th><th style="padding:3px 8px">面付</th><th style="padding:3px 8px">面数</th><th style="padding:3px 8px">使用率</th><th style="padding:3px 8px">向き</th></tr>'
+      + rows.slice(0, 24).map(r => '<tr style="cursor:pointer;border-top:1px solid var(--rule)" onclick="plainPick(' + r.i + ',' + r.sw + ',' + r.sh + ',' + r.cols + ',' + r.rows + ',' + (r.rot ? 'true' : 'false') + ')" title="押すとこの用紙・面付にします"><td style="padding:3px 8px">' + r.name + ' ' + r.sw + '×' + r.sh + '</td><td style="text-align:center;padding:3px 8px">' + r.cols + '×' + r.rows + '</td><td style="text-align:center;padding:3px 8px"><b>' + r.n + '</b></td><td style="text-align:center;padding:3px 8px">' + Math.round(r.use * 100) + '%</td><td style="text-align:center;padding:3px 8px">' + (r.rot ? '仕上がり90°' : '—') + '</td></tr>').join('') + '</table>';
+  }
+  window.plainPick = function (i, sw, sh, cols, rows, rot) { $('sheetPreset').value = String(i); $('sheetW').value = sw; $('sheetH').value = sh; $('plainCols').value = cols; $('plainRows').value = rows; $('plainRot').checked = !!rot; refresh(); };
   function refresh() {
+    applyModeUI();
     const alerts = $('alerts'); alerts.innerHTML = '';
     let cfg, lay;
     try {
@@ -982,7 +1053,8 @@
     const Ly = Math.max(1.5, Math.min(cfg.markLen, marginY - cfg.bleed - 0.5));
 
     const dl = $('specs'); dl.innerHTML = '';
-    spec(dl, '折り丁', `${cfg.scheme.perSheet}`, 'ページ／1折');
+    if (cfg.scheme.plain) spec(dl, '種類', cfg.scheme.plain === 'same' ? '同一データ' : '他面付け', cfg.scheme.plain === 'same' ? '各ページを 1 枚ずつ' : `${cfg.scheme.perSheet}ページ／1枚`);
+    else spec(dl, '折り丁', `${cfg.scheme.perSheet}`, 'ページ／1折');
     spec(dl, '面付', `${cfg.cols} × ${cfg.rows}`, `${cfg.cols * cfg.rows}面/面`);
     spec(dl, '版面（仕上がり）', `${fmt(px(lay.blockW))} × ${fmt(px(lay.blockH))}`, 'mm');
     spec(dl, '塗り足し込み', `${fmt(px(lay.blockW) + cfg.bleed * 2)} × ${fmt(px(lay.blockH) + cfg.bleed * 2)}`, 'mm');
@@ -991,7 +1063,7 @@
     if (srcBytes) {
       const n = lastPageCount, sigs = Math.max(1, Math.ceil(n / cfg.scheme.perSheet));
       spec(dl, '原稿', `${n}`, 'ページ');
-      spec(dl, '書き出し', `${sigs * 2}`, `面（${sigs}折丁 × 表裏）`);
+      spec(dl, '書き出し', `${sigs * (cfg.scheme.plain ? 1 : 2)}`, cfg.scheme.plain ? '枚（表のみ）' : `面（${sigs}折丁 × 表裏）`);
     }
 
     const add = (cls, txt) => { const d = document.createElement('div'); d.className = 'alert ' + cls; d.textContent = txt; alerts.appendChild(d); };
@@ -1060,8 +1132,9 @@
     const per = res.perSheet, N = res.nSig * per;
     const cells = new Array(N + 1).fill(null);   // 面付から戻した各ページ（canvas）
     let sheetIdx = 0;
+    const sidesS = res.sides || ['front', 'back'];
     for (let sg = 0; sg < res.nSig; sg++) {
-      for (const side of ['front', 'back']) {
+      for (const side of sidesS) {
         sheetIdx++;
         const page = await imp.getPage(sheetIdx); const vp = page.getViewport({ scale: sc });
         const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
@@ -1139,6 +1212,8 @@
   FIELDS.filter(f => !['sheetW', 'sheetH', 'pageW', 'pageH', 'sheetPreset', 'pagePreset'].includes(f))
     .forEach(f => $(f).addEventListener('input', refresh));
 
+  document.querySelectorAll('.modeTab').forEach(b => b.addEventListener('click', () => { $('mode').value = b.getAttribute('data-mode'); refresh(); }));
+  $('plainCompare').addEventListener('click', plainCompare);
   $('tabFront').addEventListener('click', () => { side = 'front'; $('tabFront').setAttribute('aria-pressed', 'true'); $('tabBack').setAttribute('aria-pressed', 'false'); refresh(); });
   $('tabBack').addEventListener('click', () => { side = 'back'; $('tabBack').setAttribute('aria-pressed', 'true'); $('tabFront').setAttribute('aria-pressed', 'false'); refresh(); });
 
