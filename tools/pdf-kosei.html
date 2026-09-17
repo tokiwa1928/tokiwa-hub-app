@@ -92,6 +92,7 @@
     <button class="pk-sc" onclick="_pkJump('sec-split')">✂ 分割</button>
     <button class="pk-sc" onclick="_pkJump('sec-rotate')">🔄 回転</button>
     <button class="pk-sc" onclick="_pkJump('sec-compress')">🗜 圧縮</button>
+    <button class="pk-sc" onclick="_pkJump('sec-verify')">🧐 面付検証</button>
     <button class="pk-sc" onclick="_pkJump('sec-mentu')">🗂 面付（試行錯誤・確認・ダウンロード）</button>
     <button class="pk-sc" onclick="_pkJump('sec-size')">📐 校正枠</button>
     <button class="pk-sc" onclick="_pkJump('sec-fuchi')">🖨 余白チェック</button>
@@ -159,6 +160,23 @@
       </div>
     </div>
     <div class="muted" id="cp-status" style="margin-top:8px"></div>
+  </div>
+
+  <!-- PDFT-12: 面付の検証 -->
+  <div class="sec" id="sec-verify">
+    <div class="st">🧐 面付検証（面付データ × 単ページデータ）</div>
+    <div class="muted" style="margin-bottom:8px">面付した PDF と元の単ページ PDF を入れると、各面を切り出して元ページと照合します。<b>順番・天地</b>が合っているか、<b>面付後のゴミ</b>（面の外の余計な絵柄）が無いか、<b>画像の解像度</b>が落ちていないかを見ます。面付の置き方は「冊子面付」「折丁面付台」と同じ前提（ブロックを用紙の真ん中、ノド側は削り分、ほかは裁ち落とし分）。</div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">
+      <div><label>面付した PDF</label><input type="file" id="vf-imp" accept="application/pdf"><div class="muted" id="vf-imp-info"></div></div>
+      <div><label>元の単ページ PDF</label><input type="file" id="vf-src" accept="application/pdf"><div class="muted" id="vf-src-info"></div></div>
+      <div><label>冊子の型 ／ 綴じ</label><div style="display:flex;gap:6px"><select id="vf-type"><option value="16">16 ページ（2段4列）</option><option value="8">8 ページ（2段2列）</option></select><select id="vf-bind"><option value="L">左綴じ</option><option value="R">右綴じ</option></select></div></div>
+      <div><label>仕上がり 天地×左右 mm ／ 裁ち落とし ／ ノド削り</label><div style="display:flex;gap:6px;align-items:center"><input type="number" id="vf-h" value="210" style="width:64px;text-align:right"><span>×</span><input type="number" id="vf-w" value="148" style="width:64px;text-align:right"><input type="number" id="vf-trim" value="3" step="0.5" style="width:52px;text-align:right" title="裁ち落とし"><input type="number" id="vf-nod" value="1" step="0.5" style="width:52px;text-align:right" title="ノド削り"></div></div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <button class="btn btn-c" onclick="verifyImposition()">🧐 検証する</button>
+      <span class="muted" id="vf-status"></span>
+    </div>
+    <div id="vf-result" style="margin-top:10px"></div>
   </div>
 
   <div class="sec" id="sec-size">
@@ -567,6 +585,94 @@ async function compressRaster(){
   }catch(e){ st.textContent=''; toast('❌ 圧縮失敗: '+(e.message||e)); }
 }
 try{ setInterval(_cpShowNow, 1500); }catch(e){}
+
+// ── PDFT-12: 面付検証 ──
+var _vfImp=null, _vfSrc=null;
+function _vfRead(input, info, which){ var f=input.files&&input.files[0]; if(!f) return; f.arrayBuffer().then(function(buf){ if(which==='imp') _vfImp={name:f.name,buf:buf}; else _vfSrc={name:f.name,buf:buf}; info.textContent=f.name+'（'+_cpMB(buf.byteLength)+'）'; }); }
+document.addEventListener('DOMContentLoaded', function(){ var a=document.getElementById('vf-imp'), b=document.getElementById('vf-src'); if(a) a.addEventListener('change', function(){ _vfRead(a, document.getElementById('vf-imp-info'), 'imp'); }); if(b) b.addEventListener('change', function(){ _vfRead(b, document.getElementById('vf-src-info'), 'src'); }); });
+// 小さな灰色の画像にして比べる（違いの平均 → 一致率）
+function _vfGray(cv, w, h, rot){ var t=document.createElement('canvas'); t.width=w; t.height=h; var c=t.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,w,h); if(rot){ c.translate(w,h); c.rotate(Math.PI); } c.drawImage(cv,0,0,w,h); var d=c.getImageData(0,0,w,h).data; var g=new Float32Array(w*h); for(var i=0,j=0;i<d.length;i+=4,j++) g[j]=(d[i]*299+d[i+1]*587+d[i+2]*114)/1000; return g; }
+function _vfSim(a,b){ var n=a.length, s=0, ink=0; for(var i=0;i<n;i++){ s+=Math.abs(a[i]-b[i]); if(a[i]<230||b[i]<230) ink++; } return { sim: 1-(s/n)/255, ink: ink/n }; }
+async function verifyImposition(){
+  if(!_vfImp||!_vfSrc){ toast('面付した PDF と元の単ページ PDF の両方を入れてください'); return; }
+  if(typeof pdfjsLib==='undefined'){ toast('pdf.js読込中。少し待って再実行してください'); return; }
+  var st=document.getElementById('vf-status'), out=document.getElementById('vf-result'); out.innerHTML=''; st.textContent='⏳ 描いています…';
+  try{
+    var P=PDFLib, MMx=2.83465; var W=parseFloat(document.getElementById('vf-w').value)||148, H=parseFloat(document.getElementById('vf-h').value)||210, tr=parseFloat(document.getElementById('vf-trim').value)||0, nod=parseFloat(document.getElementById('vf-nod').value)||0;
+    var plan=meBookletPlan(document.getElementById('vf-type').value, document.getElementById('vf-bind').value); var per=plan.per, cols=plan.cols;
+    var cellW=W+tr+nod, cellH=H+tr*2, blkW=cellW*cols, blkH=cellH*2;
+    var imp=await pdfjsLib.getDocument({data:_vfImp.buf.slice(0)}).promise, src=await pdfjsLib.getDocument({data:_vfSrc.buf.slice(0)}).promise;
+    var dpi=40, sc=dpi/72; var nSrc=src.numPages; var sigs=Math.max(1,Math.ceil(nSrc/per)); var N=sigs*per;
+    if(imp.numPages<sigs*2) { out.innerHTML='<div style="color:#b91c1c">面付 PDF は '+imp.numPages+' 枚ですが、'+nSrc+' ページを '+per+' ページ折りにすると '+(sigs*2)+' 枚（'+sigs+' 台×表裏）要ります。型が違うかもしれません。</div>'; st.textContent=''; return; }
+    // 単ページを描く（仕上がり枠に切る）
+    var origs=[]; for(var p=1;p<=nSrc;p++){ st.textContent='⏳ 単ページ '+p+'/'+nSrc; var pg=await src.getPage(p); var vp=pg.getViewport({scale:sc}); var cv=document.createElement('canvas'); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height); await pg.render({canvasContext:cv.getContext('2d'),viewport:vp,intent:'print'}).promise;
+      var view=pg.view; var wpt=view[2]-view[0], hpt=view[3]-view[1]; var wmm=wpt/MMx, hmm=hpt/MMx; var t=cv;
+      if(wmm>W+1&&hmm>H+1){ var ox=Math.round((wmm-W)/2*MMx*sc), oy=Math.round((hmm-H)/2*MMx*sc); t=document.createElement('canvas'); t.width=Math.round(W*MMx*sc); t.height=Math.round(H*MMx*sc); t.getContext('2d').drawImage(cv,ox,oy,t.width,t.height,0,0,t.width,t.height); }   // 塗り足し付きなら仕上がりだけに
+      origs.push(t); }
+    var gw=48, gh=Math.round(48*H/W); var origG=origs.map(function(cv){ return {n:_vfGray(cv,gw,gh,false), r:_vfGray(cv,gw,gh,true)}; });
+    // 面付シートを描いて各面を切り出す
+    var rows=[], sheets=[], dirt=[]; var pageFound={};
+    for(var sg=0; sg<sigs; sg++){ for(var si=0; si<2; si++){ var sheetNo=sg*2+si+1; st.textContent='⏳ 面付 '+sheetNo+'/'+(sigs*2)+' 枚目';
+      var spg=await imp.getPage(sheetNo); var v1=spg.getViewport({scale:1}); var pw=v1.width/MMx, ph=v1.height/MMx; var landscape=(pw>=blkW-0.01&&ph>=blkH-0.01);
+      var vp2=spg.getViewport({scale:sc, rotation: landscape?0:90}); if(!landscape){ var t2=pw; pw=ph; ph=t2; }
+      var scv=document.createElement('canvas'); scv.width=Math.round(vp2.width); scv.height=Math.round(vp2.height); var sctx=scv.getContext('2d'); sctx.fillStyle='#fff'; sctx.fillRect(0,0,scv.width,scv.height); await spg.render({canvasContext:sctx,viewport:vp2,intent:'print'}).promise;
+      var offX=(pw-blkW)/2, offY=(ph-blkH)/2; var side=plan.sides[si]; var rowsDef=[{list:side.top,rot:true,r:0},{list:side.bottom,rot:false,r:1}];
+      var boxes=[];
+      for(var ri=0;ri<2;ri++){ var rd=rowsDef[ri]; for(var c=0;c<cols;c++){ var pno=sg*per+rd.list[c]; var cellX=offX+c*cellW, cellY=offY+(rd.r===1?0:cellH); var spineRight=(c%2===0);
+        var x0=cellX+(spineRight?tr:nod), x1=cellX+cellW-(spineRight?nod:tr), y0=cellY+tr, y1=cellY+cellH-tr;   // 仕上がり枠（mm、左下原点）
+        var px=Math.round(x0*MMx*sc), pyTop=Math.round((ph-y1)*MMx*sc), pwid=Math.round((x1-x0)*MMx*sc), phei=Math.round((y1-y0)*MMx*sc);
+        boxes.push({x:Math.round(cellX*MMx*sc), y:Math.round((ph-cellY-cellH)*MMx*sc), w:Math.round(cellW*MMx*sc), h:Math.round(cellH*MMx*sc)});
+        var crop=document.createElement('canvas'); crop.width=pwid; crop.height=phei; var cc=crop.getContext('2d'); if(rd.rot){ cc.translate(pwid,phei); cc.rotate(Math.PI); } cc.drawImage(scv,px,pyTop,pwid,phei,0,0,pwid,phei);
+        var g=_vfGray(crop,gw,gh,false); var best=null;
+        for(var q=0;q<origG.length;q++){ var a=_vfSim(g,origG[q].n), b=_vfSim(g,origG[q].r); if(!best||a.sim>best.sim) best={page:q+1,sim:a.sim,rot:false,ink:a.ink}; if(b.sim>best.sim) best={page:q+1,sim:b.sim,rot:true,ink:b.ink}; }
+        var exp=pno<=nSrc?pno:null; var expSim=exp?_vfSim(g,origG[exp-1].n).sim:null; var expRot=exp?_vfSim(g,origG[exp-1].r).sim:null;
+        var verdict, cls;
+        if(!exp){ verdict=(best&&best.ink>0.02&&best.sim>0.9)?'⚠ 白のはずの面に絵柄':'白（余り）'; cls=(verdict.charAt(0)==='⚠')?'#b45309':'#94a3b8'; }
+        else if(expSim>=0.93 && expSim>=expRot-0.01){ verdict='✅ 一致'; cls='#16a34a'; }
+        else if(expRot>=0.93 && expRot>expSim){ verdict='⚠ 天地が逆'; cls='#b45309'; }
+        else if(best&&best.page!==exp&&best.sim>=0.93){ verdict='❌ 順番違い（'+best.page+' ページが入っている'+(best.rot?'・天地逆':'')+'）'; cls='#b91c1c'; }
+        else { verdict='❓ 一致率 '+Math.round(expSim*100)+'%（要確認）'; cls='#b45309'; }
+        if(exp) pageFound[exp]=(pageFound[exp]||0)+1;
+        rows.push({sheet:sheetNo, sig:sg+1, side:si===0?'表':'裏', pos:(ri===0?'上':'下')+(c+1), page:pno, exp:exp, sim:expSim, verdict:verdict, cls:cls, crop:crop});
+      } }
+      // ゴミ: 面（ドブ込み）の外で、トンボの帯（裁ち落とし＋12mm）と天地の帯（上下 8mm）を除いた所の絵柄
+      var mask=document.createElement('canvas'); mask.width=scv.width; mask.height=scv.height; var mc=mask.getContext('2d'); mc.drawImage(scv,0,0); mc.fillStyle='#fff';
+      var band=Math.round((tr+12)*MMx*sc); boxes.forEach(function(b){ mc.fillRect(b.x-band,b.y-band,b.w+band*2,b.h+band*2); });
+      var edge=Math.round(8*MMx*sc); mc.fillRect(0,0,mask.width,edge); mc.fillRect(0,mask.height-edge,mask.width,edge); mc.fillRect(0,0,edge,mask.height); mc.fillRect(mask.width-edge,0,edge,mask.height);
+      var md=mc.getImageData(0,0,mask.width,mask.height).data; var grid=Math.max(2,Math.round(4*MMx*sc)); var hits={};
+      for(var y=0;y<mask.height;y++){ for(var x=0;x<mask.width;x++){ var i=(y*mask.width+x)*4; if(md[i]<200||md[i+1]<200||md[i+2]<200){ var kx=Math.floor(x/grid), ky=Math.floor(y/grid); var kk=kx+','+ky; hits[kk]=(hits[kk]||0)+1; } } }
+      var spots=Object.keys(hits).filter(function(kk){ return hits[kk]>=3; }).map(function(kk){ var a=kk.split(',').map(Number); return {x:a[0]*grid,y:a[1]*grid,n:hits[kk]}; });
+      // シートの縮小図（ゴミ候補を赤枠）
+      var th=document.createElement('canvas'); var tsc=Math.min(1, 520/scv.width); th.width=Math.round(scv.width*tsc); th.height=Math.round(scv.height*tsc); var tc=th.getContext('2d'); tc.drawImage(scv,0,0,th.width,th.height);
+      tc.strokeStyle='rgba(8,145,178,.7)'; tc.lineWidth=1; boxes.forEach(function(b){ tc.strokeRect(b.x*tsc,b.y*tsc,b.w*tsc,b.h*tsc); });
+      tc.strokeStyle='#dc2626'; tc.lineWidth=2; spots.forEach(function(sp){ tc.strokeRect(sp.x*tsc-4,sp.y*tsc-4,grid*tsc+8,grid*tsc+8); });
+      sheets.push({no:sheetNo, sig:sg+1, side:si===0?'表':'裏', thumb:th, spots:spots.length, size:Math.round(pw)+'×'+Math.round(ph)});
+      dirt.push(spots.length);
+    } }
+    // 解像度: 画像 XObject の大きさを両方の PDF で数える
+    st.textContent='⏳ 画像の大きさを調べています…';
+    var imgsOf=async function(buf){ var d=await P.PDFDocument.load(buf.slice(0),{ignoreEncryption:true}); var m={}; d.context.enumerateIndirectObjects().forEach(function(pair){ var o=pair[1]; try{ if(o.dict && String(o.dict.get(P.PDFName.of('Subtype')))==='/Image'){ var kk=String(o.dict.get(P.PDFName.of('Width')))+'×'+String(o.dict.get(P.PDFName.of('Height'))); m[kk]=(m[kk]||0)+1; } }catch(e){} }); return m; };
+    var imS=await imgsOf(_vfSrc.buf), imI=await imgsOf(_vfImp.buf);
+    var missing=Object.keys(imS).filter(function(kk){ return !imI[kk]; });
+    var resNote = !Object.keys(imS).length ? '元の単ページに画像はありません（文字・線だけ）' : (missing.length ? '⚠ 元にある画像 '+missing.join('、')+' px が面付側に同じ大きさで見つかりません（縮小・再圧縮された可能性）' : '✅ 元の画像（'+Object.keys(imS).join('、')+' px）が面付側にそのままの大きさで入っています＝解像度は落ちていません');
+    // 判定のまとめ
+    var ng=rows.filter(function(r){ return r.verdict.charAt(0)==='❌'; }).length, wn=rows.filter(function(r){ return r.verdict.charAt(0)==='⚠'||r.verdict.charAt(0)==='❓'; }).length, ok=rows.filter(function(r){ return r.verdict.charAt(0)==='✅'; }).length;
+    var dup=Object.keys(pageFound).filter(function(p){ return pageFound[p]>1; }); var miss=[]; for(var p=1;p<=nSrc;p++) if(!pageFound[p]) miss.push(p);
+    var totalDirt=dirt.reduce(function(a,b){return a+b;},0);
+    var head='<div style="background:'+(ng||miss.length?'#fee2e2':wn||totalDirt?'#fef3c7':'#dcfce7')+';border:1px solid '+(ng||miss.length?'#fca5a5':wn||totalDirt?'#fcd34d':'#86efac')+';border-radius:8px;padding:9px 12px;font-size:13px">'
+      +'<b>'+(ng||miss.length?'❌ 順番か抜けに問題があります':wn?'⚠ 確認が要る面があります':'✅ 順番・天地は元データと一致')+'</b>　一致 '+ok+' ／ 要確認 '+wn+' ／ 順番違い '+ng+(miss.length?'　抜け: '+miss.join('・')+' ページ':'')+(dup.length?'　二重: '+dup.join('・')+' ページ':'')
+      +'<br>ゴミ候補: '+(totalDirt?('<b style="color:#b91c1c">'+totalDirt+' か所</b>（下のシート図の赤枠。トンボや版番号の帯は除いています）'):'なし')+'<br>解像度: '+resNote+'</div>';
+    var tbl='<div style="overflow-x:auto;margin-top:8px"><table style="border-collapse:collapse;font-size:12px"><thead><tr><th>枚</th><th>台</th><th>位置</th><th>期待ページ</th><th>一致率</th><th>判定</th><th>切り出し（天地を戻した）</th></tr></thead><tbody>'
+      +rows.map(function(r){ var w=44, h=Math.round(44*H/W); return '<tr><td style="text-align:center">'+r.sheet+'</td><td style="text-align:center">'+r.sig+'台'+r.side+'</td><td style="text-align:center">'+r.pos+'</td><td style="text-align:center;font-family:monospace">'+(r.exp||'白')+'</td><td style="text-align:center">'+(r.sim!=null?Math.round(r.sim*100)+'%':'—')+'</td><td style="color:'+r.cls+';font-weight:700">'+r.verdict+'</td><td><img src="'+r.crop.toDataURL('image/jpeg',0.5)+'" width="'+w+'" height="'+h+'" style="border:1px solid #cbd5e1"></td></tr>'; }).join('')+'</tbody></table></div>';
+    var sh='<div style="margin-top:10px"><b>シート図（青＝面、赤＝ゴミ候補）</b><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">'+sheets.map(function(x){ return '<div style="font-size:11px"><div>'+x.no+' 枚目（'+x.sig+'台 '+x.side+'）　'+x.size+'mm　ゴミ候補 '+(x.spots?'<b style="color:#b91c1c">'+x.spots+'</b>':'0')+'</div><img src="'+x.thumb.toDataURL('image/jpeg',0.7)+'" style="border:1px solid #cbd5e1;max-width:520px"></div>'; }).join('')+'</div></div>';
+    // 仕上がりシミュレーション（読む順）
+    var byPage={}; rows.forEach(function(r){ if(r.exp) byPage[r.exp]=r.crop; });
+    var simh='<div style="margin-top:10px"><b>仕上がりシミュレーション（面付から戻して読む順に）</b><div style="overflow-x:auto;margin-top:6px"><div style="display:flex;gap:6px;align-items:flex-end">';
+    for(var p=1;p<=nSrc;p++){ var c2=byPage[p]; simh+='<div style="text-align:center;font-size:11px;font-family:monospace">'+(c2?'<img src="'+c2.toDataURL('image/jpeg',0.5)+'" width="'+Math.round(90*W/H)+'" height="90" style="border:1px solid #cbd5e1;display:block">':'<div style="width:'+Math.round(90*W/H)+'px;height:90px;border:1px dashed #cbd5e1"></div>')+p+'</div>'; }
+    simh+='</div></div></div>';
+    out.innerHTML=head+simh+tbl+sh; st.textContent='✅ 検証しました（'+sigs*2+' 枚・'+nSrc+' ページ）';
+  }catch(e){ st.textContent=''; toast('❌ 検証失敗: '+(e.message||e)); console.error(e); }
+}
 
 // ── 校正サイズ・枠付与 ──
 function readOpts(){
