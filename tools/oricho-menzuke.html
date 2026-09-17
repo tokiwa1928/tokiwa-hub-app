@@ -649,30 +649,24 @@
         if (cfg.marks.spineMark) drawSpineMarks(sheet, lay, cfg, s, nSig, color);
         // 情報（フッター）: ファイル名・ジョブ名・折・表裏・面付・仕上がり・ドブ・日付
         if (cfg.marks.info) {
-          const t = `${cfg.fileName || ''}  ${cfg.jobName || ''}  ${s + 1}台／${nSig}台 ${side === 'front' ? '表' : '裏'}  P${s * per + 1}〜${Math.min((s + 1) * per, nSrc)}  ${cfg.cols}×${cfg.rows}  ${cfg.pageW}×${cfg.pageH}mm  塗り足し${cfg.bleed}／ノド${cfg.nodo}  ${cfg.stamp}`;   // 1台目から連番
+          const circledF = (n) => n <= 20 ? String.fromCharCode(0x2460 + n - 1) : n <= 35 ? String.fromCharCode(0x3251 + n - 21) : n <= 50 ? String.fromCharCode(0x32B1 + n - 36) : '(' + n + ')';
+          const plateF = s * 2 + (side === 'front' ? 1 : 2);
+          // 欄外の情報はこの 1 行だけ（下の帯）。版番号 ①②③… を先頭に
+          const t = `${circledF(plateF)} ${s + 1}台 ${side === 'front' ? '表' : '裏'}　${cfg.fileName || ''}  ${cfg.jobName || ''}  P${s * per + 1}〜${Math.min((s + 1) * per, nSrc)}  ${cfg.cols}×${cfg.rows}  ${cfg.pageW}×${cfg.pageH}mm  塗り足し${cfg.bleed}／ノド${cfg.nodo}  ${cfg.stamp}`;
           const img = await footerImage(out, t);
           if (img) { const h = 2.0 * MM, w = h * img.width / img.height; sheet.drawImage(img, { x: 3 * MM, y: 1.2 * MM, width: w, height: h }); }
           else { const ascii = (v) => String(v == null ? '' : v).replace(/[^\x20-\x7E -ÿ]/g, '').trim(); sheet.drawText(ascii(t), { x: 3 * MM, y: 1.6 * MM, size: 5.5, font, color }); }
         }
         if (cfg.pdfx && cfg.pdfx.on) { sheet.setTrimBox(0, 0, lay.sheetW, lay.sheetH); sheet.setBleedBox(0, 0, lay.sheetW, lay.sheetH); }
-        // PDFT-11: 欄外に 天／地 と 版番号（①②③…）。マーク（トンボ）の外側の帯に置く
+        // PDFT-11b: 天の印＝墨ベタの四角（2mm）を上の帯の左寄りに 1 つ。欄外の文字はフッターの 1 行だけ（本多さん指定）
         try {
-          const plate = s * 2 + (side === 'front' ? 1 : 2);
-          const circled = (n) => n <= 20 ? String.fromCharCode(0x2460 + n - 1) : n <= 35 ? String.fromCharCode(0x3251 + n - 21) : n <= 50 ? String.fromCharCode(0x32B1 + n - 36) : '(' + n + ')';
-          const bandY = Math.max(2.5 * MM, Math.min(4.5 * MM, lay.marginY - bleed - Ly - 0.8 * MM));   // 天地の帯（マークの外）
-          const put = async (text, pt, x, y, h) => { const im = await footerImage(out, text, pt); if (!im) return 0; const w = h * im.width / im.height; sheet.drawImage(im, { x, y, width: w, height: h }); return w; };
-          const xL = lay.colX[0] + lay.pw * 0.12;            // 左端のコマの中（角トンボと中央トンボの間）
-          const yTop = lay.sheetH - 0.8 * MM - bandY, yBot = 0.8 * MM + (cfg.marks.info ? 2.6 * MM : 0);
-          const hPl = bandY, hTx = bandY * 0.85;
-          let w1 = await put(circled(plate), 12, xL, yTop, hPl);
-          await put(`${s + 1}台 ${side === 'front' ? '表' : '裏'}　▲ 天`, 8, xL + w1 + 1.5 * MM, yTop + (hPl - hTx) / 2, hTx);
-          await put(circled(plate), 12, xL, yBot, hPl);
-          await put(`${s + 1}台 ${side === 'front' ? '表' : '裏'}　▼ 地`, 8, xL + w1 + 1.5 * MM, yBot + (hPl - hTx) / 2, hTx);
-          // 右端にも版番号（どちらから見ても分かるように）
-          const xR = lay.colX[cfg.cols - 1] + lay.pw * 0.62;
-          await put(circled(plate), 12, xR, yTop, hPl); await put(circled(plate), 12, xR, yBot, hPl);
-          rec.plate = plate;
-        } catch (e) { /* 欄外の札が描けなくても面付は出す */ }
+          const sq = 2 * MM;
+          const band = Math.max(0, lay.marginY - bleed - Ly);              // マークの外側に残る帯
+          const y = band >= sq + 1.2 * MM ? lay.sheetH - 0.8 * MM - sq : lay.sheetH - 0.5 * MM - sq;   // 帯が狭くても紙端に寄せて置く
+          const x = lay.colX[0] + lay.pw * 0.12;                              // 左端のコマの中（角トンボと中央トンボの間）
+          sheet.drawRectangle({ x, y, width: sq, height: sq, color });
+          rec.plate = s * 2 + (side === 'front' ? 1 : 2);
+        } catch (e) { /* 印が描けなくても面付は出す */ }
         report.push(rec);
         if (onProgress) onProgress((s * 2 + (side === 'front' ? 1 : 2)) / (nSig * 2));
       }
@@ -1094,7 +1088,7 @@
     html += '</tr><tr><td style="color:var(--muted);white-space:nowrap">面付から戻した</td>';
     for (let p = 1; p <= N; p++) html += '<td>' + cellHtml(cells[p], p > res.srcPages ? '白' : '—') + '</td>';
     html += '</tr></table>';
-    html += '<div style="font-size:11px;color:var(--muted);margin-top:6px">綴じ側にノド削り、ほかに塗り足しが付いた面のまま切り出しています（仕上がり線の内側だけではありません）。版番号: 1台 表=①・裏=②、2台 表=③…</div>';
+    html += '<div style="font-size:11px;color:var(--muted);margin-top:6px">綴じ側にノド削り、ほかに塗り足しが付いた面のまま切り出しています（仕上がり線の内側だけではありません）。欄外は 天の印（墨ベタ 2mm・上の左寄り）と、下の 1 行（① 1台 表 ／ ファイル名 ／ ページ …）だけです。</div>';
     body.innerHTML = html;
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
