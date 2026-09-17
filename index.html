@@ -20661,6 +20661,10 @@ function _dtpProcessPending_(){
     var p=DB.proofings.find(_hasNo)
         || (proj ? DB.proofings.find(function(x){ return x && x.projectId===proj.id; }) : null);
     var due=(typeof _fmDate_==='function') ? (_fmDate_(it.納期)||'') : '';
+    var fmDate=((typeof _fmDate_==='function') ? (_fmDate_(it.起票日)||'') : '') || new Date().toISOString().slice(0,10);
+    var autoG=null;
+    if(!p && nos.length===1){ autoG=_proofAutoGroupTarget_(it, cust, fmDate);
+      if(autoG){ p=autoG; if(!p.fmItems||!p.fmItems.length) p.fmItems=[{ no:String(p.fmNo), name:String(p.prodName||'') }]; items=[{ no:no, name:String(it.製品名||'') }]; nos=[String(p.fmNo)].concat((p.fmNos||[]).map(String)).filter(function(x,i,a){ return x && a.indexOf(x)===i; }); if(nos.indexOf(no)<0) nos.push(no); } }
     if(p){
       if(!p.fmNo) p.fmNo=no;
       if(nos.length>1 || (p.fmNos&&p.fmNos.length)){ var _m=(p.fmNos||[p.fmNo]).map(String); nos.forEach(function(n){ if(_m.indexOf(n)<0) _m.push(n); }); p.fmNos=_m;
@@ -20669,8 +20673,9 @@ function _dtpProcessPending_(){
       if(it.前回伝票番号 && !p.prevFmNo) p.prevFmNo=String(it.前回伝票番号); if(it.note){ p.note=(p.note?p.note+'\n':'')+'【DTP】'+it.note; p.isDraft=false; }
       if(!p.custName) p.custName=cust; if(!p.prodName) p.prodName=it.製品名||''; if(due&&!p.dueDate) p.dueDate=due;
       p.lastMoveAt=now; upd++;
+      if(autoG && typeof _toastMsg==='function') _toastMsg('📎 '+no+'（'+(it.製品名||'')+'）を同じ得意先の校正 '+autoG.fmNo+' に自動でまとめました');
     } else {
-      p={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), custName:cust, prodName:it.製品名||'', endUser:it.ユーザー名||'', projectId:(proj?proj.id:''), fmNo:no, fmNos:(nos.length>1?nos:undefined), fmItems:(items.length?items:undefined),
+      p={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), custName:cust, custCode:String(it.得意先コード||''), fmDate:fmDate, prodName:it.製品名||'', endUser:it.ユーザー名||'', projectId:(proj?proj.id:''), fmNo:no, fmNos:(nos.length>1?nos:undefined), fmItems:(items.length?items:undefined),
           status:(_proofStatuses_()[0]||{}).key||'s_ask_wait', versions:[], createdAt:now, lastMoveAt:now, dueDate:due,
           isDraft:!it.note, prevFmNo:String(it.前回伝票番号||''), note:'FileMaker 受注 '+(nos.length>1?nos.join('・')+'（'+nos.length+' 件をまとめた校正）':no)+'（DTP有）より自動作成'+(it.user?'　by '+it.user:'')+(it.note?'\n【DTP】'+it.note:'') };
       if(typeof _inheritMasterNo_==='function' && proj) try{ _inheritMasterNo_(p, proj); }catch(e){}
@@ -20907,6 +20912,7 @@ function renderProofingList(){
     + '<div style="display:flex;gap:4px;flex-wrap:wrap">'+tabsHtml+'</div>'
     + '<span style="display:flex;gap:6px">'
     + (vm==='list'?'<button class="btn" style="font-size:11px;background:#5b21b6;color:#fff;border-color:#4c1d95" onclick="_proofMergeSelected_()" title="一覧でチェックした校正を 1 枚にまとめます（名刺 4 件を一緒に校正するときなど）。伝票番号・校正データ・備考を合わせ、残りのカードは消えます">📎 選んだカードをまとめる</button>':'')
+    + (vm==='list'?'<button class="btn" style="font-size:11px;color:#5b21b6" onclick="_proofAutoGroupSetting_()" title="同じ得意先・同じユーザー・同じ日に DTP有にした品目を自動で 1 枚にまとめる設定">📎 自動まとめ: '+_escDiff(_proofAutoGroupKinds_().join('、')||'なし')+'</button>':'')
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#b91c1c" onclick="_proofDeleteSelected_()" title="一覧でチェックした校正を消します（2 回確認）。基本的に削除はしません。同じ案件が 2 枚あるなら 📎 でまとめてください">🗑 選んだカードを削除</button>':'')
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#64748b" onclick="_proofOpenColConfig_()">▦ 列の設定</button>':'')
     + '<button class="btn" style="font-size:11px;color:#64748b" onclick="openProofStatusEditor()">⚙ 状態を編集</button></span></div>';
@@ -22566,6 +22572,27 @@ function 校正まとめ名(items){
   var inner=names.map(function(n){ var m=n.match(/[（(](.+?)[）)]/); return (m?m[1]:n).replace(/様$/,'').trim(); });
   if(pre && names.every(function(n){ return n.indexOf(pre)===0; })) return pre+' '+names.length+'件（'+inner.join('・')+'）';
   return names[0]+' ほか'+(names.length-1)+'件';
+}
+// KOSEI-GROUP-4: 自動まとめ（名刺など）。同じ得意先・同じユーザー・同じ日の、まだ校了していないカードを探す
+function _proofAutoGroupKinds_(){ var s=(DB.conf&&DB.conf.proofAutoGroupKinds); if(s==null||s==='') s='名刺'; return String(s).split(/[,、，\s]+/).map(function(x){ return x.trim(); }).filter(Boolean); }
+function _proofAutoGroupTarget_(it, cust, date){
+  var kinds=_proofAutoGroupKinds_(); if(!kinds.length) return null;
+  var name=String(it.製品名||''); if(!kinds.some(function(k){ return name.indexOf(k)>=0; })) return null;
+  var code=String(it.得意先コード||''), user=String(it.ユーザー名||'');
+  var cands=(DB.proofings||[]).filter(function(x){ if(!x||!x.fmNo) return false;
+    try{ var m=_proofStatusMeta_(_normProofStatus_(x.status)); if(m&&m.done) return false; }catch(e){}
+    var sameCust=(code && String(x.custCode||'')===code) || (cust && x.custName===cust); if(!sameCust) return false;
+    if(String(x.endUser||'')!==user) return false;
+    if(!kinds.some(function(k){ return String(x.prodName||'').indexOf(k)>=0; })) return false;
+    var d=x.fmDate || String(x.createdAt||'').slice(0,10); return d===date; });
+  cands.sort(function(a,b){ return String(b.createdAt||'').localeCompare(String(a.createdAt||'')); });
+  return cands[0]||null;
+}
+function _proofAutoGroupSetting_(){
+  var cur=_proofAutoGroupKinds_().join('、');
+  var v=prompt('同じ得意先・同じユーザー・同じ日に DTP有にしたら自動で 1 枚の校正にまとめる品目（品名に含まれる言葉。読点で区切る。空にすると自動まとめなし）', cur);
+  if(v===null) return; if(!DB.conf) DB.conf={}; DB.conf.proofAutoGroupKinds=String(v).trim(); saveDB(); renderProofingList();
+  if(typeof _toastMsg==='function') _toastMsg('📎 自動まとめの品目: '+(DB.conf.proofAutoGroupKinds||'なし'));
 }
 // KOSEI-GROUP-2: 一覧でチェックした校正を 1 枚にまとめる。残す 1 枚＝校正データ(版)が多い→古い順。伝票番号・版・備考を合わせ、残りは削除扱い（他の PC からも消える）
 function _proofMergeSelected_(){
