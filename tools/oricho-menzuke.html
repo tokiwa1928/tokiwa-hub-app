@@ -305,7 +305,7 @@
       <section class="panel" id="numPanel" style="display:none">
         <h2>数字の面付見本</h2>
         <div class="body">
-          <p style="font-size:12px;color:var(--muted);margin:0 0 8px">今の設定そのままで、<b>ページ番号だけの見本原稿</b>に面付をかけた刷版です（トンボ・背丁・天の帯も本番と同じ）。各面の上辺に <b>TOP</b> と青い棒＝そのページの天、薄い水色＝塗り足し、グレーの枠＝仕上がり線です。番号の向きと並び、背丁の位置を確かめてください。</p>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 8px">今の設定そのままで、<b>ページ番号だけの見本原稿</b>に面付をかけた刷版です（トンボ・背丁・天の帯も本番と同じ）。各面の上辺に <b>TOP</b> と青い棒＝そのページの天、薄い水色＝塗り足し、グレーの枠＝仕上がり線です。番号の向きと並び、背丁の位置を確かめてください。「📏 寸法を表示」を入れると、<b>赤＝トンボの位置と間隔・長さ・線幅、背丁、天の帯の数値</b>、<b>青＝線の名前</b>を書き込みます（画像をクリックすると拡大）。保存する見本 PDF にも同じ書き込みが入ります。</p>
           <div id="numTools" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"></div>
           <div id="numBody" style="display:grid;gap:14px"></div>
         </div>
@@ -1197,6 +1197,125 @@
     }
     return await d.save();
   }
+  /* ORICHO-NUM-2: 見本に寸法を書き込む（赤＝寸法、青＝線の名前）。本番の面付には触らない */
+  async function annotateSample(res, cfg) {
+    const { PDFDocument, rgb, degrees } = PDFLib; const MMv = ImposeCore.MM;
+    const doc = await PDFDocument.load(res.bytes.slice(0)); const lay = res.lay;
+    const RED = rgb(0.85, 0.1, 0.1), BLUE = rgb(0.1, 0.3, 0.8);
+    const cache = new Map();
+    async function timg(text, pt, color) {
+      const key = pt + '|' + color + '|' + text; if (cache.has(key)) return cache.get(key);
+      const scale = 6, fs = pt * scale; const cv = document.createElement('canvas'); const cx = cv.getContext('2d');
+      const font = `bold ${fs}px "Meiryo", "Yu Gothic", "Noto Sans JP", sans-serif`; cx.font = font;
+      const w = Math.ceil(cx.measureText(text).width) + fs * 0.4; cv.width = w; cv.height = Math.ceil(fs * 1.3);
+      cx.font = font; cx.fillStyle = color; cx.textBaseline = 'middle'; cx.fillText(text, fs * 0.2, cv.height / 2);
+      const png = await new Promise(r => cv.toBlob(r, 'image/png')); const img = await doc.embedPng(await png.arrayBuffer());
+      const o = { img, w: cv.width / scale, h: cv.height / scale }; cache.set(key, o); return o;
+    }
+    const bl = cfg.bleed, sw = cfg.sheetW, sh = cfg.sheetH;
+    const bx0 = lay.blockLeft / MMv, bx1 = (lay.blockLeft + lay.blockW) / MMv, by0 = lay.blockBottom / MMv, by1 = lay.blockTop / MMv;
+    const uniq = (a) => { a.sort((p, q) => p - q); return a.filter((v, i) => i === 0 || Math.abs(v - a[i - 1]) > 0.05); };
+    // 上下の辺に出る線の x（塗り足しの角・仕上がり線・ドブのセンター・版のセンター）
+    let xs = [bx0 - bl, bx1 + bl];
+    for (let c = 0; c < cfg.cols; c++) { const x0 = lay.colX[c] / MMv; xs.push(x0, x0 + cfg.pageW); if (c < cfg.cols - 1) xs.push(x0 + cfg.pageW + lay.cg[c] / MMv / 2); }
+    if (cfg.marks.blockCenter) xs.push((bx0 + bx1) / 2); xs = uniq(xs);
+    let ys = [by0 - bl, by1 + bl];
+    for (let r = 0; r < cfg.rows; r++) { const top = sh - lay.rowY[r] / MMv; ys.push(top, top - cfg.pageH); if (r < cfg.rows - 1) ys.push(top - cfg.pageH - lay.rg[r] / MMv / 2); }
+    if (cfg.marks.blockCenter) ys.push((by0 + by1) / 2); ys = uniq(ys);
+    const nameX = (x) => Math.abs(x - (bx0 - bl)) < 0.05 || Math.abs(x - (bx1 + bl)) < 0.05 ? '塗り足しの角' : (cfg.cols > 0 && [].concat(...Array.from({ length: cfg.cols }, (_, c) => { const x0 = lay.colX[c] / MMv; return [x0, x0 + cfg.pageW]; })).some(v => Math.abs(v - x) < 0.05)) ? (Math.abs(x - bx0) < 0.05 || Math.abs(x - bx1) < 0.05 ? '仕上がり線' : '面の端') : (Array.from({ length: cfg.cols - 1 }, (_, c) => c).some(c => cfg._colSpine[c] && Math.abs(lay.colX[c] / MMv + cfg.pageW + lay.cg[c] / MMv / 2 - x) < 0.05) ? '背ドブ センター' : 'センター');
+    const nameY = (y) => Math.abs(y - (by0 - bl)) < 0.05 || Math.abs(y - (by1 + bl)) < 0.05 ? '塗り足しの角' : (Array.from({ length: cfg.rows }, (_, r) => sh - lay.rowY[r] / MMv).some(top => Math.abs(top - y) < 0.05 || Math.abs(top - cfg.pageH - y) < 0.05)) ? '仕上がり線' : (Array.from({ length: cfg.rows - 1 }, (_, r) => r).some(r => cfg._rowSpine[r] && Math.abs(sh - lay.rowY[r] / MMv - cfg.pageH - lay.rg[r] / MMv / 2 - y) < 0.05) ? '背ドブ センター' : 'センター');
+    const Lx = res.markLen.x, Ly = res.markLen.y, lw = cfg.markWeight || 0.15;
+    const fmt1 = (v) => String(Math.round(v * 100) / 100);
+    const pages = doc.getPages();
+    for (let idx = 0; idx < pages.length; idx++) {
+      const pg = pages[idx]; const side = res.sides[idx % res.sides.length]; const sig = Math.floor(idx / res.sides.length);
+      const line = (x1, y1, x2, y2, color, w, dash) => pg.drawLine({ start: { x: x1 * MMv, y: y1 * MMv }, end: { x: x2 * MMv, y: y2 * MMv }, thickness: w || 0.35, color: color || RED, dashArray: dash ? [2, 2] : undefined });
+      const arrow = (x1, y1, x2, y2) => { line(x1, y1, x2, y2); const a = Math.atan2(y2 - y1, x2 - x1), h = 1.2;
+        [[x2, y2, 1], [x1, y1, -1]].forEach(([ex, ey, s]) => { [0.5, -0.5].forEach(d => line(ex, ey, ex - s * h * Math.cos(a + d), ey - s * h * Math.sin(a + d))); }); };
+      const label = async (x, y, text, pt, color, rot) => { const o = await timg(text, pt || 7, color || '#d81b1b'); if (rot) pg.drawImage(o.img, { x: x * MMv, y: y * MMv, width: o.w, height: o.h, rotate: degrees(rot) }); else pg.drawImage(o.img, { x: x * MMv, y: y * MMv, width: o.w, height: o.h }); };
+      // 上辺: 位置の目印（点線）→ 間隔の矢印と数値（狭い所は 3 段にずらす）→ 線の名前（青・縦書き）
+      const yl = by1 - 18; let k = 0;
+      for (let i = 0; i < xs.length; i++) {
+        line(xs[i], by1 + bl, xs[i], yl - 3, RED, 0.25, true);
+        if (i > 0) { const g = xs[i] - xs[i - 1]; arrow(xs[i - 1], yl, xs[i], yl);
+          if (g < 8) { await label((xs[i - 1] + xs[i]) / 2 - 2.5, yl + 1.5 + (k % 3) * 3.6, fmt1(g), 6); k++; } else { await label((xs[i - 1] + xs[i]) / 2 - 5, yl + 1.5, fmt1(g) + 'mm', 7); k = 0; } }
+        await label(xs[i] + 0.6, by1 - 62, nameX(xs[i]), 5.5, '#1a4dcc', 90);
+      }
+      arrow(0, yl - 8, xs[0], yl - 8); await label(0.3, yl - 13, fmt1(xs[0]) + 'mm', 6);
+      arrow(xs[xs.length - 1], yl - 8, sw, yl - 8); await label(sw - 9, yl - 13, fmt1(sw - xs[xs.length - 1]) + 'mm', 6);
+      // 左辺
+      const xl = bx0 + 18; k = 0;
+      for (let i = 0; i < ys.length; i++) {
+        line(bx0 - bl, ys[i], xl + 3, ys[i], RED, 0.25, true);
+        if (i > 0) { const g = ys[i] - ys[i - 1]; arrow(xl, ys[i - 1], xl, ys[i]);
+          if (g < 8) { await label(xl + 1.5 + (k % 3) * 8, (ys[i - 1] + ys[i]) / 2 - 1.2, fmt1(g), 6); k++; } else { await label(xl + 1.5, (ys[i - 1] + ys[i]) / 2 - 1.5, fmt1(g) + 'mm', 7); k = 0; } }
+        await label(xl + 26, ys[i] - 1.2, nameY(ys[i]), 5.5, '#1a4dcc');
+      }
+      arrow(xl - 10, 0, xl - 10, ys[0]); await label(xl - 9, 0.6, fmt1(ys[0]) + 'mm', 6);
+      arrow(xl - 10, ys[ys.length - 1], xl - 10, sh); await label(xl - 9, sh - 3.5, fmt1(sh - ys[ys.length - 1]) + 'mm', 6);
+      // トンボの長さ・線幅、天の帯（下段左のコマの下のほうに。上辺の寸法や左辺の名前と重ならない所）
+      const tx = bx0 + 40, ty0 = by0 + 30;
+      await label(tx, ty0, `トンボの長さ: 上下 ${fmt1(Ly)}mm（y ${fmt1(by1 + bl)}〜${fmt1(by1 + bl + Ly)}）／左右 ${fmt1(Lx)}mm（x ${fmt1(bx0 - bl - Lx)}〜${fmt1(bx0 - bl)}）　線幅 ${fmt1(lw)}mm`, 6.5);
+      await label(tx, ty0 - 4, `背のドブ: 3 本（センター±${fmt1(cfg.nodo)}mm、幅 ${fmt1(cfg.nodo * 2)}mm）　面の間: 3 本（センター±${fmt1(bl)}mm、幅 ${fmt1(bl * 2)}mm）　塗り足しの角⇔仕上がり線 ${fmt1(bl)}mm`, 6.5);
+      await label(tx, ty0 - 8, `天の帯: 高さ 2mm × 幅 ${fmt1(lay.blockW / MMv)}mm（版面と同じ）　紙の上端 0.2mm 内側（y ${fmt1(sh - 2.2)}〜${fmt1(sh - 0.2)}）　上のトンボと重なる`, 6.5);
+      await label(tx, ty0 - 12, `用紙 ${sw}×${sh}　版面 ${fmt1(lay.blockW / MMv)}×${fmt1(lay.blockH / MMv)}　塗り足し込み ${fmt1(lay.blockW / MMv + bl * 2)}×${fmt1(lay.blockH / MMv + bl * 2)}　仕上がり ${cfg.pageW}×${cfg.pageH}　塗り足し ${bl}　ノド削り ${cfg.nodo}　原点＝用紙の左下`, 6.5);
+      // 背丁（表・P1 のある面）
+      if (cfg.marks.spineMark && !cfg.scheme.plain) {
+        const list = cfg.scheme[side]; const p1 = list.find(e => e.page === 1);
+        if (p1) {
+          let colGap = -1, rowGap = -1;
+          if (p1.col > 0 && cfg._colSpine[p1.col - 1]) colGap = p1.col - 1; else if (p1.col < cfg.cols - 1 && cfg._colSpine[p1.col]) colGap = p1.col;
+          else if (p1.row > 0 && cfg._rowSpine[p1.row - 1]) rowGap = p1.row - 1; else if (p1.row < cfg.rows - 1 && cfg._rowSpine[p1.row]) rowGap = p1.row;
+          if (colGap < 0 && rowGap < 0) { colGap = cfg._colSpine.indexOf(true); if (colGap < 0) rowGap = cfg._rowSpine.indexOf(true); }
+          const c1 = lay.cell(p1.col, p1.row); const off = (cfg.spineBarStart || 12) + sig * (cfg.spineBarStep || 10);
+          if (colGap >= 0) {
+            const x = (lay.colX[colGap] + lay.pw + lay.cg[colGap] / 2) / MMv; const head = p1.rot === 180 ? c1.y / MMv : (c1.y + c1.h) / MMv; const yc = p1.rot === 180 ? head + off : head - off;
+            arrow(x + 12, head, x + 12, yc); await label(x + 14, (head + yc) / 2 - 1.5, `${fmt1(off)}mm（P1 の天から・${sig + 1}台目）`, 6.5);
+            await label(x + 14, yc - 6, `背丁 幅${fmt1(cfg.spineBarW)}×長さ${fmt1(cfg.spineBarL)}mm　x=${fmt1(x)}（背ドブのセンター）　送り ${fmt1(cfg.spineBarStep)}mm`, 6.5);
+          } else if (rowGap >= 0) {
+            const y = sh - (lay.rowY[rowGap] + lay.ph + lay.rg[rowGap] / 2) / MMv; const left = p1.rot === 180 ? (c1.x + c1.w) / MMv : c1.x / MMv; const xc = p1.rot === 180 ? left - off : left + off;
+            arrow(left, y - 12, xc, y - 12); await label(Math.min(left, xc), y - 17, `${fmt1(off)}mm（P1 の左から・${sig + 1}台目）　背丁 ${fmt1(cfg.spineBarL)}×${fmt1(cfg.spineBarW)}mm　送り ${fmt1(cfg.spineBarStep)}mm`, 6.5);
+          }
+        }
+      }
+    }
+    return await doc.save();
+  }
+
+  let lastNumRes = null, lastNumCfg = null;
+  function numDimsOn() { try { return localStorage.getItem('menzuke-num-dims') !== '0'; } catch (e) { return true; } }
+  async function renderNumSheets() {
+    const res = lastNumRes, cfg = lastNumCfg, body = $('numBody'), tools = $('numTools'); if (!res) return;
+    const bytes = numDimsOn() ? await annotateSample(res, cfg) : res.bytes;
+    lastNumBytes = bytes;
+    const nSheets = res.nSig * res.sides.length;
+    body.innerHTML = '';
+    if (typeof pdfjsLib === 'undefined') { body.textContent = '画面に描く部品（pdf.js）が読めないので、「見本 PDF を保存」で確認してください。'; return; }
+    const imp = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+    const maxShow = 4; let shown = 0;
+    const circled = (k) => k <= 20 ? String.fromCharCode(0x2460 + k - 1) : '(' + k + ')';
+    const drawSheet = async (idx) => {
+      const page = await imp.getPage(idx); const vp0 = page.getViewport({ scale: 1 });
+      const sc = Math.min(3, 2600 / vp0.width); const vp = page.getViewport({ scale: sc });
+      const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      cv.style.cssText = 'width:100%;height:auto;border:1px solid var(--rule-strong);background:#fff;border-radius:4px;cursor:zoom-in';
+      await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      const sg = Math.floor((idx - 1) / res.sides.length) + 1, sideK = res.sides.length === 2 ? ((idx - 1) % 2 === 0 ? '表' : '裏') : '';
+      const wrap = document.createElement('div');
+      const h = document.createElement('div'); h.style.cssText = 'font-size:12px;font-weight:700;margin-bottom:4px'; h.textContent = `${circled(idx)} ${sg}台 ${sideK}　${cfg.sheetW}×${cfg.sheetH}mm　（クリックで拡大／縮小）`;
+      const box = document.createElement('div'); box.style.cssText = 'overflow:auto;max-height:80vh'; box.appendChild(cv);
+      cv.addEventListener('click', () => { const z = cv.style.width !== '100%'; cv.style.width = z ? '100%' : cv.width + 'px'; cv.style.maxWidth = 'none'; cv.style.cursor = z ? 'zoom-in' : 'zoom-out'; });
+      wrap.appendChild(h); wrap.appendChild(box); body.appendChild(wrap);
+    };
+    for (let i = 1; i <= Math.min(nSheets, maxShow); i++) { await drawSheet(i); shown++; }
+    const old = tools.querySelector('.numMore'); if (old) old.remove();
+    if (nSheets > maxShow) {
+      const more = document.createElement('button'); more.type = 'button'; more.className = 'numMore'; more.textContent = `残り ${nSheets - maxShow} 面も見る`;
+      more.style.cssText = 'font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--rule-strong);border-radius:8px;background:var(--surface);cursor:pointer';
+      more.onclick = async () => { more.disabled = true; for (let i = shown + 1; i <= nSheets; i++) await drawSheet(i); more.remove(); };
+      tools.appendChild(more);
+    }
+  }
   async function numberPreview() {
     if (!lastCfg) return;
     const btn = $('numGo'); btn.disabled = true;
@@ -1208,39 +1327,22 @@
       const bytes = await makeNumberedPdf(cfg, n);
       const cfg2 = Object.assign({}, cfg, { fileName: 'SAMPLE.pdf', pdfx: { on: false, icc: null } });
       const res = await ImposePdf.impose(bytes, cfg2, (p) => { $('status').textContent = `見本を面付中… ${Math.round(p * 100)}%`; });
-      lastNumBytes = res.bytes;
+      lastNumRes = res; lastNumCfg = cfg;
       const d = new Date(), ymd = d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2);
       lastNumName = `${ymd}_数字見本_${String(cfg.jobName || '').replace(/[\\/:*?"<>|]/g, '_')}_面付_${cfg.cols}x${cfg.rows}.pdf`;
       const nSheets = res.nSig * res.sides.length;
       const info = document.createElement('span'); info.style.cssText = 'font-size:12px;color:var(--muted)';
       info.textContent = `${n} ページ → ${res.nSig} 台 × ${res.sides.length === 2 ? '表裏' : '表'} ＝ ${nSheets} 面。`;
+      const dims = document.createElement('label'); dims.style.cssText = 'font-size:12px;display:inline-flex;gap:4px;align-items:center;cursor:pointer';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = numDimsOn();
+      cb.addEventListener('change', async () => { try { localStorage.setItem('menzuke-num-dims', cb.checked ? '1' : '0'); } catch (e) {} body.innerHTML = '<span style="font-size:12px;color:var(--muted)">⏳ 描き直しています…</span>'; await renderNumSheets(); });
+      dims.appendChild(cb); dims.appendChild(document.createTextNode('📏 寸法を表示（トンボの位置・間隔・長さ・線幅、背丁、天の帯）'));
       const save = document.createElement('button'); save.type = 'button'; save.textContent = '💾 見本 PDF を保存';
       save.style.cssText = 'font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--accent);border-radius:8px;background:var(--surface);cursor:pointer;font-weight:700';
-      save.onclick = () => saveFile(lastNumBytes, lastNumName);
-      tools.appendChild(info); tools.appendChild(save);
-      body.innerHTML = '';
-      if (typeof pdfjsLib === 'undefined') { body.textContent = '画面に描く部品（pdf.js）が読めないので、「見本 PDF を保存」で確認してください。'; return; }
-      const imp = await pdfjsLib.getDocument({ data: res.bytes.slice(0) }).promise;
-      const maxShow = 4; let shown = 0;
-      const circled = (k) => k <= 20 ? String.fromCharCode(0x2460 + k - 1) : '(' + k + ')';
-      const drawSheet = async (idx) => {
-        const page = await imp.getPage(idx); const vp0 = page.getViewport({ scale: 1 });
-        const sc = Math.min(2, 1100 / vp0.width); const vp = page.getViewport({ scale: sc });
-        const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
-        cv.style.cssText = 'width:100%;height:auto;border:1px solid var(--rule-strong);background:#fff;border-radius:4px';
-        await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-        const sg = Math.floor((idx - 1) / res.sides.length) + 1, sideK = res.sides.length === 2 ? ((idx - 1) % 2 === 0 ? '表' : '裏') : '';
-        const wrap = document.createElement('div');
-        const h = document.createElement('div'); h.style.cssText = 'font-size:12px;font-weight:700;margin-bottom:4px'; h.textContent = `${circled(idx)} ${sg}台 ${sideK}　${cfg.sheetW}×${cfg.sheetH}mm`;
-        wrap.appendChild(h); wrap.appendChild(cv); body.appendChild(wrap);
-      };
-      for (let i = 1; i <= Math.min(nSheets, maxShow); i++) { await drawSheet(i); shown++; }
-      if (nSheets > maxShow) {
-        const more = document.createElement('button'); more.type = 'button'; more.textContent = `残り ${nSheets - maxShow} 面も見る`;
-        more.style.cssText = 'font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--rule-strong);border-radius:8px;background:var(--surface);cursor:pointer';
-        more.onclick = async () => { more.disabled = true; for (let i = shown + 1; i <= nSheets; i++) await drawSheet(i); more.remove(); };
-        tools.appendChild(more);
-      }
+      save.title = '画面に出ている見本（寸法の表示 ON なら寸法入り）を PDF で保存します';
+      save.onclick = () => saveFile(lastNumBytes, (numDimsOn() ? lastNumName.replace('_面付_', '_寸法入り_面付_') : lastNumName));
+      tools.appendChild(info); tools.appendChild(dims); tools.appendChild(save);
+      await renderNumSheets();
       $('status').textContent = '数字の見本を並べました（下の「数字の面付見本」）。';
       panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) {
