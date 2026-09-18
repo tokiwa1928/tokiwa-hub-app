@@ -272,8 +272,11 @@
               </div>
             </div>
           </div>
-          <button class="primary" id="go" disabled>面付PDFを書き出す</button>
-          <p class="status" id="status">原稿PDFを読み込むと書き出せます。</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="primary" id="go" disabled>面付PDFを書き出す</button>
+            <button type="button" id="numGo" style="font:inherit;font-size:13px;padding:8px 14px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);cursor:pointer;font-weight:700" title="今の設定で、ページ番号だけの見本原稿に同じ面付をかけ、表／裏の刷版を画面に並べます（原稿 PDF が無くても使えます）">🔢 数字で面付を確認</button>
+          </div>
+          <p class="status" id="status">原稿PDFを読み込むと書き出せます。「🔢 数字で面付を確認」は原稿が無くても使えます。</p>
           <p style="font-size:11px;color:var(--muted);margin:4px 0 0">原稿のページは中身をそのまま埋め込みます（描き直し・画像の再圧縮なし）。「原寸のまま」なら 100%、「縮拡」なら倍率だけ変わり、画像の解像度はその倍率ぶんだけ変わります。フッター（版面情報）にはファイル名が入ります。</p>
         </div>
       </section>
@@ -296,6 +299,15 @@
             <span>▽ 天地が逆さの面</span>
           </div>
           <div class="alerts" id="alerts"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="numPanel" style="display:none">
+        <h2>数字の面付見本</h2>
+        <div class="body">
+          <p style="font-size:12px;color:var(--muted);margin:0 0 8px">今の設定そのままで、<b>ページ番号だけの見本原稿</b>に面付をかけた刷版です（トンボ・背丁・天の帯も本番と同じ）。各面の上辺に <b>TOP</b> と青い棒＝そのページの天、薄い水色＝塗り足し、グレーの枠＝仕上がり線です。番号の向きと並び、背丁の位置を確かめてください。</p>
+          <div id="numTools" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"></div>
+          <div id="numBody" style="display:grid;gap:14px"></div>
         </div>
       </section>
 
@@ -1165,6 +1177,78 @@
     $('status').textContent = `${filename} を書き出しました。`;
   }
 
+  /* ---------- ORICHO-NUM-1: 数字の面付見本 ---------- */
+  let lastNumBytes = null, lastNumName = '';
+  async function makeNumberedPdf(cfg, nPages) {
+    const { PDFDocument, StandardFonts, rgb } = PDFLib; const MMv = ImposeCore.MM;
+    const d = await PDFDocument.create(); const f = await d.embedFont(StandardFonts.HelveticaBold);
+    const bl = cfg.bleed, pw = cfg.pageW * MMv, ph = cfg.pageH * MMv, W = pw + 2 * bl * MMv, H = ph + 2 * bl * MMv;
+    const size = Math.min(pw, ph) * 0.42, ts = Math.max(6, Math.min(pw, ph) * 0.06);
+    for (let i = 1; i <= nPages; i++) {
+      const p = d.addPage([W, H]); p.setTrimBox(bl * MMv, bl * MMv, pw, ph);
+      p.drawRectangle({ x: 0, y: 0, width: W, height: H, color: rgb(0.88, 0.93, 1) });                                   // 塗り足し＝薄い水色
+      p.drawRectangle({ x: bl * MMv, y: bl * MMv, width: pw, height: ph, color: rgb(1, 1, 1), borderColor: rgb(0.55, 0.55, 0.55), borderWidth: 0.6 });   // 仕上がり
+      const s = String(i), tw = f.widthOfTextAtSize(s, size); const cx = W / 2;
+      p.drawText(s, { x: cx - tw / 2, y: bl * MMv + ph / 2 - size * 0.36, size, font: f, color: rgb(0.12, 0.12, 0.12) });
+      const top = bl * MMv + ph; const lab = 'TOP', lw = f.widthOfTextAtSize(lab, ts);
+      p.drawRectangle({ x: cx - ts * 1.6, y: top - ts * 0.55, width: ts * 3.2, height: ts * 0.3, color: rgb(0.15, 0.4, 0.85) });   // 天の棒
+      p.drawText(lab, { x: cx - lw / 2, y: top - ts * 1.7, size: ts, font: f, color: rgb(0.15, 0.4, 0.85) });
+      const pl = 'P' + i, ps = ts * 0.8; p.drawText(pl, { x: bl * MMv + ps * 0.6, y: bl * MMv + ps * 0.6, size: ps, font: f, color: rgb(0.5, 0.5, 0.5) });   // 左下に小さく
+    }
+    return await d.save();
+  }
+  async function numberPreview() {
+    if (!lastCfg) return;
+    const btn = $('numGo'); btn.disabled = true;
+    const panel = $('numPanel'), body = $('numBody'), tools = $('numTools');
+    panel.style.display = 'block'; body.innerHTML = '<span style="font-size:12px;color:var(--muted)">⏳ 見本を作っています…</span>'; tools.innerHTML = '';
+    try {
+      const cfg = readConfig(); const per = cfg.scheme.perSheet || 1;
+      const n = lastPageCount ? Math.ceil(lastPageCount / per) * per : per;
+      const bytes = await makeNumberedPdf(cfg, n);
+      const cfg2 = Object.assign({}, cfg, { fileName: 'SAMPLE.pdf', pdfx: { on: false, icc: null } });
+      const res = await ImposePdf.impose(bytes, cfg2, (p) => { $('status').textContent = `見本を面付中… ${Math.round(p * 100)}%`; });
+      lastNumBytes = res.bytes;
+      const d = new Date(), ymd = d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2);
+      lastNumName = `${ymd}_数字見本_${String(cfg.jobName || '').replace(/[\\/:*?"<>|]/g, '_')}_面付_${cfg.cols}x${cfg.rows}.pdf`;
+      const nSheets = res.nSig * res.sides.length;
+      const info = document.createElement('span'); info.style.cssText = 'font-size:12px;color:var(--muted)';
+      info.textContent = `${n} ページ → ${res.nSig} 台 × ${res.sides.length === 2 ? '表裏' : '表'} ＝ ${nSheets} 面。`;
+      const save = document.createElement('button'); save.type = 'button'; save.textContent = '💾 見本 PDF を保存';
+      save.style.cssText = 'font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--accent);border-radius:8px;background:var(--surface);cursor:pointer;font-weight:700';
+      save.onclick = () => saveFile(lastNumBytes, lastNumName);
+      tools.appendChild(info); tools.appendChild(save);
+      body.innerHTML = '';
+      if (typeof pdfjsLib === 'undefined') { body.textContent = '画面に描く部品（pdf.js）が読めないので、「見本 PDF を保存」で確認してください。'; return; }
+      const imp = await pdfjsLib.getDocument({ data: res.bytes.slice(0) }).promise;
+      const maxShow = 4; let shown = 0;
+      const circled = (k) => k <= 20 ? String.fromCharCode(0x2460 + k - 1) : '(' + k + ')';
+      const drawSheet = async (idx) => {
+        const page = await imp.getPage(idx); const vp0 = page.getViewport({ scale: 1 });
+        const sc = Math.min(2, 1100 / vp0.width); const vp = page.getViewport({ scale: sc });
+        const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+        cv.style.cssText = 'width:100%;height:auto;border:1px solid var(--rule-strong);background:#fff;border-radius:4px';
+        await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+        const sg = Math.floor((idx - 1) / res.sides.length) + 1, sideK = res.sides.length === 2 ? ((idx - 1) % 2 === 0 ? '表' : '裏') : '';
+        const wrap = document.createElement('div');
+        const h = document.createElement('div'); h.style.cssText = 'font-size:12px;font-weight:700;margin-bottom:4px'; h.textContent = `${circled(idx)} ${sg}台 ${sideK}　${cfg.sheetW}×${cfg.sheetH}mm`;
+        wrap.appendChild(h); wrap.appendChild(cv); body.appendChild(wrap);
+      };
+      for (let i = 1; i <= Math.min(nSheets, maxShow); i++) { await drawSheet(i); shown++; }
+      if (nSheets > maxShow) {
+        const more = document.createElement('button'); more.type = 'button'; more.textContent = `残り ${nSheets - maxShow} 面も見る`;
+        more.style.cssText = 'font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--rule-strong);border-radius:8px;background:var(--surface);cursor:pointer';
+        more.onclick = async () => { more.disabled = true; for (let i = shown + 1; i <= nSheets; i++) await drawSheet(i); more.remove(); };
+        tools.appendChild(more);
+      }
+      $('status').textContent = '数字の見本を並べました（下の「数字の面付見本」）。';
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      body.textContent = '見本を作れませんでした：' + (err && err.message ? err.message : err); console.error('[数字見本]', err);
+    }
+    btn.disabled = false;
+  }
+
   /* ---------- 仕上がりシミュレーション: 面付 PDF から各面を切り出して読む順に並べる ---------- */
   async function showSimulation(res, cfg) {
     if (typeof pdfjsLib === 'undefined') return;
@@ -1267,6 +1351,7 @@
   ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('hot'); }));
   drop.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) loadPdf(f); });
   $('go').addEventListener('click', generate);
+  $('numGo').addEventListener('click', numberPreview);
   $('iccFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (!f) return; const bytes = await f.arrayBuffer(); const u8 = new Uint8Array(bytes); const sig = String.fromCharCode(u8[36], u8[37], u8[38], u8[39]);
     if (sig !== 'acsp') { $('status').textContent = 'ICC プロファイルではないようです（' + f.name + '）'; e.target.value = ''; return; }
     iccData = { name: f.name, bytes }; await iccSave(iccData); iccShow(); $('status').textContent = '出力条件の ICC を覚えました: ' + f.name; e.target.value = ''; });
