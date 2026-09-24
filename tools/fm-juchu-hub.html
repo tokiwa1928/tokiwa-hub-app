@@ -1758,6 +1758,15 @@ function setPane(p){
   #fmgaichu input.n{ width:70px; text-align:right; }
   #fmgaichu .tot{ font-weight:700; }
   #fmgaichu button{ font-size:12px; padding:3px 10px; }
+  #fmgaichu .gc-what{ width:260px; }
+  #fmgaichu .gc-pick td{ background:#fffbeb; padding:6px 10px 8px; }
+  #fmgaichu .gc-pick .row{ display:flex; align-items:flex-start; gap:6px; margin:3px 0; flex-wrap:wrap; }
+  #fmgaichu .gc-pick .cap{ width:56px; color:#92400e; font-weight:600; padding-top:3px; flex:none; }
+  #fmgaichu .gc-chip{ display:inline-block; padding:2px 9px; border:1px solid #d6c8a0; border-radius:12px; background:#fff; cursor:pointer; user-select:none; line-height:16px; }
+  #fmgaichu .gc-chip.on{ background:#b45309; color:#fff; border-color:#b45309; }
+  #fmgaichu .gc-chip.cat.on{ background:#1e293b; border-color:#1e293b; }
+  #fmgaichu .gc-pick input.add{ width:90px; }
+  #fmgaichu .gc-pick .pv{ color:#334155; margin-top:4px; }
   #fmfind .rows{ max-height:44vh; overflow:auto; background:#fff; border:1px solid #cbd5e1; border-radius:5px; }
   #fmfind table{ border-collapse:collapse; width:100%; font-size:12px; }
   #fmfind th{ position:sticky; top:0; background:#e2e8f0; text-align:left; padding:4px 7px;
@@ -1883,7 +1892,7 @@ function setPane(p){
   <table><thead><tr><th>#</th><th>外注コード</th><th>会社名</th><th>発注内容</th><th>数量</th><th>単価</th><th>合計</th></tr></thead>
   <tbody id="gc-rows"></tbody>
   <tfoot><tr><td colspan="6" style="text-align:right">外注合計</td><td class="tot" id="gc-total" style="text-align:right"></td></tr></tfoot></table>
-  <div style="color:#92400e;margin-top:3px">合計は FileMaker の計算（数量×単価）。保存すると原価（合計金額）に反映されます。Repeat 登録でも一緒に写ります</div>
+  <div style="color:#92400e;margin-top:3px">合計は FileMaker の計算（数量×単価）。保存すると原価（合計金額）に反映されます。Repeat 登録でも一緒に写ります。発注内容は「選ぶ ▾」で 区分（部分外注／完全外注／仕入）と どこの・どれを を選べます（手で書いても可）</div>
 </div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -2571,7 +2580,7 @@ function setPane(p){
       h += '<tr data-i="' + i + '"><td>' + i + '</td>'
         + '<td><input class="gc-code" style="width:60px" value="' + esc(x.外注コード || '') + '"></td>'
         + '<td><input class="gc-name" style="width:180px" value="' + esc(x.会社名 || '') + '"></td>'
-        + '<td><input class="gc-what" style="width:220px" value="' + esc(x.発注内容 || '') + '"></td>'
+        + '<td style="white-space:nowrap"><input class="gc-what" value="' + esc(x.発注内容 || '') + '"> <button type="button" class="plain gc-pickbtn" title="区分（部分外注／完全外注／仕入）と、どこの・どれを を選んで発注内容を組みます">選ぶ ▾</button></td>'
         + '<td><input class="gc-qty n" value="' + esc(x.数量 == null ? '' : x.数量) + '"></td>'
         + '<td><input class="gc-price n" value="' + esc(x.単価 == null ? '' : x.単価) + '"></td>'
         + '<td class="gc-sum" style="text-align:right">' + esc(円(x.合計)) + '</td></tr>';
@@ -2579,10 +2588,71 @@ function setPane(p){
     $('gc-rows').innerHTML = h;
     外注合計を出す();
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('input.n'), function (el) { el.addEventListener('input', 外注合計を出す); });
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-pickbtn'), function (b) { b.onclick = function () { 発注内容を選ぶ(b.closest('tr')); }; });
+  }
+  // ---- GAICHU-1: 発注内容を選んで組む（区分・どこ・どれ・補足）。文字にして FileMaker の 発注内容 に入れる
+  var 外注区分 = ['部分外注', '完全外注', '仕入'];
+  var 外注部位 = ['全体', '表紙', '裏表紙', '本文', '中紙', '見返し', '帯', 'カバー', '封筒', '箱', '台紙', '上（1枚目）', '中（2枚目）', '下（3枚目）', 'ラベル'];
+  var 外注作業 = ['一式', '印刷', '製版', 'データ制作', '断裁', '折り', '製本', '中綴じ', '無線綴じ', 'ミシン', 'ナンバリング', '穴あけ', '型抜き', 'PP加工', '箔押し', '丁合', '封入', '梱包', '配送'];
+  var 仕入品目 = ['用紙', '封筒', '既製品', '印刷物', '資材', 'インキ', '版'];
+  function 自分の候補() { try { return JSON.parse(localStorage.getItem('fm_gaichu_chips') || '{}') || {}; } catch (e) { return {}; } }
+  function 候補を足す(種, 語) { var m = 自分の候補(); m[種] = (m[種] || []).filter(function (w) { return w !== 語; }).concat([語]).slice(-30); try { localStorage.setItem('fm_gaichu_chips', JSON.stringify(m)); } catch (e) {} }
+  function 発注内容を組む(o) {
+    var s = o.区分 ? '【' + o.区分 + '】' : '';
+    s += (o.部位 || []).join('・'); if ((o.部位 || []).length && (o.作業 || []).length) s += '：'; s += (o.作業 || []).join('・');
+    if (o.補足) s += (s ? ' ' : '') + o.補足;
+    return s;
+  }
+  function 発注内容を読む(t) {
+    var o = { 区分: '', 部位: [], 作業: [], 補足: '' }; t = String(t || '').trim();
+    var m = /^【([^】]*)】/.exec(t); if (m) { o.区分 = m[1]; t = t.slice(m[0].length); }
+    var sp = t.search(/[ 　]/); var main = sp >= 0 ? t.slice(0, sp) : t; o.補足 = sp >= 0 ? t.slice(sp + 1).trim() : '';
+    var c = main.split('：');
+    if (c.length >= 2) { o.部位 = c[0].split('・').filter(Boolean); o.作業 = c.slice(1).join('：').split('・').filter(Boolean); }
+    else if (main) {
+      var 知っている部位 = 外注部位.concat(自分の候補().部位 || []), 知っている作業 = 外注作業.concat(仕入品目, 自分の候補().作業 || [], 自分の候補().品目 || []);
+      var rest = [];
+      main.split('・').forEach(function (w) { if (!w) return; if (知っている部位.indexOf(w) >= 0) o.部位.push(w); else if (知っている作業.indexOf(w) >= 0) o.作業.push(w); else rest.push(w); });
+      if (rest.length) o.補足 = (rest.join('・') + (o.補足 ? ' ' + o.補足 : ''));
+    }
+    return o;
+  }
+  function 発注内容を選ぶ(tr) {
+    var next = tr.nextElementSibling;
+    if (next && next.classList.contains('gc-pick')) { next.remove(); return; }   // もう一度押すと閉じる
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr.gc-pick'), function (p) { p.remove(); });
+    var what = tr.querySelector('.gc-what'); var o = 発注内容を読む(what.value);
+    var pr = document.createElement('tr'); pr.className = 'gc-pick'; var td = document.createElement('td'); td.colSpan = 7; pr.appendChild(td); tr.parentNode.insertBefore(pr, tr.nextSibling);
+    function chips(種, list, sel, multi) {
+      var mine = 自分の候補()[種] || []; var all = list.concat(mine.filter(function (w) { return list.indexOf(w) < 0; }));
+      return all.map(function (w) { return '<span class="gc-chip' + (種 === '区分' ? ' cat' : '') + (sel.indexOf(w) >= 0 ? ' on' : '') + '" data-k="' + esc(種) + '" data-w="' + esc(w) + '">' + esc(w) + '</span>'; }).join('')
+        + (種 === '区分' ? '' : ' <input class="add" data-k="' + esc(種) + '" placeholder="＋ 自分で足す">');
+    }
+    function draw() {
+      var 作業list = o.区分 === '仕入' ? 仕入品目 : 外注作業, 作業種 = o.区分 === '仕入' ? '品目' : '作業';
+      td.innerHTML = '<div class="row"><span class="cap">区分</span><span>' + chips('区分', 外注区分, [o.区分]) + '</span></div>'
+        + (o.区分 === '仕入' ? '' : '<div class="row"><span class="cap">どこの</span><span>' + chips('部位', 外注部位, o.部位) + '</span></div>')
+        + '<div class="row"><span class="cap">' + (o.区分 === '仕入' ? '何を' : 'どれを') + '</span><span>' + chips(作業種, 作業list, o.作業) + '</span></div>'
+        + '<div class="row"><span class="cap">補足</span><input class="memo" style="width:360px" value="' + esc(o.補足) + '" placeholder="例: 4色／マットPP／コート90kg など"></div>'
+        + '<div class="pv">→ <b>' + esc(発注内容を組む(o) || '（まだ選んでいません）') + '</b>　<button type="button" class="plain done">閉じる</button></div>';
+      what.value = 発注内容を組む(o);
+      Array.prototype.forEach.call(td.querySelectorAll('.gc-chip'), function (c) { c.onclick = function () {
+        var kd = c.getAttribute('data-k'), w = c.getAttribute('data-w');
+        if (kd === '区分') { o.区分 = (o.区分 === w ? '' : w); if (o.区分 === '仕入') { o.部位 = []; o.作業 = o.作業.filter(function (x) { return 仕入品目.indexOf(x) >= 0 || (自分の候補().品目 || []).indexOf(x) >= 0; }); }
+          if (o.区分 === '完全外注' && !o.部位.length && !o.作業.length) { o.部位 = ['全体']; o.作業 = ['一式']; } }
+        else { var arr = (kd === '部位') ? o.部位 : o.作業; var i = arr.indexOf(w); if (i >= 0) arr.splice(i, 1); else arr.push(w); }
+        draw();
+      }; });
+      Array.prototype.forEach.call(td.querySelectorAll('input.add'), function (inp) { inp.onkeydown = function (ev) { if (ev.key !== 'Enter') return; ev.preventDefault(); var w = inp.value.trim(); if (!w) return;
+        var kd = inp.getAttribute('data-k'); 候補を足す(kd, w); ((kd === '部位') ? o.部位 : o.作業).push(w); draw(); }; });
+      var memo = td.querySelector('input.memo'); memo.oninput = function () { o.補足 = memo.value.trim(); what.value = 発注内容を組む(o); td.querySelector('.pv b').textContent = what.value || '（まだ選んでいません）'; };
+      td.querySelector('button.done').onclick = function () { pr.remove(); };
+    }
+    draw();
   }
   function 外注合計を出す() {
     var 総 = 0;
-    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr'), function (tr) {
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr[data-i]'), function (tr) {
       var q = Number(tr.querySelector('.gc-qty').value || 0), p = Number(tr.querySelector('.gc-price').value || 0);
       var s = q * p; tr.querySelector('.gc-sum').textContent = (q || p) ? s.toLocaleString() : ''; 総 += s;   // FileMaker と同じく丸めない
     });
@@ -2590,15 +2660,15 @@ function setPane(p){
   }
   function 外注の行() {
     var out = [];
-    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr'), function (tr) {
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr[data-i]'), function (tr) {
       var o = { 番: Number(tr.getAttribute('data-i')), 外注コード: tr.querySelector('.gc-code').value.trim(), 会社名: tr.querySelector('.gc-name').value.trim(),
                 発注内容: tr.querySelector('.gc-what').value.trim(), 数量: tr.querySelector('.gc-qty').value.trim(), 単価: tr.querySelector('.gc-price').value.trim() };
-      if (o.外注コード || o.会社名 || o.数量) out.push(o);
+      if (o.外注コード || o.会社名 || o.数量 || o.発注内容) out.push(o);
     });
     return out;
   }
   $('gc-add').onclick = function () {
-    var n = $('gc-rows').querySelectorAll('tr').length; if (n >= 4) { alert('外注は 4 件までです（FileMaker と同じ）'); return; }
+    var n = $('gc-rows').querySelectorAll('tr[data-i]').length; if (n >= 4) { alert('外注は 4 件までです（FileMaker と同じ）'); return; }
     var 行 = 外注の行(); 行.push({ 番: n + 1 }); 外注を描く(行);
   };
   $('gc-save').onclick = function () {
