@@ -719,6 +719,13 @@ function 画面_案件にまとめる(recordIds, 案件ID, 確認) {
   var lay = LAYOUTS.juchu;
   var ids = (recordIds || []).map(String).filter(Boolean);
   if (!ids.length) throw new Error('まとめる伝票を選んでください');
+  // GROUP-1: 伝票番号（a108355 の形）で来たら recordId に引き直す（本体の案件管理から呼ぶとき）
+  ids = ids.map(function (id) {
+    if (!/^[a-zA-Z]\d{3,}$/.test(id)) return id;
+    var f = find_(lay, [{ '伝票番号': '==' + id }], 1, 1, null);
+    if (!f.records.length) throw new Error('見つかりません: ' + id);
+    return String(f.records[0].recordId);
+  });
   var recs = ids.map(function (id) {
     var r = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records/' + id);
     if (r.code !== '0') throw new Error('読み込みに失敗 (' + r.code + ') ' + id);

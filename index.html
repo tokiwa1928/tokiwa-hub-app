@@ -1484,6 +1484,7 @@ setTimeout(_removeBootLoader_, 5000);
         <button class="btn" style="background:#dcfce7;border-color:#86efac;color:#15803d;font-weight:700;font-size:12px" onclick="_pselModal_('repeat')" title="チェックした案件をまとめて新規リピート登録（共通の置換=例:上質→コート も一括適用）">🔁 選択をリピート (<span id="psel-cnt">0</span>)</button>
         <button class="btn" style="background:#e0f2fe;border-color:#7dd3fc;color:#0369a1;font-weight:700;font-size:12px" onclick="_pselModal_('update')" title="チェックした案件のステータス変更・文字列置換をまとめて適用">✏ 選択を更新</button>
         <button class="btn" style="background:#fee2e2;border-color:#fca5a5;color:#b91c1c;font-weight:700;font-size:12px" onclick="_pselDelete_()" title="チェックした案件を削除（管理者以外は削除申請）">🗑 選択を削除</button>
+        <button class="btn" style="background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6;font-weight:700;font-size:12px" onclick="_pselGroup_()" title="チェックした案件を 1 つの案件にまとめる（同じ得意先・同じ品の年ごとの受注など）。FileMaker の 案件ID もそろえる">🔗 選択を 1 案件にまとめる</button>
         <button class="btn" style="background:#1a1a1a;border-color:#1a1a1a;color:#fff;font-weight:700;font-size:12px" onclick="_pselSeizo_(false)" title="チェックした案件（FileMaker の伝票番号があるもの）の製造指示書をまとめて開く。印刷すると出力を記録">🖨 製造指示書（選択）</button>
         <button class="btn" style="background:#fff;border-color:#f87171;color:#b91c1c;font-weight:700;font-size:12px" onclick="_pselSeizo_(true)" title="記録を残さずに製造指示書を出す（紙に「テスト出力」の帯が入ります）">🧪 テスト出力（選択）</button>
       </span>
@@ -20631,6 +20632,7 @@ function _fmAutoSync_(){
         if(f['単位'] && p.unit!==f['単位']){ p.unit=f['単位']; ch=true; }
         if(due && p.dueDate!==due){ p.dueDate=due; ch=true; }
         if(金額 && Number(p.exTax||0)!==金額){ p.exTax=金額; ch=true; }
+        if(f['案件ID'] && (!p.fm || String(p.fm['fm-anken']||'')!==String(f['案件ID']))){ p.fm=p.fm||{}; p.fm['fm-anken']=String(f['案件ID']); ch=true; }   // GROUP-1
         if(ch){ p.fm=p.fm||{}; p.fm['fm-denpyo']=no; p.fmSyncedAt=new Date().toISOString(); p.updatedAt=p.fmSyncedAt; upd++; }
       } else if(autoCreate){
         // 新しい受注（同期を始めたあとに起票された、案件区分が受注か空）だけカードにする
@@ -20639,7 +20641,7 @@ function _fmAutoSync_(){
         var proj={ id:no, master_no:(typeof _nextMasterNo_==='function'?_nextMasterNo_():''), companyId:(currentAuth&&currentAuth.companyId)||'COMP002', companyCode:(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'',
           orderDate:_fmDate_(f['起票日'])||new Date().toISOString().slice(0,10), dueDate:due, cust:cust||String(f['得意先コード']||''), endUser:String(f['ユーザー名']||''), item:String(f['製品名']||''), spec:'', qty:qty, unit:String(f['単位']||'部'),
           exTax:金額, grand:金額, status:'データ作成中', assignee:'', memo:'FileMaker 受注 '+no+' から自動作成', steps:{版下:'─',校了:'─',印刷:'─',加工:'─',納品:'─'}, stepDates:{}, createdAt:new Date().toISOString(),
-          fm:{ 'fm-denpyo':no, 'fm-no':no, 'fm-custcd':String(f['得意先コード']||''), 'fm-tantocd':String(f['担当者コード']||'') }, fmSyncedAt:new Date().toISOString(), fromFm:true };
+          fm:{ 'fm-denpyo':no, 'fm-no':no, 'fm-anken':String(f['案件ID']||''), 'fm-custcd':String(f['得意先コード']||''), 'fm-tantocd':String(f['担当者コード']||'') }, fmSyncedAt:new Date().toISOString(), fromFm:true };
         if(!DB.projects) DB.projects=[]; DB.projects.push(proj); byNo[no]=proj; made++;
       }
     });
@@ -45990,6 +45992,42 @@ function _clearProjFilters_(){
   });
   _onProjFilterChange_();
 }
+// ═══ GROUP-1: 案件（親）でまとめる ═══
+// 親の鍵: FileMaker の 案件ID（fm-anken）。無ければ伝票番号そのもの（＝自分だけの案件）。FileMaker の無いカードは master_no
+function _projGroupKey_(r){ if(!r) return ''; var a=(r.fm&&r.fm['fm-anken'])||''; if(a) return 'A:'+String(a); var no=_projFmNo_(r); if(no) return 'A:'+no; return r.master_no?('M:'+r.master_no):''; }
+window._projGrpOpen_ = window._projGrpOpen_ || {};
+function _projGrpToggle_(key){ window._projGrpOpen_[key]=!window._projGrpOpen_[key]; renderProjects(); }
+// 受注入力ページが同じブラウザに置いている索引（IndexedDB tokiwa_fm_index）から、案件IDを持たないカードに 案件ID を補う
+function _projBackfillAnken_(){
+  return new Promise(function(res){ try{ var q=indexedDB.open('tokiwa_fm_index',1); q.onupgradeneeded=function(){ try{ q.result.createObjectStore('idx'); }catch(e){} }; q.onsuccess=function(){ try{ var d=q.result; var g=d.transaction('idx','readonly').objectStore('idx').get('juchu'); g.onsuccess=function(){ d.close(); res(g.result||null); }; g.onerror=function(){ d.close(); res(null); }; }catch(e){ res(null); } }; q.onerror=function(){ res(null); }; }catch(e){ res(null); } })
+  .then(function(idx){ if(!idx||!idx.列||!idx.行) return 0; var P={}; idx.列.forEach(function(c,i){ P[c]=i; }); if(P['伝票番号']==null||P['案件ID']==null) return 0;
+    var map={}; idx.行.forEach(function(r){ var no=String(r[P['伝票番号']]||''); if(no) map[no]=String(r[P['案件ID']]||''); });
+    var n=0; (DB.projects||[]).forEach(function(p){ var no=_projFmNo_(p); if(!no) return; var a=map[no]; if(!a) return; if(!p.fm) p.fm={}; if(String(p.fm['fm-anken']||'')!==a){ p.fm['fm-anken']=a; n++; } });
+    if(n){ if(typeof saveDB==='function') saveDB(); try{ renderProjects(); }catch(e){} } return n; });
+}
+setTimeout(function(){ try{ _projBackfillAnken_(); }catch(e){} }, 7000);
+// 選択した案件を 1 つの案件（FileMaker の 案件ID）にまとめる。Hub だけのカードは master_no をそろえる
+function _pselGroup_(){
+  var list=_pselList_(); if(list.length<2){ alert('まとめる案件を 2 つ以上チェックしてください'); return; }
+  var nos=[], hubOnly=[];
+  list.forEach(function(x){ var no=_projFmNo_(x.r); if(no) nos.push(no); else hubOnly.push(x.r); });
+  var names=list.map(function(x){ return (x.r.id||'')+' '+(x.r.cust||'')+' '+(x.r.item||''); }).join('\n');
+  if(!confirm(list.length+' 件を 1 つの案件にまとめます。\n\n'+names+'\n\nFileMaker の伝票（'+nos.length+' 件）は 案件ID をそろえます（いちばん古い受注の番号が案件IDになります）。よろしいですか？')) return;
+  var done=function(anken){
+    var base=list[0].r; var mn=base.master_no||(typeof _ensureMasterNo_==='function'?_ensureMasterNo_(base):'');
+    list.forEach(function(x){ if(anken){ x.r.fm=x.r.fm||{}; x.r.fm['fm-anken']=anken; } if(mn) x.r.master_no=mn; x.r.updatedAt=new Date().toISOString(); });
+    if(anken) window._projGrpOpen_['A:'+anken]=true;
+    window._PSEL_.clear(); if(typeof saveDB==='function') saveDB(); renderProjects(); _pselUi_();
+    if(typeof _toastMsg==='function') _toastMsg('🔗 '+list.length+' 件を 1 つの案件にまとめました'+(anken?('（案件ID '+anken+'）'):''));
+  };
+  if(nos.length>=2 && window.FM && FM.名乗っている && FM.名乗っている()){
+    if(typeof _toastMsg==='function') _toastMsg('FileMaker の案件IDをそろえています…');
+    FM.呼ぶ('画面_案件にまとめる',[nos,'',0]).then(function(r){ done(String(r.案件ID||'')); }).catch(function(e){ alert('FileMaker の案件IDをそろえられませんでした: '+String(e&&e.message||e)+'\n\nHub の表示だけまとめます'); done(''); });
+  } else {
+    if(nos.length>=2) alert('FileMaker にサインインしていないので、Hub の表示だけまとめます（案件IDは FileMaker 側でそろえてください）');
+    done('');
+  }
+}
 // SEIZO-2: 案件 → FileMaker の伝票番号（自動作成のカードは id が a108355 の形、手入力のカードは fm-denpyo）
 function _projFmNo_(r){ if(!r) return ''; var v=(r.fm&&r.fm['fm-denpyo'])||''; if(v) return String(v); if(/^[a-zA-Z]\d{4,}$/.test(String(r.id||''))) return String(r.id); return ''; }
 function _pselSeizo_(test){
@@ -46338,7 +46376,19 @@ function renderProjects(){
   // ⚡ パフォーマンス: 表示件数制限
   const _projTotalCount = rows.length;
   const _projShowLimit = _getShowCount_('proj-body', PAGE_LIMITS.project);
-  const _projDisplayRows = rows.slice().reverse().slice(0, _projShowLimit);
+  const _projAllRev = rows.slice().reverse();
+  // GROUP-1: 同じ案件（案件ID）は 1 行に。仲間は絞り込み（期間など）に関係なく全案件から集め、代表＝絞り込みに残っている中でいちばん新しいもの。
+  //          展開している案件は子（過去の年の受注）も代表の直後に出す
+  const _grpAll = {};
+  (DB.projects||[]).slice().reverse().forEach(function(r){ if(!r) return; var k=_projGroupKey_(r); if(!k) return; if(!_grpAll[k]) _grpAll[k]=[]; _grpAll[k].push(r); });
+  window._projGrpInfo_ = {};
+  const _projGrouped = []; const _grpSeen = {};
+  _projAllRev.forEach(function(r){ var k=_projGroupKey_(r); if(!k){ _projGrouped.push(r); delete r._grpChild; return; } if(_grpSeen[k]) return; _grpSeen[k]=1;
+    var m=_grpAll[k]||[r]; var open=!!window._projGrpOpen_[k];
+    window._projGrpInfo_[r.id||'']={ key:k, n:m.length, open:open, members:m };
+    delete r._grpChild; _projGrouped.push(r);
+    m.forEach(function(c){ if(c===r) return; if(open){ c._grpChild=k; _projGrouped.push(c); } else delete c._grpChild; }); });
+  const _projDisplayRows = _projGrouped.slice(0, _projShowLimit);
   window._projDisplayRowsRef_ = _projDisplayRows;   // PSEL-1: 全選択用の参照
   if(typeof _pselUi_==='function') _pselUi_();
 
@@ -46510,6 +46560,7 @@ function renderProjects(){
         ${hasDetail?`<span onclick="event.stopPropagation();toggleProjAcc(${oi},event)" style="font-size:12px;color:#888;margin-right:4px;cursor:pointer;padding:2px" id="proj-acc-arrow-${oi}" title="詳細を展開">▶</span>`:''}
         ${r.id}
         ${(typeof _projPriceLagFlag_==='function' && _projPriceLagFlag_(r))?`<span onclick="event.stopPropagation();_markPriceReviewed_('${r.id}')" style="display:inline-block;background:#ea580c;color:#fff;font-size:9px;padding:1px 5px;margin-left:4px;border-radius:8px;font-weight:700;cursor:pointer" title="仕入マスタが値上げされた後の受注で、売価が見直されていない可能性があります。クリックで「確認済み」にできます">🚩値上げ未反映</span>`:''}
+        ${(function(){ var gi=(window._projGrpInfo_||{})[r.id||'']; if(gi && gi.n>1){ var yrs=gi.members.map(function(m){ return String(m.orderDate||m.createdAt||'').slice(0,4); }).filter(function(v,i,a){ return v && a.indexOf(v)===i; }).sort().join('・'); return '<button class="use-btn" style="background:#5b21b6;color:#fff;border-color:#5b21b6;font-size:10px;padding:1px 6px;margin-left:4px;border-radius:4px;font-weight:700" onclick="event.stopPropagation();_projGrpToggle_(\''+gi.key.replace(/'/g,'')+'\')" title="同じ案件の受注が '+gi.n+' 件（'+yrs+'）。押すと年ごとに展開／たたむ">'+(gi.open?'▼':'🔗')+' '+gi.n+'件'+(yrs?' '+yrs:'')+'</button>'; } if(r._grpChild) return '<span style="display:inline-block;background:#ede9fe;color:#5b21b6;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;font-weight:700" title="上の案件の過去の受注">↳ 同じ案件</span>'; return ''; })()}
         ${r.master_no ? `<button class="use-btn" style="background:#1e40af;color:#fff;border-color:#1e40af;font-size:10px;padding:1px 6px;margin-left:4px;border-radius:4px;font-weight:700" onclick="event.stopPropagation();showRelatedDocsModal('${r.master_no}')" title="関連書類 (見積書/外注/仕入/請求書) を表示">P${r.master_no} 🔗</button>` : ''}
       </td>
       <td style="white-space:nowrap">${_quoteCell}</td>
