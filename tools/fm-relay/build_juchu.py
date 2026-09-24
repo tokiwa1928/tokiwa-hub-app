@@ -120,6 +120,16 @@ STYLE = r"""
   table.g td.tehai select.gai{ background:#fef3c7; font-weight:700; }
   #th-msg{ color:#92400e; font-size:11px; margin-left:8px; }
   #kako-fold{ display:none; font-size:12px; color:#92400e; margin:4px 0; }
+  /* KENSAKU-1: 検索モード。入力欄が検索欄になる */
+  #fm-findbar{ display:none; background:#1e3a8a; color:#fff; padding:6px 14px; font-size:12.5px; align-items:center; gap:10px; flex-wrap:wrap; }
+  body.fm-findmode #fm-findbar{ display:flex; }
+  #fm-findbar button{ font-size:12px; padding:3px 12px; border-radius:4px; border:1px solid #93c5fd; background:#fff; color:#1e3a8a; cursor:pointer; }
+  #fm-findbar button.go{ background:#fbbf24; border-color:#f59e0b; color:#1e293b; font-weight:700; }
+  body.fm-findmode input.in.fm-findable, body.fm-findmode table.g td input.fm-findable{ background:#eef4ff !important; border-color:#93c5fd !important; }
+  body.fm-findmode input.in:not(.fm-findable), body.fm-findmode select.in:not(.fm-findable), body.fm-findmode table.g td input:not(.fm-findable){ opacity:.35; }
+  body.fm-findmode .fm-find-to{ display:inline-block !important; }
+  .fm-find-to{ display:none; font-size:11px; padding:1px 3px; border:1px solid #93c5fd; border-radius:3px; margin-left:2px; }
+  body.fm-findmode #fmbar .go, body.fm-findmode #fm-save{ opacity:.5; pointer-events:none; }
   #fmfind .rows{ max-height:44vh; overflow:auto; background:#fff; border:1px solid #cbd5e1; border-radius:5px; }
   #fmfind table{ border-collapse:collapse; width:100%; font-size:12px; }
   #fmfind th{ position:sticky; top:0; background:#e2e8f0; text-align:left; padding:4px 7px;
@@ -148,7 +158,7 @@ BAR = r"""
   <b>FileMaker</b>
   <input id="fm-no" placeholder="伝票番号・見積番号" autocomplete="off">
   <button class="go" id="fm-load">読み込む</button>
-  <button id="fm-find">探す</button>
+  <button id="fm-find" style="display:none">探す</button>
   <span class="sep"></span>
   <span id="fmstage">—</span>
   <select id="fm-hist" title="この案件の段階"><option>—</option></select>
@@ -159,7 +169,7 @@ BAR = r"""
   <button class="new" data-kind="受注">受注</button>
   <span class="sep"></span>
   <button class="save" id="fm-save" title="伝票を読み込んでいなければ、打った内容で新しく起こして保存します">保存</button>
-  <button id="fm-reload" disabled title="編集を捨てて FileMaker の内容に戻す">読み直す</button>
+  <button id="fm-reload" disabled style="display:none" title="編集を捨てて FileMaker の内容に戻す">読み直す</button>
   <span id="fmwho"></span>
   <span id="fmsignin"></span>
   <span id="fmstat">番号を入れて「読み込む」／何も読み込まずに「新しく起こす」と新規案件</span>
@@ -168,6 +178,7 @@ BAR = r"""
 <div id="fmerr"></div>
 <div id="fmfind">
   <div class="cond">
+    <div><label>検索モード</label><button id="ff-findmode" class="plain" title="FileMaker と同じ。入力欄に条件を入れて、複数の欄を組み合わせて探します（日付は から／まで）">🔍 入力欄で探す</button></div>
     <div><label>何でも検索</label><input id="ff-all" style="width:230px" placeholder="番号・得意先・ユーザー・品名・品種・担当 を全期間から（空白=AND、OR も可）" autocomplete="off" title="伝票番号・見積番号・案件ID・得意先（コードと名前）・ユーザー名・製品名・品種・担当者コード の全部を、期間に関係なく探します。空白で区切ると全部含むもの"></div>
     <div><label>品名で探す</label><input id="ff-kw" placeholder="打つと出ます。a10000 なら伝票番号の前方一致" autocomplete="off"></div>
     <div><label>得意先（コードか名前）</label><input id="ff-cust" style="width:150px" placeholder="5465 か 中尾" autocomplete="off"></div>
@@ -1451,8 +1462,8 @@ LOGIC = r"""
   }
   // 手元で絞る（1 打ごと）。番号（a10000）は伝票番号の前方一致、それ以外は製品名・ユーザー名の部分一致
   var 全件モード = false;   // 「全体表示」を押したら、絞りが無くても新しい順に出す
-  function 手元で探す(開いてよい) {
-    if (!索引) return false;
+  function 手元で探す(開いてよい, フォーム条件) {
+    if (!索引) return false; フォーム条件 = フォーム条件 || null;
     var kw = $('ff-kw').value.trim(), cust = $('ff-cust').value.trim(), 段階 = $('ff-stage').value;
     var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 0);   // 0 = すべて
     var user = $('ff-user').value.trim().toLowerCase(), tanto = $('ff-tanto').value.trim(), hinshu = $('ff-hinshu').value.trim().toLowerCase();
@@ -1476,7 +1487,7 @@ LOGIC = r"""
     if (all.length) 日数 = 0;   // 何でも検索は全期間
     if (d1 || d2) 日数 = 0;   // 日付を指定したら「期間」は使わない
     try { var 条件 = {}; ['ff-all', 'ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { if ($(id)) 条件[id] = $(id).value; }); 条件.全件 = 全件モード; sessionStorage.setItem('fm_find', JSON.stringify(条件)); } catch (e) {}
-    if (!all.length && !kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード && !未出力だけ) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    if (!all.length && !kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード && !未出力だけ && !フォーム条件) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
     全件モード = false;
     var から = 0;
     if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')); }
@@ -1484,6 +1495,7 @@ LOGIC = r"""
     for (var i = 0; i < 行.length; i++) {
       var r = 行[i];
       if (から && 索引日[i] < から) continue;
+      if (フォーム条件 && !検索モードに合う(r, P, フォーム条件)) continue;   // KENSAKU-1
       if (d1 && 索引日[i] < d1) continue; if (d2 && 索引日[i] > d2) continue;
       if (n1 || n2) { var nd = 日を数に(r[P['納品日']]); if (!nd) continue; if (n1 && nd < n1) continue; if (n2 && nd > n2) continue; }
       if (custSet) { if (!custSet[String(r[P['得意先コード']])]) continue; } else if (cust && String(r[P['得意先コード']]) !== cust) continue;
@@ -1652,7 +1664,7 @@ LOGIC = r"""
     // GRP-2: 関連会社のアカウントなら、得意先は自社（自社が発注元）にしておく。金額欄のロックも掛け直す
     setTimeout(function () { try { var k = 権限(); if (k.partner && $('f-custcd') && !$('f-custcd').value) { $('f-custcd').value = 自社の得意先コード(); 得意先名を入れる(); } 金額の権限を適用(); } catch (e) {} }, 250);
   }, モード === 'mitsu' ? '予算見積か見積書かを選んで、FileMaker に新しく起こします（番号は自動）' : 'FileMaker に新しい' + 起こす種別 + 'を起こします（黒帯の「' + 起こす種別 + '」と同じ）');
-  帯に付ける('検索モード', function () { 探し.style.display = 'block'; $('ff-kw').focus(); $('ff-kw').select(); }, '探す窓に移ります。打つと出ます');
+  帯に付ける('検索モード', function () { 検索モードに入る(); }, 'FileMaker と同じ検索モード。入力欄に条件を入れて Enter');
   帯に付ける('全体表示', function () {
     探し.style.display = 'block';
     $('ff-kw').value = ''; $('ff-cust').value = ''; $('ff-stage').value = ''; $('ff-days').value = '0'; $('ff-n').value = '0';
@@ -1870,6 +1882,82 @@ LOGIC = r"""
   }
   列を整える(); 手配候補を用意();
   try { window.applyRowVis(); } catch (e) {}
+
+  // ================================================================ KENSAKU-1: 検索モード（入力欄がそのまま検索欄）
+  // 入力欄 → 索引の列。type: prefix=番号の前方一致 / text=一部一致（OR・- 可） / exact / num（1000〜2000 の範囲可） / date（から／まで）
+  var 検索欄 = [
+    { id:'f-denpyo', col:'伝票番号', type:'prefix' }, { id:'f-mitsuno', col:'見積番号', type:'prefix' }, { id:'f-kubun', col:'案件区分', type:'exact' },
+    { id:'f-custcd', col:'得意先コード', type:'exact' }, { id:'f-cust', col:'得意先名', type:'custname' }, { id:'f-user', col:'ユーザー名', type:'text' },
+    { id:'f-item', col:'製品名', type:'text' }, { id:'f-hinshu2', col:'品種', type:'exact' }, { id:'f-tantocd', col:'担当者コード', type:'exact' },
+    { id:'f-date', col:'起票日', type:'date' }, { id:'f-due', col:'納期', type:'date' }, { id:'d-done', col:'納品日', type:'date' }, { id:'f-prevdate', col:'前回起票日', type:'date' },
+    { id:'p1-tot', col:'合計数1', type:'num' }, { id:'f-price', col:'売価単価', type:'num' }, { id:'f-amt', col:'売価金額', type:'num' }, { id:'c-total', col:'合計金額', type:'num' },
+    { id:'f-lotno', col:'前回伝票番号', type:'prefix' }, { id:'f-unit', col:'単位', type:'exact' }, { id:'fm-anken', col:'案件ID', type:'prefix' }
+  ];
+  var 検索モード = false, 検索前の伝票 = '';
+  function 検索欄を用意() {
+    検索欄.forEach(function (d) { var el = $(d.id); if (!el) return; el.classList.add('fm-findable'); el.title = (el.title ? el.title + '\n' : '') + '検索モードではこの欄で探せます';
+      if (d.type === 'date' && !$(d.id + '-to')) { var to = document.createElement('input'); to.type = 'date'; to.id = d.id + '-to'; to.className = 'fm-find-to'; to.title = 'まで（空なら同じ日）'; el.parentNode.insertBefore(to, el.nextSibling); } });
+    var bar = document.createElement('div'); bar.id = 'fm-findbar';
+    bar.innerHTML = '<b>🔍 検索モード</b><span>入力欄に条件を入れて Enter か「探す」。青い欄が探せる欄。複数の欄は AND。文字は一部一致（OR・先頭 - も可）、数字は 1000〜2000、日付は から／まで。索引に無い欄（紙質・インキなど）は探せません</span>'
+      + '<button class="go" id="fm-find-go">探す</button><button id="fm-find-clear">条件を消す</button><button id="fm-find-exit">検索モードを終わる</button><span id="fm-find-msg" style="color:#fde68a"></span>';
+    bar.querySelector('#fm-find-go').onclick = 検索モードで探す; bar.querySelector('#fm-find-clear').onclick = function () { 検索欄を空に(); $('fm-find-msg').textContent = ''; };
+    bar.querySelector('#fm-find-exit').onclick = function () { 検索モードを終わる(true); };
+    var top = $('fmbar'); if (top && top.parentNode) top.parentNode.insertBefore(bar, top.nextSibling); else document.body.insertBefore(bar, document.body.firstChild);
+    document.addEventListener('keydown', function (e) { if (!検索モード || e.key !== 'Enter') return; var t = e.target; if (!t || !(t.tagName === 'INPUT' || t.tagName === 'SELECT')) return; if (t.closest('#fmfind') || t.closest('#fmbar')) return; e.preventDefault(); 検索モードで探す(); }, true);
+  }
+  function 検索欄を空に() { 検索欄.forEach(function (d) { var el = $(d.id); if (el) el.value = ''; var to = $(d.id + '-to'); if (to) to.value = ''; }); }
+  function 検索モードに入る() {
+    if (検索モード) { var f0 = $('f-item') || $('f-custcd'); if (f0) f0.focus(); return; }
+    if (現在 && Object.keys(変更分()).length && !confirm('保存していない変更があります。捨てて検索モードに入りますか？')) return;
+    検索前の伝票 = 現在 ? String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || '') : '';
+    検索モード = true; document.body.classList.add('fm-findmode'); 現在 = null; 読込時 = {};
+    Object.keys(TO_FM).forEach(function (id) { var el = $(id); if (el) { el.value = ''; el.classList.remove('fm-dirty'); } });
+    検索欄を空に(); 状態('検索モード: 入力欄に条件を入れて Enter', ''); $('fm-find-msg').textContent = '';
+    var f = $('f-item'); if (f) f.focus();
+  }
+  function 検索モードを終わる(戻す) {
+    if (!検索モード) return; 検索モード = false; document.body.classList.remove('fm-findmode'); 検索欄を空に();
+    if (戻す && 検索前の伝票) { 番号欄.value = 検索前の伝票; 読み込む(検索前の伝票); } else { 状態('', ''); }
+  }
+  // 文字の条件（空白＝AND、OR、先頭 - ）
+  function 文字が合う(hay, q) { var groups = String(q).normalize('NFKC').toLowerCase().split(/\s+(?:or|または)\s+|\s*[|｜]\s*/).map(function (g) { return g.split(/[\s　]+/).filter(Boolean); }).filter(function (g) { return g.length; }); if (!groups.length) return true; hay = String(hay == null ? '' : hay).normalize('NFKC').toLowerCase();
+    return groups.some(function (g) { return g.every(function (t) { if (t.length > 1 && t.charAt(0) === '-') return hay.indexOf(t.slice(1)) < 0; return hay.indexOf(t) >= 0; }); }); }
+  function 数の条件(v) { v = String(v).normalize('NFKC').replace(/[,\s]/g, ''); var m = /^(-?[\d.]*)(?:〜|~|\.\.|-)(-?[\d.]*)$/.exec(v); if (m && (m[1] !== '' || m[2] !== '') && !/^-?[\d.]+$/.test(v)) return { lo: m[1] === '' ? -Infinity : Number(m[1]), hi: m[2] === '' ? Infinity : Number(m[2]) }; var n = Number(v); return isNaN(n) ? null : { lo: n, hi: n }; }
+  function 検索モードの条件() {
+    var out = [];
+    検索欄.forEach(function (d) { var el = $(d.id); if (!el) return; var v = String(el.value || '').trim(); var to = $(d.id + '-to'); var v2 = to ? String(to.value || '').trim() : '';
+      if (!v && !v2) return;
+      if (d.type === 'date') { out.push({ d: d, lo: 日を数に(v || v2), hi: 日を数に(v2 || v) }); return; }
+      if (d.type === 'num') { var r = 数の条件(v); if (r) out.push({ d: d, lo: r.lo, hi: r.hi }); return; }
+      if (d.type === 'custname') { var set = 得意先コードを名前で(v); out.push({ d: d, set: set, v: v }); return; }
+      out.push({ d: d, v: v }); });
+    return out;
+  }
+  function 検索モードに合う(r, P, 条件) {
+    for (var i = 0; i < 条件.length; i++) { var c = 条件[i], d = c.d; var col = d.col === '得意先名' ? '得意先コード' : d.col; var x = r[P[col]]; if (P[col] == null && d.type !== 'custname') return false;
+      if (d.type === 'date') { var n = 日を数に(x); if (!n || (c.lo && n < c.lo) || (c.hi && n > c.hi)) return false; }
+      else if (d.type === 'num') { var num = Number(String(x == null ? '' : x).replace(/[,\s]/g, '')); if (isNaN(num) || num < c.lo || num > c.hi) return false; }
+      else if (d.type === 'custname') { if (c.set) { if (!c.set[String(x)]) return false; } else if (!文字が合う(String(x), c.v)) return false; }
+      else if (d.type === 'prefix') { var pv = c.v.normalize('NFKC').toLowerCase(); if (String(x == null ? '' : x).toLowerCase().indexOf(pv) !== 0) return false; }
+      else if (d.type === 'exact') { if (String(x == null ? '' : x).normalize('NFKC').toLowerCase() !== c.v.normalize('NFKC').toLowerCase()) return false; }
+      else if (!文字が合う(x, c.v)) return false; }
+    return true;
+  }
+  function 検索モードで探す() {
+    if (!検索モード) return; var 条件 = 検索モードの条件();
+    if (!条件.length) { $('fm-find-msg').textContent = '条件が入っていません（青い欄に入れてください）'; return; }
+    if (!索引) { $('fm-find-msg').textContent = '索引をまだ取っていません。少し待ってからもう一度'; return; }
+    探し.style.display = 'block'; $('ff-days').value = '0'; 全件モード = false;
+    var ok = 手元で探す(false, 条件);
+    $('fm-find-msg').textContent = ok ? ('条件 ' + 条件.length + ' 件で探しました → 下の一覧') : '探せませんでした';
+  }
+  検索欄を用意();
+  if ($('ff-findmode')) $('ff-findmode').onclick = function () { 探し.style.display = 'none'; 検索モードに入る(); };
+  // 探す窓の 品名で探す／得意先／ユーザー名／担当者コード／品種 は隠す（検索モードで代わりになる。値が入っていれば今まで通り効く）
+  ['ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu'].forEach(function (id) { var el = $(id); if (el && el.parentElement) el.parentElement.style.display = 'none'; });
+  // 結果を選んで読み込んだら検索モードは終わる（FileMaker と同じ）
+  var 読み込む元 = 読み込む;
+  読み込む = function (番号) { if (検索モード) 検索モードを終わる(false); return 読み込む元(番号); };
 
   // ================================================================ NAV-1: ◀ 前／次 ▶ は索引（起票日→伝票番号の順）を送る
   var 送り = null, 送り元 = null;
