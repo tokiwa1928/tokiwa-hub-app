@@ -2616,7 +2616,7 @@ setTimeout(_removeBootLoader_, 5000);
       </div>
       <!-- フィルタ (1行配置 — 各 select 幅 90px 固定でコンパクトに) -->
       <div style="display:flex;gap:4px;margin-bottom:.65rem;align-items:center;flex-wrap:wrap">
-        <input id="inq-search" placeholder="🔍検索…" style="flex:1;min-width:120px;max-width:180px;font-size:12px;padding:4px 8px" oninput="if(window._inqViewMode_==='kanban'){renderInquiryKanban()}else{renderInquiryList()}">
+        <input id="inq-search" placeholder="🔍検索（空白=AND・OR）" title="空白で区切ると全部含む（AND）。「OR」か「|」で どちらか（OR）。先頭に - で含まない。案件番号 P0001／a108393、連絡ID、タグ、担当でも当たります" style="flex:1;min-width:120px;max-width:180px;font-size:12px;padding:4px 8px" oninput="if(window._inqViewMode_==='kanban'){renderInquiryKanban()}else{renderInquiryList()}">
         <select id="inq-status-f" style="font-size:11px;padding:4px 4px;width:90px" onchange="renderInquiryList()" title="ステータス">
           <option value="">📊 状態</option>
           <option value="new">新規</option>
@@ -5853,6 +5853,10 @@ function _setPeriodFilter_(listId, period, renderFn){
   if(typeof window[renderFn] === 'function') window[renderFn]();
 }
 
+// SEARCH-1: 検索語の解釈。空白＝AND、「OR」「または」「|」＝OR（AND のかたまり同士）、先頭「-」＝含まない
+function _qTerms_(q){ q=String(q||'').toLowerCase().trim(); if(!q) return null; return q.split(/\s+(?:or|または)\s+|\s*[|｜]\s*/).map(function(g){ return g.split(/[\s　]+/).filter(Boolean); }).filter(function(g){ return g.length; }); }
+function _qMatch_(hay, q){ var groups=_qTerms_(q); if(!groups||!groups.length) return true; hay=String(hay==null?'':hay).toLowerCase();
+  return groups.some(function(g){ return g.every(function(t){ if(t.length>1&&t.charAt(0)==='-') return hay.indexOf(t.slice(1))<0; return hay.indexOf(t)>=0; }); }); }
 function _filterByPeriod_(records, listId, dateFields){
   var period = _getPeriodFilter_(listId);
   if(period === 'all' || !records || !records.length) return records;
@@ -5960,7 +5964,7 @@ function _fastSearchFilter_(rows, query){
   if(!query) return rows;
   var q = query.toLowerCase().trim();
   if(!q) return rows;
-  return rows.filter(function(r){ return _getSearchKey_(r).indexOf(q) >= 0; });
+  return rows.filter(function(r){ return _qMatch_(_getSearchKey_(r), q); });
 }
 
 // 各ページの大きなヘッダー定義
@@ -6043,32 +6047,32 @@ function onGlobalSearchInput(){
   // 案件
   (DB.projects || []).forEach(function(p){
     var hay = ((p.id||'')+' '+(p.cust||'')+' '+(p.item||'')+' '+(p.spec||'')+' '+(p.end_user||'')+' '+(p.master_no?'P'+p.master_no:'')).toLowerCase();
-    if(hay.indexOf(q) >= 0) hits.push({ type:'案件', icon:'📁', color:'#16a34a', id:p.id, label:(p.cust||'')+' / '+(p.item||''), sub:(p.master_no?'P'+p.master_no+' · ':'')+p.id+' · '+(p.status||''), action:'jumpToProject', actionArg:p.id });
+    if(_qMatch_(hay, q)) hits.push({ type:'案件', icon:'📁', color:'#16a34a', id:p.id, label:(p.cust||'')+' / '+(p.item||''), sub:(p.master_no?'P'+p.master_no+' · ':'')+p.id+' · '+(p.status||''), action:'jumpToProject', actionArg:p.id });
   });
   // 見積依頼
   (DB.estimates || []).forEach(function(e){
     var hay = ((e.id||'')+' '+(e.cust||'')+' '+(e.item||'')+' '+(e.spec||'')).toLowerCase();
-    if(hay.indexOf(q) >= 0) hits.push({ type:'見積依頼', icon:'📋', color:'#1e40af', id:e.id, label:(e.cust||'')+' / '+(e.item||''), sub:e.id, action:'jumpToEstimate', actionArg:e.id });
+    if(_qMatch_(hay, q)) hits.push({ type:'見積依頼', icon:'📋', color:'#1e40af', id:e.id, label:(e.cust||'')+' / '+(e.item||''), sub:e.id, action:'jumpToEstimate', actionArg:e.id });
   });
   // 連絡
   (DB.inquiries || []).forEach(function(i){
     var hay = ((i.id||'')+' '+(i.subject||'')+' '+(i.body||'').substring(0,200)+' '+(i.from_name||'')+' '+(i.from_company||'')).toLowerCase();
-    if(hay.indexOf(q) >= 0) hits.push({ type:'連絡', icon:'📨', color:'#7c3aed', id:i.id, label:i.subject||'(件名なし)', sub:(i.from_name||'')+' · '+(i.source_type||''), action:'openInquiryDetail', actionArg:i.id });
+    if(_qMatch_(hay, q)) hits.push({ type:'連絡', icon:'📨', color:'#7c3aed', id:i.id, label:i.subject||'(件名なし)', sub:(i.from_name||'')+' · '+(i.source_type||''), action:'openInquiryDetail', actionArg:i.id });
   });
   // 請求書
   (DB.invoices || []).forEach(function(v){
     var hay = ((v.id||'')+' '+(v.cust||'')+' '+JSON.stringify(v.items||[])).toLowerCase();
-    if(hay.indexOf(q) >= 0) hits.push({ type:'請求書', icon:'📄', color:'#dc2626', id:v.id, label:v.cust||'', sub:'¥'+(v.total||0).toLocaleString()+' · '+(v.status||''), action:'_navAdmin_', actionArg:'invoices' });
+    if(_qMatch_(hay, q)) hits.push({ type:'請求書', icon:'📄', color:'#dc2626', id:v.id, label:v.cust||'', sub:'¥'+(v.total||0).toLocaleString()+' · '+(v.status||''), action:'_navAdmin_', actionArg:'invoices' });
   });
   // 過去の見積書
   (DB.history || []).forEach(function(h, i){
     var hay = ((h.cust||'')+' '+(h.item||'')+' '+(h.spec||'')).toLowerCase();
-    if(hay.indexOf(q) >= 0 && hits.length < 30) hits.push({ type:'過去見積', icon:'📜', color:'#5b21b6', id:i, label:(h.cust||'')+' / '+(h.item||''), sub:(h.date||'')+' · ¥'+(h.exTax||0).toLocaleString(), action:'_navAdmin_', actionArg:'history' });
+    if(_qMatch_(hay, q) && hits.length < 30) hits.push({ type:'過去見積', icon:'📜', color:'#5b21b6', id:i, label:(h.cust||'')+' / '+(h.item||''), sub:(h.date||'')+' · ¥'+(h.exTax||0).toLocaleString(), action:'_navAdmin_', actionArg:'history' });
   });
   // 入金
   (DB.payments || []).forEach(function(p){
     var hay = ((p.id||'')+' '+(p.cust||'')+' '+(p.memo||'')+' '+(p.projectId||'')).toLowerCase();
-    if(hay.indexOf(q) >= 0) hits.push({ type:'入金', icon:'💰', color:'#16a34a', id:p.id, label:p.cust||'', sub:'¥'+(p.amount||0).toLocaleString()+' · '+(p.method||''), action:'_navAdmin_', actionArg:'payments' });
+    if(_qMatch_(hay, q)) hits.push({ type:'入金', icon:'💰', color:'#16a34a', id:p.id, label:p.cust||'', sub:'¥'+(p.amount||0).toLocaleString()+' · '+(p.method||''), action:'_navAdmin_', actionArg:'payments' });
   });
 
   hits = hits.slice(0, 30);
@@ -6168,7 +6172,7 @@ function _renderProjPickerList_(){
   if(q){
     rows = rows.filter(function(r){
       var hay = ((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase();
-      return hay.indexOf(q) >= 0;
+      return _qMatch_(hay, q);
     });
   }
   rows = rows.slice(0, 50);
@@ -6789,7 +6793,7 @@ function renderBookmarksPage(){
   // 検索＋カテゴリでフィルタ
   var rows = all.filter(function(b){
     if(curFilter!=='__all__' && (b.category||'未分類')!==curFilter) return false;
-    if(q){ var hay=((b.title||'')+' '+(b.url||'')+' '+(b.memo||'')+' '+(b.category||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    if(q){ var hay=((b.title||'')+' '+(b.url||'')+' '+(b.memo||'')+' '+(b.category||'')).toLowerCase(); if(!_qMatch_(hay,q)) return false; }
     return true;
   });
   if(!rows.length){
@@ -8931,7 +8935,7 @@ function renderPast(id){
       if(cust && !(r.cust||'').toLowerCase().includes(cust)) return false;
       if(prod && !(r.item||'').toLowerCase().includes(prod)) return false;
     }
-    if(q&&!(r.item||'').toLowerCase().includes(q)&&!(r.cust||'').toLowerCase().includes(q)&&!(r.spec||'').toLowerCase().includes(q)) return false;
+    if(q&&!_qMatch_(((r.item||'')+' '+(r.cust||'')+' '+(r.spec||'')).toLowerCase(),q)) return false;
     return true;
   });
   document.getElementById(`past-sec-${id}`).style.display='block';
@@ -12309,7 +12313,7 @@ function renderStockCandidates(mp){
   var live=_liveRepeats_('');
   var combined=fm.concat(live);
   var all=combined.filter(function(r){ return scope==='all' || r.companyId===scope; });
-  var data=all.filter(function(r){ return !q || ((r.cust||'')+(r.item||'')+(r.paper||'')+(r.src||'')).toLowerCase().indexOf(q)>=0; });
+  var data=all.filter(function(r){ return !q || _qMatch_(((r.cust||'')+' '+(r.item||'')+' '+(r.paper||'')+' '+(r.src||'')).toLowerCase(),q); });
   data.sort(function(a,b){
     if(sort==='orders') return (b.orders||0)-(a.orders||0);
     if(sort==='amt') return (b.sumAmt||0)-(a.sumAmt||0);
@@ -12458,7 +12462,7 @@ function renderCostRefMaster(mp){
   var all=DB.costRefMaster;
   var data=all.filter(function(r){
     if(fcat && r.cat!==fcat) return false;
-    if(q && JSON.stringify(r).toLowerCase().indexOf(q)<0) return false;
+    if(q && !_qMatch_(JSON.stringify(r).toLowerCase(),q)) return false;
     return true;
   });
   var catBtns=[''].concat(COSTREF_CATS).map(function(c){
@@ -13158,7 +13162,7 @@ function renderTankaMaster(mp){
   var rows=list.filter(function(m){
     if(coF && (m.company||'')!==coF) return false;
     if(!q) return true;
-    return ((m.cust||'')+' '+(m.rawItem||m.item||'')+' '+(m.spec||'')+' '+(m.company||'')).toLowerCase().indexOf(q)>=0;
+    return _qMatch_(((m.cust||'')+' '+(m.rawItem||m.item||'')+' '+(m.spec||'')+' '+(m.company||'')).toLowerCase(),q);
   });
   // ── 会社別の「基準比」サマリー（村山は基準の何%、アート・エスは何% を出す）──
   var byCo={};
@@ -13482,7 +13486,7 @@ function renderMaster(id){
   const data=(DB.master[id]||[]).filter(r=>{
     if(!_mstPassState_(id, r)) return false;   // 状態（有効／無効）の絞り込み
     if(!q)return true;
-    const str=JSON.stringify(r).toLowerCase();return str.includes(q);
+    const str=JSON.stringify(r).toLowerCase();return _qMatch_(str,q);
   });
   if(id==='paper'){
     // 有効なデータのみ表示（デフォルト）または全て表示
@@ -15846,7 +15850,7 @@ function renderStdRates(mp){
   var view=rows.filter(function(r){
     if(wf && r.work!==wf) return false;
     if(!q) return true;
-    return ((r.work||'')+' '+(r.item||'')+' '+(r.spec||'')+' '+(r.note||'')).toLowerCase().indexOf(q)>=0;
+    return _qMatch_(((r.work||'')+' '+(r.item||'')+' '+(r.spec||'')+' '+(r.note||'')).toLowerCase(),q);
   });
   var nConf=rows.filter(function(r){return r.confirmed;}).length;
   var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">💴 基準単価表（工程 × 仕様 × 数量帯）'
@@ -16252,7 +16256,7 @@ function renderMakerTerms(mp){
     if(catF && r.cat!==catF) return false;
     if(!q) return true;
     var hay=(r.std||'')+' '+(r.spec||'')+' '+(r.note||'')+' '+Object.keys(r.m||{}).map(function(k){return k+' '+r.m[k];}).join(' ');
-    return hay.toLowerCase().indexOf(q)>=0;
+    return _qMatch_(hay.toLowerCase(),q);
   });
   var warns=_mtConflicts_();
   var html='<div class="sec"><div class="st" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">🏭 メーカー別呼称の対訳（封筒・用紙）'
@@ -16578,7 +16582,7 @@ function renderOutsourceVendors(mp){
     if(capF && _vCaps_(v).indexOf(capF)<0) return false;
     if(q){
       var hay=((v.name||'')+' '+(v.tel||'')+' '+(v.fax||'')+' '+(v.email||'')+' '+(v.address||'')+' '+_vCaps_(v).join(' ')).toLowerCase();
-      if(hay.indexOf(q)<0) return false;
+      if(!_qMatch_(hay,q)) return false;
     }
     return true;
   });
@@ -18280,7 +18284,7 @@ function _attachLabelToInquiry_(labelRecord){
 function _filterAttachInqList_(q){
   q = (q || '').toLowerCase();
   document.querySelectorAll('.bl-attach-item').forEach(function(el){
-    el.style.display = (!q || el.dataset.text.indexOf(q) >= 0) ? '' : 'none';
+    el.style.display = (!q || _qMatch_(el.dataset.text, q)) ? '' : 'none';
   });
 }
 
@@ -18662,7 +18666,7 @@ function renderProcessBoard(){
   var scoped=(DB.projects||[]).filter(function(r){
     if(typeof _itemVisibleByCompany_==='function' && !_itemVisibleByCompany_(r)) return false;
     if(typeof _projStageOf_==='function' && _projStageOf_(r.status)==='quote') return false;
-    if(q){ var hay=((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    if(q){ var hay=((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); if(!_qMatch_(hay,q)) return false; }
     return true;
   });
   // 期間フィルタ（直近◯ヶ月）
@@ -19007,7 +19011,7 @@ function _wbBase_(){
     if(typeof _itemVisibleByCompany_==='function' && !_itemVisibleByCompany_(r)) return false;
     if(typeof _projStageOf_==='function' && _projStageOf_(r.status)==='quote') return false;
     if(/失注|キャンセル/.test(String(r.status||''))) return false;
-    if(q){ var hay=((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    if(q){ var hay=((r.id||'')+' '+(r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); if(!_qMatch_(hay,q)) return false; }
     return true;
   });
 }
@@ -19536,7 +19540,7 @@ function renderInhouseJobs(){
     if(filter==='待ち'&&j.status!=='待ち') return false;
     if(filter==='作業中'&&j.status!=='作業中') return false;
     if(filter==='完了'&&j.status!=='完了') return false;
-    if(q){ var hay=((j.cust||'')+' '+(j.item||'')+' '+(j.process||'')+' '+(j.projectId||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    if(q){ var hay=((j.cust||'')+' '+(j.item||'')+' '+(j.process||'')+' '+(j.projectId||'')).toLowerCase(); if(!_qMatch_(hay,q)) return false; }
     return true;
   });
   if(!jobs.length){ container.innerHTML='<div style="text-align:center;color:#888;padding:1.2rem;font-size:12px">該当する社内ジョブはありません</div>'; return; }
@@ -20143,7 +20147,7 @@ function renderScheduleList(){
     // 検索フィルター
     if(q){
       const searchStr = `${project.custName||''} ${project.prodName||''} ${project.id||''}`.toLowerCase();
-      if(!searchStr.includes(q)) return false;
+      if(!_qMatch_(searchStr,q)) return false;
     }
     
     // 状態フィルター
@@ -20880,7 +20884,7 @@ function renderProofingList(){
     }
     if(q){
       const searchStr = `${p.custName||''} ${p.prodName||''} ${p.projectId||''}`.toLowerCase();
-      if(!searchStr.includes(q)) return false;
+      if(!_qMatch_(searchStr,q)) return false;
     }
     return true;
   }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -21282,7 +21286,7 @@ function _proofForwardPick_(proofId){
 }
 function _proofForwardFilter_(){
   var q=(document.getElementById('proof-fwd-q')?.value||'').toLowerCase();
-  document.querySelectorAll('#proof-fwd-rows > div').forEach(function(r){ r.style.display=(!q || r.textContent.toLowerCase().indexOf(q)>=0)?'':'none'; });
+  document.querySelectorAll('#proof-fwd-rows > div').forEach(function(r){ r.style.display=(!q || _qMatch_(r.textContent.toLowerCase(),q))?'':'none'; });
 }
 function _proofSetView_(k){ window._proofViewStatus_ = k; renderProofingList(); }
 // かんばん ドラッグ&ドロップ（PC）。スマホは各カードの選択メニューで変更
@@ -21890,7 +21894,7 @@ function createProofing(){
 function _filterProofCreateList_(q){
   q = (q || '').toLowerCase();
   document.querySelectorAll('.proof-create-item').forEach(function(el){
-    el.style.display = (!q || el.dataset.text.indexOf(q) >= 0) ? '' : 'none';
+    el.style.display = (!q || _qMatch_(el.dataset.text, q)) ? '' : 'none';
   });
 }
 
@@ -24075,7 +24079,7 @@ function renderFinanceDocs(){
     if(typeF && d.docType !== typeF) return false;
     if(q){
       var s = (d.title + ' ' + (d.notes||'') + ' ' + (d.companyName||'')).toLowerCase();
-      if(!s.includes(q)) return false;
+      if(!_qMatch_(s,q)) return false;
     }
     return true;
   }).sort(function(a, b){ return new Date(b.uploadedAt) - new Date(a.uploadedAt); });
@@ -24383,7 +24387,7 @@ function renderEstimates(){
     // フィルタ
     if(q){
       var hay = ((e.cust||'') + ' ' + (e.item||'') + ' ' + (e.spec||'') + ' ' + (e.id||'')).toLowerCase();
-      if(hay.indexOf(q) < 0) return false;
+      if(!_qMatch_(hay, q)) return false;
     }
     if(statusFilter && e.status !== statusFilter) return false;
     if(sourceFilter === 'ai' && !e.aiAutoCreated) return false;
@@ -27438,7 +27442,7 @@ function renderFormsPage(){
   fl.innerHTML = cardSec + savedArea;
 }
 // 保存フォーム検索（件名/得意先/宛先/作成者/品名/備考をまとめて部分一致）
-function _formMatch_(r,q){ if(!q) return true; var d=r.data||{}; var hay=[r.title,r.createdBy,d.subject,d.cust,d.to,d.dest,d.prod,d.user,d.note].filter(Boolean).join(' ').toLowerCase(); return hay.indexOf(q)>=0; }
+function _formMatch_(r,q){ if(!q) return true; var d=r.data||{}; var hay=[r.title,r.createdBy,d.subject,d.cust,d.to,d.dest,d.prod,d.user,d.note].filter(Boolean).join(' ').toLowerCase(); return _qMatch_(hay,q); }
 function _formsSearchInput_(){ var el=document.getElementById('forms-search'); window._formsSearch_=el?el.value:''; window._formsExpand_={}; renderFormsPage(); var n=document.getElementById('forms-search'); if(n){ n.focus(); try{ n.setSelectionRange(n.value.length,n.value.length); }catch(e){} } }
 function _formsClearSearch_(){ window._formsSearch_=''; window._formsExpand_={}; renderFormsPage(); }
 function _formsToggleExpand_(k){ window._formsExpand_=window._formsExpand_||{}; window._formsExpand_[k]=!window._formsExpand_[k]; renderFormsPage(); }
@@ -29045,7 +29049,7 @@ function _renderLedger_(cfg){
   var q=(st.q||'').toLowerCase();
   // 検索＋期間で絞った集合（タブ件数の母数）
   var base=(cfg.rows||[]).filter(function(r){
-    if(q && String(cfg.search?cfg.search(r):'').toLowerCase().indexOf(q)<0) return false;
+    if(q && !_qMatch_(String(cfg.search?cfg.search(r):'').toLowerCase(),q)) return false;
     if(cut){ var d=cfg.dateOf?cfg.dateOf(r):''; if(d){ var dd=new Date(d); if(dd<cut||(cutEnd&&dd>cutEnd)) return false; } }
     return true;
   });
@@ -30639,7 +30643,7 @@ function _dochistRender_(){
   var list=(DB.docSubmissions||[]).slice().sort(function(a,b){ return String((b&&b.issuedAt)||'').localeCompare(String((a&&a.issuedAt)||'')); }).filter(function(r){
     if(!r) return false;
     if(ty && r.docType!==ty) return false;
-    if(q){ var hay=((r.cust||'')+' '+((r.cases||[]).join(' '))+' '+((r.items||[]).join(' '))+' '+(r.id||'')).toLowerCase(); if(hay.indexOf(q)<0) return false; }
+    if(q){ var hay=((r.cust||'')+' '+((r.cases||[]).join(' '))+' '+((r.items||[]).join(' '))+' '+(r.id||'')).toLowerCase(); if(!_qMatch_(hay,q)) return false; }
     return true;
   });
   if(!list.length){ body.innerHTML='<div style="padding:44px;text-align:center;color:#94a3b8">提出履歴はまだありません（まとめ発行や配送で帳票を発行すると記録されます）</div>'; return; }
@@ -30717,7 +30721,7 @@ function _docLedgerRender_(){
     if(!r) return false;
     if(!isTk && myCo && r.issuerId && r.issuerId!==myCo) return false;
     if(unpaidOnly && r.paid) return false;
-    if(q && (String(r.cust||'')+String(r.itemsText||'')).indexOf(q)<0) return false;
+    if(q && !_qMatch_(String(r.cust||'')+' '+String(r.itemsText||''),q)) return false;
     return true;
   }).sort(function(a,b){ return String(b.date||'').localeCompare(String(a.date||'')); });
   if(!rows.length){ box.innerHTML='<div style="text-align:center;color:#94a3b8;padding:2rem;font-size:12px">記録がありません（まとめ発行で納品書・請求書を出すと自動で台帳に載ります）</div>'; document.getElementById('docl-sum').textContent=''; return; }
@@ -33017,7 +33021,7 @@ function _renderHistoryPanelList_(){
   var custF = document.getElementById('hist-panel-cust')?.value || '';
   var rows = (DB.history || []).slice().reverse();
   if(custF) rows = rows.filter(function(r){ return r.cust === custF; });
-  if(q) rows = rows.filter(function(r){ var hay = ((r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); return hay.indexOf(q) >= 0; });
+  if(q) rows = rows.filter(function(r){ var hay = ((r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')).toLowerCase(); return _qMatch_(hay, q); });
   rows = rows.slice(0, 60);
 
   if(!rows.length){
@@ -34428,7 +34432,7 @@ function renderOrgCodeMaster(){
     if(familyFilter && r.codeFamily !== familyFilter) return false;
     if(q){
       var hay = ((r.code||'') + ' ' + (r.org||'') + ' ' + (r.kana||'') + ' ' + ((r.aliases||[]).join(' '))).toLowerCase();
-      if(hay.indexOf(q) < 0) return false;
+      if(!_qMatch_(hay, q)) return false;
     }
     return true;
   });
@@ -44496,7 +44500,7 @@ function _ddlRender_(inp){
   var dl=document.getElementById(inp.dataset.ddl); if(!dl){ _ddlClose_(); return; }
   var q=String(inp.value||'').toLowerCase();
   var vals=[].map.call(dl.querySelectorAll('option'),function(o){ return o.value||o.textContent; })
-    .filter(function(v){ return v && (!q || String(v).toLowerCase().indexOf(q)>=0); });
+    .filter(function(v){ return v && (!q || _qMatch_(String(v).toLowerCase(),q)); });
   if(q && vals.length===1 && vals[0]===inp.value) vals=[];
   if(!vals.length){ if(_ddlBox_){ _ddlBox_.remove(); _ddlBox_=null; } return; }
   if(!_ddlBox_){ _ddlBox_=document.createElement('div'); _ddlBox_.id='ddl-box'; document.body.appendChild(_ddlBox_); }
@@ -46626,7 +46630,7 @@ function _renderProjFlatList_(){
   var rows = _filterByPeriod_(all, 'proj-body', ['orderDate','createdAt']).filter(function(r){
     if(sf && r.status !== sf) return false;
     if(stage !== 'all' && stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
-    if(q && !((r.cust||'')+(r.item||'')+(r.spec||'')+(r.id||'')+(r.assignee||'')).toLowerCase().includes(q)) return false;
+    if(q && !_qMatch_(((r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')+' '+(r.id||'')+' '+(r.assignee||'')).toLowerCase(),q)) return false;
     if(cf === 'own'){
       var isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId === 'COMP001');
       if(!isOwn) return false;
@@ -46734,7 +46738,7 @@ function _renderProjQuoteList_(stageArg){
   var _showAllQuotes = (stageArg === 'allquote'); // 見積書一覧=全件 / 見積中=受注済除外
   var estimates = (DB.estimates || []).filter(function(e){
     if(!_showAllQuotes && e.status === 'ordered') return false; // 見積中は受注済を除外
-    if(q && !((e.cust||'') + (e.item||'') + (e.spec||'')).toLowerCase().includes(q)) return false;
+    if(q && !_qMatch_(((e.cust||'') + ' ' + (e.item||'') + ' ' + (e.spec||'')).toLowerCase(),q)) return false;
     return true;
   }).sort(function(a,b){ return (b.createdAt||'').localeCompare(a.createdAt||''); });
 
@@ -47372,7 +47376,63 @@ function renderProjStageTabs(){
   container.innerHTML =
     tabBtn('all') +
     groupBox('受注・製造', '#15803d', '#f4fdf6', ['orders','active','done']) +
-    groupBox('見積', '#7c3aed', '#faf7ff', ['allquote','quote','lost']);
+    groupBox('見積', '#7c3aed', '#faf7ff', ['allquote','quote']) +
+    // LOST-1: 失注はタブにしない。データは残して、検索・分析の窓から見る
+    '<button onclick="showLostReport()" title="失注した見積・案件を検索・分析（理由別・得意先別・月別）" style="padding:7px 12px;border-radius:13px;font-size:12px;cursor:pointer;border:1px dashed #b91c1c;background:#fff;color:#b91c1c;white-space:nowrap;margin:1px">❌ 失注（検索・分析）' + (counts.lost ? ' <span style="background:#f3f4f6;color:#b91c1c;padding:0 6px;border-radius:8px;font-size:10px;font-weight:700">' + counts.lost + '</span>' : '') + '</button>';
+  if(cur === 'lost') setTimeout(function(){ setProjStage('orders'); }, 0);
+}
+// LOST-1: 失注の検索・分析（案件の失注 ＋ 見積の失注）
+function _lostRows_(){
+  var out = [];
+  (DB.projects||[]).forEach(function(p){ if(p && p.status === '失注') out.push({ kind:'案件', id:p.id, pno:p.master_no ? 'P' + p.master_no : '', cust:p.cust||'', item:p.item||p.prod||'', spec:p.spec||'', amt:Number(p.grand||p.exTax||0), date:String(p.lostAt||p.updatedAt||p.orderDate||p.createdAt||'').slice(0,10), reason:p.lostReason||'', assignee:p.assignee||'', open:function(){ if(typeof jumpToProject==='function') jumpToProject(p.id); } }); });
+  (DB.estimates||[]).forEach(function(e){ if(e && e.status === '失注' && !e.linkedProjectId) out.push({ kind:'見積', id:e.id, pno:'', cust:e.cust||'', item:e.item||'', spec:e.spec||'', amt:Number(e.grand||e.total||e.exTax||0), date:String(e.lostAt||e.updatedAt||e.date||e.createdAt||'').slice(0,10), reason:e.lostReason||'', assignee:e.assignee||'', open:function(){ if(typeof jumpToEstimate==='function') jumpToEstimate(e.id); else if(typeof openEstimateDetail==='function') openEstimateDetail(e.id); } }); });
+  out.sort(function(a,b){ return String(b.date).localeCompare(String(a.date)); });
+  return out;
+}
+window._lostRowsCache_ = null;
+function showLostReport(){
+  var old = document.getElementById('lost-report-modal'); if(old) old.remove();
+  var m = document.createElement('div'); m.id = 'lost-report-modal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:30px 12px;overflow:auto';
+  m.innerHTML = '<div style="background:#fff;border-radius:10px;width:min(1100px,100%);max-height:calc(100vh - 60px);overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.3)">' +
+    '<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid #e5e7eb;position:sticky;top:0;background:#fff;z-index:1">' +
+      '<strong style="font-size:15px;color:#b91c1c">❌ 失注の検索・分析</strong>' +
+      '<input id="lost-q" placeholder="🔍 得意先・品名・理由・番号（空白=AND、OR も可）" style="flex:1;min-width:200px;font-size:12px;padding:5px 8px" oninput="_renderLostReport_()">' +
+      '<select id="lost-y" style="font-size:12px;padding:4px" onchange="_renderLostReport_()"><option value="">全期間</option></select>' +
+      '<button class="btn" style="font-size:12px" onclick="_exportLostCsv_()">CSV</button>' +
+      '<button class="btn" style="font-size:12px" onclick="document.getElementById(\'lost-report-modal\').remove()">閉じる</button>' +
+    '</div><div id="lost-body" style="padding:12px 16px;font-size:12px"></div></div>';
+  m.addEventListener('click', function(e){ if(e.target === m) m.remove(); });
+  document.body.appendChild(m);
+  window._lostRowsCache_ = _lostRows_();
+  var years = {}; window._lostRowsCache_.forEach(function(r){ var y = String(r.date).slice(0,4); if(/^\d{4}$/.test(y)) years[y] = 1; });
+  var ysel = document.getElementById('lost-y'); Object.keys(years).sort().reverse().forEach(function(y){ ysel.add(new Option(y + '年', y)); });
+  _renderLostReport_();
+}
+function _lostFiltered_(){
+  var q = (document.getElementById('lost-q')||{}).value || '', y = (document.getElementById('lost-y')||{}).value || '';
+  return (window._lostRowsCache_||[]).filter(function(r){ if(y && String(r.date).slice(0,4) !== y) return false; return _qMatch_([r.kind, r.id, r.pno, r.cust, r.item, r.spec, r.reason, r.assignee, r.date].join(' ').toLowerCase(), q); });
+}
+function _renderLostReport_(){
+  var body = document.getElementById('lost-body'); if(!body) return;
+  var rows = _lostFiltered_(); var esc = function(v){ return (typeof _escDiff==='function') ? _escDiff(String(v==null?'':v)) : String(v==null?'':v); };
+  var yen = function(n){ return n ? '¥' + Math.round(n).toLocaleString() : ''; };
+  function tally(key, top){ var m = {}; rows.forEach(function(r){ var kk = (typeof key === 'function' ? key(r) : r[key]) || '（未入力）'; m[kk] = m[kk] || { n:0, amt:0 }; m[kk].n++; m[kk].amt += r.amt||0; }); return Object.keys(m).map(function(kk){ return { k:kk, n:m[kk].n, amt:m[kk].amt }; }).sort(function(a,b){ return b.n - a.n || b.amt - a.amt; }).slice(0, top||12); }
+  function box(title, list){ return '<div style="flex:1;min-width:220px;border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px"><div style="font-weight:700;margin-bottom:4px">' + title + '</div>' + (list.length ? list.map(function(x){ return '<div style="display:flex;justify-content:space-between;gap:8px;padding:1px 0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer" onclick="document.getElementById(\'lost-q\').value=' + JSON.stringify(x.k).replace(/"/g, '&quot;') + ';_renderLostReport_()">' + esc(x.k) + '</span><span style="white-space:nowrap">' + x.n + ' 件 <span style="color:#888">' + yen(x.amt) + '</span></span></div>'; }).join('') : '<div style="color:#999">なし</div>') + '</div>'; }
+  var total = rows.reduce(function(a,r){ return a + (r.amt||0); }, 0);
+  var h = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">' +
+    '<div style="flex:1;min-width:160px;border:1px solid #fecaca;background:#fef2f2;border-radius:8px;padding:8px 10px"><div style="font-weight:700">合計</div><div style="font-size:18px;font-weight:800;color:#b91c1c">' + rows.length + ' 件</div><div style="color:#666">' + yen(total) + '</div><div style="color:#888;font-size:11px;margin-top:4px">案件 ' + rows.filter(function(r){ return r.kind==='案件'; }).length + '／見積 ' + rows.filter(function(r){ return r.kind==='見積'; }).length + '</div></div>' +
+    box('理由別', tally('reason')) + box('得意先別', tally('cust', 10)) + box('月別', tally(function(r){ return String(r.date).slice(0,7); }, 12).sort(function(a,b){ return b.k.localeCompare(a.k); })) +
+  '</div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f3f4f6;text-align:left"><th style="padding:6px 8px">日付</th><th style="padding:6px 8px">種類</th><th style="padding:6px 8px">番号</th><th style="padding:6px 8px">得意先</th><th style="padding:6px 8px">品名</th><th style="padding:6px 8px;text-align:right">金額</th><th style="padding:6px 8px">理由</th><th style="padding:6px 8px">担当</th></tr></thead><tbody>' +
+    rows.slice(0, 300).map(function(r, i){ return '<tr style="border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="(window._lostRowsCache_.filter(function(x){return x.id===' + JSON.stringify(r.id).replace(/"/g, '&quot;') + '})[0]||{open:function(){}}).open()"><td style="padding:5px 8px;white-space:nowrap">' + esc(r.date) + '</td><td style="padding:5px 8px">' + esc(r.kind) + '</td><td style="padding:5px 8px;white-space:nowrap">' + esc(r.id) + (r.pno ? ' <span style="background:#1e40af;color:#fff;font-size:10px;padding:0 5px;border-radius:4px">' + esc(r.pno) + '</span>' : '') + '</td><td style="padding:5px 8px">' + esc(r.cust) + '</td><td style="padding:5px 8px">' + esc(r.item) + '</td><td style="padding:5px 8px;text-align:right;white-space:nowrap">' + yen(r.amt) + '</td><td style="padding:5px 8px">' + esc(r.reason) + '</td><td style="padding:5px 8px">' + esc(r.assignee) + '</td></tr>'; }).join('') +
+    '</tbody></table>' + (rows.length > 300 ? '<div style="color:#888;padding:6px">先頭 300 件だけ出しています。検索で絞ってください</div>' : '');
+  body.innerHTML = h;
+}
+function _exportLostCsv_(){
+  var rows = _lostFiltered_(); var cols = ['date','kind','id','pno','cust','item','spec','amt','reason','assignee'];
+  var csv = '\uFEFF' + ['日付','種類','番号','P番号','得意先','品名','仕様','金額','理由','担当'].join(',') + '\n' + rows.map(function(r){ return cols.map(function(c){ return '"' + String(r[c]==null?'':r[c]).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+  var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type:'text/csv' })); a.download = '失注一覧_' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
 }
 
 function setProjStage(stage){
@@ -47484,7 +47544,7 @@ function renderProjectLedger(){
   // 検索フィルタ (得意先・品名)
   if(q){
     groupList = groupList.filter(function(g){
-      return (g.cust + g.item + (g.spec||'')).toLowerCase().includes(q);
+      return _qMatch_((g.cust + ' ' + g.item + ' ' + (g.spec||'')).toLowerCase(),q);
     });
   }
 
@@ -50174,8 +50234,10 @@ async function sendInternalMessage() {
       timeline: [{ type:'note', date:new Date().toISOString(), text:'社内連絡として投稿', by: currentAuth.userName||'' }],
       tags: ['社内連絡', typeLabel],
       linked_project_id: projectId || '',
+      from_inquiry_id: window._internalMsgFromInquiry_ || '',   // ACTION-1: どの連絡の「社内連絡」か
       _internal_meta: { toCompanyIds: toCompanyIds, fromUserId: currentAuth.userId }
     };
+    window._internalMsgFromInquiry_ = '';
     if(!DB.inquiries) DB.inquiries = [];
     DB.inquiries.unshift(newInq);
     if(typeof saveDB === 'function') saveDB();
@@ -52480,6 +52542,8 @@ function _inqAutoFolder_(inq){
 
 const INQ_FOLDERS = [
   { key:'inbox',             label:'受信トレイ',      icon:'📥', color:'#dc2626', help:'対応済にするまで残ります' },
+  { key:'todo_all',          label:'未対応すべて',    icon:'🗂', color:'#b91c1c', help:'期間・会社に関係なく、対応済でないものを全部' },
+  { key:'action_open',       label:'次のアクション未完了', icon:'⚠', color:'#dc2626', help:'校了・発注などの連絡で、社内連絡・工程・指示書がまだのもの（返信だけで止まっているもの）' },
   { key:'progress',          label:'対応中',          icon:'🟡', color:'#f59e0b' },
   { key:'acknowledged',      label:'受領通知済',      icon:'💬', color:'#0891b2', help:'「依頼ありがとう」だけ返した — まだ対応継続' },
   { key:'quote_in_progress', label:'見積作成中',      icon:'📝', color:'#fbbf24' },
@@ -52513,6 +52577,8 @@ function renderInquiryFolderList(){
     var f = _inqAutoFolder_(inq);
     if(counts[f] !== undefined) counts[f]++;
     if(f !== 'inbox' && f !== 'done' && counts.inbox !== undefined) counts.inbox++;   // INQ-KEEP: 受信トレイは対応済以外ぜんぶ
+    if(inq.status !== 'done' && counts.todo_all !== undefined) counts.todo_all++;   // INQ-3
+    if(inq.status !== 'done' && counts.action_open !== undefined){ try { var _as2 = _inqActionState_(inq); if(_as2 && _as2.open.length) counts.action_open++; } catch(e){} }   // ACTION-1
     var s = inq.source_type || 'manual';
     if(channelCounts[s] !== undefined) channelCounts[s]++;
     if(myUser && inq.assignee === myUser) myAssignedCount++;
@@ -52985,7 +53051,7 @@ function renderInquiryList() {
 
   // ⚡ 期間フィルタ (デフォルト直近6ヶ月)
   var allInquiries = DB.inquiries || [];
-  var periodFiltered = _filterByPeriod_(allInquiries, 'inq-list', ['received_at','createdAt']);
+  var periodFiltered = (window._inqFolder_ === 'todo_all') ? allInquiries : _filterByPeriod_(allInquiries, 'inq-list', ['received_at','createdAt']);   // INQ-3: 未対応すべて は全期間
 
   // 提出済 (linked_quote_id の見積が「提出済/受注案件として確定」または status === 'done') の連絡を非表示
   var showSubmitted = document.getElementById('inq-show-submitted')?.checked;
@@ -53003,7 +53069,7 @@ function renderInquiryList() {
     // COSCOPE-1: 会社別分離 — トキワ以外は自社宛のメール/LINE/連絡のみ
     if(typeof _inqVisibleByCompany_ === 'function' && !_inqVisibleByCompany_(inq)) return false;
     // 会社タブ判定
-    if(companyTab !== 'all' && !_matchesCompanyTab_(inq, companyTab)) return false;
+    if(companyTab !== 'all' && folder !== 'todo_all' && !_matchesCompanyTab_(inq, companyTab)) return false;
     // フォルダ判定 (左サイドバー)
     if(folder !== 'all'){
       if(folder === 'mine'){
@@ -53022,9 +53088,13 @@ function renderInquiryList() {
         if(typeof _destinationKeyFor_ === 'function'){
           if(_destinationKeyFor_(inq) !== destKey) return false;
         }
-      } else if(folder === 'inbox'){
+      } else if(folder === 'action_open'){
+        if(inq.status === 'done') return false; var _as = null; try { _as = _inqActionState_(inq); } catch(e){}
+        if(!_as || !_as.open.length) return false;
+      } else if(folder === 'inbox' || folder === 'todo_all'){
         // INQ-KEEP: 受信トレイは「対応済」にするまで残す（見積に紐づけた・受領通知した・案件になった、でも消さない）
-        if(inq.status === 'done') return false;
+        // INQ-3: 未対応すべて（全期間）も同じ。ステータスを選んでいるときはそちらを優先
+        if(inq.status === 'done' && !statusF) return false;
       } else {
         // ステータス系フォルダ
         if(_inqAutoFolder_(inq) !== folder) return false;
@@ -53037,7 +53107,7 @@ function renderInquiryList() {
     if(scope === 'interco' && intercoSources.indexOf(src) < 0) return false;
     if(scope === 'voice' && voiceSources.indexOf(src) < 0) return false;
     // 対応済を非表示（INQ-KEEP: 見積を提出済にしても、連絡そのものを「対応済」にするまでは残す）
-    if(!showSubmitted){
+    if(!showSubmitted && !statusF){   // INQ-2: ステータスを選んでいるときは、その絞りを優先
       if(inq.status === 'done') return false;
     }
 
@@ -53048,8 +53118,11 @@ function renderInquiryList() {
     if(sourceF && inq.source_type !== sourceF) return false;
     if(kindF && inq.kind !== kindF) return false;
     if(q) {
-      const searchStr = `${inq.custName||inq.from_name||''} ${inq.subject||''} ${inq.body||''} ${inq.email||inq.from_email||''} ${inq.tel||''} ${inq.summary||''}`.toLowerCase();
-      if(!searchStr.includes(q)) return false;
+      // INQ-2: 案件番号（P番号・案件ID・FileMaker 伝票番号）・連絡ID・タグ・担当・種別でも当たる
+      const _lp = inq.linked_project_id ? (DB.projects||[]).find(function(p){ return p.id === inq.linked_project_id; }) : null;
+      const _lpStr = _lp ? ('p' + (_lp.master_no||'') + ' ' + (_lp.id||'') + ' ' + ((typeof _projFmNo_==='function') ? _projFmNo_(_lp) : '') + ' ' + (_lp.cust||'') + ' ' + (_lp.item||'')) : '';
+      const searchStr = `${inq.custName||inq.from_name||''} ${inq.subject||''} ${inq.body||''} ${inq.email||inq.from_email||''} ${inq.tel||''} ${inq.summary||''} ${inq.id||''} ${inq.from_company||''} ${inq.from_name||''} ${(inq.tags||[]).join(' ')} ${inq.assignee||''} ${inq.kind||''} ${inq.linked_project_id||''} ${inq.linked_quote_id||''} ${inq.linked_invoice_id||''} ${_lpStr}`.toLowerCase();
+      if(!_qMatch_(searchStr,q)) return false;
     }
     return true;
   });
@@ -53163,6 +53236,10 @@ function renderInquiryList() {
     // 添付
     var attCount = (inq.attachments || []).length;
     if(attCount > 0) chips.push('<span class="inq-chip attach">📎' + attCount + '</span>');
+    // ACTION-1: 次のアクション
+    try { var _ac = _inqActionChip_(inq); if(_ac) chips.push(_ac); } catch(e){}
+    // REL-1: 関連メール（自動）
+    try { var _relN = _inqRelatedAuto_(inq).length; if(_relN) chips.push('<span class="inq-chip" style="background:#e0e7ff;color:#3730a3" title="関連メール ' + _relN + ' 件（開くと連結して出ます）">🧵' + _relN + '</span>'); } catch(e){}
     // チャネル icon (小さく)
     var sourceMeta = SOURCE_TYPE_META[inq.source_type] || SOURCE_TYPE_META.manual;
     // チャネル(受信元)を色付きラベルバッジで明示（📧 Gmail / 💬 LINE WORKS 等）
@@ -53679,6 +53756,9 @@ function openInquiryDetail(id) {
     <!-- 🔗 リンク管理: 案件リンク + 関連メール (親子) -->
     ${_renderInquiryLinksSection_(inq)}
 
+    <!-- ACTION-1: 次のアクション（見逃し防止） -->
+    ${(typeof _renderInquiryActionCheck_ === 'function') ? _renderInquiryActionCheck_(inq) : ''}
+
     <!-- ⚡ アクションボタン (管理者は並び替え可) -->
     ${_renderInquiryActionsSection_(inq)}
 
@@ -54168,6 +54248,7 @@ async function _sendInquiryReplyByChannel_(inqId){
             meta: { channel: 'email', to: to, from: fromEmail, subject: subject }
           });
           if(typeof saveDB === 'function') saveDB();
+          try { _inqAfterReplyCheck_(inq); } catch(e){}   // ACTION-1
         } catch(saveErr){ console.warn('timeline 追加失敗:', saveErr); }
         alert('✅ メール送信完了' + (fromEmail ? '\nFrom: ' + fromEmail : ''));
         if(ta) ta.value = '';
@@ -54210,6 +54291,7 @@ async function _sendInquiryReplyByChannel_(inqId){
             meta: { channel: 'lineworks', target: 'user', targetId: lwTarget }
           });
           if(typeof saveDB === 'function') saveDB();
+          try { _inqAfterReplyCheck_(inq); } catch(e){}   // ACTION-1
         } catch(saveErr){ console.warn('timeline 追加失敗:', saveErr); }
         alert('✅ LINE WORKS 送信完了');
         if(ta) ta.value = '';
@@ -54242,6 +54324,199 @@ async function _sendInquiryReplyByChannel_(inqId){
   }
 }
 
+// ═══════════ ACTION-1: アクションを見逃さない ═══════════
+// 出来事ごとの「次に必ずやること」。証拠は Hub の記録から自動で拾う（evidence）。how は「やる」ボタンの動き
+var INQ_EVENTS = {
+  proof_ok:     { label:'校了',      steps:[ { k:'internal', label:'社内へ校了連絡（次の工程へ）', how:'internal', evidence:['internal','proofing_ok'] }, { k:'step', label:'案件の工程「校了」を進める', how:'step', evidence:['step'] }, { k:'seizo', label:'製造指示書を出す', how:'seizo', evidence:['seizo'] } ] },
+  order:        { label:'発注',      kind:'order',        steps:[ { k:'register', label:'受注（案件）にする', how:'project', evidence:['project'] }, { k:'internal', label:'社内へ受注連絡', how:'internal', evidence:['internal'] } ] },
+  proof_return: { label:'校正戻し',  kind:'proof_return', steps:[ { k:'internal', label:'修正を担当へ連絡', how:'internal', evidence:['internal','proofing_any'] }, { k:'proof', label:'校正BOXに戻りを登録', how:'proof', evidence:['proofing_any'] } ] },
+  quote_req:    { label:'見積依頼',  kind:'quote_req',    steps:[ { k:'quote', label:'見積を作って送る', how:'quote', evidence:['quote'] } ] },
+  spec_change:  { label:'仕様変更',  kind:'spec_change',  steps:[ { k:'internal', label:'社内へ変更連絡', how:'internal', evidence:['internal'] }, { k:'seizo', label:'指示書を出し直す', how:'seizo', evidence:['seizo'] } ] },
+  schedule:     { label:'納期・日程', kind:'schedule',    steps:[ { k:'internal', label:'社内へ納期連絡', how:'internal', evidence:['internal'] } ] }
+};
+var _PROOF_OK_RE = /校了|このまま(で)?(進|お願い|ＯＫ|OK|大丈夫|結構)|修正(は|点は)?(ありません|なし|無し|ございません)|問題(ありません|ないです|ございません)|(ＯＫ|OK)\s*(です|でお願い)/i;
+function _inqTimelineOf_(inq, type){ return (inq && Array.isArray(inq.timeline) ? inq.timeline : []).filter(function(t){ return t && t.type === type; }); }
+function _inqEvent_(inq){
+  if(!inq || inq.source_type === 'internal_msg' || inq.isSpam) return null;
+  var ov = _inqTimelineOf_(inq, 'action_event'); if(ov.length){ var e = ov[ov.length-1].event; return (e && INQ_EVENTS[e]) ? e : null; }   // 手で決めたもの（「校了ではない」も含む）
+  var t = (inq.subject||'') + '\n' + (inq.body||'').slice(0, 1500) + '\n' + (inq.summary||'');
+  if(_PROOF_OK_RE.test(t) && !/校了(では|じゃ)(ない|ありません)|未校了|校了前/.test(t)) return 'proof_ok';
+  var k = inq.kind; var key = k ? Object.keys(INQ_EVENTS).filter(function(e){ return INQ_EVENTS[e].kind && INQ_EVENTS[e].kind === k; })[0] : null;
+  return key || null;
+}
+function _inqReplied_(inq){
+  if(!inq) return null; if(inq.replied_at) return { at: inq.replied_at, by: inq.replied_by||'' };
+  var f = _inqTimelineOf_(inq, 'forward').filter(function(t){ var ch = t.meta && t.meta.channel; return ch === 'email' || ch === 'lineworks'; });
+  return f.length ? { at: f[f.length-1].at || f[f.length-1].date || '', by: f[f.length-1].by || '' } : null;
+}
+function _inqActionState_(inq){
+  var ev = _inqEvent_(inq); if(!ev) return null; var def = INQ_EVENTS[ev];
+  var t0 = new Date(inq.received_at||inq.createdAt||0).getTime();
+  var proj = inq.linked_project_id ? (DB.projects||[]).find(function(p){ return p.id === inq.linked_project_id; }) : null;
+  var fmNo = proj && typeof _projFmNo_ === 'function' ? _projFmNo_(proj) : '';
+  var after = function(at){ var x = new Date(at||0).getTime(); return x >= t0 - 60000; };
+  var manual = {}; _inqTimelineOf_(inq, 'action_done').forEach(function(t){ manual[t.k] = t; });
+  function evidence(kind){
+    if(kind === 'internal'){
+      var hit = (DB.inquiries||[]).find(function(x){ return x && x.source_type === 'internal_msg' && ((x.from_inquiry_id === inq.id) || (proj && x.linked_project_id === proj.id && after(x.received_at||x.createdAt))); });
+      if(hit) return { at: hit.received_at||hit.createdAt, by: hit.from_name||'', how: '社内連絡「' + String(hit.subject||'').slice(0, 24) + '」' };
+      var fw = _inqTimelineOf_(inq, 'forward').find(function(t){ var ch = t.meta && t.meta.channel; return ch === 'internal' || ch === 'lineworks_group' || /社内|工場|製造/.test(String(t.text||'').slice(0, 40)); });
+      if(fw) return { at: fw.at||fw.date, by: fw.by||'', how: '転送の記録' };
+      return null;
+    }
+    if(kind === 'proofing_ok' || kind === 'proofing_any'){
+      var prfs = (DB.proofings||[]).filter(function(p){ return p && ((proj && p.projectId === proj.id) || p.fromInquiryId === inq.id); });
+      var hit2 = prfs.find(function(p){ var st = String(p.status||''); var ok = /校了|完了|approved|final/.test(st); return (kind === 'proofing_ok' ? ok : true) && after(p.updatedAt||p.createdAt); });
+      return hit2 ? { at: hit2.updatedAt||hit2.createdAt, by: '', how: '校正BOX ' + (hit2.status||'') } : null;
+    }
+    if(kind === 'step'){ if(!proj) return null; var sv = String((proj.steps||{})['校了']||''); return /校了|OK|完了/.test(sv) ? { at: (proj.stepDates||{})['校了']||'', by: '', how: '案件の工程 校了＝' + sv } : null; }
+    if(kind === 'seizo'){ if(!fmNo || typeof _sagyoPrintsOf_ !== 'function') return null; var pr = _sagyoPrintsOf_(fmNo).filter(function(r){ return after(r.at); }); var last = pr[pr.length-1]; return last ? { at: last.at, by: last.by||'', how: '製造指示書 第' + (last.n||'?') + '回' } : null; }
+    if(kind === 'project'){ return proj ? { at: proj.createdAt||'', by: proj.assignee||'', how: '案件 ' + proj.id } : (inq.linked_project_id ? { at: '', by: '', how: '案件 ' + inq.linked_project_id } : null); }
+    if(kind === 'quote'){ if(inq.linked_quote_id) return { at: '', by: '', how: '見積 ' + inq.linked_quote_id }; var e = (DB.estimates||[]).find(function(x){ return x && x.fromInquiryId === inq.id; }); return e ? { at: e.createdAt||'', by: '', how: '見積 ' + e.id + (e.status ? '（' + e.status + '）' : '') } : null; }
+    return null;
+  }
+  var steps = def.steps.map(function(st){
+    var done = null;
+    if(manual[st.k]) done = { at: manual[st.k].at, by: manual[st.k].by||'', how: '手で✔' + (manual[st.k].note ? '（' + manual[st.k].note + '）' : '') };
+    else for(var i = 0; i < st.evidence.length && !done; i++) done = evidence(st.evidence[i]);
+    return { k: st.k, label: st.label, how: st.how, done: done };
+  });
+  var replied = _inqReplied_(inq); var open = steps.filter(function(x){ return !x.done; });
+  var ageH = (Date.now() - t0) / 3600000;
+  return { event: ev, label: def.label, steps: steps, open: open, replied: replied, alert: open.length > 0 && inq.status !== 'done' && (!!replied || ageH > 4), proj: proj, fmNo: fmNo };
+}
+function _inqActionChip_(inq){
+  var st = null; try { st = _inqActionState_(inq); } catch(e){ return ''; } if(!st) return '';
+  if(!st.open.length) return '<span class="inq-chip" style="background:#dcfce7;color:#166534" title="' + st.label + ': 次のアクションは全部済み">✔' + st.label + '済</span>';
+  var first = st.open[0].label.replace(/（.*?）/g, '');
+  return '<span class="inq-chip" style="background:' + (st.alert ? '#fee2e2' : '#fff7ed') + ';color:' + (st.alert ? '#b91c1c' : '#9a3412') + ';font-weight:700" title="' + st.label + ' の連絡。' + (st.replied ? '返信は済み。' : '') + '残り: ' + st.open.map(function(x){ return x.label; }).join('／') + '">' + (st.alert ? '⚠ ' : '□ ') + st.label + '→' + first + '</span>';
+}
+function _renderInquiryActionCheck_(inq){
+  var st = null; try { st = _inqActionState_(inq); } catch(e){ return ''; }
+  var pick = '<select onchange="_inqSetEvent_(\'' + inq.id + '\', this.value)" style="font-size:11px;padding:2px 4px"><option value="">（出来事を選ぶ）</option>' + Object.keys(INQ_EVENTS).map(function(e){ return '<option value="' + e + '"' + (st && st.event === e ? ' selected' : '') + '>' + INQ_EVENTS[e].label + '</option>'; }).join('') + '<option value="none"' + (!st ? '' : '') + '>該当なし（次のアクション不要）</option></select>';
+  if(!st){
+    return '<div style="margin-top:6px;margin-bottom:.75rem;padding:8px 12px;border:1px dashed #cbd5e1;border-radius:8px;font-size:11px;color:#64748b;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span>✅ 次のアクション: この連絡は出来事（校了・発注など）と判定していません。</span>' + pick + '<button class="btn" style="font-size:10px;padding:2px 8px" onclick="_inqAiActionCheck_(\'' + inq.id + '\')">🤖 AI に確認</button><span id="inq-ai-check-' + inq.id + '" style="flex-basis:100%"></span></div>';
+  }
+  var rows = st.steps.map(function(x){
+    var ev = x.done ? ('<span style="color:#166534">' + _escDiff(x.done.how||'') + (x.done.at ? ' ' + new Date(x.done.at).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '') + (x.done.by ? ' ' + _escDiff(x.done.by) : '') + '</span>') : '<span style="color:#b91c1c">まだ</span>';
+    var btn = x.done ? '' : ('<button class="btn" style="font-size:10px;padding:2px 8px;background:#1e40af;color:#fff;border-color:#1e40af" onclick="_inqDoAction_(\'' + inq.id + '\',\'' + x.k + '\')">やる</button> <button class="btn" style="font-size:10px;padding:2px 8px" onclick="_inqMarkAction_(\'' + inq.id + '\',\'' + x.k + '\')" title="Hub の外で済ませたときに、誰が・いつ を残す">手で✔</button>');
+    return '<div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px dotted #e5e7eb"><span style="font-size:14px">' + (x.done ? '☑' : '☐') + '</span><span style="flex:1;min-width:0">' + _escDiff(x.label) + '　' + ev + '</span>' + btn + '</div>';
+  }).join('');
+  var head = st.open.length
+    ? '<div style="font-size:12px;font-weight:700;color:#b91c1c">' + (st.alert ? '⚠ ' : '') + st.label + 'の連絡です。' + (st.replied ? 'お客様への返信は済んでいますが、' : '') + '次のアクションが ' + st.open.length + ' 件残っています</div>'
+    : '<div style="font-size:12px;font-weight:700;color:#166534">✔ ' + st.label + 'の連絡。次のアクションは全部できています</div>';
+  return '<div style="margin-top:6px;margin-bottom:.75rem;padding:10px 12px;border:1px solid ' + (st.open.length ? '#fca5a5' : '#86efac') + ';border-radius:8px;background:' + (st.open.length ? '#fef2f2' : '#f0fdf4') + '">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">' + head + '<span style="display:flex;gap:6px;align-items:center">' + pick + '<button class="btn" style="font-size:10px;padding:2px 8px" onclick="_inqAiActionCheck_(\'' + inq.id + '\')" title="件名・本文・記録・チェックを AI に見せて、抜けが無いか聞く">🤖 AI に確認</button></span></div>' +
+    rows + '<div id="inq-ai-check-' + inq.id + '" style="margin-top:6px">' + (inq.ai_action_check ? '<div style="font-size:11px;background:#fff;border:1px solid #e0e7ff;border-radius:6px;padding:6px 8px;white-space:pre-wrap"><b>🤖 AI の確認</b>（' + _escDiff(String(inq.ai_action_check.at||'').slice(0, 16).replace('T', ' ')) + '）\n' + _escDiff(inq.ai_action_check.text||'') + '</div>' : '') + '</div>' +
+  '</div>';
+}
+function _inqPushTimeline_(inq, entry){
+  inq.timeline = Array.isArray(inq.timeline) ? inq.timeline : []; inq.timeline.push(entry);
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof callCloudAPI === 'function') try { callCloudAPI('updateCommunication', {}, { id: inq.id, patch: { _timeline_entry: entry } }); } catch(e){}
+}
+function _inqSetEvent_(inqId, ev){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }); if(!inq) return;
+  _inqPushTimeline_(inq, { type:'action_event', event: ev === 'none' ? '' : ev, at: new Date().toISOString(), by: (currentAuth && currentAuth.userName) || 'user', text: '出来事を「' + (ev === 'none' ? '該当なし' : (INQ_EVENTS[ev] ? INQ_EVENTS[ev].label : ev)) + '」に' });
+  if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId); if(typeof renderInquiryList === 'function') renderInquiryList();
+}
+function _inqMarkAction_(inqId, k){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }); if(!inq) return;
+  var note = prompt('「' + k + '」を済ませた印を付けます。どうやって済ませたか（任意）', ''); if(note === null) return;
+  _inqPushTimeline_(inq, { type:'action_done', k: k, note: note, at: new Date().toISOString(), by: (currentAuth && currentAuth.userName) || 'user', text: '次のアクション ' + k + ' 済み' + (note ? '（' + note + '）' : '') });
+  if(typeof openInquiryDetail === 'function') openInquiryDetail(inqId); if(typeof renderInquiryList === 'function') renderInquiryList();
+}
+function _inqDoAction_(inqId, k){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }); if(!inq) return;
+  var st = _inqActionState_(inq); var step = st && st.steps.filter(function(x){ return x.k === k; })[0]; var how = step ? step.how : k;
+  if(how === 'internal'){
+    if(typeof openInternalMessageModal !== 'function') return alert('社内連絡の画面がありません');
+    window._internalMsgFromInquiry_ = inq.id; openInternalMessageModal();
+    var sub = document.getElementById('internal-msg-subject'), bd = document.getElementById('internal-msg-body'), ps = document.getElementById('internal-msg-project');
+    if(sub && !sub.value) sub.value = '【' + (st ? st.label : '連絡') + '】' + (inq.from_company||inq.custName||inq.from_name||'') + ' ' + String(inq.subject||'').replace(/^(\s*(re|fw|fwd)\s*[:：]\s*)+/i, '');
+    if(bd && !bd.value) bd.value = (st ? st.label : '') + 'の連絡がありました。次の工程へ進めてください。\n\n差出人: ' + (inq.from_name||'') + ' ' + (inq.from_company||'') + '\n受信: ' + String(inq.received_at||'').slice(0, 16).replace('T', ' ') + (st && st.proj ? '\n案件: ' + st.proj.id + (st.proj.master_no ? ' P' + st.proj.master_no : '') + ' ' + (st.proj.cust||'') + ' / ' + (st.proj.item||'') : '') + (st && st.fmNo ? '\n伝票: ' + st.fmNo : '') + '\n\n' + String(inq.summary || inq.body || '').slice(0, 400) + '\n\n（連絡ID ' + inq.id + '）';
+    if(ps && st && st.proj){ var has = Array.prototype.some.call(ps.options, function(o){ return o.value === st.proj.id; }); if(!has) ps.add(new Option((st.proj.cust||'') + ' - ' + (st.proj.item||st.proj.prod||''), st.proj.id)); ps.value = st.proj.id; }
+    return;
+  }
+  if(how === 'step'){
+    if(!st || !st.proj) return alert('まず案件に紐づけてください（🔗 既存案件にリンク）');
+    var oi = (DB.projects||[]).indexOf(st.proj); if(oi < 0) return; st.proj.steps = st.proj.steps || {};
+    var opts = (typeof PROC_OPTIONS !== 'undefined' && PROC_OPTIONS['校了']) || []; st.proj.steps['校了'] = opts.indexOf('校了') >= 0 ? '校了' : (opts[opts.length-1] || '完了');
+    st.proj.stepDates = st.proj.stepDates || {}; st.proj.stepDates['校了'] = new Date().toISOString().slice(0, 10);
+    if(typeof saveDB === 'function') saveDB(); _toastMsg && _toastMsg('✅ 案件 ' + st.proj.id + ' の工程「校了」を進めました');
+    openInquiryDetail(inqId); renderInquiryList(); return;
+  }
+  if(how === 'seizo'){ if(!st || !st.fmNo) return alert('この案件には FileMaker の伝票番号がありません。案件管理で伝票を紐づけてから出してください'); window.open('tools/sagyo.html?no=' + encodeURIComponent(st.fmNo) + '&type=seizo', '_blank'); return; }
+  if(how === 'project'){ if(typeof _inqTransferToOrder_ === 'function') _inqTransferToOrder_(inqId); return; }
+  if(how === 'quote'){ if(typeof _inqTransferToEstimate_ === 'function') _inqTransferToEstimate_(inqId); return; }
+  if(how === 'proof'){ if(typeof forwardInquiryToProofing === 'function') forwardInquiryToProofing(inqId); return; }
+}
+async function _inqAiActionCheck_(inqId){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }); if(!inq) return;
+  var box = document.getElementById('inq-ai-check-' + inqId); if(box) box.innerHTML = '<div style="font-size:11px;color:#5b21b6">🤖 AI が確認しています…</div>';
+  var st = _inqActionState_(inq);
+  var tl = (inq.timeline||[]).slice(-12).map(function(t){ return '- ' + String(t.at||t.date||'').slice(0, 16) + ' ' + (t.type||'') + ' ' + String(t.text||t.note||'').replace(/\s+/g, ' ').slice(0, 120); }).join('\n');
+  var prompt = '印刷会社の受付担当の代わりに「やり残しが無いか」を点検してください。\n\n' +
+    '【お客様からの連絡】\n件名: ' + (inq.subject||'') + '\n差出人: ' + (inq.from_name||'') + ' ' + (inq.from_company||'') + '\n本文:\n' + String(inq.body||'').slice(0, 1200) + '\n\n' +
+    '【Hub の記録（新しい順の末尾）】\n' + (tl || '（なし）') + '\n\n' +
+    '【いまの判定】出来事: ' + (st ? st.label : '（判定なし）') + '\n' + (st ? st.steps.map(function(x){ return (x.done ? '済' : '未') + ' ' + x.label + (x.done ? '（' + (x.done.how||'') + '）' : ''); }).join('\n') : '') + '\n' + (st && st.replied ? 'お客様への返信: 済み' : 'お客様への返信: なし') + '\n\n' +
+    '次を日本語で短く（各 1〜2 行）:\n1. 出来事の判定は合っているか（校了／発注／校正戻し／見積依頼／仕様変更／納期／該当なし）\n2. 抜けているアクション（特に「社内への連絡」が済んでいるか。お客様への返信だけで社内へ伝わっていない状態なら必ず指摘）\n3. 本文に期限・数量・変更点など見落としやすい点があれば';
+  try {
+    var resp = await callCloudAPI('claudeChat', {}, { messages: JSON.stringify([{ role:'user', content: prompt }]), max_tokens: 400 });
+    var text = resp && resp.success ? (resp.text || (resp.content && resp.content[0] && resp.content[0].text) || '') : '';
+    if(!text) throw new Error((resp && resp.error) || 'AI が使えません');
+    inq.ai_action_check = { at: new Date().toISOString(), text: text }; if(typeof saveDB === 'function') saveDB();
+    if(box) box.innerHTML = '<div style="font-size:11px;background:#fff;border:1px solid #e0e7ff;border-radius:6px;padding:6px 8px;white-space:pre-wrap"><b>🤖 AI の確認</b>\n' + _escDiff(text) + '</div>';
+  } catch(e){ if(box) box.innerHTML = '<div style="font-size:11px;color:#b91c1c">AI の確認ができませんでした: ' + _escDiff(String(e.message||e)) + '</div>'; }
+}
+// 返信を送った直後: 次のアクションが残っていれば知らせる（返信して満足、を防ぐ）
+function _inqAfterReplyCheck_(inq){
+  var st = _inqActionState_(inq); if(!st || !st.open.length) return;
+  var msg = '返信は送りました。\n\nただし「' + st.label + '」の次のアクションがまだです:\n' + st.open.map(function(x){ return '・' + x.label; }).join('\n') + '\n\nこのまま連絡を開いたままにします。上の「やる」から進めてください。';
+  setTimeout(function(){ alert('⚠ ' + msg); try { openInquiryDetail(inq.id); } catch(e){} }, 300);
+}
+// REL-1: 関連メールを自動で見つける。件名の芯（Re:/Fw:/【】を除いたもの）が同じ、または同じ差出人から 2 週間以内
+function _inqSubjectCore_(s){
+  return String(s||'').normalize('NFKC').toLowerCase()
+    .replace(/(^|\s)(re|fw|fwd|転送|返信)\s*(\[\d+\])?\s*[:：]\s*/gi, ' ')
+    .replace(/\[[^\]]*\]|【[^】]*】|\([^)]*\)|（[^）]*）/g, ' ')
+    .replace(/[\s　]+/g, '').slice(0, 80);
+}
+var _relIdxCache_ = null;
+function _inqRelIndex_(){
+  var list = DB.inquiries || []; var sig = list.length + ':' + (list[0] && list[0].id) + ':' + (list[list.length-1] && list[list.length-1].id);
+  if(_relIdxCache_ && _relIdxCache_.sig === sig) return _relIdxCache_;
+  var byCore = {}, byMail = {};
+  list.forEach(function(x){ if(!x || x.isSpam) return; var c = _inqSubjectCore_(x.subject); if(c && c.length >= 4){ (byCore[c] = byCore[c] || []).push(x); } var e = String(x.from_email||x.email||'').toLowerCase(); if(e){ (byMail[e] = byMail[e] || []).push(x); } });
+  _relIdxCache_ = { sig: sig, byCore: byCore, byMail: byMail }; return _relIdxCache_;
+}
+function _inqRelatedAuto_(inq){
+  if(!inq) return []; var ix = _inqRelIndex_(); var core = _inqSubjectCore_(inq.subject);
+  var em = String(inq.from_email||inq.email||'').toLowerCase(), co = String(inq.from_company||inq.custName||'').trim();
+  var t0 = new Date(inq.received_at||inq.createdAt||0).getTime(); var seen = {}; var out = [];
+  function add(x, why){
+    if(!x || x.id === inq.id || seen[x.id]) return;
+    var xe = String(x.from_email||x.email||'').toLowerCase(), xco = String(x.from_company||x.custName||'').trim();
+    if(!((em && xe === em) || (co && xco === co))) return;
+    seen[x.id] = 1; out.push({ inq: x, why: why });
+  }
+  if(core && core.length >= 4) (ix.byCore[core] || []).forEach(function(x){ add(x, '同じ件名'); });
+  if(em) (ix.byMail[em] || []).forEach(function(x){ var dt = Math.abs(new Date(x.received_at||x.createdAt||0).getTime() - t0); if(dt < 14*86400000) add(x, '同じ差出人・2週間以内'); });
+  out.sort(function(a,b){ return String(b.inq.received_at||b.inq.createdAt||'').localeCompare(String(a.inq.received_at||a.inq.createdAt||'')); });
+  return out.slice(0, 20);
+}
+function _inqRelatedAutoHTML_(inq){
+  var rel = _inqRelatedAuto_(inq); if(!rel.length) return '';
+  var st = { 'new':'未対応', 'progress':'対応中', 'waiting':'返信待ち', 'done':'対応済' };
+  return '<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:10px 12px;margin-top:6px">' +
+    '<div style="font-size:11px;color:#3730a3;font-weight:700;margin-bottom:6px">🧵 関連メール（自動で連結・' + rel.length + ' 件）<span style="font-weight:400;color:#6366f1;margin-left:6px">同じ件名か、同じ差出人から 2 週間以内</span></div>' +
+    rel.map(function(r){ var x = r.inq; var d = x.received_at||x.createdAt||''; return '<div style="font-size:11px;background:#fff;border:1px solid #e0e7ff;border-radius:5px;padding:6px 10px;margin-bottom:4px;cursor:pointer;display:flex;gap:8px;align-items:center" onclick="openInquiryDetail(\'' + x.id + '\')">' +
+      '<span style="color:#888;white-space:nowrap">' + (d ? new Date(d).toLocaleDateString('ja-JP') : '') + '</span>' +
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><strong>' + _escDiff(x.subject || '(件名なし)') + '</strong> <span style="color:#666">' + _escDiff(x.from_name||x.custName||'') + '</span></span>' +
+      '<span style="font-size:10px;color:' + (x.status==='done'?'#16a34a':'#b91c1c') + ';white-space:nowrap">' + (st[x.status||'new']||x.status||'') + '</span>' +
+      '<span style="font-size:10px;color:#6366f1;white-space:nowrap">' + r.why + '</span></div>'; }).join('') +
+  '</div>';
+}
 // CCCC-1: 連絡詳細 - リンクセクション (案件リンク + 関連メール親子)
 function _renderInquiryLinksSection_(inq){
   if(!inq) return '';
@@ -54307,7 +54582,8 @@ function _renderInquiryLinksSection_(inq){
     '</div>';
   }
 
-  return '<div style="margin-bottom:.75rem">' + projHtml + relHtml + '</div>';
+  var autoHtml = ''; try { autoHtml = _inqRelatedAutoHTML_(inq); } catch(e){ autoHtml = ''; }   // REL-1
+  return '<div style="margin-bottom:.75rem">' + projHtml + relHtml + autoHtml + '</div>';
 }
 
 // CCCC-1: アクションボタン群 (管理者並び替え可)
@@ -54507,7 +54783,7 @@ function showLinkParentInquiryModal(inqId){
 function _filterLinkParentList_(q){
   q = (q||'').toLowerCase();
   document.querySelectorAll('.lp-item').forEach(function(el){
-    el.style.display = (!q || el.dataset.text.indexOf(q) >= 0) ? '' : 'none';
+    el.style.display = (!q || _qMatch_(el.dataset.text, q)) ? '' : 'none';
   });
 }
 
@@ -55452,7 +55728,7 @@ async function linkInquiryToExistingProject(inqId){
 function _filterLinkProjList_(q){
   q = (q || '').toLowerCase();
   document.querySelectorAll('.link-proj-item').forEach(function(el){
-    el.style.display = (!q || el.dataset.text.indexOf(q) >= 0) ? '' : 'none';
+    el.style.display = (!q || _qMatch_(el.dataset.text, q)) ? '' : 'none';
   });
 }
 
