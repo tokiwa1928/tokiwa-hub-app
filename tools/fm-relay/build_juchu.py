@@ -148,6 +148,7 @@ BAR = r"""
 <div id="fmerr"></div>
 <div id="fmfind">
   <div class="cond">
+    <div><label>何でも検索</label><input id="ff-all" style="width:230px" placeholder="番号・得意先・ユーザー・品名・品種・担当 を全期間から" autocomplete="off" title="伝票番号・見積番号・案件ID・得意先（コードと名前）・ユーザー名・製品名・品種・担当者コード の全部を、期間に関係なく探します。空白で区切ると全部含むもの"></div>
     <div><label>品名で探す</label><input id="ff-kw" placeholder="打つと出ます。a10000 なら伝票番号の前方一致" autocomplete="off"></div>
     <div><label>得意先（コードか名前）</label><input id="ff-cust" style="width:150px" placeholder="5465 か 中尾" autocomplete="off"></div>
     <div><label>ユーザー名</label><input id="ff-user" style="width:120px" placeholder="花井寺" autocomplete="off"></div>
@@ -1286,14 +1287,23 @@ LOGIC = r"""
     var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 0);   // 0 = すべて
     var user = $('ff-user').value.trim().toLowerCase(), tanto = $('ff-tanto').value.trim(), hinshu = $('ff-hinshu').value.trim().toLowerCase();
     var d1 = 日を数に($('ff-d1').value), d2 = 日を数に($('ff-d2').value), n1 = 日を数に($('ff-n1').value), n2 = 日を数に($('ff-n2').value);
+    // FMHUB-FIND-ALL: 何でも検索（空白区切りの語を全部含む）。得意先名で当てるためにマスタが要る
+    var all = $('ff-all') ? $('ff-all').value.trim().normalize('NFKC').toLowerCase().split(/[\s　]+/).filter(Boolean) : [];
+    var 名前表 = null;
+    if (all.length) {
+      if (!得意先マスタ) { try { var cm = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); if (cm && cm.行) 得意先マスタ = cm; } catch (e) {} }
+      if (!得意先マスタ) { $('ff-msg').textContent = '得意先マスタを読んでいます…'; 得意先マスタを用意().then(function () { 手元で探す(false); }); return true; }
+      名前表 = {}; 得意先マスタ.行.forEach(function (r) { 名前表[String(r['得意先コード'])] = String(r['得意先名'] || '').normalize('NFKC').toLowerCase(); });
+    }
     // 得意先: 数字ならコード、それ以外は得意先マスタの名前で前方一致→該当コードの集合
     var custSet = null;
     if (cust && !/^\d+$/.test(cust)) { custSet = 得意先コードを名前で(cust); if (!custSet) { $('ff-msg').textContent = '得意先マスタを読んでいます…'; 得意先マスタを用意().then(function () { 手元で探す(false); }); return true; } }
     var 番号らしい = /^[a-zA-Z]?\d{2,}$/.test(kw);
     if (番号らしい) 日数 = 0;
+    if (all.length) 日数 = 0;   // 何でも検索は全期間
     if (d1 || d2) 日数 = 0;   // 日付を指定したら「期間」は使わない
-    try { var 条件 = {}; ['ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { 条件[id] = $(id).value; }); 条件.全件 = 全件モード; sessionStorage.setItem('fm_find', JSON.stringify(条件)); } catch (e) {}
-    if (!kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    try { var 条件 = {}; ['ff-all', 'ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { if ($(id)) 条件[id] = $(id).value; }); 条件.全件 = 全件モード; sessionStorage.setItem('fm_find', JSON.stringify(条件)); } catch (e) {}
+    if (!all.length && !kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
     全件モード = false;
     var から = 0;
     if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')); }
@@ -1311,6 +1321,13 @@ LOGIC = r"""
       if (kw) {
         if (番号らしい) { if (String(r[P['伝票番号']]).toLowerCase().indexOf(kwl) !== 0 && String(r[P['案件ID']] || '').toLowerCase().indexOf(kwl) !== 0 && String(r[P['見積番号']] || '').toLowerCase().indexOf(kwl) !== 0) continue; }
         else if (String(r[P['製品名']]).toLowerCase().indexOf(kwl) < 0 && String(r[P['ユーザー名']]).toLowerCase().indexOf(kwl) < 0) continue;
+      }
+      if (all.length) {   // FMHUB-FIND-ALL: 全項目をつないだ 1 本の文字列に、語が全部含まれるか
+        var code = String(r[P['得意先コード']] || '');
+        var 束 = [r[P['伝票番号']], r[P['見積番号']], r[P['案件ID']], code, 名前表[code] || '', r[P['ユーザー名']], r[P['製品名']], r[P['品種']], r[P['担当者コード']]]
+          .map(function (v) { return String(v == null ? '' : v); }).join('\n').normalize('NFKC').toLowerCase();
+        var ok = true; for (var a = 0; a < all.length; a++) { if (束.indexOf(all[a]) < 0) { ok = false; break; } }
+        if (!ok) continue;
       }
       hits.push(i);
     }
@@ -1360,6 +1377,8 @@ LOGIC = r"""
     if (手元で探す(true)) return;   // 索引があれば手元で（速い）。無ければ中継に聞く
     // 伝票番号（a10000 のような形）を品名欄に入れたら、番号の前方一致で全期間から探す（中継が判断）
     var kw = $('ff-kw').value.trim();
+    var all = $('ff-all') ? $('ff-all').value.trim() : '';
+    if (all && !kw) { kw = all; $('ff-days').value = '0'; }   // FMHUB-FIND-ALL: 索引が無いときは中継に全期間で聞く（製品名・ユーザー名）
     var 番号らしい = /^[a-zA-Z]\d{3,}$/.test(kw);
     if (番号らしい) $('ff-days').value = '0';
     var 条件 = {
@@ -1393,7 +1412,8 @@ LOGIC = r"""
   };
   $('ff-go').onclick = 探す;
   $('ff-x').onclick = function () { 探し.style.display = 'none'; };
-  ['ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu'].forEach(function (id) {
+  ['ff-all', 'ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu'].forEach(function (id) {
+    if (!$(id)) return;
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') 探す(); });
     $(id).addEventListener('input', 打ちながら);
   });
