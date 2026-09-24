@@ -1693,6 +1693,7 @@ function setPane(p){
      ================================================================== -->
 
 <style>
+  .fm-locked{ background:#f1f5f9 !important; color:#475569; }
   #fmbar{ position:sticky; top:0; z-index:60; display:flex; gap:7px; align-items:center;
           flex-wrap:wrap; padding:6px 12px; background:#1a1a1a; color:#fff;
           font-size:13px; border-bottom:2px solid #000; }
@@ -1847,12 +1848,13 @@ function setPane(p){
     <b>📜 変更履歴</b><span id="rk-sum" style="color:#9a3412"></span>
     <button id="rk-toggle" style="font-size:11px;padding:2px 8px">全部見る</button>
     <span style="margin-left:auto"></span>
-    <b>関連会社の売価（Hub 側）</b>
+    <b id="sp-title">関連会社の売価（Hub 側）</b>
     <label>単価 <input id="sp-unit" type="number" step="any" style="width:80px"></label>
     <label>金額 <input id="sp-amt" type="number" style="width:100px"></label>
     <button id="sp-save" style="font-size:11px;padding:2px 8px">保存</button>
     <span id="sp-msg" style="color:#166534"></span>
   </div>
+  <div id="sp-all" style="margin-top:3px;font-size:11px;color:#334155"></div>
   <div id="rk-check" style="margin-top:4px"></div>
   <div id="rk-list" style="display:none;margin-top:4px;max-height:220px;overflow:auto"></div>
 </div>
@@ -1907,6 +1909,7 @@ function setPane(p){
     '画面_履歴':           ['recordId', '伝票番号'],
     '先方売価_読む':       ['伝票番号'],
     '先方売価_書く':       ['伝票番号', '会社', '単価', '金額', 'メモ'],
+    '先方売価_一覧':       [],
     '画面_Repeat登録':     ['recordId'],
     '画面_削除':           ['recordId', 'modId'],
     '画面_外注':           ['伝票番号'],
@@ -2233,11 +2236,40 @@ function setPane(p){
     DTPを出す(r.record.fields['伝票番号']);
     履歴を読む(r.record.recordId, r.record.fields['伝票番号']);
     先方売価を読む(r.record.fields['伝票番号']);
+    金額の権限を適用();   // GRP-2
   }
   // ---- GRP-1: 変更履歴（赤枠・チェックリスト）と関連会社の売価
   function 会社名() { try { var a = JSON.parse(localStorage.getItem('murayama_auth') || '{}'); return String(a.companyName || ''); } catch (e) { return ''; } }
-  var 会社の得意先コード = { '村山': '5236', '中尾': '5465', '北上': '5463', 'ヤマウチ': '5451', 'アート': '5427', '津島': '5525' };
+  var 会社の得意先コード = { '村山': '5236', '中尾': '5465', '北上': '5463', 'ヤマウチ': '5451', 'アート': '5427', '津島': '5525', 'ソネ': '5364' };   // GRP-2: ソネ商事
   function 自社の得意先コード() { var nm = 会社名(); var hit = ''; Object.keys(会社の得意先コード).forEach(function (k) { if (nm.indexOf(k) >= 0) hit = 会社の得意先コード[k]; }); return hit; }
+  // GRP-2: 誰として使っているか。super＝本多・福永（両方直せる）／partner＝関連会社（トキワの金額は見るだけ）／tokiwa＝トキワ（関連会社の売価は見るだけ）
+  var SUPER_ADMINS = ['honda@tokiwap.co.jp', 'fukunaga@tokiwap.co.jp'];
+  function 権限() {
+    var mail = ''; try { mail = String((window.FM名乗っている ? FM名乗っている() : '') || '').toLowerCase(); } catch (e) {}
+    var partner = !!自社の得意先コード();
+    var sup = SUPER_ADMINS.indexOf(mail) >= 0;
+    return { mail: mail, super: sup, partner: partner && !sup, tokiwa: !partner && !sup, 会社: 会社名() };
+  }
+  // 関連会社が触れない欄（トキワの金額＝関連会社から見た仕入）: 売価・原価・行ごとの単価と代
+  var トキワの金額欄 = ['f-price', 'f-amt', 'c-paper', 'c-plate', 'c-print', 'c-ship', 'c-work', 'c-pack', 'c-labor', 'c-stock', 'c-unit', 'c-total'];
+  for (var _i = 1; _i <= 9; _i++) トキワの金額欄.push('p' + _i + '-up', 'p' + _i + '-am', 'k' + _i + '-pc', 'k' + _i + '-hd');
+  function 金額の権限を適用() {
+    var k = 権限();
+    トキワの金額欄.forEach(function (id) { var el = $(id); if (!el) return;
+      if (k.partner) { el.readOnly = true; el.classList.add('fm-locked'); el.title = 'トキワ印刷の金額（' + k.会社 + 'から見た仕入）。ここでは変えられません'; }
+      else if (el.classList.contains('fm-locked')) { el.readOnly = (id === 'c-total'); el.classList.remove('fm-locked'); el.title = ''; } });
+    var lb = $('f-price') && $('f-price').parentNode ? $('f-price').parentNode.querySelector('.lb') : null;
+    if (lb) lb.textContent = k.partner ? '仕入単価(トキワ)' : '売価単価';
+    var sv = $('sp-save'); if (sv) { sv.disabled = k.tokiwa; sv.title = k.tokiwa ? '関連会社の売価は各社が入れます（トキワは見るだけ。本多・福永は変えられます）' : ''; }
+    var su = $('sp-unit'), sa = $('sp-amt'); [su, sa].forEach(function (el) { if (el) el.readOnly = k.tokiwa; });
+  }
+  window.FM金額の権限を適用 = 金額の権限を適用; window.FM権限 = 権限;   // 試験・他ページ用
+  // 保存のとき、関連会社からはトキワの金額欄を送らない（念のため）
+  function 関連会社の差を絞る(差) {
+    if (!権限().partner) return 差;
+    var lock = {}; トキワの金額欄.forEach(function (id) { if (TO_FM[id]) lock[TO_FM[id]] = 1; });
+    var out = {}; Object.keys(差).forEach(function (k) { if (!lock[k]) out[k] = 差[k]; }); return out;
+  }
   var 重要語 = ['数', '納期', '納品', '製品名', 'サイズ', '横', '縦', '色', '用紙', '紙', '加工', 'パーツ', '仕様', '版', '単価', '金額'];
   function 履歴を読む(recordId, no) {
     var box = $('fmrireki'); if (!box) return;
@@ -2265,16 +2297,24 @@ function setPane(p){
   function 日時短(iso) { var d = new Date(iso); if (isNaN(d.getTime())) return String(iso); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
   $('rk-toggle').onclick = function () { var l = $('rk-list'); var open = l.style.display === 'none'; l.style.display = open ? 'block' : 'none'; $('rk-toggle').textContent = open ? '閉じる' : '全部見る'; };
   function 先方売価を読む(no) {
-    $('sp-unit').value = ''; $('sp-amt').value = ''; $('sp-msg').textContent = '';
+    $('sp-unit').value = ''; $('sp-amt').value = ''; $('sp-msg').textContent = ''; if ($('sp-all')) $('sp-all').innerHTML = '';
+    var k = 権限();
+    if ($('sp-title')) $('sp-title').textContent = k.partner ? (k.会社 + ' の売価（お客様への金額）') : '関連会社の売価（各社が入れた、お客様への金額）';
     呼ぶ('先方売価_読む', [no]).then(function (r) {
-      var 行 = r.行 || []; if (!行.length) return; var my = 会社名(); var hit = 行.filter(function (x) { return my && String(x.会社) === my; })[0] || 行[0];
+      var 行 = r.行 || [];
+      // GRP-2: 全社ぶんを表に（トキワは見るだけ。関連会社は自社の行を上の欄で直す）
+      if ($('sp-all') && 行.length) $('sp-all').innerHTML = 行.map(function (x) { return '<span style="display:inline-block;margin-right:12px">' + esc(x.会社) + ': 単価 ' + esc(x.単価 === '' ? '—' : x.単価) + '／金額 ' + esc(x.金額 === '' ? '—' : 円(x.金額)) + (x.更新日 ? ' <span style="color:#94a3b8">' + esc(日時短(x.更新日)) + ' ' + esc(String(x.更新者 || '').split('@')[0]) + '</span>' : '') + '</span>'; }).join('');
+      if (!行.length) return; var my = 会社名(); var hit = 行.filter(function (x) { return my && String(x.会社) === my; })[0] || (k.partner ? null : 行[0]);
+      if (!hit) return;
       $('sp-unit').value = hit.単価 === '' ? '' : hit.単価; $('sp-amt').value = hit.金額 === '' ? '' : hit.金額;
       $('sp-msg').textContent = (hit.会社 ? hit.会社 + '　' : '') + (hit.更新日 ? 日時短(hit.更新日) + ' ' + String(hit.更新者 || '').split('@')[0] : '');
     }).catch(function () {});
   }
   $('sp-save').onclick = function () {
     if (!現在) { alert('先に伝票を開いてください'); return; }
+    var kk = 権限(); if (kk.tokiwa) { $('sp-msg').textContent = '関連会社の売価は各社が入れます（トキワは見るだけ）'; return; }
     var no = String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''); var 会社 = 会社名() || 'トキワ印刷';
+    if (kk.super && !自社の得意先コード()) { var 候補 = Object.keys(会社の得意先コード).map(function (k) { return k; }); var pick = prompt('どの会社の売価として保存しますか？（' + 候補.join('・') + '）', 候補[0]); if (pick === null) return; 会社 = String(pick).trim() || 会社; }
     $('sp-msg').textContent = '保存中…';
     呼ぶ('先方売価_書く', [no, 会社, $('sp-unit').value, $('sp-amt').value, '']).then(function () { $('sp-msg').textContent = '保存しました（' + 会社 + '）'; }).catch(function (e) { $('sp-msg').textContent = String(e.message || e); });
   };
@@ -2449,6 +2489,13 @@ function setPane(p){
     try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'dtp', 伝票番号: no }); } catch (e) {}
     return '校正BOXへ送りました' + (note ? '' : '（内容が空なので下書き）') + '。本体を開いていれば今、閉じていれば次に開いたときにカードになります';
   }
+  // GRP-2: 関連会社売価の全行（伝票番号 → [{会社, 単価, 金額, 更新日}]）。一覧の列に使う
+  var 先方売価表 = {};
+  function 先方売価表を読む() {
+    if (!(window.FM名乗っている && FM名乗っている())) return Promise.resolve();
+    return 呼ぶ('先方売価_一覧', []).then(function (r) { var m = {}; (r.行 || []).forEach(function (x) { var k = String(x.伝票番号 || ''); if (!m[k]) m[k] = []; m[k].push(x); }); 先方売価表 = m; try { if (最後の件数) 手元で探す(false); } catch (e) {} }).catch(function () {});
+  }
+  setTimeout(先方売価表を読む, 2500); setInterval(先方売価表を読む, 5 * 60 * 1000); window.addEventListener('fm-signin', function () { setTimeout(先方売価表を読む, 500); });
   // SEIZO-1: 製造指示書の出力記録（本体の DB.sagyoPrints）。伝票番号 → 最後の記録 { n, at, by, comment }
   var 製造記録 = {};
   function 製造記録を読む() {
@@ -2661,7 +2708,7 @@ function setPane(p){
   }
   function 保存() {
     if (!現在) { 空から起こして保存(); return; }
-    var 差 = 変更分(), n = Object.keys(差).length;
+    var 差 = 関連会社の差を絞る(変更分()), n = Object.keys(差).length;   // GRP-2: 関連会社はトキワの金額を送らない
     if (!n) { 状態('変更はありません', ''); return; }
     var 消す = 空にする項目(差);
     var 文 = n + ' 項目を FileMaker に保存します。よろしいですか？\n\n'
@@ -2711,7 +2758,8 @@ function setPane(p){
     { c:'製品名',     h:'製品名' },
     { c:'品種',       h:'品種' },
     { c:'合計数1',    h:'数量', num:true },
-    { c:'売価金額',   h:'売価', money:true },
+    { c:'売価金額',   h:'売価', money:true, tokiwaPrice:true },
+    { c:'_senpo',     h:'各社の売価', senpo:true },   // GRP-2: 関連会社売価（Hub 側）
     { c:'合計金額',   h:'原価', money:true },
     { c:'納品日',     h:'納品日', date:true },
     { c:'注残数',     h:'注残', num:true },
@@ -2756,7 +2804,8 @@ function setPane(p){
       + '<input id="ff-group-id" placeholder="案件ID（空なら自動）" style="width:150px;padding:3px 6px"><span style="color:#64748b">「案件」列が同じ伝票が、予算見積→見積→受注の 1 つの案件です</span>'
       + '<button id="ff-proof-group" style="padding:3px 10px;margin-left:auto;background:#5b21b6;color:#fff;border:1px solid #4c1d95;border-radius:4px" title="チェックした伝票を 1 枚の校正カードにまとめて校正BOXへ（名刺 4 件を一緒に校正するときなど）">📎 選んだ伝票を 1 つの校正にまとめて校正BOXへ</button></div>';
     h += '<table><thead><tr><th></th><th></th>';
-    列.forEach(function (k) { h += '<th>' + esc(k.h) + '</th>'; });
+    var kkh = 権限();
+    列.forEach(function (k) { if (k.c === '合計金額' && kkh.partner) return; var hd = k.h; if (k.tokiwaPrice && kkh.partner) hd = '仕入(トキワ売価)'; if (k.senpo && kkh.partner) hd = '自社売価'; h += '<th>' + esc(hd) + '</th>'; });   // GRP-2: 関連会社にはトキワの原価を出さない
     h += '</tr></thead><tbody>';
     var 一度に = 500, 描いた = Math.min(一度に, r.行.length);
     function 行の札(row) {
@@ -2765,7 +2814,11 @@ function setPane(p){
       t += '<td><button type="button" class="open" data-id="' + esc(row.recordId) + '" style="font:inherit;font-size:11px;font-weight:700;padding:2px 10px;border:1.5px solid #fff;outline:1px solid #1a1a1a;border-radius:4px;background:#1a1a1a;color:#fff;cursor:pointer;white-space:nowrap">表示</button></td>';
       列.forEach(function (k) {
         var v = row[k.c];
+        if (k.c === '合計金額' && 権限().partner) return;   // GRP-2
         if (k.sagyo) { var sn = encodeURIComponent(String(row['伝票番号'] || '')); t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px"><a href="sagyo.html?no=' + sn + '" target="_blank" rel="noopener" title="外注指示書（FileMaker と同じ紙）" style="color:#0369a1">🖨外注</a> <a href="sagyo.html?no=' + sn + '&type=seizo" target="_blank" rel="noopener" title="製造指示書（内製用）" style="color:#0369a1;margin-left:4px">🖨製造</a></td>'; return; }
+        if (k.senpo) { var rows = 先方売価表[String(row['伝票番号'] || '')] || []; var kk2 = 権限(); var my2 = kk2.会社;
+          var show = kk2.partner ? rows.filter(function (x) { return String(x.会社) === my2; }) : rows;
+          t += '<td style="white-space:nowrap;font-size:11px">' + (show.length ? show.map(function (x) { return (kk2.partner ? '' : esc(x.会社) + ' ') + esc(円(x.金額 === '' ? x.単価 : x.金額)); }).join('<br>') : '<span style="color:#cbd5e1">—</span>') + '</td>'; return; }
         if (k.seizo) { var sp = 製造指示書状態(row['伝票番号']); var 受注 = String(row['案件区分'] || '') === '受注' || !row['案件区分'];
           t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px">' + (sp ? ('<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="color:#166534;font-weight:700" title="' + esc(sp.comment || '') + '">第' + sp.n + '回 ' + esc(String(sp.at || '').slice(0, 10).replace(/-/g, '/')) + '</a>')
             : (受注 ? '<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="color:#b91c1c;font-weight:700;background:#fee2e2;border-radius:4px;padding:1px 6px" title="製造指示書がまだ出ていません。押すと出せます">未出力</a>' : '<span style="color:#94a3b8">—</span>')) + '</td>'; return; }

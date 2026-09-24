@@ -771,6 +771,13 @@ function 先方売価_読む(伝票番号) {
     out.push({ 会社: v[i][1], 単価: v[i][2], 金額: v[i][3], 更新者: v[i][4], 更新日: (v[i][5] instanceof Date) ? v[i][5].toISOString() : String(v[i][5] || ''), メモ: v[i][6] }); }
   return { ok: true, user: who.email, 行: out };
 }
+/** GRP-2: 関連会社売価の全行（案件管理表の列に出す用。伝票番号 → 会社ごとの単価・金額） */
+function 先方売価_一覧() {
+  var who = 画面_利用者_(); var sh = 先方売価_帳簿_(); var v = sh.getDataRange().getValues(); var out = [];
+  for (var i = 1; i < v.length; i++) { if (!v[i][0]) continue;
+    out.push({ 伝票番号: String(v[i][0]), 会社: v[i][1], 単価: v[i][2], 金額: v[i][3], 更新者: String(v[i][4] || '').split('@')[0], 更新日: (v[i][5] instanceof Date) ? v[i][5].toISOString() : String(v[i][5] || '') }); }
+  return { ok: true, user: who.email, 行: out };
+}
 function 先方売価_書く(伝票番号, 会社, 単価, 金額, メモ) {
   var who = 画面_利用者_(); 伝票番号 = String(伝票番号 || '').trim(); if (!伝票番号) throw new Error('伝票番号が要ります');
   var sh = 先方売価_帳簿_(); var v = sh.getDataRange().getValues(); var at = 0;
@@ -821,6 +828,7 @@ function handle_(action, req, who) {
     case '画面_履歴':         return 画面_履歴(req.recordId, req['伝票番号']);          // GRP-1: 伝票ごとの変更履歴（読むだけ）
     case '先方売価_読む':     return 先方売価_読む(req['伝票番号']);                  // GRP-1: 関連会社の売価（Hub 側）
     case '先方売価_書く':     return 先方売価_書く(req['伝票番号'], req['会社'], req['単価'], req['金額'], req['メモ']);
+    case '先方売価_一覧':     return 先方売価_一覧();                                    // GRP-2
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
