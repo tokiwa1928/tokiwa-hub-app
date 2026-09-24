@@ -5180,7 +5180,8 @@ async function _autoRegisterExtractedEstimates_(){
       status: '見積中',
       aiAutoCreated: true,
       fromInquiryId: inq.id,
-      fromSubject: inq.subject || ''
+      fromSubject: inq.subject || '',
+      attachments: _inqAttachLite_(inq)   // ATTACH-1
     };
     DB.estimates.push(newEst);
     registered++;
@@ -24534,6 +24535,7 @@ function renderEstimates(){
     var combined = '';
     if(sourceInfoHtml){
       combined += '<div style="margin-bottom:6px;padding:4px 8px;background:#faf5ff;border-radius:4px;cursor:pointer" onclick="jumpToEstimateSource(\'' + e.id + '\')" title="発生源を開く">' + sourceInfoHtml + '</div>';
+      try { var _srcInq = e.fromInquiryId ? (DB.inquiries||[]).find(function(i){ return i.id === e.fromInquiryId; }) : null; combined += _attachListHTML_((e.attachments && e.attachments.length) ? e.attachments : (_srcInq ? _inqAttachLite_(_srcInq) : []), '📎 添付（問い合わせから）'); } catch(e2){}   // ATTACH-1
     }
     // 🆕 顧客依頼メモ
     if(e.customerRequestMemo){
@@ -43259,7 +43261,8 @@ function _inqTransferToOrder_(inqId){
     cust:d.cust, item:d.item, spec:d.spec, qty:d.qty, unit:d.unit, exTax:0, grand:0,
     status:'データ作成中', assignee:currentAuth?.userName||'',
     memo:d.memo, steps:{版下:'─',校了:'─',印刷:'─',加工:'─',納品:'─'}, stepDates:{},
-    createdAt:new Date().toISOString(), fromInquiryId:inqId
+    createdAt:new Date().toISOString(), fromInquiryId:inqId,
+    attachments: _inqAttachLite_(inq)   // ATTACH-1: 添付も一緒に
   });
   inq.linked_project_id = createdId;
   if(typeof saveDB==='function') saveDB();
@@ -43613,6 +43616,7 @@ function confirmOrder(tabId){
   if(typeof _inheritMasterNo_ === 'function'){
     var srcInq = s && s._fromInquiryId ? (DB.inquiries||[]).find(function(i){ return i.id === s._fromInquiryId; }) : null;
     _inheritMasterNo_(proj, srcInq);
+    if(srcInq){ proj.fromInquiryId = proj.fromInquiryId || srcInq.id; if(!proj.attachments || !proj.attachments.length) proj.attachments = _inqAttachLite_(srcInq); }   // ATTACH-1
   }
   if(!DB.projects) DB.projects=[];
   DB.projects.push(proj);
@@ -46491,6 +46495,7 @@ function renderProjects(){
           </div>
           <!-- 基本タブ -->
           <div id="proj-tab-basic-${oi}" class="proj-tab-content" style="padding:14px">
+            ${(typeof _attachListHTML_==='function') ? _attachListHTML_(_projAttachments_(r), '📎 添付（問い合わせから引き継ぎ）') : ''}
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-bottom:10px">
               <div style="background:#dbeafe;padding:8px;border-radius:6px"><div style="font-size:10px;color:#1e3a8a">数量</div><div style="font-size:14px;font-weight:700">${r.qty?r.qty.toLocaleString():'-'}${r.unit||''}</div></div>
               <div style="background:#dcfce7;padding:8px;border-radius:6px"><div style="font-size:10px;color:#14532d">原価合計</div><div style="font-size:14px;font-weight:700">${r.grand?fmt(r.grand):'-'}</div></div>
@@ -51992,15 +51997,21 @@ function _renderAttachmentPreview_(inq){
         ? '<button onclick="event.stopPropagation();_summarizeAttachment_(\'' + _escAttr_(inq.id) + '\',' + i + ')" style="font-size:11px;color:#fff;background:#7c3aed;border:1px solid #7c3aed;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0" title="AI で内容を要約">🤖 要約</button>'
         : '';
 
+      // ATTACH-1: zip は「展開して Drive へ」
+      var isZip = /\.zip$/i.test(name) || /zip/i.test(mime);
+      var unzipBtn = (isZip && (fileId || att.data) && !att.expanded)
+        ? '<button onclick="event.stopPropagation();_inqUnzipAttachment_(\'' + _escAttr_(inq.id) + '\',' + i + ')" style="font-size:11px;color:#fff;background:#3730a3;border:1px solid #3730a3;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0" title="zip の中身をフォルダごと Drive（問い合わせ添付）に展開して、添付一覧に足します。パスワード付きならメール本文から探します">📂 展開して Drive へ</button>'
+        : (att.expanded ? '<span style="font-size:10px;color:#3730a3">📂 展開済 ' + att.expanded.n + ' 件</span>' : '');
+      var shownName = (att.path ? att.path + '/' : '') + name;
       // data-属性 + イベント委任 でホバー (URL ない場合も "URL未取得" 表示)
       return '<div class="att-row" data-inq="' + _escAttr_(inq.id) + '" data-idx="' + i + '" data-kind="' + kind + '" data-url="' + _escAttr_(url) + '" data-name="' + _escAttr_(name) + '" data-file-id="' + _escAttr_(fileId) + '" style="background:#fff;border:1px solid #e0ddd6;border-radius:6px;padding:8px 12px;margin-bottom:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">' +
           '<div class="att-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;cursor:help">' +
-            (isImage ? '🖼' : isPdf ? '📄' : '📎') + ' <strong>' + _escDiff(name) + '</strong>' +
+            (isImage ? '🖼' : isPdf ? '📄' : isZip ? '🗜' : '📎') + ' <strong>' + _escDiff(shownName) + '</strong>' + (att.fromZip ? ' <span style="background:#e0e7ff;color:#3730a3;font-size:9px;padding:0 5px;border-radius:3px" title="zip から展開">zip</span>' : '') +
             '<span style="color:#888;font-size:10px">' + size + '</span>' +
             (existingSummary ? '<span style="color:#16a34a;font-size:10px;margin-left:4px" title="AI要約あり">🤖✓</span>' : '') +
           '</div>' +
-          summarizeBtn +
+          summarizeBtn + unzipBtn +
           // IIIII-1: AI 要約があっても 展開プレビューは常に表示する (要約と現物確認は別ニーズ)
           ((isImage||isPdf) && url
             ? '<button onclick="event.stopPropagation();var e=document.getElementById(\'' + inlineId + '\');if(e)e.style.display=(e.style.display===\'none\'?\'block\':\'none\')" style="font-size:11px;color:#5b21b6;background:#faf5ff;border:1px solid #c4b5fd;padding:2px 8px;border-radius:4px;cursor:pointer;flex-shrink:0">👁 展開</button>'
@@ -54324,6 +54335,90 @@ async function _sendInquiryReplyByChannel_(inqId){
   }
 }
 
+// ═══════════ ATTACH-1: 添付を転記先へ・zip を Drive に展開 ═══════════
+function _inqAttachLite_(inq){
+  return ((inq && inq.attachments) || []).filter(function(a){ return a && !a.expanded; }).map(function(a){
+    var url = a.url || a.driveUrl || a.drive_url || a.downloadUrl || '', fid = a.drive_file_id || a.driveFileId || a.fileId || '';
+    if(!fid && url){ var m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/); if(m) fid = m[1]; }
+    return { name: (a.path ? a.path + '/' : '') + (a.name || a.filename || ''), url: url, driveFileId: fid, mimeType: a.mimeType || a.mime_type || a.type || '', size: a.size || 0, fromInquiryId: inq.id, fromZip: a.fromZip || '', addedAt: new Date().toISOString() };
+  }).filter(function(a){ return a.name; });
+}
+function _projAttachments_(r){
+  if(!r) return []; if(r.attachments && r.attachments.length) return r.attachments;
+  var iid = r.fromInquiryId || ''; if(!iid) return []; var inq = (DB.inquiries||[]).find(function(i){ return i.id === iid; }); return inq ? _inqAttachLite_(inq) : [];
+}
+function _attachListHTML_(list, title){
+  list = list || []; if(!list.length) return '';
+  var esc = function(v){ return (typeof _escDiff === 'function') ? _escDiff(String(v == null ? '' : v)) : String(v == null ? '' : v); };
+  return '<div style="margin:6px 0 10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px"><div style="font-size:11px;font-weight:700;color:#334155;margin-bottom:4px">' + esc(title || '📎 添付') + '（' + list.length + '）</div>' +
+    list.map(function(a){ var u = a.url || a.driveUrl || ''; var fid = a.driveFileId || a.drive_file_id || ''; var pv = fid ? 'https://drive.google.com/file/d/' + fid + '/preview' : u;
+      return '<div style="font-size:11.5px;display:flex;gap:8px;align-items:center;padding:2px 0">' + (/\.(pdf)$/i.test(a.name) ? '📄' : /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i.test(a.name) ? '🖼' : /\.(ai|eps|psd|indd)$/i.test(a.name) ? '🎨' : '📎') +
+        ' <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.name) + (a.fromZip ? ' <span style="background:#e0e7ff;color:#3730a3;font-size:9px;padding:0 5px;border-radius:3px">zip ' + esc(a.fromZip) + '</span>' : '') + '</span>' +
+        (a.size ? '<span style="color:#94a3b8;font-size:10px">' + Math.round(a.size/1024) + ' KB</span>' : '') + (u ? '<a href="' + esc(u) + '" target="_blank" style="color:#1e40af;text-decoration:none;white-space:nowrap">↗ 開く</a>' : '') + (pv && pv !== u ? '<a href="' + esc(pv) + '" target="_blank" style="color:#5b21b6;text-decoration:none;white-space:nowrap">👁</a>' : '') + '</div>'; }).join('') + '</div>';
+}
+function _inqSaveAttachments_(inq){
+  if(typeof saveDB === 'function') try { saveDB(); } catch(e){}
+  if(typeof callCloudAPI === 'function') try { callCloudAPI('updateCommunication', {}, { id: inq.id, patch: { attachments: inq.attachments || [] } }); } catch(e){}
+}
+var _PW_RE = /(パスワード|ﾊﾟｽﾜｰﾄﾞ|password|passcode|pass\b|PW|暗証番号|解凍キー|解凍パス)\s*(は|:|：|=|＝|→)?\s*[「『【\[（(]?\s*([A-Za-z0-9!#$%&*+,\-./:;<=>?@\[\]^_`{|}~]{4,40})/i;
+function _findZipPassword_(inq){
+  var texts = [inq.body || '']; try { _inqRelatedAuto_(inq).forEach(function(r){ texts.push(r.inq.body || ''); }); } catch(e){}
+  for(var i = 0; i < texts.length; i++){ var m = _PW_RE.exec(String(texts[i])); if(m && m[3] && !/^(です|ます|は|を|の)/.test(m[3])) return m[3].replace(/[」』】\])）]+$/, ''); }
+  return '';
+}
+var _zipJsP_ = null;
+function _loadZipJs_(){
+  if(window.zip && window.zip.ZipReader) return Promise.resolve(window.zip);
+  if(_zipJsP_) return _zipJsP_;
+  _zipJsP_ = new Promise(function(res, rej){ var sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.52/dist/zip.min.js'; sc.onload = function(){ window.zip && window.zip.ZipReader ? res(window.zip) : rej(new Error('zip.js を読めませんでした')); }; sc.onerror = function(){ rej(new Error('zip.js を読めませんでした（ネットワーク）')); }; document.head.appendChild(sc); });
+  return _zipJsP_;
+}
+function _blobToBase64_(blob){ return new Promise(function(res, rej){ var fr = new FileReader(); fr.onload = function(){ res(String(fr.result).split(',')[1] || ''); }; fr.onerror = rej; fr.readAsDataURL(blob); }); }
+function _b64ToBytes_(b64){ var bin = atob(b64); var u = new Uint8Array(bin.length); for(var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+async function _inqUnzipAttachment_(inqId, attIdx){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }); if(!inq || !inq.attachments) return;
+  var att = inq.attachments[attIdx]; if(!att) return;
+  var name = att.name || att.filename || 'file.zip'; var url = att.url || att.driveUrl || att.drive_url || '';
+  var fileId = att.drive_file_id || att.driveFileId || att.fileId || ''; if(!fileId && url){ var m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/); if(m) fileId = m[1]; }
+  if(!fileId && !att.data){ alert('この zip は Drive に無いので展開できません（URL 未取得）'); return; }
+  var st = function(t){ try { _toastMsg(t); } catch(e){} var el = document.getElementById('att-sum-' + inqId + '-' + attIdx); if(el){ el.style.display = 'block'; el.innerHTML = '<div style="font-size:11px;color:#3730a3;background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:6px 8px">' + t + '</div>'; } };
+  var files = [];
+  try {
+    st('📂 zip を Drive で展開しています… ' + name);
+    var r = await callCloudAPI('unzipToDrive', {}, { fileId: fileId, base64: fileId ? '' : (att.data || ''), name: name, inquiryId: inq.id });
+    if(r && r.success){ files = r.files || []; }
+    else if(r && r.encrypted){
+      var pw = _findZipPassword_(inq);
+      pw = prompt('パスワード付きの zip です。' + (pw ? 'メール本文に見つかったパスワードを入れました。' : 'パスワードを入れてください（メール本文には見つかりませんでした）。') , pw || '');
+      if(!pw) { st('やめました'); return; }
+      st('🔑 パスワードを解除して展開しています…');
+      var b64 = att.data || '';
+      if(!b64){ var g = await callCloudAPI('getFileBase64', {}, { fileId: fileId }); if(!g || !g.success) throw new Error((g && g.error) || 'zip を読めません'); b64 = g.base64; }
+      var zip = await _loadZipJs_(); var reader = new zip.ZipReader(new zip.Uint8ArrayReader(_b64ToBytes_(b64)), { password: pw });
+      var entries = await reader.getEntries(); var n = 0;
+      for(var i = 0; i < entries.length; i++){
+        var en = entries[i]; if(en.directory) continue; var full = en.filename || ''; if(/(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)(\/|$)/.test(full)) continue;
+        var sl = full.lastIndexOf('/'); var path = sl >= 0 ? full.slice(0, sl) : '', fname = sl >= 0 ? full.slice(sl + 1) : full;
+        var blob;
+        try { blob = await en.getData(new zip.BlobWriter(), { password: pw }); }
+        catch(e2){ if(/password/i.test(String(e2 && e2.message))){ throw new Error('パスワードが違います'); } throw e2; }
+        st('⬆ Drive へ置いています… ' + (++n) + ' / ' + entries.length + '　' + fname);
+        var up = await callCloudAPI('uploadInquiryFile', {}, { inquiryId: inq.id, zipName: name, path: path, name: fname, mime: blob.type || '', base64: await _blobToBase64_(blob) });
+        if(!up || !up.success) throw new Error((up && up.error) || (fname + ' を置けませんでした'));
+        up.path = path; files.push(up);
+      }
+      await reader.close();
+    } else { throw new Error((r && r.error) || '展開できませんでした'); }
+    if(!files.length){ st('zip の中にファイルがありませんでした'); return; }
+    var now = new Date().toISOString();
+    files.forEach(function(f, i){ inq.attachments.push({ id: 'ZIP-' + Date.now() + '-' + i, name: f.name, path: f.path || '', fromZip: name, url: f.url, downloadUrl: f.downloadUrl, driveFileId: f.fileId, drive_file_id: f.fileId, mimeType: f.mime || '', size: f.size || 0, addedAt: now }); });
+    att.expanded = { at: now, n: files.length };
+    inq.timeline = inq.timeline || []; inq.timeline.push({ type: 'note', date: now, at: now, by: (currentAuth && currentAuth.userName) || 'user', text: '📂 ' + name + ' を Drive に展開（' + files.length + ' ファイル）' });
+    _inqSaveAttachments_(inq);
+    st('✅ ' + files.length + ' ファイルを Drive に置きました');
+    if(typeof openInquiryDetail === 'function') setTimeout(function(){ openInquiryDetail(inqId); }, 600);
+  } catch(e){ st('❌ ' + (e && e.message || e)); alert('zip の展開ができませんでした: ' + (e && e.message || e)); }
+}
 // ═══════════ ACTION-1: アクションを見逃さない ═══════════
 // 出来事ごとの「次に必ずやること」。証拠は Hub の記録から自動で拾う（evidence）。how は「やる」ボタンの動き
 var INQ_EVENTS = {
