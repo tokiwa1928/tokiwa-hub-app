@@ -679,7 +679,9 @@ LOGIC = r"""
     });
     var 上限 = 40, 出す = 見せる.slice(0, 上限), h = '';
     h += '<button class="close" id="fmdiff-x">閉じる</button>';
-    h += '<h4>⚠ ' + esc(参考.番号) + '（' + esc(参考.起票日) + '）とは内容が変わっています</h4>';
+    var 区分x = 現在 ? String(現在.fields['案件区分'] || '') : '';
+    h += '<h4>⚠ 前回の' + esc(区分x || '同じ段階') + ' ' + esc(参考.番号) + '（' + esc(参考.起票日) + '）から変わっている項目です</h4>';
+    if (区分x === '予算見積') h += '<div style="font-size:12px;color:#7f1d1d;margin:0 0 6px">今回の予算見積は、この案件のいちばん新しい段階（前年の受注など）から起こしています。前年の 見積・受注 で仕様が変わった分が、ここに出ています。予算見積書に反映されているか確認してください。</div>';
     h += '<table>';
     出す.forEach(function (d) {
       var money = MONEY.indexOf(d.項目) >= 0;
