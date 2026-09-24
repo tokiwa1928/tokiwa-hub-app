@@ -73,6 +73,7 @@
   body.checkonly #chk{ width:auto; max-width:none; margin:0; min-height:calc(100vh - 40px); border:0; border-radius:0; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; font-size:18px; padding:24px; }
   body.checkonly #chk.ok{ background:#dcfce7; } body.checkonly #chk.ng{ background:#fee2e2; }
   body.checkonly #chk .big{ font-size:44px; font-weight:900; letter-spacing:.1em; margin-bottom:12px; }
+  @media (max-width:480px){ body.checkonly #chk .big{ font-size:30px; letter-spacing:.05em; } body.checkonly #chk{ font-size:15px; padding:16px; } }
   .testmark{ border:2px solid #000; color:#000; font-weight:700; text-align:center; padding:1mm; margin:0 0 2mm; font-size:11pt; letter-spacing:.2em; }
   @media print{ body{ background:#fff; } #bar{ display:none; } #paper{ margin:0; box-shadow:none; width:auto; min-height:auto; padding:10mm 10mm 8mm; } @page{ size:A4 portrait; margin:0; } }
 </style>
@@ -200,6 +201,35 @@ function 更新後か(f, 記録, 履歴) {
   var h = (履歴 || []).filter(function (x) { return x && x.日時 && new Date(x.日時) > at; });
   if (h.length) return { stale: true, why: 'Hub で ' + 日時(h[0].日時) + ' に ' + h.length + ' 項目が直っています（' + h.slice(0, 3).map(function (x) { return x.項目; }).join('・') + (h.length > 3 ? ' ほか' : '') + '）' };
   return { stale: false, why: '' };
+}
+// SEIZO-7: サインインなしの確認（中継の 指示書_確認。返るのは最新かどうかと回数・日時だけ）
+function 中継URL() { try { if (window.FM && FM.中継) return FM.中継; } catch (e) {} return (document.querySelector('script[src*="fm-bridge"]') && window.FM_RELAY_URL) || 'https://script.google.com/macros/s/AKfycby3DCpR4kCCQMBZ0a8sdsBArM1z_J3JJKcIMYNOHLlhzB1LNrYPqw_NM-dxo_JirSyK4g/exec'; }
+function 公開確認(no, id) {
+  return fetch(中継URL(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: '指示書_確認', 伝票番号: no, 記録id: id || 'latest' }), redirect: 'follow' })
+    .then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || '確認できませんでした'); return j.data || {}; });
+}
+function 確認画面(no, d) {
+  var box = $('chk'); if (!box) return; document.body.classList.add('checkonly'); box.style.display = 'flex';
+  var big = function (ok) { return '<div class="big">' + (ok ? '✔ 最新です' : d.status === 'none' ? '✖ 未出力です' : d.status === 'old' ? '✖ 古い版です' : '✖ 更新されています') + '</div>'; };
+  var ok = d.status === 'ok'; box.className = ok ? 'ok' : 'ng';
+  var body = ok ? ('この紙は 第' + esc(d.n) + '回 ' + esc(日時(d.at)) + ' の出力で、その後の更新はありません。')
+          : d.status === 'none' ? 'この伝票はまだ製造指示書を出していません。'
+          : d.status === 'old' ? ('この紙は古い版です' + (d.n ? '（第' + esc(d.n) + '回 ' + esc(日時(d.at)) + '）' : '') + '。最新は 第' + esc(d.lastN) + '回 ' + esc(日時(d.lastAt)) + ' です。最新の紙で作業してください。')
+          : ('この紙（第' + esc(d.n) + '回 ' + esc(日時(d.at)) + '）のあとに伝票が直っています。<br>' + esc(d.why || '') + '<br>製造指示書を出し直してから作業してください。');
+  box.innerHTML = big(ok) + '<div>' + body + '</div><div style="font-size:12px;color:#555;margin-top:6px">伝票 ' + esc(no) + '　確認 ' + esc(日時(new Date().toISOString())) + '</div>';
+  if (!ok) {
+    var signed = false; try { signed = !!(FM.名乗っている && FM.名乗っている()); } catch (e) {}
+    var b = document.createElement('button'); b.id = 'chk-print-btn'; b.textContent = signed ? '🖨 製造指示書を出力（記録して印刷）' : '🔒 ログインして出力する';
+    b.style.cssText = 'margin-top:14px;font-size:18px;font-weight:700;padding:12px 22px;border:2px solid #000;border-radius:8px;background:#000;color:#fff;cursor:pointer';
+    b.onclick = function () {
+      var s2 = false; try { s2 = !!(FM.名乗っている && FM.名乗っている()); } catch (e) {}
+      if (!s2) { var sb = $('fm-signin') && $('fm-signin').querySelector('button, div[role=button], iframe'); alert('出力には社内の Google アカウントでのログインが要ります。右上の「ログイン」を押してから、もう一度このボタンを押してください。'); if (sb && sb.click) try { sb.click(); } catch (e) {} return; }
+      document.body.classList.remove('checkonly'); 確認id = ''; box.style.display = 'none';
+      $('no').value = no; 出す().then(function () { setTimeout(記録して印刷, 300); });
+    };
+    box.appendChild(document.createElement('br')); box.appendChild(b);
+    var note = document.createElement('div'); note.style.cssText = 'font-size:12px;color:#555;margin-top:8px'; note.textContent = signed ? '' : '確認だけならログインは要りません。出力するときだけログインしてください。'; box.appendChild(note);
+  }
 }
 function 確認URL(no, rec) { var u = location.origin + location.pathname; return u + '?no=' + encodeURIComponent(no) + '&type=seizo&check=' + encodeURIComponent(rec && rec.id ? rec.id : 'latest'); }
 function QRを描く() {
@@ -441,6 +471,7 @@ function 束を記録して印刷() {
     var c = m.c; var rec = { id: 'SGP' + Date.now() + Math.floor(Math.random() * 100000), fmNo: c.no, kind: 'seizo', n: c.記録一覧.length + 1, at: new Date().toISOString(), by: who, pc: pc,
       comment: m.案, changes: m.chg.slice(0, 200), snap: c.snap, custName: String(得意先名(c.f['得意先コード']) || ''), prodName: String(c.f['製品名'] || '') };
     q.push(rec); c.記録一覧 = c.記録一覧.concat([rec]);
+    try { FM.呼ぶ('指示書_記録', [{ id: rec.id, 伝票番号: rec.fmNo, n: rec.n, at: rec.at, by: rec.by, pc: rec.pc, comment: rec.comment }]).catch(function () {}); } catch (e) {}   // SEIZO-7
   });
   try { localStorage.setItem('fm_sagyo_pending', JSON.stringify(q)); } catch (e) { alert('記録を置けませんでした（保存領域がいっぱいです）。印刷だけします'); }
   try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'sagyo' }); } catch (e) {}
@@ -465,6 +496,7 @@ function 記録して印刷() {
   var q = []; try { q = JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]'); } catch (e) { q = []; }
   q.push(rec); try { localStorage.setItem('fm_sagyo_pending', JSON.stringify(q)); } catch (e) { alert('記録を置けませんでした（保存領域がいっぱいです）。印刷だけします'); }
   try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'sagyo', 伝票番号: no }); } catch (e) {}
+  try { FM.呼ぶ('指示書_記録', [{ id: rec.id, 伝票番号: rec.fmNo, n: rec.n, at: rec.at, by: rec.by, pc: rec.pc, comment: rec.comment }]).catch(function () {}); } catch (e) {}   // SEIZO-7: QR 確認用に中継にも
   記録一覧 = 記録一覧.concat([rec]); 前回の記録 = 記録一覧[記録一覧.length - 2] || null;
   製造を描く(直近);   // 帯に 第N回 と コメントを出してから印刷（赤字は前回比のまま）
   前回の記録 = rec;    // 次の出力は今回との比較になる
@@ -473,10 +505,10 @@ function 記録して印刷() {
 }
 
 function 出す() {
-  var no = $('no').value.trim(); if (!no) return;
+  var no = $('no').value.trim(); if (!no) return Promise.resolve();
   $('st').textContent = '読んでいます… ' + no;
   var t0 = Date.now();
-  Promise.all([FM.呼ぶ('画面_読み込み', [no]), マスタを用意(), 出力記録を読む(no), FM.呼ぶ('画面_外注', [no]).catch(function () { return null; })]).then(function (rs) {
+  return Promise.all([FM.呼ぶ('画面_読み込み', [no]), マスタを用意(), 出力記録を読む(no), FM.呼ぶ('画面_外注', [no]).catch(function () { return null; })]).then(function (rs) {
     var r = rs[0]; if (!r.record) throw new Error('見つかりません: ' + no);
     記録一覧 = rs[2] || []; 前回の記録 = 記録一覧[記録一覧.length - 1] || null;
     var g = rs[3]; 外注行 = (g && g.外注 && g.外注[0] && g.外注[0].行) ? g.外注[0].行 : [];
@@ -501,7 +533,11 @@ function 出す() {
   var q = new URLSearchParams(location.search); if (q.get('type') === 'seizo') 種類を変える('seizo');
   if (q.get('test') === '1') テスト = true;
   if (q.get('check')) { 確認id = String(q.get('check')); 種類を変える('seizo'); document.body.classList.add('checkonly');
-    var c0 = $('chk'); if (c0) { c0.className = ''; c0.style.display = 'flex'; c0.innerHTML = (FM.名乗っている && FM.名乗っている()) ? '<div>確認しています…</div>' : '<div>右上の「ログイン」を押してください（社内の Google アカウント）</div>'; } }
+    var c0 = $('chk'); if (c0) { c0.className = ''; c0.style.display = 'flex'; c0.innerHTML = '<div>確認しています…</div>'; }
+    var no0 = String(q.get('no') || '').trim();
+    公開確認(no0, 確認id).then(function (d) { 確認画面(no0, d); }).catch(function (e) { if (c0) { c0.className = 'ng'; c0.innerHTML = '<div class="big">確認できませんでした</div><div>' + esc(String(e.message || e)) + '</div>'; } });
+    return;   // 伝票そのものは読まない（ログイン不要）
+  }
   if (q.get('nos')) { setTimeout(function () { 複数を出す(q.get('nos').split(/[,\s]+/)); }, 300); }
   else if (q.get('no')) { $('no').value = q.get('no'); setTimeout(出す, 300); }
 })();

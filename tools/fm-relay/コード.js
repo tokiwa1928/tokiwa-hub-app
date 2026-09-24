@@ -84,6 +84,8 @@ var BASE = 'https://' + FM_HOST + '/fmi/data/vLatest/databases/' + encodeURIComp
 function doPost(e) {
   try {
     var req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    // SEIZO-7: 製造指示書の QR 確認は誰でも（返すのは「最新かどうか」と回数・日時だけ。伝票の中身は返さない）
+    if (req.action === '指示書_確認') return json_({ ok: true, user: 'public', data: 指示書_確認(req['伝票番号'], req['記録id']) });
     var who = authorize_(req);
     いま呼んでいる人 = who;                 // 画面_* が Session を使わずに済むように
     try {
@@ -778,6 +780,56 @@ function 先方売価_読む(伝票番号) {
     out.push({ 会社: v[i][1], 単価: v[i][2], 金額: v[i][3], 更新者: v[i][4], 更新日: (v[i][5] instanceof Date) ? v[i][5].toISOString() : String(v[i][5] || ''), メモ: v[i][6] }); }
   return { ok: true, user: who.email, 行: out };
 }
+// ------------------------------------------------------- SEIZO-7: 製造指示書の出力記録（QR の確認用。保管庫「製造指示書出力」）
+var 指示書列 = ['id', '伝票番号', 'n', 'at', 'by', 'pc', 'comment'];
+function 指示書_帳簿_() { return 写し_帳簿_('製造指示書出力', 指示書列).getSheets()[0]; }
+function 指示書_記録(記録) {
+  var who = 画面_利用者_(); 記録 = 記録 || {};
+  var no = String(記録['伝票番号'] || 記録.fmNo || '').trim(); var id = String(記録.id || '').trim();
+  if (!no || !id) throw new Error('伝票番号と id が要ります');
+  var sh = 指示書_帳簿_(); var v = sh.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === id) return { ok: true, user: who.email, 既に: true }; }
+  sh.appendRow([id, no, Number(記録.n || 0), String(記録.at || new Date().toISOString()), String(記録.by || who.email || ''), String(記録.pc || ''), String(記録.comment || '').slice(0, 500)]);
+  return { ok: true, user: who.email };
+}
+function 指示書_確認(伝票番号, 記録id) {
+  var no = String(伝票番号 || '').trim(); var id = String(記録id || 'latest').trim();
+  if (!no) return { status: 'none', why: '伝票番号がありません' };
+  var sh = 指示書_帳簿_(); var v = sh.getDataRange().getValues(); var recs = [];
+  for (var i = 1; i < v.length; i++) { if (String(v[i][1]) !== no) continue; recs.push({ id: String(v[i][0]), n: Number(v[i][2] || 0), at: (v[i][3] instanceof Date) ? v[i][3].toISOString() : String(v[i][3] || ''), pc: String(v[i][5] || '') }); }
+  recs.sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
+  var last = recs[recs.length - 1] || null;
+  if (!last) return { status: 'none', 伝票番号: no, why: 'まだ製造指示書を出していません' };
+  var mine = id === 'latest' ? last : (recs.filter(function (r) { return r.id === id; })[0] || null);
+  if (!mine) return { status: 'old', 伝票番号: no, lastN: last.n, lastAt: last.at, why: 'この紙の出力記録が見つかりません。最新は 第' + last.n + '回' };
+  if (mine.id !== last.id) return { status: 'old', 伝票番号: no, n: mine.n, at: mine.at, lastN: last.n, lastAt: last.at, why: 'この紙は 第' + mine.n + '回。最新は 第' + last.n + '回' };
+  // 出力のあとに直っているか: FileMaker の修正日（日付）と、Hub からの変更の記録（日時）
+  var lay = LAYOUTS.juchu; var at = new Date(last.at); var 出力日 = new Date(at.getFullYear(), at.getMonth(), at.getDate());
+  var why = '';
+  try {
+    var f = find_(lay, [{ '伝票番号': '==' + no }], 1, 1, null);
+    if (f.records.length) {
+      var rec = f.records[0]; var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(rec.fields['修正日'] || ''));
+      if (m) { var d = new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])); if (d > 出力日) why = 'FileMaker の修正日 ' + rec.fields['修正日'] + ' が出力（' + 日付_(at) + '）より後'; }
+      if (!why) {
+        var h = 画面_履歴_誰でも_(rec.recordId); var after = h.filter(function (x) { return new Date(x.日時) > at; });
+        if (after.length) why = 'Hub で ' + after.length + ' 項目が出力より後に直っています';
+      }
+    }
+  } catch (e) { why = ''; }
+  if (why) return { status: 'stale', 伝票番号: no, n: mine.n, at: mine.at, why: why };
+  return { status: 'ok', 伝票番号: no, n: mine.n, at: mine.at, pc: mine.pc };
+}
+/** 画面_履歴 のサインイン不要版（項目名と日時だけ。値は返さない） */
+function 画面_履歴_誰でも_(recordId) {
+  var lay = LAYOUTS.juchu; var sh = 記録の置き場_().getSheets()[0]; var last = sh.getLastRow(); if (last < 2) return [];
+  var from = Math.max(2, last - 4000 + 1); var v = sh.getRange(from, 1, last - from + 1, 7).getValues(); var out = [];
+  for (var i = v.length - 1; i >= 0; i--) { var r = v[i]; if (String(r[3]) !== String(recordId) || String(r[2]) !== lay) continue;
+    var sent = {}; try { sent = JSON.parse(r[5] || '{}'); } catch (e) {}
+    var 日時 = (r[0] instanceof Date) ? r[0].toISOString() : String(r[0]);
+    Object.keys(sent).forEach(function (k) { out.push({ 日時: 日時, 項目: k }); }); if (out.length > 300) break; }
+  return out;
+}
 /** GRP-2: 関連会社売価の全行（案件管理表の列に出す用。伝票番号 → 会社ごとの単価・金額） */
 function 先方売価_一覧() {
   var who = 画面_利用者_(); var sh = 先方売価_帳簿_(); var v = sh.getDataRange().getValues(); var out = [];
@@ -836,6 +888,7 @@ function handle_(action, req, who) {
     case '先方売価_読む':     return 先方売価_読む(req['伝票番号']);                  // GRP-1: 関連会社の売価（Hub 側）
     case '先方売価_書く':     return 先方売価_書く(req['伝票番号'], req['会社'], req['単価'], req['金額'], req['メモ']);
     case '先方売価_一覧':     return 先方売価_一覧();                                    // GRP-2
+    case '指示書_記録':       return 指示書_記録(req['記録']);                            // SEIZO-7
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);
