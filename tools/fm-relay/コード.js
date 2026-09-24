@@ -237,6 +237,16 @@ function 画面_読み込み(番号) {
     var kb = rec ? String(rec.fields['案件区分'] || '') : ''; var aid = rec ? String(rec.fields['案件ID'] || '') : '';
     if (rec && aid && kb) { var p = 同じ段階の前回_(lay, aid, kb, rec.recordId); if (p) { 参考 = { recordId: p.recordId, 番号: p.fields['見積番号'] || p.fields['伝票番号'] || '', 起票日: p.fields['起票日'] || '', 合計金額: p.fields['合計金額'], 売価金額: p.fields['売価金額'] }; 差分 = 差分_(p.fields, rec.fields); } }
   } catch (e) { 参考 = null; 差分 = []; }
+  // YOY-2: 前段階（同じ案件で、この伝票より前に起こした 1 つ下の段階。受注なら今年の見積、見積なら今年の予算見積）との差分
+  var 前段階 = null, 前段階差分 = [];
+  try {
+    var 順 = { '予算見積': 1, '見積': 2, '受注': 3 }; var kb2 = rec ? String(rec.fields['案件区分'] || '') : ''; var aid2 = rec ? String(rec.fields['案件ID'] || '') : '';
+    if (rec && aid2 && 順[kb2] > 1) {
+      var rows2 = find_(lay, [{ '案件ID': '==' + aid2 }], 500, 1, null); var best = null; var my = String(rec.fields['起票日'] || '');
+      rows2.records.forEach(function (r) { if (String(r.recordId) === String(rec.recordId)) return; var k2 = String(r.fields['案件区分'] || ''); if (!順[k2] || 順[k2] >= 順[kb2]) return; var d = String(r.fields['起票日'] || ''); if (my && 日付数_(d) > 日付数_(my)) return; if (!best || 日付数_(d) > 日付数_(String(best.fields['起票日'] || '')) || (日付数_(d) === 日付数_(String(best.fields['起票日'] || '')) && 順[k2] > 順[String(best.fields['案件区分'] || '')])) best = r; });
+      if (best) { 前段階 = { recordId: best.recordId, 番号: best.fields['見積番号'] || best.fields['伝票番号'] || '', 起票日: best.fields['起票日'] || '', 区分: String(best.fields['案件区分'] || '') }; 前段階差分 = 差分_(best.fields, rec.fields); }
+    }
+  } catch (e) { 前段階 = null; 前段階差分 = []; }
 
   return {
     ok: true,
@@ -245,6 +255,8 @@ function 画面_読み込み(番号) {
     record: rec,
     参考: 参考,
     差分: 差分,
+    前段階: 前段階,
+    前段階差分: 前段階差分,
     履歴: rec ? 案件の履歴_(lay, rec.fields['案件ID']) : []
   };
 }
@@ -1329,6 +1341,7 @@ function 同じ段階の前回_(layout, 案件ID, 種別, 除くRecordId) {
 }
 
 /** 2つのレコードで中身が違う項目を並べる（金額と仕様の変化を見せるため） */
+function 日付数_(v) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v || '').trim()); return m ? Number(m[3] + m[1] + m[2]) : 0; }
 function 差分_(前, 後) {
   var out = [];
   if (!前 || !後) return out;

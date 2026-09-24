@@ -1721,6 +1721,13 @@ function setPane(p){
   #fmwho{ font-size:11.5px; color:#94a3b8; }
   #fmsignin{ display:none; }
   #fmdiff{ display:none; background:#fff7ed; border-bottom:2px solid #b45309; padding:9px 14px; }
+  #fmdiff.yoy-ok{ background:#f0fdf4; border-bottom-color:#16a34a; padding:5px 14px; }
+  #fmdiff.yoy-ok table, #fmdiff.yoy-ok .yoy-note{ display:none; }
+  #fmdiff.yoy-ok h4{ margin:0; font-size:12px; color:#166534; }
+  #fmdiff .yoy-ack{ font-size:12px; padding:3px 12px; border:1px solid #b45309; border-radius:4px; background:#fff; color:#7c2d12; cursor:pointer; margin-left:10px; }
+  #fmdiff2{ display:none; background:#fef2f2; border-bottom:2px solid #b91c1c; padding:8px 14px; font-size:12px; }
+  #fmdiff2 h4{ margin:0 0 4px; font-size:13px; color:#991b1b; }
+  #fmdiff2 table{ border-collapse:collapse; font-size:12px; } #fmdiff2 td{ padding:1px 8px 1px 0; border-bottom:1px solid #fecaca; } #fmdiff2 td.b{ font-weight:700; color:#991b1b; }
   #fmdiff h4{ margin:0 0 6px; font-size:13.5px; color:#7c2d12; }
   #fmdiff table{ border-collapse:collapse; font-size:12px; }
   #fmdiff td{ border:1px solid #e7d3ba; padding:2px 8px; }
@@ -1858,6 +1865,7 @@ function setPane(p){
   <span id="fmstat">番号を入れて「読み込む」／何も読み込まずに「新しく起こす」と新規案件</span>
 </div>
 <div id="fmdiff"></div>
+<div id="fmdiff2"></div>
 <div id="fmerr"></div>
 <div id="fmfind">
   <div class="cond">
@@ -2118,6 +2126,28 @@ window.FM見た目 = function () {};
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // YOY-1: 昨年比の確認（手配に残す。前回の番号が変われば、また注意が出る）
+  var 昨年比確認 = null, 昨年比の相手 = '';
+  function 昨年比の見た目() {
+    if (!diff || diff.style.display === 'none') return; var ok = !!(昨年比確認 && 昨年比の相手 && 昨年比確認.against === 昨年比の相手);
+    diff.classList.toggle('yoy-ok', ok); var st = $('yoy-state'); var ack = $('yoy-ack');
+    if (st) st.textContent = ok ? ('　✔ 確認済（' + String(昨年比確認.by || '').split('@')[0] + ' ' + String(昨年比確認.at || '').slice(0, 10) + '）押すと開きます') : '';
+    if (ack) ack.style.display = ok ? 'none' : '';
+    var h4 = diff.querySelector('h4'); if (h4) h4.onclick = ok ? function () { diff.classList.remove('yoy-ok'); if (ack) ack.style.display = 'none'; } : null;
+  }
+  // YOY-2: 前段階比（受注なら今年の見積、見積なら今年の予算見積）。前年の受注から写した受注に、今年の見積で入れた仕様変更が落ちていないか
+  function 前段階比を出す(前段階, 差) {
+    var box = $('fmdiff2'); if (!box) return; box.style.display = 'none'; box.innerHTML = '';
+    if (!前段階 || !差 || !差.length) return;
+    var 見せる = 差.filter(function (d) { return (FROM_FM[d.項目] || MONEY.indexOf(d.項目) >= 0) && ['起票日', '納期', '納品日', '修正日', '伝票番号', '見積番号', '案件区分', '前回伝票番号', '前回起票日', '注残数'].indexOf(d.項目) < 0; });
+    if (!見せる.length) return;
+    var 区分x = 現在 ? String(現在.fields['案件区分'] || '') : '';
+    var h = '<h4>⚠ 今年の' + esc(前段階.区分 || '前の段階') + ' ' + esc(前段階.番号) + '（' + esc(前段階.起票日) + '）と <b>' + 見せる.length + ' 項目</b>が違います</h4>'
+      + '<div style="color:#7f1d1d;margin-bottom:4px">' + (区分x === '受注' ? 'この受注は今年の見積と内容が違います。見積で入れた仕様変更が受注に落ちていませんか。金額の違いだけなら問題ありません。' : 'この見積は今年の予算見積と内容が違います。予算見積で入れた仕様変更が落ちていませんか。') + '</div><table>';
+    見せる.slice(0, 30).forEach(function (d) { h += '<tr><td>' + esc(d.項目) + '</td><td>' + (esc(d.前) || '空') + '</td><td class="b">→ ' + (esc(d.後) || '空') + '</td></tr>'; });
+    h += '</table>' + (見せる.length > 30 ? '<div>ほか ' + (見せる.length - 30) + ' 項目</div>' : '');
+    box.innerHTML = h; box.style.display = 'block';
+  }
   function 差分を出す(参考, 差) {
     diff.style.display = 'none';
     if (!参考 || !差 || !差.length) return;
@@ -2131,8 +2161,9 @@ window.FM見た目 = function () {};
     var 上限 = 40, 出す = 見せる.slice(0, 上限), h = '';
     h += '<button class="close" id="fmdiff-x">閉じる</button>';
     var 区分x = 現在 ? String(現在.fields['案件区分'] || '') : '';
-    h += '<h4>⚠ 前回の' + esc(区分x || '同じ段階') + ' ' + esc(参考.番号) + '（' + esc(参考.起票日) + '）から変わっている項目です</h4>';
-    if (区分x === '予算見積') h += '<div style="font-size:12px;color:#7f1d1d;margin:0 0 6px">今回の予算見積は、この案件のいちばん新しい段階（前年の受注など）から起こしています。前年の 見積・受注 で仕様が変わった分が、ここに出ています。予算見積書に反映されているか確認してください。</div>';
+    昨年比の相手 = String(参考.番号 || '');
+    h += '<h4>⚠ 昨年比の注意：前回の' + esc(区分x || '同じ段階') + ' ' + esc(参考.番号) + '（' + esc(参考.起票日) + '）から <b>' + 見せる.length + ' 項目</b>が変わっています <span id="yoy-state"></span><button type="button" class="yoy-ack" id="yoy-ack">確認しました</button></h4>';
+    h += '<div class="yoy-note" style="font-size:12px;color:#7f1d1d;margin:0 0 6px">' + (区分x === '予算見積' ? '今回の予算見積は、この案件のいちばん新しい段階（前年の受注など）から起こしています。前年の 見積・受注 で仕様が変わった分が、ここに出ています。予算見積書に反映されているか確認してください。' : '前年の同じ段階と比べています。仕様が変わっている項目は見積書・受注の内容と突き合わせてください。') + '</div>';
     h += '<table>';
     出す.forEach(function (d) {
       var money = MONEY.indexOf(d.項目) >= 0;
@@ -2146,9 +2177,11 @@ window.FM見た目 = function () {};
       h += '<div style="font-size:11.5px;color:#7c2d12;margin-top:4px">ほか '
          + (見せる.length - 上限) + ' 項目</div>';
     }
-    h += '<div style="font-size:11.5px;color:#7c2d12;margin-top:5px">'
+    h += '<div class="yoy-note" style="font-size:11.5px;color:#7c2d12;margin-top:5px">'
        + '前回の金額をそのまま使わないでください。仕様が変わっています。</div>';
     diff.innerHTML = h;
+    var ack = $('yoy-ack'); if (ack) ack.onclick = function () { 昨年比確認 = { against: 昨年比の相手, at: new Date().toISOString(), by: (window.FM名乗っている ? FM名乗っている() : '') || '' }; 昨年比の見た目(); 手配が変わった(); };
+    昨年比の見た目();
     diff.style.display = 'block';
     $('fmdiff-x').onclick = function () { diff.style.display = 'none'; };
   }
@@ -2164,6 +2197,7 @@ window.FM見た目 = function () {};
     履歴を出す(r['履歴']);
     番号欄.value = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
     差分を出す(r['参考'], r['差分']);
+    try { 前段階比を出す(r['前段階'], r['前段階差分']); } catch (e) {}   // YOY-2
     状態(msg + (ms ? '（' + ms + 'ms）' : ''), 'ok');
     待機(false);
     外注を読む(r.record.fields['伝票番号']);
@@ -3378,6 +3412,7 @@ window.FM見た目 = function () {};
       });
     });
     var gq = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { var v = Number(i.value); if (v) gq[i.getAttribute('data-n')] = v; }); if (Object.keys(gq).length) o.外注見積 = gq;
+    if (昨年比確認) o.昨年比確認 = 昨年比確認;
     var jz = {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
     o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord.done'), function (b) { o.外注[b.getAttribute('data-i')] = { ord: { done: true, at: b.getAttribute('data-at') || '' } }; });
     var mt = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k:checked'), function (c) { mt[c.value] = true; }); var mm = ($('mt-memo') || {}).value || ''; if (Object.keys(mt).length || mm.trim()) { mt.memo = mm.trim(); o.未確定 = mt; }
@@ -3398,6 +3433,7 @@ window.FM見た目 = function () {};
     Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord'), function (b) { 発注ボタンを描く(b, ((o.外注 || {})[b.getAttribute('data-i')] || {}).ord); });
     var mt = o.未確定 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.checked = !!mt[c.value]; }); if ($('mt-memo')) $('mt-memo').value = mt.memo || ''; 未確定の印();
     var gq = o.外注見積 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { i.value = gq[i.getAttribute('data-n')] || ''; });
+    昨年比確認 = o.昨年比確認 || null; 昨年比の見た目();
     var jz = o.事前 || {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { if ($(p[0])) $(p[0]).value = jz[p[1]] || ''; });
     if ($('fmjizen')) $('fmjizen').style.display = 手配の伝票 ? 'block' : 'none'; 仕様書を出す(); 同じ依頼を出す();
     if ($('hs-how')) { $('hs-how').value = (o.発送 || {}).how || ''; $('hs-how-who').value = (o.発送 || {}).who || ''; }
