@@ -1484,6 +1484,8 @@ setTimeout(_removeBootLoader_, 5000);
         <button class="btn" style="background:#dcfce7;border-color:#86efac;color:#15803d;font-weight:700;font-size:12px" onclick="_pselModal_('repeat')" title="チェックした案件をまとめて新規リピート登録（共通の置換=例:上質→コート も一括適用）">🔁 選択をリピート (<span id="psel-cnt">0</span>)</button>
         <button class="btn" style="background:#e0f2fe;border-color:#7dd3fc;color:#0369a1;font-weight:700;font-size:12px" onclick="_pselModal_('update')" title="チェックした案件のステータス変更・文字列置換をまとめて適用">✏ 選択を更新</button>
         <button class="btn" style="background:#fee2e2;border-color:#fca5a5;color:#b91c1c;font-weight:700;font-size:12px" onclick="_pselDelete_()" title="チェックした案件を削除（管理者以外は削除申請）">🗑 選択を削除</button>
+        <button class="btn" style="background:#1a1a1a;border-color:#1a1a1a;color:#fff;font-weight:700;font-size:12px" onclick="_pselSeizo_(false)" title="チェックした案件（FileMaker の伝票番号があるもの）の製造指示書をまとめて開く。印刷すると出力を記録">🖨 製造指示書（選択）</button>
+        <button class="btn" style="background:#fff;border-color:#f87171;color:#b91c1c;font-weight:700;font-size:12px" onclick="_pselSeizo_(true)" title="記録を残さずに製造指示書を出す（紙に「テスト出力」の帯が入ります）">🧪 テスト出力（選択）</button>
       </span>
       <!-- 区切り -->
       <span style="display:inline-block;width:1px;height:28px;background:#cbd5e1;margin:0 6px"></span>
@@ -1533,6 +1535,7 @@ setTimeout(_removeBootLoader_, 5000);
       <select id="proj-jt-f" style="font-size:12px;padding:4px 8px" onchange="_onProjFilterChange_()" title="新規/リピートの区分で絞り込み"><option value="">🏷 区分</option><option value="repeat">リピート</option><option value="new">新規</option></select>
       <input id="proj-qmin-f" type="number" data-step="off" style="font-size:12px;padding:4px 8px;width:90px" oninput="_onProjFilterChange_()" placeholder="数量 最小">
       <input id="proj-qmax-f" type="number" data-step="off" style="font-size:12px;padding:4px 8px;width:90px" oninput="_onProjFilterChange_()" placeholder="数量 最大">
+      <select id="proj-seizo-f" style="font-size:12px;padding:4px 8px" onchange="_onProjFilterChange_()" title="製造指示書を出したかどうかで絞り込み（SEIZO-2）"><option value="">🖨 製造指示書</option><option value="none">未出力だけ</option><option value="done">出力済だけ</option></select>
       <select id="proj-period-f" style="font-size:12px;padding:4px 8px" onchange="_onProjFilterChange_()" title="登録/受注日の期間で絞り込み"><option value="">📅 全期間</option><option value="3m">直近3ヶ月</option><option value="6m">直近6ヶ月</option><option value="1y">直近1年</option><option value="2y">直近2年</option><option value="3y">直近3年</option></select>
       <button class="btn" style="font-size:11px;padding:3px 8px;color:#666" onclick="_clearProjFilters_()" title="絞り込みをすべて解除">✕ クリア</button>
     </div>
@@ -45959,6 +45962,8 @@ function _projMatchesChips_(r){
   if(fQmin !== '' && (parseInt(r.qty)||0) < (parseInt(fQmin)||0)) return false;
   var fQmax = (document.getElementById('proj-qmax-f')?.value || '').trim();
   if(fQmax !== '' && (parseInt(r.qty)||0) > (parseInt(fQmax)||0)) return false;
+  var fSz = document.getElementById('proj-seizo-f')?.value || '';   // SEIZO-2: 製造指示書の未出力／出力済
+  if(fSz){ var _fmNo=_projFmNo_(r); if(!_fmNo) return false; var _done=(typeof _sagyoPrintsOf_==='function' && _sagyoPrintsOf_(_fmNo).length>0) || !!r.sagyoPrintN; if(fSz==='none' ? _done : !_done) return false; }
   var fP = document.getElementById('proj-period-f')?.value || '';
   if(fP){
     var _m = fP==='3m'?3:fP==='6m'?6:fP==='1y'?12:fP==='2y'?24:36;
@@ -45977,10 +45982,19 @@ function _onProjFilterChange_(){
 function _clearProjFilters_(){
   window._projSearchChips_ = [];
   _renderProjChips_();
-  ['proj-q','proj-cat-f','proj-status-f','proj-company-f','proj-cust-f','proj-user-f','proj-jt-f','proj-qmin-f','proj-qmax-f','proj-period-f'].forEach(function(id){
+  ['proj-q','proj-cat-f','proj-status-f','proj-company-f','proj-cust-f','proj-user-f','proj-jt-f','proj-qmin-f','proj-qmax-f','proj-period-f','proj-seizo-f'].forEach(function(id){
     var el = document.getElementById(id); if(el) el.value = '';
   });
   _onProjFilterChange_();
+}
+// SEIZO-2: 案件 → FileMaker の伝票番号（自動作成のカードは id が a108355 の形、手入力のカードは fm-denpyo）
+function _projFmNo_(r){ if(!r) return ''; var v=(r.fm&&r.fm['fm-denpyo'])||''; if(v) return String(v); if(/^[a-zA-Z]\d{4,}$/.test(String(r.id||''))) return String(r.id); return ''; }
+function _pselSeizo_(test){
+  var nos=[], skip=[];
+  _pselList_().forEach(function(x){ var no=_projFmNo_(x.r); if(no){ if(nos.indexOf(no)<0) nos.push(no); } else skip.push(x.r.id||x.r.item||'?'); });
+  if(!nos.length){ alert('チェックした案件に FileMaker の伝票番号がありません（製造指示書は FileMaker の伝票から出します）'); return; }
+  if(skip.length && !confirm(skip.length+' 件は FileMaker の伝票番号が無いので出せません。残り '+nos.length+' 件を出しますか？')) return;
+  window.open('tools/sagyo.html?type=seizo&nos='+encodeURIComponent(nos.join(','))+(test?'&test=1':''), '_blank', 'noopener');
 }
 // 得意先ドロップダウン + 検索候補を案件データから生成 (1度だけ毎回再構築)
 function _populateProjFilterOptions_(){
