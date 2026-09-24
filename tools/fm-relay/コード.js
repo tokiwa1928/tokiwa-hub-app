@@ -794,6 +794,17 @@ function 手配_読む(伝票番号) {
   }
   return { ok: true, user: who.email, 手配: null };
 }
+/** MITEI-1: 全伝票の 仕様未確定の理由・未発注の数（案件管理表の列と絞り用。小さい） */
+function 手配_一覧() {
+  var who = 画面_利用者_(); var sh = 手配_帳簿_(); var v = sh.getDataRange().getValues(); var out = {};
+  for (var i = 1; i < v.length; i++) {
+    var no = String(v[i][0] || ''); if (!no) continue; var o = {}; try { o = JSON.parse(v[i][1] || '{}') || {}; } catch (e) { continue; }
+    var mt = o.未確定 || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); var nb = 0;
+    ['用紙', '印刷', '加工'].forEach(function (g) { Object.keys(o[g] || {}).forEach(function (n) { var x = o[g][n]; if (x && ((g === '用紙' && x.k !== '在庫') || x.k === '外注') && !(x.ord && x.ord.done)) nb++; }); });
+    if (ks.length || nb || (mt.memo && String(mt.memo).trim())) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb };
+  }
+  return { ok: true, user: who.email, 一覧: out };
+}
 function 手配_書く(伝票番号, 手配) {
   var who = 画面_利用者_(); var no = String(伝票番号 || '').trim(); if (!no) throw new Error('伝票番号がありません');
   var js = JSON.stringify(手配 || {}); if (js.length > 40000) throw new Error('手配が大きすぎます');
@@ -915,6 +926,7 @@ function handle_(action, req, who) {
     case '指示書_記録':       return 指示書_記録(req['記録']);                            // SEIZO-7
     case '手配_読む':         return 手配_読む(req['伝票番号']);                          // TEHAI-1
     case '手配_書く':         return 手配_書く(req['伝票番号'], req['手配']);             // TEHAI-1
+    case '手配_一覧':         return 手配_一覧();                                        // MITEI-1
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);

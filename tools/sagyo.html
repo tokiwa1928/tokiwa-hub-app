@@ -77,6 +77,7 @@
   .testmark{ border:2px solid #000; color:#000; font-weight:700; text-align:center; padding:1mm; margin:0 0 2mm; font-size:11pt; letter-spacing:.2em; }
   @media print{ body{ background:#fff; } #bar{ display:none; } #paper{ margin:0; box-shadow:none; width:auto; min-height:auto; padding:10mm 10mm 8mm; } @page{ size:A4 portrait; margin:0; } }
 </style>
+<style>/* 表組は角（本多さん指定）。ボタンは丸くてよい */ table,thead,tbody,tr,th,td,div:has(> table),section:has(> table){border-radius:0 !important}</style>
 </head>
 <body>
 <div id="bar">
@@ -191,8 +192,9 @@ var 手配 = {};            // TEHAI-1: 保管庫「手配」（用紙の 仕入
 function 手配文(種, n) {
   var x = ((手配 || {})[種] || {})[String(n === '表紙' ? 0 : n)]; if (!x) return '';
   var w = x.who ? ' ' + x.who : '';
-  if (種 === '用紙') return x.k === '在庫' ? '在庫紙' : x.k === '外注' ? '外注手配' + w : (x.who ? '仕入' + w : '');
-  return x.k === '外注' ? '部分外注' + w : '';
+  var od = (x.ord && x.ord.done) ? ' ✔発注済' + (x.ord.at ? String(x.ord.at).slice(5, 10).replace('-', '/') : '') : ((種 === '用紙' && x.k !== '在庫') || x.k === '外注') ? ' 未発注' : '';
+  if (種 === '用紙') return (x.k === '在庫' ? '在庫紙' : x.k === '外注' ? '外注手配' + w : (x.who ? '仕入' + w : '仕入')) + od;
+  return x.k === '外注' ? '部分外注' + w + od : '';
 }
 var 今の写し = null;       // いま描いた内容（出力記録に残す）
 var 前回の記録 = null;     // この伝票の直前の出力記録（変更の赤字に使う）
@@ -282,6 +284,9 @@ function 製造HTML(f) {
   function nm(n) { return n === '表紙' ? '表紙' : ('0' + n); }
   var 得 = 得意先名(f['得意先コード']);
   var h = '<h1 class="label">製 造 指 示 書</h1>';
+  // MITEI-1: 仕様が決まっていないときは紙の上に大きく
+  (function () { var mt = (手配 && 手配.未確定) || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); if (!ks.length && !(mt.memo && String(mt.memo).trim())) return;
+    h += '<div style="border:0.6mm solid #000;padding:1.2mm 3mm;margin:0 0 1.5mm;font-size:11pt;font-weight:900;background:#fff">⚠ 仕様未確定：' + esc(ks.map(function (x) { return x + '未確定'; }).join('・')) + (mt.memo ? '　' + esc(mt.memo) : '') + '　— 決まるまで作業に入らないでください</div>'; })();
   // 出力記録の帯（画面と紙の両方に出す）
   var n回 = 記録一覧.length;
   var last = 記録一覧[n回 - 1] || null;
@@ -350,10 +355,10 @@ function 製造HTML(f) {
     + '</table>';
   // 外注（FileMaker 外注データ・最大 4 社）を表で。1 社ずつ 外注先／発注内容／数量／単価／合計
   if (外注行.length) {
-    h += '<table class="box sec"><colgroup><col style="width:6mm"><col style="width:40mm"><col><col style="width:16mm"><col style="width:16mm"><col style="width:20mm"></colgroup>'
-      + '<tr><th>外注</th><th>外注先</th><th>発注内容</th><th>数量</th><th>単価</th><th>合計</th></tr>';
+    h += '<table class="box sec"><colgroup><col style="width:6mm"><col style="width:40mm"><col><col style="width:16mm"><col style="width:16mm"><col style="width:20mm"><col style="width:16mm"></colgroup>'
+      + '<tr><th>外注</th><th>外注先</th><th>発注内容</th><th>数量</th><th>単価</th><th>合計</th><th>発注</th></tr>';
     外注行.slice(0, 4).forEach(function (x, i) { var n = String(x.番 || (i + 1));
-      h += '<tr><td class="rn">' + esc(n) + '</td><td>' + V('外注' + n + '先', x.会社名 || x.外注コード || '') + '</td><td>' + V('外注' + n + '内容', x.発注内容 || '') + '</td><td class="r">' + V('外注' + n + '数量', x.数量 == null ? '' : x.数量, 数(x.数量)) + '</td><td class="r">' + V('外注' + n + '単価', x.単価 == null ? '' : x.単価) + '</td><td class="r">' + V('外注' + n + '合計', x.合計 == null ? '' : x.合計, 数(x.合計)) + '</td></tr>'; });
+      h += '<tr><td class="rn">' + esc(n) + '</td><td>' + V('外注' + n + '先', x.会社名 || x.外注コード || '') + '</td><td>' + V('外注' + n + '内容', x.発注内容 || '') + '</td><td class="r">' + V('外注' + n + '数量', x.数量 == null ? '' : x.数量, 数(x.数量)) + '</td><td class="r">' + V('外注' + n + '単価', x.単価 == null ? '' : x.単価) + '</td><td class="r">' + V('外注' + n + '合計', x.合計 == null ? '' : x.合計, 数(x.合計)) + '</td><td class="c small">' + (function () { var o = ((手配 && 手配.外注) || {})[n]; return (o && o.ord && o.ord.done) ? '✔ ' + String(o.ord.at || '').slice(5, 10).replace('-', '/') : '未発注'; })() + '</td></tr>'; });
     h += '</table>';
   }
   h += '<div style="font-size:7.5pt;color:#555;margin-top:2mm;display:flex;justify-content:space-between"><span>' + (n回 ? '太字＋二重下線＝前回の出力（第' + n回 + '回）から変わった項目。変更の一覧は裏面' : '') + '</span><span>トキワ印刷株式会社　印刷日 ' + 和暦(new Date()) + '</span></div>';

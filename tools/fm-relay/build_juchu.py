@@ -110,6 +110,17 @@ STYLE = r"""
   #fmgaichu .gc-chip.cat.on{ background:#1e293b; border-color:#1e293b; }
   #fmgaichu .gc-pick input.add{ width:90px; }
   #fmgaichu .gc-pick .pv{ color:#334155; margin-top:4px; }
+  /* MITEI-1: 未発注／発注済、仕様未確定 */
+  .th-ord{ font-size:10px; padding:1px 6px; border:1px solid #f59e0b; background:#fffbeb; color:#92400e; border-radius:3px; cursor:pointer; margin-left:2px; display:none; }
+  .th-ord.done{ background:#dcfce7; border-color:#86efac; color:#166534; }
+  .mitei-btn{ font-size:9.5px; padding:0 5px; border:1px solid #cbd5e1; background:#fff; color:#64748b; border-radius:3px; cursor:pointer; margin-left:4px; font-weight:400; vertical-align:middle; }
+  .mitei-btn.on{ background:#fee2e2; border-color:#fca5a5; color:#b91c1c; font-weight:700; }
+  .mitei-mark{ display:none; font-size:10px; color:#b91c1c; font-weight:700; margin-left:4px; }
+  .mitei-mark.on{ display:inline; }
+  #fmmitei{ display:none; background:#fff1f2; border-bottom:2px solid #dc2626; padding:6px 14px; font-size:12px; }
+  #fmmitei label{ margin-right:10px; cursor:pointer; white-space:nowrap; }
+  #fmmitei .sum{ color:#b91c1c; font-weight:700; }
+  body.fm-mitei #fmmitei{ display:block; }
   table.g, .panebox table, #fmgaichu table{ border-radius:0 !important; }
   table.g .fm-hide{ display:none; }
   body.fm-showall table.g .fm-hide{ display:table-cell; }
@@ -192,6 +203,7 @@ BAR = r"""
         <option value="">すべて</option>
         <option>予算見積</option><option>見積</option><option>受注</option><option>失注</option>
       </select></div>
+    <div><label>仕様未確定</label><label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;cursor:pointer"><input type="checkbox" id="ff-mitei" title="用紙・印刷色・数量などが決まっていない伝票だけ"> 未確定だけ</label></div>
     <div><label>製造指示書</label><label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;cursor:pointer"><input type="checkbox" id="ff-seizo" title="受注のうち、製造指示書をまだ出していないもの＋出したあとに直っているもの（更新後未出力）"> 未出力だけ</label></div>
     <div><label>期間（起票日）</label>
       <select id="ff-days">
@@ -251,6 +263,13 @@ BAR = r"""
   <button id="dtp-go" style="background:#7c3aed">校正BOXへ</button>
   <span id="dtp-msg" style="color:#6d28d9"></span>
 </div>
+<div id="fmmitei">
+  <b>⚠ 仕様未確定</b> <span class="sum" id="mt-sum"></span>
+  <span style="margin-left:10px">理由:</span>
+  <label><input type="checkbox" class="mt-k" value="用紙"> 用紙未確定</label><label><input type="checkbox" class="mt-k" value="印刷色"> 印刷色未確定</label><label><input type="checkbox" class="mt-k" value="数量"> 数量未確定</label><label><input type="checkbox" class="mt-k" value="納期"> 納期未確定</label><label><input type="checkbox" class="mt-k" value="外注先"> 外注先未確定</label><label><input type="checkbox" class="mt-k" value="デザイン"> デザイン未確定</label><label><input type="checkbox" class="mt-k" value="その他"> その他</label>
+  <input id="mt-memo" style="width:260px" placeholder="待っている内容（例: 用紙色を客先確認中）">
+  <span style="color:#7f1d1d;margin-left:8px">決まったらチェックを外してください。案件管理表に「仕様未確定」として残ります</span>
+</div>
 <div id="fmgaichu">
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px">
     <b>外注（FileMaker 外注データ）</b>
@@ -258,7 +277,7 @@ BAR = r"""
     <button id="gc-add" class="plain" style="margin-left:auto">＋ 行を足す</button>
     <button id="gc-save">外注を保存</button>
   </div>
-  <table><thead><tr><th>#</th><th>外注コード</th><th>会社名</th><th>発注内容</th><th>数量</th><th>単価</th><th>合計</th></tr></thead>
+  <table><thead><tr><th>#</th><th>外注コード</th><th>会社名</th><th>発注内容</th><th>数量</th><th>単価</th><th>合計</th><th>発注</th></tr></thead>
   <tbody id="gc-rows"></tbody>
   <tfoot><tr><td colspan="6" style="text-align:right">外注合計</td><td class="tot" id="gc-total" style="text-align:right"></td></tr></tfoot></table>
   <div style="color:#92400e;margin-top:3px">合計は FileMaker の計算（数量×単価）。保存すると原価（合計金額）に反映されます。Repeat 登録でも一緒に写ります。発注内容は「選ぶ ▾」で 区分（部分外注／完全外注／仕入）と どこの・どれを を選べます（手で書いても可）</div>
@@ -921,6 +940,13 @@ LOGIC = r"""
     });
   }
   function 製造指示書状態(no) { return 製造記録[String(no || '')] || null; }
+  // MITEI-1: 保管庫「手配」の一覧（未確定の理由・未発注の数）。サインインしてから取り、5 分ごとに取り直す
+  var 手配一覧 = {};
+  function 手配一覧を読む() {
+    if (!(window.FM名乗っている ? FM名乗っている() : false)) return Promise.resolve();
+    return 呼ぶ('手配_一覧', []).then(function (r) { 手配一覧 = r.一覧 || {}; try { if (最後の件数) 手元で探す(false); } catch (e) {} }).catch(function () {});
+  }
+  setTimeout(手配一覧を読む, 4000); setInterval(手配一覧を読む, 5 * 60 * 1000); window.addEventListener('fm-signin', function () { setTimeout(手配一覧を読む, 1500); });
   // SEIZO-4: 出力のあとに FileMaker で直っている（修正日 > 出力日）なら「更新後未出力」
   function 製造指示書が古い(no, 修正日) {
     var sp = 製造指示書状態(no); if (!sp || !sp.at) return false;
@@ -980,12 +1006,14 @@ LOGIC = r"""
         + '<td style="white-space:nowrap"><input class="gc-what" value="' + esc(x.発注内容 || '') + '"> <button type="button" class="plain gc-pickbtn" title="区分（部分外注／完全外注／仕入）と、どこの・どれを を選んで発注内容を組みます">選ぶ ▾</button></td>'
         + '<td><input class="gc-qty n" value="' + esc(x.数量 == null ? '' : x.数量) + '"></td>'
         + '<td><input class="gc-price n" value="' + esc(x.単価 == null ? '' : x.単価) + '"></td>'
-        + '<td class="gc-sum" style="text-align:right">' + esc(円(x.合計)) + '</td></tr>';
+        + '<td class="gc-sum" style="text-align:right">' + esc(円(x.合計)) + '</td>'
+        + '<td><button type="button" class="th-ord gc-ord" style="display:inline-block" data-i="' + i + '" title="この外注先に発注したら押す（もう一度で戻す）">未発注</button></td></tr>';
     }
     $('gc-rows').innerHTML = h;
     外注合計を出す();
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('input.n'), function (el) { el.addEventListener('input', 外注合計を出す); });
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-pickbtn'), function (b) { b.onclick = function () { 発注内容を選ぶ(b.closest('tr')); }; });
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-ord'), function (b) { 発注ボタンを描く(b, ((手配.外注 || {})[b.getAttribute('data-i')] || {}).ord); b.onclick = function () { 発注を切替(b); 手配が変わった(); }; });
   }
   // ---- GAICHU-1: 発注内容を選んで組む（区分・どこ・どれ・補足）。文字にして FileMaker の 発注内容 に入れる
   var 外注区分 = ['部分外注', '完全外注', '仕入'];
@@ -1239,7 +1267,8 @@ LOGIC = r"""
     { c:'注残数',     h:'注残', num:true },
     { c:'_dtp',       h:'DTP', dtp:true },   // KOSEI-DTP-1: 有にすると校正BOXへ
     { c:'_sagyo',     h:'指示書', sagyo:true }, // SAGYO-2: 外注／製造 の指示書を別タブで
-    { c:'_seizo',     h:'製造指示書', seizo:true } // SEIZO-1: 未出力／第N回 出力日
+    { c:'_seizo',     h:'製造指示書', seizo:true }, // SEIZO-1: 未出力／第N回 出力日
+    { c:'_mitei',     h:'仕様未確定', mitei:true }  // MITEI-1: 未確定の理由・未発注の数（保管庫「手配」）
   ];
 
   // FileMaker は MM/DD/YYYY で返す。日本の並びに直す
@@ -1293,6 +1322,7 @@ LOGIC = r"""
         if (k.senpo) { var rows = 先方売価表[String(row['伝票番号'] || '')] || []; var kk2 = 権限(); var my2 = kk2.会社;
           var show = kk2.partner ? rows.filter(function (x) { return String(x.会社) === my2; }) : rows;
           t += '<td style="white-space:nowrap;font-size:11px">' + (show.length ? show.map(function (x) { return (kk2.partner ? '' : esc(x.会社) + ' ') + esc(円(x.金額 === '' ? x.単価 : x.金額)); }).join('<br>') : '<span style="color:#cbd5e1">—</span>') + '</td>'; return; }
+        if (k.mitei) { var mi = 手配一覧[String(row['伝票番号'] || '')]; t += '<td style="white-space:nowrap;font-size:11px">' + (mi && mi.未確定 && mi.未確定.length ? '<span style="background:#fee2e2;color:#b91c1c;font-weight:700;padding:1px 6px;border-radius:3px" title="' + esc(mi.memo || '') + '">⚠ ' + esc(mi.未確定.join('・')) + '</span>' : '') + (mi && mi.未発注 ? ' <span style="color:#92400e" title="仕入・外注で発注済にしていないもの">未発注 ' + mi.未発注 + '</span>' : '') + '</td>'; return; }
         if (k.seizo) { var sp = 製造指示書状態(row['伝票番号']); var 受注 = String(row['案件区分'] || '') === '受注' || !row['案件区分']; var 古い = sp && 製造指示書が古い(row['伝票番号'], row['修正日']);
           t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px">' + (sp ? ('<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="' + (古い ? 'color:#b45309;font-weight:700;background:#fef3c7;border-radius:4px;padding:1px 6px' : 'color:#166534;font-weight:700') + '" title="' + esc((sp.pc ? '🖥 ' + sp.pc + '　' : '') + (sp.comment || '')) + (古い ? '　※出力（' + esc(String(sp.at || '').slice(0, 10)) + '）のあと FileMaker で直っています（修正日 ' + esc(String(row['修正日'] || '')) + '）。出し直してください' : '') + '">' + (古い ? '更新後未出力 ' : '') + '第' + sp.n + '回 ' + esc(String(sp.at || '').slice(0, 10).replace(/-/g, '/')) + '</a>')
             : (受注 ? '<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="color:#b91c1c;font-weight:700;background:#fee2e2;border-radius:4px;padding:1px 6px" title="製造指示書がまだ出ていません。押すと出せます">未出力</a>' : '<span style="color:#94a3b8">—</span>')) + '</td>'; return; }
@@ -1468,6 +1498,7 @@ LOGIC = r"""
     var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 0);   // 0 = すべて
     var user = $('ff-user').value.trim().toLowerCase(), tanto = $('ff-tanto').value.trim(), hinshu = $('ff-hinshu').value.trim().toLowerCase();
     var 未出力だけ = !!($('ff-seizo') && $('ff-seizo').checked);   // SEIZO-1
+    var 未確定だけ = !!($('ff-mitei') && $('ff-mitei').checked);   // MITEI-1
     var d1 = 日を数に($('ff-d1').value), d2 = 日を数に($('ff-d2').value), n1 = 日を数に($('ff-n1').value), n2 = 日を数に($('ff-n2').value);
     // FMHUB-FIND-ALL: 何でも検索（空白区切りの語を全部含む）。得意先名で当てるためにマスタが要る
     // SEARCH-1: 空白＝AND、「OR」「または」「|」＝OR（AND のかたまり同士）
@@ -1487,7 +1518,7 @@ LOGIC = r"""
     if (all.length) 日数 = 0;   // 何でも検索は全期間
     if (d1 || d2) 日数 = 0;   // 日付を指定したら「期間」は使わない
     try { var 条件 = {}; ['ff-all', 'ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { if ($(id)) 条件[id] = $(id).value; }); 条件.全件 = 全件モード; sessionStorage.setItem('fm_find', JSON.stringify(条件)); } catch (e) {}
-    if (!all.length && !kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード && !未出力だけ && !フォーム条件) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    if (!all.length && !kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード && !未出力だけ && !未確定だけ && !フォーム条件) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
     全件モード = false;
     var から = 0;
     if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')); }
@@ -1500,6 +1531,7 @@ LOGIC = r"""
       if (n1 || n2) { var nd = 日を数に(r[P['納品日']]); if (!nd) continue; if (n1 && nd < n1) continue; if (n2 && nd > n2) continue; }
       if (custSet) { if (!custSet[String(r[P['得意先コード']])]) continue; } else if (cust && String(r[P['得意先コード']]) !== cust) continue;
       if (段階 && String(r[P['案件区分']]) !== 段階) continue;
+      if (未確定だけ) { var mi2 = 手配一覧[String(r[P['伝票番号']] || '')]; if (!(mi2 && mi2.未確定 && mi2.未確定.length)) continue; }
       if (未出力だけ) { var kb = String(r[P['案件区分']] || ''); if (kb && kb !== '受注') continue; if (製造指示書状態(r[P['伝票番号']]) && !製造指示書が古い(r[P['伝票番号']], r[P['修正日']])) continue; }
       if (user && String(r[P['ユーザー名']]).toLowerCase().indexOf(user) < 0) continue;
       if (tanto && String(r[P['担当者コード']]) !== tanto) continue;
@@ -1603,7 +1635,7 @@ LOGIC = r"""
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') 探す(); });
     $(id).addEventListener('input', 打ちながら);
   });
-  ['ff-stage', 'ff-days', 'ff-n', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-seizo'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', function () { 手元で探す(false); }); });
+  ['ff-stage', 'ff-days', 'ff-n', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-seizo', 'ff-mitei'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', function () { 手元で探す(false); }); });
   探し.addEventListener('keydown', function (e) { if (e.key !== 'Enter') return; var t = e.target; if (!t || !(t.tagName === 'INPUT' || t.tagName === 'SELECT')) return; if (t.closest('#ff-rows')) return; e.preventDefault(); 探す(); });
   // -------------------------------------------------- FileMaker のボタンを本物の動きに（FMHUB-9）
   function 帯のボタン(文言) {
@@ -1665,6 +1697,7 @@ LOGIC = r"""
     setTimeout(function () { try { var k = 権限(); if (k.partner && $('f-custcd') && !$('f-custcd').value) { $('f-custcd').value = 自社の得意先コード(); 得意先名を入れる(); } 金額の権限を適用(); } catch (e) {} }, 250);
   }, モード === 'mitsu' ? '予算見積か見積書かを選んで、FileMaker に新しく起こします（番号は自動）' : 'FileMaker に新しい' + 起こす種別 + 'を起こします（黒帯の「' + 起こす種別 + '」と同じ）');
   帯に付ける('検索モード', function () { 検索モードに入る(); }, 'FileMaker と同じ検索モード。入力欄に条件を入れて Enter');
+  (function () { var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('仕様未確定')) return; var b = document.createElement('button'); b.className = 'fb'; b.style.background = '#fee2e2'; b.style.color = '#b91c1c'; b.textContent = '仕様未確定'; b.title = '用紙・印刷色・数量などが決まっていないときに理由を付けます（案件管理表に残ります）'; b.onclick = function () { document.body.classList.add('fm-mitei'); var c = document.querySelector('#fmmitei .mt-k'); if (c) c.focus(); }; lay.parentNode.insertBefore(b, lay); })();
   帯に付ける('全体表示', function () {
     探し.style.display = 'block';
     $('ff-kw').value = ''; $('ff-cust').value = ''; $('ff-stage').value = ''; $('ff-days').value = '0'; $('ff-n').value = '0';
@@ -1773,15 +1806,18 @@ LOGIC = r"""
       tb.setAttribute('data-aligned', '1');
     });
     Array.prototype.forEach.call(document.querySelectorAll('table.g td.tehai select, table.g td.tehai input'), function (el) { el.addEventListener('change', 手配が変わった); el.addEventListener('input', function () { 手配の見た目(el.closest('td')); }); });
+    Array.prototype.forEach.call(document.querySelectorAll('table.g td.tehai .th-ord'), function (b) { b.onclick = function () { 発注を切替(b); 手配が変わった(); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('table.g td.tehai'), 手配の見た目);
   }
   function 手配欄HTML(t) {
-    if (t === 'p') return '<select class="th-sel"><option value="仕入">仕入発注</option><option value="在庫">在庫紙</option><option value="外注">外注先手配</option></select><input class="th-who" list="dl-tehai-vendor" placeholder="仕入先">';
-    return '<select class="th-sel"><option value="社内">社内</option><option value="外注">部分外注</option></select><input class="th-who" list="dl-tehai-vendor" placeholder="外注先" style="display:none">';
+    if (t === 'p') return '<select class="th-sel"><option value="仕入">仕入発注</option><option value="在庫">在庫紙</option><option value="外注">外注先手配</option></select><input class="th-who" list="dl-tehai-vendor" placeholder="仕入先"><button type="button" class="th-ord" title="発注したら押す（もう一度で戻す）">未発注</button>';
+    return '<select class="th-sel"><option value="社内">社内</option><option value="外注">部分外注</option></select><input class="th-who" list="dl-tehai-vendor" placeholder="外注先" style="display:none"><button type="button" class="th-ord" title="発注したら押す（もう一度で戻す）">未発注</button>';
   }
   function 手配の見た目(td) {
     var sel = td.querySelector('select'), who = td.querySelector('input.th-who'); if (!sel) return;
     var v = sel.value; sel.classList.toggle('gai', v === '外注');
     if (who) who.style.display = (v === '在庫' || v === '社内') ? 'none' : '';
+    var ob = td.querySelector('.th-ord'); if (ob) ob.style.display = (v === '在庫' || v === '社内') ? 'none' : 'inline-block';
   }
   // 隠した項目も出す（帯の右端。PC ごとに覚える）
   (function () {
@@ -1819,9 +1855,12 @@ LOGIC = r"""
       Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n'), function (tr) {
         var td = tr.querySelector('td.tehai'); if (!td) return; var sel = td.querySelector('select'), who = td.querySelector('input.th-who');
         var v = sel.value, w = who ? who.value.trim() : ''; var def = pr[0] === 'p' ? '仕入' : '社内';
-        if (v !== def || w) o[pr[1]][tr.getAttribute('data-n')] = { k: v, who: w };
+        var ob = td.querySelector('.th-ord'); var ord = (ob && ob.classList.contains('done')) ? { done: true, at: ob.getAttribute('data-at') || '' } : null;
+        if (v !== def || w || ord) o[pr[1]][tr.getAttribute('data-n')] = { k: v, who: w, ord: ord };
       });
     });
+    o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord.done'), function (b) { o.外注[b.getAttribute('data-i')] = { ord: { done: true, at: b.getAttribute('data-at') || '' } }; });
+    var mt = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k:checked'), function (c) { mt[c.value] = true; }); var mm = ($('mt-memo') || {}).value || ''; if (Object.keys(mt).length || mm.trim()) { mt.memo = mm.trim(); o.未確定 = mt; }
     if ($('hs-how')) { var how = $('hs-how').value, hw = $('hs-how-who').value.trim(); if (how || hw) o.発送 = { how: how, who: hw }; }
     if ($('t-perbox')) { var pb = Number($('t-perbox').value) || 0; if (pb) o.箱 = { perbox: pb, boxes: Number($('t-boxes').value) || 0 }; }
     return o;
@@ -1833,12 +1872,41 @@ LOGIC = r"""
       Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n'), function (tr) {
         var td = tr.querySelector('td.tehai'); if (!td) return; var sel = td.querySelector('select'), who = td.querySelector('input.th-who');
         var x = (o[pr[1]] || {})[tr.getAttribute('data-n')] || {}; sel.value = x.k || (pr[0] === 'p' ? '仕入' : '社内'); if (who) who.value = x.who || ''; 手配の見た目(td);
+        var ob = td.querySelector('.th-ord'); if (ob) 発注ボタンを描く(ob, x.ord);
       });
     });
+    Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord'), function (b) { 発注ボタンを描く(b, ((o.外注 || {})[b.getAttribute('data-i')] || {}).ord); });
+    var mt = o.未確定 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.checked = !!mt[c.value]; }); if ($('mt-memo')) $('mt-memo').value = mt.memo || ''; 未確定の印();
     if ($('hs-how')) { $('hs-how').value = (o.発送 || {}).how || ''; $('hs-how-who').value = (o.発送 || {}).who || ''; }
     if ($('t-perbox')) { $('t-perbox').value = (o.箱 || {}).perbox || ''; 箱数を計算(); }
     手配読込中 = false;
   }
+  function 発注ボタンを描く(b, ord) {
+    if (!b) return; var done = !!(ord && ord.done); b.classList.toggle('done', done); b.setAttribute('data-at', done ? (ord.at || '') : '');
+    b.textContent = done ? ('発注済 ' + (ord.at ? String(ord.at).slice(5, 10).replace('-', '/') : '')) : '未発注';
+  }
+  function 発注を切替(b) { var done = b.classList.contains('done'); 発注ボタンを描く(b, done ? null : { done: true, at: new Date().toISOString().slice(0, 10) }); }
+  // 仕様未確定: 見出しの「未定」ボタン ⇄ チェック、⏳待ち の印
+  var 未定の場所 = [];   // { k, th(見出しの要素) }
+  function 未確定を用意() {
+    function 付ける(el, k, label) { if (!el || el.querySelector('.mitei-btn[data-k="' + k + '"]')) return; var b = document.createElement('button'); b.type = 'button'; b.className = 'mitei-btn'; b.setAttribute('data-k', k); b.textContent = '未定'; b.title = label + 'がまだ決まっていないときに押す（仕様未確定として残ります。決まったらもう一度押す）';
+      b.onclick = function (e) { e.preventDefault(); e.stopPropagation(); var c = document.querySelector('#fmmitei .mt-k[value="' + k + '"]'); if (!c) return; c.checked = !c.checked; 未確定の印(); 手配が変わった(); };
+      var m = document.createElement('span'); m.className = 'mitei-mark'; m.setAttribute('data-k', k); m.textContent = '⏳ 待ち'; el.appendChild(b); el.appendChild(m); 未定の場所.push({ k: k, el: el }); }
+    var thP = 表.p && Array.prototype.filter.call(表.p.querySelectorAll('th'), function (x) { return x.textContent.trim().indexOf('紙質') === 0; })[0]; 付ける(thP, '用紙', '用紙');
+    var thK = 表.k && Array.prototype.filter.call(表.k.querySelectorAll('th'), function (x) { return x.textContent.trim().indexOf('インキ') === 0; })[0]; 付ける(thK, '印刷色', '印刷色（インキ・用紙色）');
+    var lot = $('f-lotunit'); if (lot && lot.previousElementSibling) 付ける(lot.previousElementSibling, '数量', '数量');
+    var due = $('f-due'); if (due && due.previousElementSibling && due.previousElementSibling.classList && due.previousElementSibling.classList.contains('lb')) 付ける(due.previousElementSibling, '納期', '納期');
+    var gh = document.querySelector('#fmgaichu b'); 付ける(gh, '外注先', '外注先');
+    Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.addEventListener('change', function () { 未確定の印(); 手配が変わった(); }); });
+    if ($('mt-memo')) $('mt-memo').addEventListener('change', 手配が変わった);
+  }
+  function 未確定の印() {
+    var on = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k:checked'), function (c) { on[c.value] = true; });
+    未定の場所.forEach(function (p) { var b = p.el.querySelector('.mitei-btn'), m = p.el.querySelector('.mitei-mark'); if (b) b.classList.toggle('on', !!on[p.k]); if (m) m.classList.toggle('on', !!on[p.k]); });
+    var keys = Object.keys(on); document.body.classList.toggle('fm-mitei', keys.length > 0 || !!(($('mt-memo') || {}).value || '').trim());
+    if ($('mt-sum')) $('mt-sum').textContent = keys.length ? ('（' + keys.join('・') + '）') : '';
+  }
+  window.仕様未確定を出す = function () { document.body.classList.add('fm-mitei'); };
   function 手配を読む(no) {
     手配の伝票 = no; 手配 = {}; 手配を置く({}); if (!no) return;
     呼ぶ('手配_読む', [no]).then(function (r) { if (手配の伝票 !== no) return; 手配 = r.手配 || {}; 手配を置く(手配); if ($('th-msg')) $('th-msg').textContent = r.手配 ? '' : ''; }).catch(function (e) { if ($('th-msg')) $('th-msg').textContent = '手配を読めません: ' + String(e.message || e); });
@@ -1851,7 +1919,9 @@ LOGIC = r"""
     clearTimeout(手配タイマー); if ($('th-msg')) $('th-msg').textContent = '手配を保存します…';
     手配タイマー = setTimeout(function () {
       var no = 手配の伝票, o = 手配を集める();
-      呼ぶ('手配_書く', [no, o]).then(function () { 手配 = o; if ($('th-msg')) $('th-msg').textContent = '手配を保存しました ' + new Date().toTimeString().slice(0, 5); }).catch(function (e) { if ($('th-msg')) $('th-msg').textContent = '手配を保存できません: ' + String(e.message || e); });
+      呼ぶ('手配_書く', [no, o]).then(function () { 手配 = o; if ($('th-msg')) $('th-msg').textContent = '手配を保存しました ' + new Date().toTimeString().slice(0, 5);
+        var mt = o.未確定 || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); var nb = 0; ['用紙', '印刷', '加工'].forEach(function (g) { Object.keys(o[g] || {}).forEach(function (n) { var x = o[g][n]; if (x && ((g === '用紙' && x.k !== '在庫') || x.k === '外注') && !(x.ord && x.ord.done)) nb++; }); });
+        手配一覧[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb }; }).catch(function (e) { if ($('th-msg')) $('th-msg').textContent = '手配を保存できません: ' + String(e.message || e); });
     }, 1200);
   }
   if ($('hs-how')) { $('hs-how').addEventListener('change', 手配が変わった); $('hs-how-who').addEventListener('change', 手配が変わった); }
@@ -1880,7 +1950,7 @@ LOGIC = r"""
     var 試す = 0; var t = setInterval(function () { 試す++; if (!(window.FM名乗っている ? FM名乗っている() : true)) { if (試す > 40) clearInterval(t); return; } clearInterval(t);
       呼ぶ('マスタ_配る', ['外注先マスタ']).then(function (j) { j.取った = new Date().toISOString(); try { localStorage.setItem('fm_master_外注先マスタ', JSON.stringify(j)); } catch (e) {} 使う(j); }).catch(function () {}); }, 1500);
   }
-  列を整える(); 手配候補を用意();
+  列を整える(); 手配候補を用意(); 未確定を用意();
   try { window.applyRowVis(); } catch (e) {}
 
   // ================================================================ KENSAKU-1: 検索モード（入力欄がそのまま検索欄）
