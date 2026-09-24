@@ -801,9 +801,46 @@ function 手配_一覧() {
     var no = String(v[i][0] || ''); if (!no) continue; var o = {}; try { o = JSON.parse(v[i][1] || '{}') || {}; } catch (e) { continue; }
     var mt = o.未確定 || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); var nb = 0;
     ['用紙', '印刷', '加工'].forEach(function (g) { Object.keys(o[g] || {}).forEach(function (n) { var x = o[g][n]; if (x && ((g === '用紙' && x.k !== '在庫') || x.k === '外注') && !(x.ord && x.ord.done)) nb++; }); });
-    if (ks.length || nb || (mt.memo && String(mt.memo).trim())) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb };
+    var jz = o.事前 || {};
+    if (ks.length || nb || (mt.memo && String(mt.memo).trim()) || jz.依頼ID) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb, 依頼ID: jz.依頼ID || '' };
   }
   return { ok: true, user: who.email, 一覧: out };
+}
+/** SPEC-1: 手配（事前情報・未確定・手配）を 元 → 先 に写す。先に既にあれば触らない */
+function 手配_写す(元, 先) {
+  var who = 画面_利用者_(); var a = String(元 || '').trim(), b = String(先 || '').trim(); if (!a || !b || a === b) return { ok: true, user: who.email, 写した: false };
+  var sh = 手配_帳簿_(); var v = sh.getDataRange().getValues(); var src = null, has = false;
+  for (var i = 1; i < v.length; i++) { var no = String(v[i][0]); if (no === a) src = v[i][1]; if (no === b) has = true; }
+  if (!src || has) return { ok: true, user: who.email, 写した: false, 理由: has ? '先に既にある' : '元に無い' };
+  var o = {}; try { o = JSON.parse(src || '{}') || {}; } catch (e) { o = {}; }
+  // 発注済みの印は新しい番号では消す（また発注するので）
+  ['用紙', '印刷', '加工'].forEach(function (g) { Object.keys(o[g] || {}).forEach(function (n) { if (o[g][n]) delete o[g][n].ord; }); }); delete o.外注;
+  o.写し元 = a;
+  sh.appendRow([b, JSON.stringify(o), new Date().toISOString(), who.email]);
+  return { ok: true, user: who.email, 写した: true };
+}
+/** SPEC-1: 仕様書（お客様の仕様書・見積依頼書）を Drive に置く。写しフォルダ/仕様書/<番号 or 依頼ID>/ */
+function 仕様書_フォルダ_(番号) {
+  var f = 写し_フォルダ_(); var it = f.getFoldersByName('仕様書'); var s = it.hasNext() ? it.next() : f.createFolder('仕様書');
+  var nm = String(番号 || '').replace(/[\\\/:*?"<>|]/g, '_').trim() || '不明'; var it2 = s.getFoldersByName(nm); return it2.hasNext() ? it2.next() : s.createFolder(nm);
+}
+function 仕様書_置く(番号, 名, mime, base64) {
+  var who = 画面_利用者_(); if (!番号 || !base64) throw new Error('番号とファイルが要ります');
+  var bytes = Utilities.base64Decode(base64); if (bytes.length > 25 * 1024 * 1024) throw new Error('25MB を超えています');
+  var folder = 仕様書_フォルダ_(番号); var nm = String(名 || 'file').replace(/[\\\/:*?"<>|]/g, '_');
+  var base = nm.replace(/(\.[^.]+)$/, ''), ext = (nm.match(/(\.[^.]+)$/) || ['', ''])[1], k = 1, fin = nm;
+  while (folder.getFilesByName(fin).hasNext()) { k++; fin = base + ' (' + k + ')' + ext; }
+  var f = folder.createFile(Utilities.newBlob(bytes, mime || 'application/octet-stream', fin));
+  return { ok: true, user: who.email, file: { id: f.getId(), name: f.getName(), url: f.getUrl(), size: f.getSize(), at: new Date().toISOString() }, folderUrl: folder.getUrl() };
+}
+function 仕様書_一覧(番号) {
+  var who = 画面_利用者_(); if (!番号) return { ok: true, user: who.email, files: [] };
+  var f = 写し_フォルダ_(); var it = f.getFoldersByName('仕様書'); if (!it.hasNext()) return { ok: true, user: who.email, files: [] };
+  var nm = String(番号).replace(/[\\\/:*?"<>|]/g, '_').trim(); var it2 = it.next().getFoldersByName(nm); if (!it2.hasNext()) return { ok: true, user: who.email, files: [] };
+  var folder = it2.next(); var fs = folder.getFiles(), out = [];
+  while (fs.hasNext() && out.length < 50) { var x = fs.next(); out.push({ id: x.getId(), name: x.getName(), url: x.getUrl(), size: x.getSize(), at: x.getLastUpdated().toISOString() }); }
+  out.sort(function (a, b) { return a.at < b.at ? 1 : -1; });
+  return { ok: true, user: who.email, files: out, folderUrl: folder.getUrl() };
 }
 function 手配_書く(伝票番号, 手配) {
   var who = 画面_利用者_(); var no = String(伝票番号 || '').trim(); if (!no) throw new Error('伝票番号がありません');
@@ -927,6 +964,9 @@ function handle_(action, req, who) {
     case '手配_読む':         return 手配_読む(req['伝票番号']);                          // TEHAI-1
     case '手配_書く':         return 手配_書く(req['伝票番号'], req['手配']);             // TEHAI-1
     case '手配_一覧':         return 手配_一覧();                                        // MITEI-1
+    case '手配_写す':         return 手配_写す(req['元'], req['先']);                     // SPEC-1: 段階・Repeat で新しい番号へ
+    case '仕様書_置く':       return 仕様書_置く(req['番号'], req['名'], req['mime'], req['base64']);   // SPEC-1
+    case '仕様書_一覧':       return 仕様書_一覧(req['番号']);                            // SPEC-1
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);

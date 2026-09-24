@@ -121,6 +121,13 @@ STYLE = r"""
   #fmmitei label{ margin-right:10px; cursor:pointer; white-space:nowrap; }
   #fmmitei .sum{ color:#b91c1c; font-weight:700; }
   body.fm-mitei #fmmitei{ display:block; }
+  /* SPEC-1: 見積時の事前情報 */
+  #fmjizen{ display:none; background:#f0f9ff; border-bottom:2px solid #0369a1; padding:6px 14px; font-size:12px; }
+  #fmjizen label{ margin-right:8px; white-space:nowrap; }
+  #fmjizen input[type=date]{ font-size:12px; padding:2px 4px; }
+  #fmjizen input[type=text]{ font-size:12px; padding:2px 4px; border:1px solid #cbd5e1; border-radius:3px; }
+  #fmjizen .files a{ color:#0369a1; margin-right:10px; }
+  #fmjizen .up{ font-size:11px; padding:2px 8px; }
   table.g, .panebox table, #fmgaichu table{ border-radius:0 !important; }
   table.g .fm-hide{ display:none; }
   body.fm-showall table.g .fm-hide{ display:table-cell; }
@@ -262,6 +269,26 @@ BAR = r"""
   <label>校正の内容 <input id="dtp-note" style="width:320px" placeholder="何を校正に出すか（空なら校正BOXに下書きで入ります）"></label>
   <button id="dtp-go" style="background:#7c3aed">校正BOXへ</button>
   <span id="dtp-msg" style="color:#6d28d9"></span>
+</div>
+<div id="fmjizen">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <b>📄 見積時の事前情報（仕様書から）</b><span style="color:#0369a1">予算見積の段階から入れておけます。段階を進めても Repeat しても新しい番号に写ります</span>
+    <label>発注予定日 <input type="date" id="jz-order"></label>
+    <label>入稿予定日 <input type="date" id="jz-nyuko"></label>
+    <label>希望納期 <input type="date" id="jz-due"> <button type="button" class="plain up" id="jz-due-to" title="FileMaker の納期欄に同じ日を入れる">納期欄へ</button></label>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:3px">
+    <label>配送 <input type="text" id="jz-haiso" style="width:200px" placeholder="方法・納品先（例: 宅配で各校へ分納）"></label>
+    <label>梱包 <input type="text" id="jz-konpo" style="width:160px" placeholder="例: 100枚結束・段ボール"></label>
+    <label>まとめ依頼ID <input type="text" id="jz-group" style="width:120px" placeholder="例: 2026市役所A" title="1 つの依頼で複数の見積が来たとき、同じ ID を付けると仕様書を共有し、他の番号が並びます"></label>
+    <label>メモ <input type="text" id="jz-memo" style="width:240px" placeholder="仕様書の要点・見積依頼事項"></label>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:3px">
+    <span>仕様書・依頼書:</span><span class="files" id="jz-files">（なし）</span>
+    <input type="file" id="jz-file" multiple style="display:none" accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg,.zip">
+    <button type="button" class="plain up" id="jz-upload">＋ ファイルを置く</button>
+    <span id="jz-same" style="color:#0369a1"></span><span id="jz-msg" style="color:#0369a1"></span>
+  </div>
 </div>
 <div id="fmmitei">
   <b>⚠ 仕様未確定</b> <span class="sum" id="mt-sum"></span>
@@ -1162,6 +1189,7 @@ LOGIC = r"""
       p.then(function (r) {
         var no = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
         受け取る(r, 種別 + ' を起こしました  ' + no, Date.now() - t0);
+        try { if (r.種 && r.種.番号) 手配を写して読む(String(r.種.番号), String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}   // SPEC-1
         if (起こした後) { var f = 起こした後; 起こした後 = null; try { f(); } catch (e) {} }
       }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); 起こした後 = null; });
     };
@@ -1689,7 +1717,7 @@ LOGIC = r"""
     b.onclick = function () { 保存(); };
     新規.parentNode.insertBefore(b, 新規);
   })();
-  帯に付ける('新規作成', function () { try { 手配の伝票 = ''; 手配 = {}; 手配を置く({}); } catch (e) {}
+  帯に付ける('新規作成', function () { try { 手配の伝票 = ''; 手配 = {}; 手配を置く({}); if ($('fmjizen')) $('fmjizen').style.display = 'none'; } catch (e) {}
     if (モード === 'mitsu') { 種別を選んで起こす(); return; }
     var n = document.querySelector('#fmbar button.new[data-kind="' + 起こす種別 + '"]') || document.querySelector('#fmbar button.new');
     if (n) n.click();
@@ -1712,7 +1740,7 @@ LOGIC = r"""
     待機(true); 失敗(''); diff.style.display = 'none'; 状態('Repeat 登録しています… 元 ' + no);
     var t0 = Date.now();
     呼ぶ('画面_Repeat登録', [現在.recordId])
-      .then(function (r) { var n2 = r.record.fields['伝票番号'] || ''; 受け取る(r, 'Repeat 登録しました  ' + n2 + '（元 ' + no + '）', Date.now() - t0); })
+      .then(function (r) { var n2 = r.record.fields['伝票番号'] || ''; 受け取る(r, 'Repeat 登録しました  ' + n2 + '（元 ' + no + '）', Date.now() - t0); try { 手配を写して読む(no, String(n2)); } catch (e) {} })
       .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }); }, '読み込んでいる伝票を元に、新しい受注を FileMaker に起こします');
   帯に付ける('データ削除', function () { 読んでから(function () {
@@ -1859,6 +1887,7 @@ LOGIC = r"""
         if (v !== def || w || ord) o[pr[1]][tr.getAttribute('data-n')] = { k: v, who: w, ord: ord };
       });
     });
+    var jz = {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
     o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord.done'), function (b) { o.外注[b.getAttribute('data-i')] = { ord: { done: true, at: b.getAttribute('data-at') || '' } }; });
     var mt = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k:checked'), function (c) { mt[c.value] = true; }); var mm = ($('mt-memo') || {}).value || ''; if (Object.keys(mt).length || mm.trim()) { mt.memo = mm.trim(); o.未確定 = mt; }
     if ($('hs-how')) { var how = $('hs-how').value, hw = $('hs-how-who').value.trim(); if (how || hw) o.発送 = { how: how, who: hw }; }
@@ -1877,10 +1906,50 @@ LOGIC = r"""
     });
     Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord'), function (b) { 発注ボタンを描く(b, ((o.外注 || {})[b.getAttribute('data-i')] || {}).ord); });
     var mt = o.未確定 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.checked = !!mt[c.value]; }); if ($('mt-memo')) $('mt-memo').value = mt.memo || ''; 未確定の印();
+    var jz = o.事前 || {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { if ($(p[0])) $(p[0]).value = jz[p[1]] || ''; });
+    if ($('fmjizen')) $('fmjizen').style.display = 手配の伝票 ? 'block' : 'none'; 仕様書を出す(); 同じ依頼を出す();
     if ($('hs-how')) { $('hs-how').value = (o.発送 || {}).how || ''; $('hs-how-who').value = (o.発送 || {}).who || ''; }
     if ($('t-perbox')) { $('t-perbox').value = (o.箱 || {}).perbox || ''; 箱数を計算(); }
     手配読込中 = false;
   }
+  // ---- SPEC-1: 仕様書ファイル（Drive）と まとめ依頼
+  var 仕様書一覧 = { 番号: [], 依頼: [] };
+  function 仕様書を出す() {
+    var el = $('jz-files'); if (!el) return; var no = 手配の伝票, gid = (($('jz-group') || {}).value || '').trim();
+    if (!no) { el.textContent = '（なし）'; return; }
+    el.textContent = '読んでいます…';
+    Promise.all([呼ぶ('仕様書_一覧', [no]).catch(function () { return { files: [] }; }), gid ? 呼ぶ('仕様書_一覧', [gid]).catch(function () { return { files: [] }; }) : Promise.resolve({ files: [] })]).then(function (rs) {
+      if (手配の伝票 !== no) return; 仕様書一覧 = { 番号: rs[0].files || [], 依頼: rs[1].files || [] };
+      var h = 仕様書一覧.番号.map(function (f) { return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener" title="' + esc(String(f.at || '').slice(0, 10)) + '">📄 ' + esc(f.name) + '</a>'; }).join('')
+        + 仕様書一覧.依頼.map(function (f) { return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener" title="まとめ依頼 ' + esc(gid) + ' の共有ファイル ' + esc(String(f.at || '').slice(0, 10)) + '">📎 ' + esc(f.name) + ' <span style="color:#64748b">(依頼 ' + esc(gid) + ')</span></a>'; }).join('');
+      el.innerHTML = h || '（なし）';
+    });
+  }
+  function 同じ依頼を出す() {
+    var el = $('jz-same'); if (!el) return; var gid = (($('jz-group') || {}).value || '').trim(); el.textContent = '';
+    if (!gid) return; var nos = Object.keys(手配一覧).filter(function (no) { return no !== 手配の伝票 && (手配一覧[no].依頼ID || '') === gid; });
+    if (nos.length) el.innerHTML = '同じ依頼: ' + nos.map(function (no) { return '<a href="?no=' + encodeURIComponent(no) + '" style="color:#0369a1;margin-right:6px">' + esc(no) + '</a>'; }).join('');
+  }
+  function 仕様書を置く(files) {
+    var no = 手配の伝票; if (!no) { alert('先に伝票（見積）を読み込むか起こしてください'); return; }
+    var gid = (($('jz-group') || {}).value || '').trim(); var 置き先 = gid && confirm('まとめ依頼 ' + gid + ' の共有ファイルとして置きますか？\n\n[OK] 依頼 ' + gid + ' の共有　／　[キャンセル] この番号 ' + no + ' だけ') ? gid : no;
+    var list = Array.prototype.slice.call(files || []); if (!list.length) return; var i = 0;
+    var next = function () { if (i >= list.length) { $('jz-msg').textContent = list.length + ' 件を置きました（' + 置き先 + '）'; 仕様書を出す(); return; }
+      var f = list[i++]; if (f.size > 25 * 1024 * 1024) { alert(f.name + ' は 25MB を超えています'); next(); return; }
+      $('jz-msg').textContent = '置いています… ' + f.name; var fr = new FileReader();
+      fr.onload = function () { var b64 = String(fr.result).split(',')[1] || ''; 呼ぶ('仕様書_置く', [置き先, f.name, f.type || '', b64]).then(next).catch(function (e) { $('jz-msg').textContent = f.name + ' を置けません: ' + String(e.message || e); }); };
+      fr.readAsDataURL(f); };
+    next();
+  }
+  (function () {
+    if (!$('jz-upload')) return;
+    $('jz-upload').onclick = function () { $('jz-file').click(); }; $('jz-file').onchange = function () { 仕様書を置く(this.files); this.value = ''; };
+    ['jz-order', 'jz-nyuko', 'jz-due', 'jz-haiso', 'jz-konpo', 'jz-group', 'jz-memo'].forEach(function (id) { $(id).addEventListener('change', 手配が変わった); });
+    $('jz-group').addEventListener('change', function () { 同じ依頼を出す(); 仕様書を出す(); });
+    $('jz-due-to').onclick = function () { var v = $('jz-due').value; if (!v) return; if ($('f-due')) { $('f-due').value = v; $('f-due').dispatchEvent(new Event('input', { bubbles: true })); $('f-due').dispatchEvent(new Event('change', { bubbles: true })); 状態('納期欄に ' + v + ' を入れました（保存で FileMaker へ）', 'ok'); } };
+  })();
+  // 段階を起こす・Repeat したら、元の番号の手配（事前情報・未確定・手配）を新しい番号へ写す
+  function 手配を写して読む(元, 先) { if (!元 || !先 || 元 === 先) return; 呼ぶ('手配_写す', [元, 先]).then(function (r) { if (r && r.写した) { 手配を読む(先); 状態('事前情報・手配を ' + 元 + ' から写しました', 'ok'); } }).catch(function () {}); }
   function 発注ボタンを描く(b, ord) {
     if (!b) return; var done = !!(ord && ord.done); b.classList.toggle('done', done); b.setAttribute('data-at', done ? (ord.at || '') : '');
     b.textContent = done ? ('発注済 ' + (ord.at ? String(ord.at).slice(5, 10).replace('-', '/') : '')) : '未発注';
@@ -2054,7 +2123,7 @@ LOGIC = r"""
   var 受け取る元 = 受け取る;
   受け取る = function (r, msg, ms) {
     受け取る元(r, msg, ms);
-    if (r && r.record) { 手配を読む(String(r.record.fields['伝票番号'] || '')); 送り位置を出す(); }
+    if (r && r.record) { 手配を読む(String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); 送り位置を出す(); }
   };
 
   // 番号を渡して開ける（Hub の一覧から開くときに使う）。
