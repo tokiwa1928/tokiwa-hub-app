@@ -231,12 +231,20 @@ function 画面_読み込み(番号) {
   var rows = find_(lay, [{ '伝票番号': '==' + 番号 }], 1, 1, null);
   if (!rows.records.length) rows = find_(lay, [{ '見積番号': '==' + 番号 }], 1, 1, null);
   var rec = rows.records[0] || null;
+  // YOY-1: 同じ段階の前回（前年の予算見積／見積／受注）との差分を、読み込むたびに返す（昨年比の注意）
+  var 参考 = null, 差分 = [];
+  try {
+    var kb = rec ? String(rec.fields['案件区分'] || '') : ''; var aid = rec ? String(rec.fields['案件ID'] || '') : '';
+    if (rec && aid && kb) { var p = 同じ段階の前回_(lay, aid, kb, rec.recordId); if (p) { 参考 = { recordId: p.recordId, 番号: p.fields['見積番号'] || p.fields['伝票番号'] || '', 起票日: p.fields['起票日'] || '', 合計金額: p.fields['合計金額'], 売価金額: p.fields['売価金額'] }; 差分 = 差分_(p.fields, rec.fields); } }
+  } catch (e) { 参考 = null; 差分 = []; }
 
   return {
     ok: true,
     user: who.email,
     writable: fieldInfo_(lay).writable,
     record: rec,
+    参考: 参考,
+    差分: 差分,
     履歴: rec ? 案件の履歴_(lay, rec.fields['案件ID']) : []
   };
 }
