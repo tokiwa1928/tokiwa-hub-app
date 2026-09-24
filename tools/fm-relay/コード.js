@@ -780,6 +780,30 @@ function 先方売価_読む(伝票番号) {
     out.push({ 会社: v[i][1], 単価: v[i][2], 金額: v[i][3], 更新者: v[i][4], 更新日: (v[i][5] instanceof Date) ? v[i][5].toISOString() : String(v[i][5] || ''), メモ: v[i][6] }); }
   return { ok: true, user: who.email, 行: out };
 }
+// ------------------------------------------------------- TEHAI-1: 手配（保管庫「手配」。伝票番号ごとに JSON 1 つ）
+//   { 用紙:{1:{k:'仕入'|'在庫'|'外注', who:''}}, 印刷:{1:{k:'社内'|'外注', who:''}}, 加工:{…}, 発送:{how:'', who:''}, 箱:{perbox:0, boxes:0} }
+var 手配列 = ['伝票番号', 'json', 'at', 'by'];
+function 手配_帳簿_() { return 写し_帳簿_('手配', 手配列).getSheets()[0]; }
+function 手配_読む(伝票番号) {
+  var who = 画面_利用者_(); var no = String(伝票番号 || '').trim(); if (!no) throw new Error('伝票番号がありません');
+  var sh = 手配_帳簿_(); var v = sh.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++) {
+    if (String(v[i][0]) !== no) continue;
+    var o = {}; try { o = JSON.parse(v[i][1] || '{}') || {}; } catch (e) { o = {}; }
+    return { ok: true, user: who.email, 手配: o, at: (v[i][2] instanceof Date) ? v[i][2].toISOString() : String(v[i][2] || ''), by: String(v[i][3] || '') };
+  }
+  return { ok: true, user: who.email, 手配: null };
+}
+function 手配_書く(伝票番号, 手配) {
+  var who = 画面_利用者_(); var no = String(伝票番号 || '').trim(); if (!no) throw new Error('伝票番号がありません');
+  var js = JSON.stringify(手配 || {}); if (js.length > 40000) throw new Error('手配が大きすぎます');
+  var lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    var sh = 手配_帳簿_(); var v = sh.getDataRange().getValues(); var now = new Date().toISOString();
+    for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === no) { sh.getRange(i + 1, 2, 1, 3).setValues([[js, now, who.email]]); return { ok: true, user: who.email, 更新: true }; } }
+    sh.appendRow([no, js, now, who.email]); return { ok: true, user: who.email, 更新: false };
+  } finally { lock.releaseLock(); }
+}
 // ------------------------------------------------------- SEIZO-7: 製造指示書の出力記録（QR の確認用。保管庫「製造指示書出力」）
 var 指示書列 = ['id', '伝票番号', 'n', 'at', 'by', 'pc', 'comment'];
 function 指示書_帳簿_() { return 写し_帳簿_('製造指示書出力', 指示書列).getSheets()[0]; }
@@ -889,6 +913,8 @@ function handle_(action, req, who) {
     case '先方売価_書く':     return 先方売価_書く(req['伝票番号'], req['会社'], req['単価'], req['金額'], req['メモ']);
     case '先方売価_一覧':     return 先方売価_一覧();                                    // GRP-2
     case '指示書_記録':       return 指示書_記録(req['記録']);                            // SEIZO-7
+    case '手配_読む':         return 手配_読む(req['伝票番号']);                          // TEHAI-1
+    case '手配_書く':         return 手配_書く(req['伝票番号'], req['手配']);             // TEHAI-1
     case '画面_外注':         return 画面_外注(req['伝票番号']);
     case '画面_外注保存':     return 画面_外注保存(req.recordId, req.modId, req['行']);
     case '画面_外注作成':     return 画面_外注作成(req['伝票番号'], req['行']);

@@ -19,6 +19,15 @@
   th.sat{ color:#1d4ed8; } th.sun{ color:#dc2626; }
   td{ border:1px solid #94a3b8; vertical-align:top; padding:0; height:150px; }
   td.other{ background:#f8fafc; }
+  #cal.week td{ height:calc(100vh - 140px); }
+  #cal.week .ev{ font-size:13px; padding:4px 6px; }
+  #cal .day{ padding:10px 14px; }
+  #cal .day .ev{ font-size:16px; padding:8px 10px; border-bottom:1px solid #e5e7eb; }
+  #cal .day .ev b{ margin-right:8px; }
+  #cal .day .none{ color:#94a3b8; padding:20px; text-align:center; }
+  #cal .day .add{ display:inline-block; margin:8px 0; color:#1d4ed8; cursor:pointer; font-size:13px; }
+  #bar .vw button{ border-radius:0; margin-left:-1px; } #bar .vw button.on{ background:#1d4ed8; color:#fff; border-color:#1d4ed8; }
+  @media print{ #cal.week td{ height:auto; min-height:120mm; } }
   td.today .d{ background:#fde68a; }
   .d{ text-align:center; font-size:15px; font-weight:600; padding:2px; border-bottom:1px solid #e5e7eb; position:relative; }
   .d .add{ position:absolute; right:4px; top:2px; font-size:12px; color:#94a3b8; cursor:pointer; } .d .add:hover{ color:#1d4ed8; }
@@ -39,7 +48,8 @@
 <div id="bar">
   <a href="fm-juchu-hub.html">← 受注入力</a>
   <button id="prev">←</button><span class="ym" id="ym"></span><button id="next">→</button>
-  <button id="today">今月</button>
+  <button id="today">今日</button>
+  <span class="vw"><button data-v="月" class="on">月</button><button data-v="週">週</button><button data-v="日">日</button></span>
   <label>カレンダー基準日 <input type="month" id="base"></label>
   <label><input type="checkbox" id="wk"> 土日も出す</label>
   <button id="print">印刷</button>
@@ -67,50 +77,73 @@ function ISO(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + p
 function ISOfromFM(fm) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(fm || '')); return m ? (m[3] + '-' + m[1] + '-' + m[2]) : ''; }
 function FMfromISO(iso) { var p = String(iso || '').split('-'); return p.length === 3 ? (p[1] + '/' + p[2] + '/' + p[0]) : ''; }
 
-var 年 = new Date().getFullYear(), 月 = new Date().getMonth();   // 月は 0 始まり
+var 表示 = '月';                                       // 月／週／日
+var 基準 = new Date(); 基準.setHours(0, 0, 0, 0);       // 見ている日（月なら その月、週なら その週）
 var 予定 = [];   // 表示中の範囲の予定
 var 編集中 = null;
+var 曜名 = ['日', '月', '火', '水', '木', '金', '土'];
 
 function 範囲() {
-  // FileMaker と同じく、月の初めの週の月曜から、月末の週の日曜まで
-  var first = new Date(年, 月, 1), last = new Date(年, 月 + 1, 0);
+  if (表示 === '日') return { start: new Date(基準), end: new Date(基準) };
+  if (表示 === '週') { var st = new Date(基準); st.setDate(st.getDate() - ((st.getDay() + 6) % 7)); var en = new Date(st); en.setDate(st.getDate() + 6); return { start: st, end: en }; }
+  // 月: FileMaker と同じく、月の初めの週の月曜から、月末の週の日曜まで
+  var first = new Date(基準.getFullYear(), 基準.getMonth(), 1), last = new Date(基準.getFullYear(), 基準.getMonth() + 1, 0);
   var start = new Date(first); start.setDate(first.getDate() - ((first.getDay() + 6) % 7));
   var end = new Date(last); end.setDate(last.getDate() + (7 - last.getDay()) % 7);
   return { start: start, end: end };
 }
+function 見出し() {
+  var r = 範囲();
+  if (表示 === '日') return 基準.getFullYear() + '年' + (基準.getMonth() + 1) + '月' + 基準.getDate() + '日（' + 曜名[基準.getDay()] + '）';
+  if (表示 === '週') return r.start.getFullYear() + '年' + (r.start.getMonth() + 1) + '/' + r.start.getDate() + '〜' + (r.end.getMonth() + 1) + '/' + r.end.getDate();
+  return 基準.getFullYear() + '年' + (基準.getMonth() + 1) + '月';
+}
 function 読む() {
   var r = 範囲();
-  $('ym').textContent = 年 + '年' + (月 + 1) + '月';
-  $('base').value = 年 + '-' + pad(月 + 1);
+  $('ym').textContent = 見出し();
+  $('base').value = 基準.getFullYear() + '-' + pad(基準.getMonth() + 1);
+  Array.prototype.forEach.call(document.querySelectorAll('#bar .vw button'), function (b) { b.classList.toggle('on', b.getAttribute('data-v') === 表示); });
   $('st').textContent = '読んでいます…';
   return FM.呼ぶ('予定_一覧', [FM日付(r.start), FM日付(r.end)]).then(function (res) {
     予定 = res.行 || []; 描く(); $('st').textContent = 予定.length + ' 件';
-    try { history.replaceState(null, '', '?ym=' + 年 + '-' + pad(月 + 1)); } catch (e) {}
+    try { history.replaceState(null, '', '?v=' + encodeURIComponent(表示) + '&d=' + ISO(基準)); } catch (e) {}
   }).catch(function (e) { $('st').textContent = String(e.message || e); });
 }
 function 描く() {
-  var r = 範囲(), 土日 = $('wk').checked, 今日 = ISO(new Date());
+  var r = 範囲(), 土日 = $('wk').checked || 表示 !== '月', 今日 = ISO(new Date());
   var by = {}; 予定.forEach(function (p) { var k = ISOfromFM(p.日付); (by[k] = by[k] || []).push(p); });
-  var 曜 = 土日 ? ['月', '火', '水', '木', '金', '土', '日'] : ['月', '火', '水', '木', '金'];
-  var h = '<table><thead><tr>' + 曜.map(function (w) { return '<th class="' + (w === '土' ? 'sat' : w === '日' ? 'sun' : '') + '">' + w + '</th>'; }).join('') + '</tr></thead><tbody>';
-  for (var d = new Date(r.start); d <= r.end; d.setDate(d.getDate() + 7)) {
-    h += '<tr>';
-    for (var i = 0; i < (土日 ? 7 : 5); i++) {
-      var day = new Date(d); day.setDate(d.getDate() + i);
-      var k = ISO(day), other = day.getMonth() !== 月;
-      h += '<td class="' + (other ? 'other ' : '') + (k === 今日 ? 'today' : '') + '" data-d="' + k + '"><div class="d">' + day.getDate() + '<span class="add" title="この日に予定を足す" data-d="' + k + '">＋</span></div>';
-      (by[k] || []).forEach(function (p) {
-        var off = /休み|休暇|有給/.test(p.タイトル) && !/^a\d/.test(p.タイトル);
-        h += '<div class="ev' + (off ? ' off' : '') + '" data-id="' + esc(p.recordId) + '">' + (p.時刻 ? '<b>' + esc(String(p.時刻).slice(0, 5)) + '</b> ' : '') + esc(p.タイトル) + '</div>';
-      });
-      h += '</td>';
-    }
-    h += '</tr>';
+  $('cal').className = 表示 === '週' ? 'week' : '';
+  function 予定HTML(p, big) {
+    var off = /休み|休暇|有給/.test(p.タイトル) && !/^a\d/.test(p.タイトル);
+    return '<div class="ev' + (off ? ' off' : '') + '" data-id="' + esc(p.recordId) + '">' + (p.時刻 ? '<b>' + esc(String(p.時刻).slice(0, 5)) + '</b> ' : '') + esc(p.タイトル) + '</div>';
   }
-  h += '</tbody></table>';
+  var h;
+  if (表示 === '日') {
+    var k0 = ISO(基準); var list = by[k0] || [];
+    h = '<div class="day"><div style="font-size:18px;font-weight:700;margin-bottom:6px">' + esc(見出し()) + '</div>'
+      + (list.length ? list.map(function (p) { return 予定HTML(p, true); }).join('') : '<div class="none">この日の予定はありません</div>')
+      + '<span class="add" data-d="' + k0 + '">＋ この日に予定を足す</span></div>';
+  } else {
+    var 曜 = 土日 ? ['月', '火', '水', '木', '金', '土', '日'] : ['月', '火', '水', '木', '金'];
+    h = '<table><thead><tr>' + 曜.map(function (w) { return '<th class="' + (w === '土' ? 'sat' : w === '日' ? 'sun' : '') + '">' + w + '</th>'; }).join('') + '</tr></thead><tbody>';
+    for (var d = new Date(r.start); d <= r.end; d.setDate(d.getDate() + 7)) {
+      h += '<tr>';
+      for (var i = 0; i < (土日 ? 7 : 5); i++) {
+        var day = new Date(d); day.setDate(d.getDate() + i);
+        var k = ISO(day), other = 表示 === '月' && day.getMonth() !== 基準.getMonth();
+        h += '<td class="' + (other ? 'other ' : '') + (k === 今日 ? 'today' : '') + '" data-d="' + k + '"><div class="d">' + (表示 === '週' ? (day.getMonth() + 1) + '/' : '') + day.getDate() + '<span class="add" title="この日に予定を足す" data-d="' + k + '">＋</span></div>';
+        (by[k] || []).forEach(function (p) { h += 予定HTML(p); });
+        h += '</td>';
+      }
+      h += '</tr>';
+    }
+    h += '</tbody></table>';
+  }
   $('cal').innerHTML = h;
   Array.prototype.forEach.call($('cal').querySelectorAll('.ev'), function (el) { el.onclick = function () { var p = 予定.filter(function (x) { return String(x.recordId) === el.getAttribute('data-id'); })[0]; if (p) 開く(p); }; });
   Array.prototype.forEach.call($('cal').querySelectorAll('.add'), function (el) { el.onclick = function () { 開く({ 日付: FMfromISO(el.getAttribute('data-d')), タイトル: '', 時刻: '' }); }; });
+  // 月・週の日付を押すと、その日の一覧（日の表示）へ
+  Array.prototype.forEach.call($('cal').querySelectorAll('td .d'), function (el) { el.ondblclick = function () { var k = el.parentNode.getAttribute('data-d'); if (k) { 基準 = new Date(k + 'T00:00:00'); 表示 = '日'; 読む(); } }; el.title = 'ダブルクリックでこの日だけを出す'; });
 }
 function 開く(p) {
   編集中 = p;
@@ -141,14 +174,18 @@ function 削除() {
   FM.サインインのボタンを置く($('fm-signin'));
   function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
   名(); window.addEventListener('fm-signin', 名);
-  $('prev').onclick = function () { 月--; if (月 < 0) { 月 = 11; 年--; } 読む(); };
-  $('next').onclick = function () { 月++; if (月 > 11) { 月 = 0; 年++; } 読む(); };
-  $('today').onclick = function () { 年 = new Date().getFullYear(); 月 = new Date().getMonth(); 読む(); };
-  $('base').onchange = function () { var p = $('base').value.split('-'); if (p.length === 2) { 年 = Number(p[0]); 月 = Number(p[1]) - 1; 読む(); } };
+  function 進む(n) { if (表示 === '月') 基準 = new Date(基準.getFullYear(), 基準.getMonth() + n, 1); else 基準.setDate(基準.getDate() + n * (表示 === '週' ? 7 : 1)); 読む(); }
+  $('prev').onclick = function () { 進む(-1); };
+  $('next').onclick = function () { 進む(1); };
+  $('today').onclick = function () { 基準 = new Date(); 基準.setHours(0, 0, 0, 0); 読む(); };
+  $('base').onchange = function () { var p = $('base').value.split('-'); if (p.length === 2) { 基準 = new Date(Number(p[0]), Number(p[1]) - 1, 1); 読む(); } };
+  Array.prototype.forEach.call(document.querySelectorAll('#bar .vw button'), function (b) { b.onclick = function () { 表示 = b.getAttribute('data-v'); try { localStorage.setItem('haiso_view', 表示); } catch (e) {} 読む(); }; });
+  try { var sv = localStorage.getItem('haiso_view'); if (sv === '週' || sv === '日' || sv === '月') 表示 = sv; } catch (e) {}
   $('wk').onchange = 描く; $('print').onclick = function () { window.print(); }; $('reload').onclick = 読む;
   $('e-save').onclick = 保存; $('e-cancel').onclick = 閉じる; $('e-del').onclick = 削除;
   $('edit').addEventListener('click', function (e) { if (e.target === $('edit')) 閉じる(); });
-  var q = new URLSearchParams(location.search); var ym = q.get('ym'); if (ym && /^\d{4}-\d\d$/.test(ym)) { 年 = Number(ym.slice(0, 4)); 月 = Number(ym.slice(5)) - 1; }
+  var q = new URLSearchParams(location.search); var ym = q.get('ym'); if (ym && /^\d{4}-\d\d$/.test(ym)) { 基準 = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5)) - 1, 1); 表示 = '月'; }
+  var qd = q.get('d'); if (qd && /^\d{4}-\d\d-\d\d$/.test(qd)) 基準 = new Date(qd + 'T00:00:00'); var qv = q.get('v'); if (qv === '週' || qv === '日' || qv === '月') 表示 = qv;
   setTimeout(読む, 300);
   setInterval(function () { if ($('edit').style.display !== 'block') 読む(); }, 5 * 60 * 1000);   // 5 分ごとに読み直す（他の人の登録を拾う）
 })();
