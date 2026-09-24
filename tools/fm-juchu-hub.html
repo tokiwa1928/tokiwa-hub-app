@@ -1817,7 +1817,7 @@ function setPane(p){
         <option value="">すべて</option>
         <option>予算見積</option><option>見積</option><option>受注</option><option>失注</option>
       </select></div>
-    <div><label>製造指示書</label><label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;cursor:pointer"><input type="checkbox" id="ff-seizo" title="受注のうち、製造指示書をまだ出していないものだけ"> 未出力だけ</label></div>
+    <div><label>製造指示書</label><label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;cursor:pointer"><input type="checkbox" id="ff-seizo" title="受注のうち、製造指示書をまだ出していないもの＋出したあとに直っているもの（更新後未出力）"> 未出力だけ</label></div>
     <div><label>期間（起票日）</label>
       <select id="ff-days">
         <option value="90">直近3か月</option>
@@ -2515,6 +2515,13 @@ function setPane(p){
     });
   }
   function 製造指示書状態(no) { return 製造記録[String(no || '')] || null; }
+  // SEIZO-4: 出力のあとに FileMaker で直っている（修正日 > 出力日）なら「更新後未出力」
+  function 製造指示書が古い(no, 修正日) {
+    var sp = 製造指示書状態(no); if (!sp || !sp.at) return false;
+    var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(修正日 || '')); if (!m) return false;
+    var d = new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])); var at = new Date(sp.at); var 出力日 = new Date(at.getFullYear(), at.getMonth(), at.getDate());
+    return d > 出力日;
+  }
   製造記録を読む().then(function () { try { if (最後の件数) 手元で探す(false); } catch (e) {} });
   setInterval(function () { 製造記録を読む(); }, 60 * 1000);
   try { new BroadcastChannel('tokiwa-hub-tools').onmessage = function (ev) { if (ev.data && (ev.data.type === 'sagyo' || ev.data.type === 'db-updated')) 製造記録を読む().then(function () { try { if (最後の件数) 手元で探す(false); } catch (e) {} }); }; } catch (e) {}
@@ -2819,8 +2826,8 @@ function setPane(p){
         if (k.senpo) { var rows = 先方売価表[String(row['伝票番号'] || '')] || []; var kk2 = 権限(); var my2 = kk2.会社;
           var show = kk2.partner ? rows.filter(function (x) { return String(x.会社) === my2; }) : rows;
           t += '<td style="white-space:nowrap;font-size:11px">' + (show.length ? show.map(function (x) { return (kk2.partner ? '' : esc(x.会社) + ' ') + esc(円(x.金額 === '' ? x.単価 : x.金額)); }).join('<br>') : '<span style="color:#cbd5e1">—</span>') + '</td>'; return; }
-        if (k.seizo) { var sp = 製造指示書状態(row['伝票番号']); var 受注 = String(row['案件区分'] || '') === '受注' || !row['案件区分'];
-          t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px">' + (sp ? ('<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="color:#166534;font-weight:700" title="' + esc(sp.comment || '') + '">第' + sp.n + '回 ' + esc(String(sp.at || '').slice(0, 10).replace(/-/g, '/')) + '</a>')
+        if (k.seizo) { var sp = 製造指示書状態(row['伝票番号']); var 受注 = String(row['案件区分'] || '') === '受注' || !row['案件区分']; var 古い = sp && 製造指示書が古い(row['伝票番号'], row['修正日']);
+          t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px">' + (sp ? ('<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="' + (古い ? 'color:#b45309;font-weight:700;background:#fef3c7;border-radius:4px;padding:1px 6px' : 'color:#166534;font-weight:700') + '" title="' + esc(sp.comment || '') + (古い ? '　※出力（' + esc(String(sp.at || '').slice(0, 10)) + '）のあと FileMaker で直っています（修正日 ' + esc(String(row['修正日'] || '')) + '）。出し直してください' : '') + '">' + (古い ? '更新後未出力 ' : '') + '第' + sp.n + '回 ' + esc(String(sp.at || '').slice(0, 10).replace(/-/g, '/')) + '</a>')
             : (受注 ? '<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="color:#b91c1c;font-weight:700;background:#fee2e2;border-radius:4px;padding:1px 6px" title="製造指示書がまだ出ていません。押すと出せます">未出力</a>' : '<span style="color:#94a3b8">—</span>')) + '</td>'; return; }
         if (k.dtp) { var st = window.DTP状態 ? DTP状態(row['伝票番号']) : ''; var on = !!st;
           t += '<td onclick="event.stopPropagation()" style="white-space:nowrap"><select class="dtp-sel" data-no="' + esc(row['伝票番号'] || '') + '" title="有にすると校正BOXにカードができます" style="font:inherit;font-size:11px;padding:1px 2px;' + (on ? 'background:#ede9fe;color:#5b21b6;font-weight:700' : '') + '"><option value=""' + (on ? '' : ' selected') + '>無</option><option value="有"' + (on ? ' selected' : '') + '>有</option></select>'
@@ -3023,7 +3030,7 @@ function setPane(p){
       if (n1 || n2) { var nd = 日を数に(r[P['納品日']]); if (!nd) continue; if (n1 && nd < n1) continue; if (n2 && nd > n2) continue; }
       if (custSet) { if (!custSet[String(r[P['得意先コード']])]) continue; } else if (cust && String(r[P['得意先コード']]) !== cust) continue;
       if (段階 && String(r[P['案件区分']]) !== 段階) continue;
-      if (未出力だけ) { var kb = String(r[P['案件区分']] || ''); if (kb && kb !== '受注') continue; if (製造指示書状態(r[P['伝票番号']])) continue; }
+      if (未出力だけ) { var kb = String(r[P['案件区分']] || ''); if (kb && kb !== '受注') continue; if (製造指示書状態(r[P['伝票番号']]) && !製造指示書が古い(r[P['伝票番号']], r[P['修正日']])) continue; }
       if (user && String(r[P['ユーザー名']]).toLowerCase().indexOf(user) < 0) continue;
       if (tanto && String(r[P['担当者コード']]) !== tanto) continue;
       if (hinshu && String(r[P['品種']]).toLowerCase().indexOf(hinshu) < 0) continue;
