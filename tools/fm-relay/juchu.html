@@ -1816,6 +1816,7 @@ function setPane(p){
         <option value="">すべて</option>
         <option>予算見積</option><option>見積</option><option>受注</option><option>失注</option>
       </select></div>
+    <div><label>製造指示書</label><label style="display:inline-flex;align-items:center;gap:4px;font-weight:400;cursor:pointer"><input type="checkbox" id="ff-seizo" title="受注のうち、製造指示書をまだ出していないものだけ"> 未出力だけ</label></div>
     <div><label>期間（起票日）</label>
       <select id="ff-days">
         <option value="90">直近3か月</option>
@@ -2272,6 +2273,28 @@ window.FM見た目 = function () {};
     try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'dtp', 伝票番号: no }); } catch (e) {}
     return '校正BOXへ送りました' + (note ? '' : '（内容が空なので下書き）') + '。本体を開いていれば今、閉じていれば次に開いたときにカードになります';
   }
+  // SEIZO-1: 製造指示書の出力記録（本体の DB.sagyoPrints）。伝票番号 → 最後の記録 { n, at, by, comment }
+  var 製造記録 = {};
+  function 製造記録を読む() {
+    return new Promise(function (res) {
+      try { var r = indexedDB.open('tokiwa_hub_local', 1);
+        r.onupgradeneeded = function (e) { try { var d = e.target.result; if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); } catch (x) {} };
+        r.onsuccess = function () { try { var d = r.result, q = d.transaction('kv', 'readonly').objectStore('kv').get('db');
+          q.onsuccess = function () { var v = q.result; d.close(); var db = null; if (v && v.json) { try { db = JSON.parse(v.json); } catch (e) {} } res(db); }; q.onerror = function () { d.close(); res(null); }; } catch (e) { res(null); } };
+        r.onerror = function () { res(null); };
+      } catch (e) { res(null); }
+    }).then(function (db) {
+      if (!db) { try { db = JSON.parse(localStorage.getItem('murayama_v15') || 'null'); } catch (e) { db = null; } }
+      var m = {};
+      ((db && db.sagyoPrints) || []).forEach(function (r) { if (!r || !r.fmNo) return; var k = String(r.fmNo); if (!m[k] || String(r.at || '') > String(m[k].at || '')) m[k] = { n: r.n, at: r.at, by: r.by, comment: r.comment }; });
+      try { (JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]')).forEach(function (r) { if (!r || !r.fmNo) return; var k = String(r.fmNo); if (!m[k] || String(r.at || '') > String(m[k].at || '')) m[k] = { n: r.n, at: r.at, by: r.by, comment: r.comment }; }); } catch (e) {}
+      製造記録 = m; return m;
+    });
+  }
+  function 製造指示書状態(no) { return 製造記録[String(no || '')] || null; }
+  製造記録を読む().then(function () { try { if (最後の件数) 手元で探す(false); } catch (e) {} });
+  setInterval(function () { 製造記録を読む(); }, 60 * 1000);
+  try { new BroadcastChannel('tokiwa-hub-tools').onmessage = function (ev) { if (ev.data && (ev.data.type === 'sagyo' || ev.data.type === 'db-updated')) 製造記録を読む().then(function () { try { if (最後の件数) 手元で探す(false); } catch (e) {} }); }; } catch (e) {}
   // 校正BOX に入っているか（本体の DB は同じブラウザの localStorage にある）。'card'＝カードあり／'pending'＝送信済みで本体待ち／''＝無し
   function DTP状態(no) {
     try { var db = JSON.parse(localStorage.getItem('murayama_v15') || 'null'); if (db && (db.proofings || []).some(function (p) { return p && (String(p.fmNo || '') === String(no) || (p.fmNos || []).map(String).indexOf(String(no)) >= 0); })) return 'card'; } catch (e) {}
@@ -2517,7 +2540,8 @@ window.FM見た目 = function () {};
     { c:'納品日',     h:'納品日', date:true },
     { c:'注残数',     h:'注残', num:true },
     { c:'_dtp',       h:'DTP', dtp:true },   // KOSEI-DTP-1: 有にすると校正BOXへ
-    { c:'_sagyo',     h:'指示書', sagyo:true } // SAGYO-2: 外注／製造 の指示書を別タブで
+    { c:'_sagyo',     h:'指示書', sagyo:true }, // SAGYO-2: 外注／製造 の指示書を別タブで
+    { c:'_seizo',     h:'製造指示書', seizo:true } // SEIZO-1: 未出力／第N回 出力日
   ];
 
   // FileMaker は MM/DD/YYYY で返す。日本の並びに直す
@@ -2566,6 +2590,9 @@ window.FM見た目 = function () {};
       列.forEach(function (k) {
         var v = row[k.c];
         if (k.sagyo) { var sn = encodeURIComponent(String(row['伝票番号'] || '')); t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px"><a href="sagyo.html?no=' + sn + '" target="_blank" rel="noopener" title="外注指示書（FileMaker と同じ紙）" style="color:#0369a1">🖨外注</a> <a href="sagyo.html?no=' + sn + '&type=seizo" target="_blank" rel="noopener" title="製造指示書（内製用）" style="color:#0369a1;margin-left:4px">🖨製造</a></td>'; return; }
+        if (k.seizo) { var sp = 製造指示書状態(row['伝票番号']); var 受注 = String(row['案件区分'] || '') === '受注' || !row['案件区分'];
+          t += '<td onclick="event.stopPropagation()" style="white-space:nowrap;font-size:11px">' + (sp ? ('<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="color:#166534;font-weight:700" title="' + esc(sp.comment || '') + '">第' + sp.n + '回 ' + esc(String(sp.at || '').slice(0, 10).replace(/-/g, '/')) + '</a>')
+            : (受注 ? '<a href="sagyo.html?no=' + encodeURIComponent(String(row['伝票番号'] || '')) + '&type=seizo" target="_blank" rel="noopener" style="color:#b91c1c;font-weight:700;background:#fee2e2;border-radius:4px;padding:1px 6px" title="製造指示書がまだ出ていません。押すと出せます">未出力</a>' : '<span style="color:#94a3b8">—</span>')) + '</td>'; return; }
         if (k.dtp) { var st = window.DTP状態 ? DTP状態(row['伝票番号']) : ''; var on = !!st;
           t += '<td onclick="event.stopPropagation()" style="white-space:nowrap"><select class="dtp-sel" data-no="' + esc(row['伝票番号'] || '') + '" title="有にすると校正BOXにカードができます" style="font:inherit;font-size:11px;padding:1px 2px;' + (on ? 'background:#ede9fe;color:#5b21b6;font-weight:700' : '') + '"><option value=""' + (on ? '' : ' selected') + '>無</option><option value="有"' + (on ? ' selected' : '') + '>有</option></select>'
              + (st === 'card' ? '<span title="校正BOXにカードがあります" style="font-size:11px;margin-left:3px">📸</span>' : st ? '<span title="送信済み（本体を開くとカードになります）" style="font-size:11px;margin-left:3px;color:#a78bfa">⏳</span>' : '') + '</td>'; return; }
@@ -2737,6 +2764,7 @@ window.FM見た目 = function () {};
     var kw = $('ff-kw').value.trim(), cust = $('ff-cust').value.trim(), 段階 = $('ff-stage').value;
     var 日数 = Number($('ff-days').value), 件数 = Number($('ff-n').value || 0);   // 0 = すべて
     var user = $('ff-user').value.trim().toLowerCase(), tanto = $('ff-tanto').value.trim(), hinshu = $('ff-hinshu').value.trim().toLowerCase();
+    var 未出力だけ = !!($('ff-seizo') && $('ff-seizo').checked);   // SEIZO-1
     var d1 = 日を数に($('ff-d1').value), d2 = 日を数に($('ff-d2').value), n1 = 日を数に($('ff-n1').value), n2 = 日を数に($('ff-n2').value);
     // FMHUB-FIND-ALL: 何でも検索（空白区切りの語を全部含む）。得意先名で当てるためにマスタが要る
     var all = $('ff-all') ? $('ff-all').value.trim().normalize('NFKC').toLowerCase().split(/[\s　]+/).filter(Boolean) : [];
@@ -2754,7 +2782,7 @@ window.FM見た目 = function () {};
     if (all.length) 日数 = 0;   // 何でも検索は全期間
     if (d1 || d2) 日数 = 0;   // 日付を指定したら「期間」は使わない
     try { var 条件 = {}; ['ff-all', 'ff-kw', 'ff-cust', 'ff-user', 'ff-tanto', 'ff-hinshu', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-stage', 'ff-days', 'ff-n'].forEach(function (id) { if ($(id)) 条件[id] = $(id).value; }); 条件.全件 = 全件モード; sessionStorage.setItem('fm_find', JSON.stringify(条件)); } catch (e) {}
-    if (!all.length && !kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
+    if (!all.length && !kw && !cust && !段階 && !user && !tanto && !hinshu && !d1 && !d2 && !n1 && !n2 && !全件モード && !未出力だけ) { $('ff-rows').style.display = 'none'; 索引の状態(); return true; }
     全件モード = false;
     var から = 0;
     if (日数 > 0) { var d = new Date(); d.setDate(d.getDate() - 日数); から = Number(d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0')); }
@@ -2766,6 +2794,7 @@ window.FM見た目 = function () {};
       if (n1 || n2) { var nd = 日を数に(r[P['納品日']]); if (!nd) continue; if (n1 && nd < n1) continue; if (n2 && nd > n2) continue; }
       if (custSet) { if (!custSet[String(r[P['得意先コード']])]) continue; } else if (cust && String(r[P['得意先コード']]) !== cust) continue;
       if (段階 && String(r[P['案件区分']]) !== 段階) continue;
+      if (未出力だけ) { var kb = String(r[P['案件区分']] || ''); if (kb && kb !== '受注') continue; if (製造指示書状態(r[P['伝票番号']])) continue; }
       if (user && String(r[P['ユーザー名']]).toLowerCase().indexOf(user) < 0) continue;
       if (tanto && String(r[P['担当者コード']]) !== tanto) continue;
       if (hinshu && String(r[P['品種']]).toLowerCase().indexOf(hinshu) < 0) continue;
@@ -2868,7 +2897,7 @@ window.FM見た目 = function () {};
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') 探す(); });
     $(id).addEventListener('input', 打ちながら);
   });
-  ['ff-stage', 'ff-days', 'ff-n', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2'].forEach(function (id) { $(id).addEventListener('change', function () { 手元で探す(false); }); });
+  ['ff-stage', 'ff-days', 'ff-n', 'ff-d1', 'ff-d2', 'ff-n1', 'ff-n2', 'ff-seizo'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', function () { 手元で探す(false); }); });
   探し.addEventListener('keydown', function (e) { if (e.key !== 'Enter') return; var t = e.target; if (!t || !(t.tagName === 'INPUT' || t.tagName === 'SELECT')) return; if (t.closest('#ff-rows')) return; e.preventDefault(); 探す(); });
   // -------------------------------------------------- FileMaker のボタンを本物の動きに（FMHUB-9）
   function 帯のボタン(文言) {

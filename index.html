@@ -4695,6 +4695,15 @@ async function loadFromCloud() {
     DB.proofings = _pfOrder.filter(function(id){ return !_pfDel[id]; }).map(function(id){ return _pfById[id]; });
   }
 
+  // SEIZO-1: 製造指示書の出力記録。id の和集合（消さない）。写し(snap)は同じ id なら持っている方を残す
+  if (Array.isArray(result.data.sagyoPrints)) {
+    var _spById={}, _spOrder=[];
+    var _spTake=function(r){ if(!r||!r.id) return; if(!(r.id in _spById)){ _spOrder.push(r.id); _spById[r.id]=r; return; } var cur=_spById[r.id]; if(!cur.snap && r.snap) _spById[r.id]=r; };
+    (Array.isArray(DB.sagyoPrints)?DB.sagyoPrints:[]).forEach(_spTake);
+    result.data.sagyoPrints.forEach(_spTake);
+    DB.sagyoPrints = _spOrder.map(function(id){ return _spById[id]; }).sort(function(a,b){ return String(a.at||'').localeCompare(String(b.at||'')); }).slice(-8000);
+  }
+
   // 連絡宛先マスタ（LW/メール宛先・全社共有／会社別閲覧権限）
   if (Array.isArray(result.data.contactTargets)) {
     DB.contactTargets = result.data.contactTargets;
@@ -5243,6 +5252,7 @@ async function saveToCloud() {
     calendarOrdersDeletedSig: (DB.calendarOrdersDeletedSig || []).slice(-2000),
     proofings: DB.proofings || [],                                   // KOSEI-SYNC-1: 校正BOX のカードも全社保存
     proofingsDeleted: (DB.proofingsDeleted || []).slice(-2000),
+    sagyoPrints: (DB.sagyoPrints || []).slice(-8000),                // SEIZO-1: 製造指示書の出力記録（第N回・日時・誰が・変更コメント・写し）
     inquiries: DB.inquiries || [],
     deliveryItems: DB.deliveryItems || [],
     drivers: DB.drivers || [],
@@ -20703,9 +20713,25 @@ function _proofDraftBanner_(){
     return '<span onclick="showProofingDetail(\''+p.id+'\')" style="cursor:pointer;background:#fff;border:1px solid #c4b5fd;border-radius:6px;padding:2px 8px;font-size:11px;margin:2px;display:inline-block">'+_escDiff(p.fmNo||p.projectId||'')+' '+_escDiff(p.custName||'')+' '+_escDiff((p.prodName||'').slice(0,20))+' <b style="color:#6d28d9">'+days+'日</b></span>'; }).join('');
   return '<div style="background:#f5f3ff;border:2px solid #a78bfa;border-radius:9px;padding:9px 13px;margin:6px 0"><b style="font-size:13px;color:#5b21b6">📝 下書きのまま動いていない校正 '+ds.length+'件</b><span style="font-size:11px;color:#6d28d9;margin-left:8px">（DTP有で作られたが内容が入っていません。開いて内容を入れるか、ステータスを進めてください）</span><div style="margin-top:6px">'+rows+'</div></div>';
 }
+// ═══ SEIZO-1: 製造指示書の出力記録（指示書の画面が fm_sagyo_pending に積む）→ DB.sagyoPrints ═══
+function _sagyoProcessPending_(){
+  var q=[]; try{ q=JSON.parse(localStorage.getItem('fm_sagyo_pending')||'[]'); }catch(e){ return; }
+  if(!Array.isArray(q)||!q.length) return;
+  if(!Array.isArray(DB.sagyoPrints)) DB.sagyoPrints=[];
+  var have={}; DB.sagyoPrints.forEach(function(r){ if(r&&r.id) have[r.id]=1; });
+  var n=0; q.forEach(function(r){ if(!r||!r.id||!r.fmNo||have[r.id]) return; DB.sagyoPrints.push(r); have[r.id]=1; n++;
+    // 案件カードにも 出力回数・最終出力 を持たせる（一覧で見えるように）
+    try{ var p=(DB.projects||[]).find(function(x){ return x && x.fm && String(x.fm['fm-denpyo']||'')===String(r.fmNo); }); if(p){ p.sagyoPrintN=r.n; p.sagyoPrintAt=r.at; p.updatedAt=new Date().toISOString(); } }catch(e){} });
+  try{ localStorage.removeItem('fm_sagyo_pending'); }catch(e){}
+  if(n){ DB.sagyoPrints.sort(function(a,b){ return String(a.at||'').localeCompare(String(b.at||'')); }); if(DB.sagyoPrints.length>8000) DB.sagyoPrints=DB.sagyoPrints.slice(-8000);
+    if(typeof saveDB==='function') saveDB(); if(typeof _toastMsg==='function') _toastMsg('🖨 製造指示書の出力を記録: '+n+' 件'); }
+}
+function _sagyoPrintsOf_(no){ return (DB.sagyoPrints||[]).filter(function(r){ return r && String(r.fmNo)===String(no); }); }
+setTimeout(function(){ try{ _sagyoProcessPending_(); }catch(e){ console.warn('[sagyo]', e); } }, 4500);
+setInterval(function(){ try{ _sagyoProcessPending_(); }catch(e){} }, 60*1000);
 try{
   var _dtpBC=new BroadcastChannel('tokiwa-hub-tools');
-  _dtpBC.onmessage=function(ev){ if(ev.data&&ev.data.type==='dtp'){ setTimeout(_dtpProcessPending_, 200); } };
+  _dtpBC.onmessage=function(ev){ if(ev.data&&ev.data.type==='dtp'){ setTimeout(_dtpProcessPending_, 200); } if(ev.data&&ev.data.type==='sagyo'){ setTimeout(_sagyoProcessPending_, 200); } };
 }catch(e){}
 setTimeout(function(){ try{ _dtpProcessPending_(); }catch(e){ console.warn('[dtp]', e); } }, 4000);
 setTimeout(function(){ try{ var rs=_replyWaitProofings_(); if(rs.length && typeof _toastMsg==='function') _toastMsg('💬 返信できていない校正が '+rs.length+' 件あります（🚨 要注意 から開けます）'); }catch(e){} }, 7000);
