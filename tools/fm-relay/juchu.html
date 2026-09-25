@@ -1975,6 +1975,7 @@ function setPane(p){
     <span id="kn-prev" style="color:#334155"></span>
   </div>
   <div id="kn-advice" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:3px"></div>
+  <div id="kn-souba" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:3px"></div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:3px"><span>この案件の段階:</span><span id="kn-stages">（索引を読んでから出ます）</span><span id="kn-result" style="font-weight:700"></span></div>
   <details style="margin-top:3px"><summary style="cursor:pointer;color:#334155">外注見積（業者と金額。FileMaker の 見積業者1〜5・見積金額1）</summary>
     <table class="gq"><thead><tr><th>#</th><th>業者</th><th>金額</th><th>数量</th><th>単価</th><th>見積日</th></tr></thead><tbody>
@@ -2481,8 +2482,8 @@ window.FM見た目 = function () {};
     }).then(function (db) {
       if (!db) { try { db = JSON.parse(localStorage.getItem('murayama_v15') || 'null'); } catch (e) { db = null; } }
       var m = {};
-      ((db && db.sagyoPrints) || []).forEach(function (r) { if (!r || !r.fmNo) return; var k = String(r.fmNo); if (!m[k] || String(r.at || '') > String(m[k].at || '')) m[k] = { n: r.n, at: r.at, by: r.by, pc: r.pc, comment: r.comment }; });
-      try { (JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]')).forEach(function (r) { if (!r || !r.fmNo) return; var k = String(r.fmNo); if (!m[k] || String(r.at || '') > String(m[k].at || '')) m[k] = { n: r.n, at: r.at, by: r.by, pc: r.pc, comment: r.comment }; }); } catch (e) {}
+      ((db && db.sagyoPrints) || []).forEach(function (r) { if (!r || !r.fmNo || (r.kind || 'seizo') !== 'seizo') return; var k = String(r.fmNo); if (!m[k] || String(r.at || '') > String(m[k].at || '')) m[k] = { n: r.n, at: r.at, by: r.by, pc: r.pc, comment: r.comment }; });
+      try { (JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]')).forEach(function (r) { if (!r || !r.fmNo || (r.kind || 'seizo') !== 'seizo') return; var k = String(r.fmNo); if (!m[k] || String(r.at || '') > String(m[k].at || '')) m[k] = { n: r.n, at: r.at, by: r.by, pc: r.pc, comment: r.comment }; }); } catch (e) {}
       製造記録 = m; return m;
     });
   }
@@ -3309,6 +3310,8 @@ window.FM見た目 = function () {};
     var b4 = document.createElement('button'); b4.className = 'fb or'; b4.textContent = '見積書'; b4.title = '読み込んでいる伝票から 予算見積書（予算見積のとき）／御見積書 を出します。紙の中の文字は印刷前に直せます';
     b4.onclick = function () { 読んでから(function () { window.open('mitsumori.html?no=' + encodeURIComponent(String(現在.fields['見積番号'] || 現在.fields['伝票番号'] || '')), '_blank'); }); };
     lay.parentNode.insertBefore(b4, lay);
+    var b5 = document.createElement('button'); b5.className = 'fb'; b5.textContent = '単価分析'; b5.title = '過去 3 年の受注から、仕様ごとの作業原価と掛け率（材料を除いた部分）を見ます';
+    b5.onclick = function () { window.open('tanka-bunseki.html', '_blank'); }; lay.parentNode.insertBefore(b5, lay);
   })();
   帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '0'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
 
@@ -3513,6 +3516,50 @@ window.FM見た目 = function () {};
   }
   function 行の結果(r) { var P = 索引位置; var arr = Array.isArray(r); var id = String((arr ? r[P['案件ID']] : r['案件ID']) || ''); var no = String((arr ? (r[P['伝票番号']] || r[P['見積番号']]) : (r['伝票番号'] || r['見積番号'])) || ''); var m = 案件の結果表(); var g = id ? m[id] : m['#' + no]; return g ? g.結果 : ''; }
   var 金額タイマー = null, 前回原価 = null;
+  // ---- TANKA-1: この仕様の相場（単価分析と同じ束で、作業原価/1,000 と掛け率の中央値）
+  var 単価データ = null, 単価取得中 = false;
+  function 単価IDB(op, val) { return new Promise(function (res) { try { var q = indexedDB.open('tokiwa_fm_index', 1); q.onupgradeneeded = function () { q.result.createObjectStore('idx'); }; q.onsuccess = function () { var tx = q.result.transaction('idx', op === 'get' ? 'readonly' : 'readwrite'); var st = tx.objectStore('idx'); var r = op === 'get' ? st.get('tanka') : st.put(val, 'tanka'); r.onsuccess = function () { res(op === 'get' ? r.result : true); }; r.onerror = function () { res(null); }; }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
+  function 単価データを用意() {
+    if (単価データ) return Promise.resolve(単価データ);
+    return 単価IDB('get').then(function (c) {
+      if (c && c.取った && Date.now() - new Date(c.取った).getTime() < 24 * 3600 * 1000) { 単価データ = c; return c; }
+      if (単価取得中 || !(window.FM名乗っている ? FM名乗っている() : false)) return c || null;
+      単価取得中 = true;
+      return 呼ぶ('単価_集計', [3]).then(function (j) { j.取った = new Date().toISOString(); 単価データ = j; 単価取得中 = false; 単価IDB('put', j); return j; }).catch(function () { 単価取得中 = false; return c || null; });
+    });
+  }
+  function 中央(a) { if (!a.length) return 0; var s2 = a.slice().sort(function (x, y) { return x - y; }); var m = Math.floor(s2.length / 2); return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2; }
+  function 数量帯(q) { return q <= 500 ? '〜500' : q <= 1000 ? '〜1,000' : q <= 3000 ? '〜3,000' : q <= 10000 ? '〜10,000' : '10,001〜'; }
+  function 相場を出す() {
+    var box = $('kn-souba'); if (!box) return; if (!現在) { box.style.display = 'none'; return; }
+    単価データを用意().then(function (j) {
+      if (!j || !j.列) { box.style.display = 'block'; box.innerHTML = '<span style="color:#475569">この仕様の相場: 単価分析のデータをまだ取っていません（ログインしていれば自動で取ります。<a href="tanka-bunseki.html" target="_blank">単価分析</a>）</span>'; return; }
+      var P = {}; j.列.forEach(function (c, i) { P[c] = i; }); var mk = 1.15;
+      var f = 現在.fields; var myQ = 金額(($('p1-tot') || {}).value) || 金額(($('f-lotunit') || {}).value) || 金額(f['合計数1']);
+      var 鍵 = function (g, lvl) { var ks = [ '品種' + (g('品種') || '—'), (g('サイズ横') || '') + '×' + (g('サイズ縦') || ''), (g('色数1') || '?') + (g('色MAX1') ? '/' + g('色MAX1') : '') + '色', (g('パーツ数') || '1') + 'P', 数量帯(金額(g('合計数1'))) ]; return ks.slice(0, ks.length - lvl).join(' | '); };
+      var 今 = function (c) { var id = { '品種': 'f-hinshu2', 'サイズ横': 'f-w', 'サイズ縦': 'f-h', '色数1': 'k1-iro1', '色MAX1': 'k1-iro2', 'パーツ数': 'f-parts' }[c]; var v = id && $(id) ? $(id).value : f[c]; if (c === '合計数1') return myQ; return v == null ? '' : String(v).trim(); };
+      var myNo = String(f['伝票番号'] || '');
+      for (var lvl = 0; lvl <= 3; lvl++) {
+        var key = 鍵(今, lvl); var hit = [];
+        j.行.forEach(function (r) { if (String(r[P['伝票番号']]) === myNo) return; var g = function (c) { return r[P[c]]; }; if (鍵(g, lvl) !== key) return;
+          var 用 = 金額(g('用紙代')), 版 = 金額(g('版代')), 梱 = 金額(g('梱包代')), 配 = 金額(g('配送代')), 印 = 金額(g('印刷代')), 加 = 金額(g('加工賃')), 人 = 金額(g('人件費')), 合 = 金額(g('合計金額')), 売 = 金額(g('売価金額')), q = 金額(g('合計数1'));
+          var 外 = Math.max(0, 合 - (用 + 版 + 梱 + 配 + 印 + 加 + 人)); var 作業 = 印 + 加 + 人; var 材料売 = (用 + 外) * mk + 版 + 梱 + 配;
+          if (!q || !売) return; hit.push({ 作業千: 作業 / q * 1000, 率: 作業 > 0 ? (売 - 材料売) / 作業 : null, 単価: 売 / q }); });
+        if (hit.length >= 3 || lvl === 3) {
+          if (!hit.length) { box.style.display = 'block'; box.innerHTML = '<span style="color:#475569">この仕様の相場: 似た受注が見つかりません（<a href="tanka-bunseki.html" target="_blank">単価分析</a>）</span>'; return; }
+          var 作業千 = 中央(hit.map(function (x) { return x.作業千; })), 率 = 中央(hit.filter(function (x) { return x.率 != null && isFinite(x.率); }).map(function (x) { return x.率; })), 単 = 中央(hit.map(function (x) { return x.単価; }));
+          var now = function (k) { var id = { '用紙代': 'c-paper', '版代': 'c-plate', '梱包代': 'c-pack', '配送代': 'c-ship', '印刷代': 'c-print', '加工賃': 'c-work', '人件費': 'c-labor', '合計金額': 'c-total' }[k]; return 金額(($(id) || {}).value); };
+          var B = 材料費(null, now); var 材料売今 = (B.用紙 + B.外注) * mk + now('版代') + now('梱包代') + now('配送代');
+          var 作業今 = myQ ? 作業千 * myQ / 1000 : 0; var 積み上げ = 材料売今 + 作業今 * (率 || 1); var 売今 = 金額(($('f-amt') || {}).value);
+          box.style.display = 'block';
+          box.innerHTML = '<b style="color:#3730a3">この仕様の相場</b>（' + esc(key) + (lvl ? '　※条件を ' + lvl + ' つ外して広げました' : '') + '、' + hit.length + ' 件）　作業原価 ' + 円表示(作業千) + '/1,000　掛け率 ' + (率 ? (Math.round(率 * 100) / 100) + '×' : '—') + '　売価単価の中央 ' + (Math.round(単 * 100) / 100)
+            + (myQ ? '　→ 積み上げ売価 <b>' + 円表示(積み上げ) + '</b>（材料 ' + 円表示(材料売今) + '（×' + mk + '）＋ 作業 ' + 円表示(作業今) + ' × ' + (率 ? Math.round(率 * 100) / 100 : 1) + '）' + (売今 ? '　いま ' + 円表示(売今) + ' <span style="color:' + (売今 >= 積み上げ ? '#166534' : '#b91c1c') + '">' + (売今 >= 積み上げ ? '+' : '') + Math.round(売今 - 積み上げ).toLocaleString() + '</span>' : '') : '')
+            + '　<a href="tanka-bunseki.html" target="_blank" style="color:#3730a3">単価分析</a>';
+          return;
+        }
+      }
+    });
+  }
   // COST-1: 原価差の助言。材料費（用紙・版・梱包・配送・外注）を引いた「取り分」（印刷・加工・人件費・利益）を前回と同じだけ確保する売価を出す
   function 材料費(f, g) { var 用 = g('用紙代'), 版 = g('版代'), 梱 = g('梱包代'), 配 = g('配送代'), 印 = g('印刷代'), 加 = g('加工賃'), 人 = g('人件費'), 合 = g('合計金額'); var 外 = Math.max(0, 合 - (用 + 版 + 梱 + 配 + 印 + 加 + 人)); return { 材料: 用 + 版 + 梱 + 配 + 外, 外注: 外, 用紙: 用, 人件: 人, 印刷: 印, 加工: 加 }; }
   function 原価差の助言() {
@@ -3561,6 +3608,7 @@ window.FM見た目 = function () {};
         var res = g2.結果; rs.textContent = res === '予算見積だけ' ? '→ 予算見積だけ。見積をもらいに行く' : res === '失注' ? '→ 失注。金額を見直す' : res === '見積まで' ? '→ 見積まで（未受注）' : res === '受注' ? '→ 受注あり' : ''; rs.style.color = res === '失注' ? '#b91c1c' : res === '予算見積だけ' ? '#1d4ed8' : '#166534'; } else { se.textContent = '—'; rs.textContent = ''; } }
     else { se.textContent = 索引 ? '（案件IDなし）' : '（索引を読んでから出ます）'; rs.textContent = ''; }
     try { 原価差の助言(); } catch (e) {}
+    try { 相場を出す(); } catch (e) {}
   }
   document.addEventListener('input', function (e) { var t = e.target; if (!t || !t.id) return; if (t.id === 'f-amt' || t.id === 'c-total' || t.id === 'f-price' || t.id === 'p1-up' || t.id === 'p1-tot' || /^c-/.test(t.id)) { clearTimeout(金額タイマー); 金額タイマー = setTimeout(金額を出す, 300); } }, true);
   Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { i.addEventListener('change', 手配が変わった); });

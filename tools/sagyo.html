@@ -91,6 +91,7 @@
   <button id="go">出す</button>
   <button id="pr" title="製造指示書は、印刷するたびに 第N回・日時・誰が・変更コメント を記録します">🖨 印刷</button>
   <button id="pt" title="記録を残さずに印刷します（紙に「テスト出力」の帯が入ります）" style="border-color:#f87171;color:#b91c1c">🧪 テスト出力</button>
+  <button id="ps" title="まとめて出したとき、伝票ごとに別の印刷（別の PDF）にします。出力の記録は 1 件ずつ付きます" style="display:none">🖨 1 枚ずつ印刷</button>
   <span class="st" id="st"></span>
   <button type="button" id="pcname" onclick="端末名を変える()" title="この PC の名前（製造指示書の出力記録に残ります）。押すと変えられます" style="border-color:#64748b;color:#e5e7eb;background:#1f2937"></button>
   <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
@@ -136,6 +137,10 @@ function 描く(f) {
   function row(n) { return n === '表紙' ? 0 : n; }
   function v(k, n) { var x = f[k + row(n)]; return (x == null) ? '' : String(x); }
   var h = '<h1>外注指示書</h1><div class="date">' + 和暦(new Date()) + '</div>';
+  // QR-2: 出力記録（第N回）と最新確認の QR
+  (function () { var last = 記録一覧[記録一覧.length - 1] || null; var no0 = String(f['伝票番号'] || '');
+    h += '<div id="rec" style="justify-content:flex-end"><div style="text-align:right">' + (last ? '第' + esc(last.n) + '回 ' + esc(日時(last.at)) + (last.by ? ' ' + esc(String(last.by).split('@')[0]) : '') + (last.pc ? ' 🖥' + esc(last.pc) : '') : '未出力') + '</div>'
+      + '<div class="qrbox"><div class="qr" data-url="' + esc(確認URL(no0, last)) + '"></div><div>QR で<br>最新か確認</div></div></div>'; })();
   h += '<table class="box">'
     + '<tr><td class="lbl">伝票番号</td><td colspan="8" class="c">' + esc(f['伝票番号']) + '</td></tr>'
     + '<tr><td class="lbl">得意先名</td><td colspan="8" class="c">' + esc(得意先名(f['得意先コード'])) + '</td></tr>'
@@ -184,6 +189,7 @@ function 描く(f) {
     + '</table>';
   h += '<div class="foot">ご不明な点は下記担当者までご連絡下さい。<br>トキワ印刷株式会社<br>〒432-8053<br>静岡県浜松市中央区法枝町115<br>TEL:  053-441-2784<br>FAX:  053-442-1265<br>mail:<br>担当: ' + esc(社員名(f['担当者コード'])) + '</div>';
   $('paper').innerHTML = h;
+  QRを描く(); 確認を出す(f);
 }
 
 // ---- 製造指示書＝社内の作業伝票（211110 の紙と同じ並び）。SEIZO-1
@@ -214,7 +220,7 @@ function 更新後か(f, 記録, 履歴) {
 // SEIZO-7: サインインなしの確認（中継の 指示書_確認。返るのは最新かどうかと回数・日時だけ）
 function 中継URL() { try { if (window.FM && FM.中継) return FM.中継; } catch (e) {} return (document.querySelector('script[src*="fm-bridge"]') && window.FM_RELAY_URL) || 'https://script.google.com/macros/s/AKfycby3DCpR4kCCQMBZ0a8sdsBArM1z_J3JJKcIMYNOHLlhzB1LNrYPqw_NM-dxo_JirSyK4g/exec'; }
 function 公開確認(no, id) {
-  return fetch(中継URL(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: '指示書_確認', 伝票番号: no, 記録id: id || 'latest' }), redirect: 'follow' })
+  return fetch(中継URL(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: '指示書_確認', 伝票番号: no, 記録id: id || 'latest', kind: 種類 }), redirect: 'follow' })
     .then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.ok) throw new Error((j && j.error) || '確認できませんでした'); return j.data || {}; });
 }
 function 確認画面(no, d) {
@@ -240,7 +246,7 @@ function 確認画面(no, d) {
     var note = document.createElement('div'); note.style.cssText = 'font-size:12px;color:#555;margin-top:8px'; note.textContent = signed ? '' : '確認だけならログインは要りません。出力するときだけログインしてください。'; box.appendChild(note);
   }
 }
-function 確認URL(no, rec) { var u = location.origin + location.pathname; return u + '?no=' + encodeURIComponent(no) + '&type=seizo&check=' + encodeURIComponent(rec && rec.id ? rec.id : 'latest'); }
+function 確認URL(no, rec) { var u = location.origin + location.pathname; return u + '?no=' + encodeURIComponent(no) + '&type=' + 種類 + '&check=' + encodeURIComponent(rec && rec.id ? rec.id : 'latest'); }
 function QRを描く() {
   if (typeof QRCode === 'undefined') return;
   Array.prototype.forEach.call(document.querySelectorAll('.qr[data-url]'), function (el) { if (el.getAttribute('data-done')) return; el.setAttribute('data-done', '1'); try { new QRCode(el, { text: el.getAttribute('data-url'), width: 128, height: 128, correctLevel: QRCode.CorrectLevel.M }); } catch (e) {} });
@@ -264,8 +270,8 @@ function 本体DBを読む() {
 function 出力記録を読む(no) {
   return 本体DBを読む().then(function (db) {
     var out = [];
-    ((db && db.sagyoPrints) || []).forEach(function (r) { if (r && String(r.fmNo) === String(no) && (r.kind || 'seizo') === 'seizo') out.push(r); });
-    try { (JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]')).forEach(function (r) { if (r && String(r.fmNo) === String(no) && !out.some(function (x) { return x.id === r.id; })) out.push(r); }); } catch (e) {}
+    ((db && db.sagyoPrints) || []).forEach(function (r) { if (r && String(r.fmNo) === String(no) && (r.kind || 'seizo') === 種類) out.push(r); });
+    try { (JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]')).forEach(function (r) { if (r && String(r.fmNo) === String(no) && (r.kind || 'seizo') === 種類 && !out.some(function (x) { return x.id === r.id; })) out.push(r); }); } catch (e) {}
     out.sort(function (a, b) { return String(a.at || '').localeCompare(String(b.at || '')); });
     return out;
   });
@@ -483,19 +489,36 @@ function 束を記録して印刷() {
     var c = m.c; var rec = { id: 'SGP' + Date.now() + Math.floor(Math.random() * 100000), fmNo: c.no, kind: 'seizo', n: c.記録一覧.length + 1, at: new Date().toISOString(), by: who, pc: pc,
       comment: m.案, changes: m.chg.slice(0, 200), snap: c.snap, custName: String(得意先名(c.f['得意先コード']) || ''), prodName: String(c.f['製品名'] || '') };
     q.push(rec); c.記録一覧 = c.記録一覧.concat([rec]);
-    try { FM.呼ぶ('指示書_記録', [{ id: rec.id, 伝票番号: rec.fmNo, n: rec.n, at: rec.at, by: rec.by, pc: rec.pc, comment: rec.comment }]).catch(function () {}); } catch (e) {}   // SEIZO-7
+    try { FM.呼ぶ('指示書_記録', [{ id: rec.id, 伝票番号: rec.fmNo, n: rec.n, at: rec.at, by: rec.by, pc: rec.pc, comment: rec.comment, kind: 'seizo' }]).catch(function () {}); } catch (e) {}   // SEIZO-7
   });
   try { localStorage.setItem('fm_sagyo_pending', JSON.stringify(q)); } catch (e) { alert('記録を置けませんでした（保存領域がいっぱいです）。印刷だけします'); }
   try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'sagyo' }); } catch (e) {}
   束を描く();   // 帯に 第N回 を出してから印刷（赤字は前回比のまま）
   束.forEach(function (c) { c.前回の記録 = c.記録一覧[c.記録一覧.length - 1]; });
   $('st').textContent = 束.length + ' 件を記録しました';
+  if (分けて) { setTimeout(一枚ずつ印刷, 200); return; }
   setTimeout(function () { window.print(); }, 200);
+}
+// SPLIT-1: 伝票ごとに別の印刷（PDF に保存するときも 1 伝票 1 ファイルになる）。表と裏（変更履歴）は同じ伝票なので一緒
+var 分けて = false;
+function 一枚ずつ印刷() {
+  var sheets = Array.prototype.slice.call(document.querySelectorAll('#paper .sheet'));
+  var groups = []; sheets.forEach(function (sh) { if (sh.classList.contains('back') && groups.length) groups[groups.length - 1].push(sh); else groups.push([sh]); });
+  var title0 = document.title; var i = 0;
+  function next() {
+    if (i >= groups.length) { sheets.forEach(function (sh) { sh.style.display = ''; }); document.title = title0; $('st').textContent = groups.length + ' 件を 1 枚ずつ印刷しました'; 分けて = false; return; }
+    var g = groups[i++]; sheets.forEach(function (sh) { sh.style.display = g.indexOf(sh) >= 0 ? '' : 'none'; });
+    var c = 束 && 束[i - 1]; if (c) document.title = '【製造指示書】' + c.no + '_' + esc(得意先名(c.f['得意先コード'])) + '_' + esc(c.f['製品名'] || '');
+    $('st').textContent = '印刷 ' + i + ' / ' + groups.length + '…';
+    setTimeout(function () { window.print(); setTimeout(next, 400); }, 100);
+  }
+  next();
 }
 function 記録して印刷() {
   if (テスト) { window.print(); return; }
   if (束 && 種類 === 'seizo') { 束を記録して印刷(); return; }
-  if (種類 !== 'seizo' || !直近 || !今の写し) { window.print(); return; }
+  if (種類 === 'gaichu') { 外注を記録して印刷(); return; }
+  if (!直近 || !今の写し) { window.print(); return; }
   var no = String(直近['伝票番号'] || ''); if (!no) { window.print(); return; }
   var chg = 変更点(前回の記録 && 前回の記録.snap, 今の写し);
   var 案 = chg.map(function (c) { return 項目の表示名(c.k) + ': ' + (c.before || '（空）') + ' → ' + (c.after || '（空）'); }).join('、');
@@ -508,7 +531,7 @@ function 記録して印刷() {
   var q = []; try { q = JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]'); } catch (e) { q = []; }
   q.push(rec); try { localStorage.setItem('fm_sagyo_pending', JSON.stringify(q)); } catch (e) { alert('記録を置けませんでした（保存領域がいっぱいです）。印刷だけします'); }
   try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'sagyo', 伝票番号: no }); } catch (e) {}
-  try { FM.呼ぶ('指示書_記録', [{ id: rec.id, 伝票番号: rec.fmNo, n: rec.n, at: rec.at, by: rec.by, pc: rec.pc, comment: rec.comment }]).catch(function () {}); } catch (e) {}   // SEIZO-7: QR 確認用に中継にも
+  try { FM.呼ぶ('指示書_記録', [{ id: rec.id, 伝票番号: rec.fmNo, n: rec.n, at: rec.at, by: rec.by, pc: rec.pc, comment: rec.comment, kind: 'seizo' }]).catch(function () {}); } catch (e) {}   // SEIZO-7: QR 確認用に中継にも
   記録一覧 = 記録一覧.concat([rec]); 前回の記録 = 記録一覧[記録一覧.length - 2] || null;
   製造を描く(直近);   // 帯に 第N回 と コメントを出してから印刷（赤字は前回比のまま）
   前回の記録 = rec;    // 次の出力は今回との比較になる
@@ -516,6 +539,20 @@ function 記録して印刷() {
   setTimeout(function () { window.print(); }, 150);
 }
 
+// QR-2: 外注指示書は 第N回・日時・誰が・PC だけ記録（変更点の比較は製造指示書のみ）
+function 外注を記録して印刷() {
+  if (!直近) { window.print(); return; }
+  var no = String(直近['伝票番号'] || ''); if (!no) { window.print(); return; }
+  var who = ''; try { who = FM.名乗っている() || ''; } catch (e) {}
+  var rec = { id: 'SGP' + Date.now() + Math.floor(Math.random() * 1000), fmNo: no, kind: 'gaichu', n: 記録一覧.length + 1, at: new Date().toISOString(), by: who, pc: 端末名(true), comment: '', custName: String(得意先名(直近['得意先コード']) || ''), prodName: String(直近['製品名'] || '') };
+  var q = []; try { q = JSON.parse(localStorage.getItem('fm_sagyo_pending') || '[]'); } catch (e) { q = []; }
+  q.push(rec); try { localStorage.setItem('fm_sagyo_pending', JSON.stringify(q)); } catch (e) {}
+  try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'sagyo', 伝票番号: no }); } catch (e) {}
+  try { FM.呼ぶ('指示書_記録', [{ id: rec.id, 伝票番号: rec.fmNo, n: rec.n, at: rec.at, by: rec.by, pc: rec.pc, comment: '', kind: 'gaichu' }]).catch(function () {}); } catch (e) {}
+  記録一覧 = 記録一覧.concat([rec]); 前回の記録 = rec;
+  描く(直近); $('st').textContent = '外注指示書 第' + rec.n + '回として記録しました';
+  setTimeout(function () { window.print(); }, 150);
+}
 function 出す() {
   var no = $('no').value.trim(); if (!no) return Promise.resolve();
   $('st').textContent = '読んでいます… ' + no;
@@ -542,10 +579,12 @@ function 出す() {
   function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
   名(); window.addEventListener('fm-signin', 名);
   $('go').onclick = function () { 束 = null; 出す(); }; $('pr').onclick = 記録して印刷; $('pt').onclick = テスト出力; 端末名を表示();
+  $('ps').onclick = function () { if (!束) return; 分けて = true; 記録して印刷(); };
+  setInterval(function () { $('ps').style.display = (束 && 束.length > 1) ? '' : 'none'; }, 800);
   $('no').addEventListener('keydown', function (e) { if (e.key === 'Enter') 出す(); });
   var q = new URLSearchParams(location.search); if (q.get('type') === 'seizo') 種類を変える('seizo');
   if (q.get('test') === '1') テスト = true;
-  if (q.get('check')) { 確認id = String(q.get('check')); 種類を変える('seizo'); document.body.classList.add('checkonly');
+  if (q.get('check')) { 確認id = String(q.get('check')); 種類を変える(q.get('type') === 'gaichu' ? 'gaichu' : 'seizo'); document.body.classList.add('checkonly');
     var c0 = $('chk'); if (c0) { c0.className = ''; c0.style.display = 'flex'; c0.innerHTML = '<div>確認しています…</div>'; }
     var no0 = String(q.get('no') || '').trim();
     公開確認(no0, 確認id).then(function (d) { 確認画面(no0, d); }).catch(function (e) { if (c0) { c0.className = 'ng'; c0.innerHTML = '<div class="big">確認できませんでした</div><div>' + esc(String(e.message || e)) + '</div>'; } });

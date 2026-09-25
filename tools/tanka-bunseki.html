@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>単価分析 | Tokiwa Hub</title>
+<style>
+  body{ margin:0; font-family:"Noto Sans JP","Yu Gothic","Meiryo",sans-serif; background:#f1f5f9; color:#111; font-size:13px; }
+  #bar{ background:#0d0d0d; color:#e5e7eb; padding:6px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  #bar a{ color:#93c5fd; text-decoration:none; }
+  #bar button{ font-size:13px; padding:3px 12px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#111; cursor:pointer; }
+  #bar .st{ color:#fbbf24; }
+  #ctl{ background:#fff; border-bottom:1px solid #cbd5e1; padding:8px 14px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  #ctl label{ white-space:nowrap; cursor:pointer; }
+  #ctl input[type=number]{ width:60px; font-size:13px; padding:2px 4px; }
+  #ctl input[type=text]{ width:220px; font-size:13px; padding:3px 6px; }
+  #wrap{ padding:10px 14px; }
+  table.t{ border-collapse:collapse; background:#fff; width:100%; }
+  table.t th{ background:#e2e8f0; padding:4px 8px; font-weight:600; text-align:left; white-space:nowrap; cursor:pointer; position:sticky; top:0; }
+  table.t td{ padding:3px 8px; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
+  table.t td.r, table.t th.r{ text-align:right; font-variant-numeric:tabular-nums; }
+  table.t tr.g:hover{ background:#fefce8; cursor:pointer; }
+  table.t tr.few td{ color:#94a3b8; }
+  .sub{ background:#f8fafc; }
+  .sub table{ border-collapse:collapse; font-size:12px; margin:4px 0 8px 20px; }
+  .sub td{ padding:1px 8px; border-bottom:1px solid #eee; }
+  .sub td.r{ text-align:right; }
+  .note{ color:#475569; font-size:12px; margin:6px 0; }
+  .hi{ background:#fee2e2; }
+</style>
+<style>/* 表組は角（本多さん指定）。ボタンは丸くてよい */ table,thead,tbody,tr,th,td,div:has(> table),section:has(> table){border-radius:0 !important}</style>
+</head>
+<body>
+<div id="bar">
+  <a href="fm-juchu-hub.html">← 受注入力</a>
+  <b>単価分析（材料を除いた作業の原価と掛け率）</b>
+  <button id="reload" title="中継から取り直します（ふだんは 1 日 1 回、自動で取ります）">取り直す</button>
+  <button id="csv">CSV</button>
+  <span class="st" id="st"></span>
+  <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
+</div>
+<div id="ctl">
+  <span>束ねる鍵:</span>
+  <label><input type="checkbox" class="k" value="品種" checked> 品種</label>
+  <label><input type="checkbox" class="k" value="品目"> 品目（製品名の頭）</label>
+  <label><input type="checkbox" class="k" value="サイズ" checked> サイズ</label>
+  <label><input type="checkbox" class="k" value="色数" checked> 色数</label>
+  <label><input type="checkbox" class="k" value="パーツ" checked> パーツ数</label>
+  <label><input type="checkbox" class="k" value="加工"> 加工</label>
+  <label><input type="checkbox" class="k" value="紙質"> 紙質</label>
+  <label><input type="checkbox" class="k" value="得意先種類"> 得意先種類</label>
+  <label><input type="checkbox" class="k" value="数量帯" checked> 数量帯</label>
+  <span style="border-left:1px solid #cbd5e1;height:18px"></span>
+  <label>材料の掛け率 <input type="number" id="mk" value="1.15" step="0.01"></label>
+  <label>期間 <select id="per"><option value="3">3 年</option><option value="1">直近 1 年</option><option value="2">直近 2 年</option></select></label>
+  <label>最低件数 <input type="number" id="minn" value="3" min="1"></label>
+  <input type="text" id="q" placeholder="🔍 絞る（空白=AND、OR も可）">
+</div>
+<div id="wrap"><div class="note">材料 ＝ 用紙代・版代・梱包代・配送代・外注（合計金額から印刷代・加工賃・人件費を除いた残り）。作業原価 ＝ 印刷代 ＋ 加工賃 ＋ 人件費。作業の掛け率 ＝（売価 − 材料 × 掛け率）÷ 作業原価。数字は中央値（平均より特殊な案件に引っ張られにくい）。</div><div id="out">読んでいます…</div></div>
+
+<script src="fm-bridge.js"></script>
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+var PARTNER = { '5236': '村山', '5465': '中尾', '5463': '北上', '5451': 'ヤマウチ', '5427': 'アート', '5525': '津島', '5364': 'ソネ' };
+var DATA = null, 開いている = {};
+function 数(v) { var x = Number(String(v == null ? '' : v).replace(/[,\s]/g, '')); return isNaN(x) ? 0 : x; }
+function 中央値(a) { if (!a.length) return 0; var s = a.slice().sort(function (x, y) { return x - y; }); var m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function 分位(a, p) { if (!a.length) return 0; var s = a.slice().sort(function (x, y) { return x - y; }); var i = Math.min(s.length - 1, Math.max(0, Math.round((s.length - 1) * p))); return s[i]; }
+function 円(n) { return n ? Math.round(n).toLocaleString() : '—'; }
+function 数量帯(q) { return q <= 500 ? '〜500' : q <= 1000 ? '〜1,000' : q <= 3000 ? '〜3,000' : q <= 10000 ? '〜10,000' : '10,001〜'; }
+function 品目(name) { var s = String(name || '').normalize('NFKC'); var m = s.match(/(名刺|封筒|チラシ|伝票|複写|冊子|パンフ|リーフ|ポスター|カレンダー|はがき|ハガキ|カード|シール|ラベル|帳票|納品書|請求書|受託書|領収書|受付票|案内|封書|用紙|ノート|メモ)/); return m ? m[1] : s.replace(/[（(].*$/, '').slice(0, 6); }
+function IDB(op, val) { return new Promise(function (res) { try { var q = indexedDB.open('tokiwa_fm_index', 1); q.onupgradeneeded = function () { q.result.createObjectStore('idx'); }; q.onsuccess = function () { var tx = q.result.transaction('idx', op === 'get' ? 'readonly' : 'readwrite'); var st = tx.objectStore('idx'); var r = op === 'get' ? st.get('tanka') : st.put(val, 'tanka'); r.onsuccess = function () { res(op === 'get' ? r.result : true); }; r.onerror = function () { res(null); }; }; q.onerror = function () { res(null); }; } catch (e) { res(null); } }); }
+function 行を物に(j) { var P = {}; j.列.forEach(function (c, i) { P[c] = i; }); return j.行.map(function (r) { var o = {}; j.列.forEach(function (c) { o[c] = r[P[c]]; }); return o; }); }
+function 読む(強制) {
+  $('st').textContent = '読んでいます…';
+  return IDB('get').then(function (c) {
+    if (!強制 && c && c.取った && Date.now() - new Date(c.取った).getTime() < 24 * 3600 * 1000) return c;
+    if (!FM.名乗っている()) { $('st').textContent = 'ログインしてください（中継から集計を取ります）'; return c || null; }
+    $('st').textContent = '中継から 3 年分を集計しています（20〜60 秒）…';
+    return FM.呼ぶ('単価_集計', [3]).then(function (j) { j.取った = new Date().toISOString(); return IDB('put', j).then(function () { return j; }); });
+  }).then(function (j) { if (!j) return; DATA = 行を物に(j); $('st').textContent = DATA.length.toLocaleString() + ' 件（' + String(j.取った || '').slice(0, 16).replace('T', ' ') + ' 取得）'; 描く(); });
+}
+function 派生(o, mk) {
+  var 用 = 数(o['用紙代']), 版 = 数(o['版代']), 梱 = 数(o['梱包代']), 配 = 数(o['配送代']), 印 = 数(o['印刷代']), 加 = 数(o['加工賃']), 人 = 数(o['人件費']), 合 = 数(o['合計金額']), 売 = 数(o['売価金額']), q = 数(o['合計数1']);
+  var 外 = Math.max(0, 合 - (用 + 版 + 梱 + 配 + 印 + 加 + 人)); var 材料 = 用 + 版 + 梱 + 配 + 外; var 材料売 = (用 + 外) * mk + 版 + 梱 + 配; var 作業 = 印 + 加 + 人;
+  return { q: q, 売: 売, 材料: 材料, 材料売: 材料売, 作業: 作業, 作業千: q ? 作業 / q * 1000 : 0, 単価: q ? 売 / q : 数(o['売価単価']), 掛け率: 作業 > 0 ? (売 - 材料売) / 作業 : null, 取り分率: 売 ? (売 - 材料) / 売 : null };
+}
+function 鍵(o) {
+  var ks = Array.prototype.filter.call(document.querySelectorAll('#ctl .k'), function (c) { return c.checked; }).map(function (c) { return c.value; });
+  return ks.map(function (k) {
+    if (k === '品種') return '品種' + (o['品種'] || '—');
+    if (k === '品目') return 品目(o['製品名']);
+    if (k === 'サイズ') return (o['サイズ横'] || '') + '×' + (o['サイズ縦'] || '');
+    if (k === '色数') return (o['色数1'] || '?') + (o['色MAX1'] ? '/' + o['色MAX1'] : '') + '色';
+    if (k === 'パーツ') return (o['パーツ数'] || '1') + 'P';
+    if (k === '加工') return [o['製本加工'] ? '製本:' + String(o['製本加工']).slice(0, 8) : '', o['横ミシン1'] ? '横ミシン' + o['横ミシン1'] : '', o['縦ミシン1'] ? '縦ミシン' + o['縦ミシン1'] : ''].filter(Boolean).join('・') || '加工なし';
+    if (k === '紙質') return String(o['紙質1'] || '—').slice(0, 10);
+    if (k === '得意先種類') return PARTNER[String(o['得意先コード'])] ? '関連会社' : '直接';
+    if (k === '数量帯') return 数量帯(数(o['合計数1']));
+    return '';
+  }).join(' | ');
+}
+function 年(o) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(o['起票日'] || '')); return m ? Number(m[3]) : (/^(\d{4})/.exec(String(o['起票日'] || '')) ? Number(RegExp.$1) : 0); }
+function 描く() {
+  if (!DATA) return; var mk = Number($('mk').value) || 1.15, per = Number($('per').value), minn = Number($('minn').value) || 1, q = $('q').value.trim();
+  var y0 = new Date().getFullYear() - per + 1; var yNow = new Date().getFullYear();
+  var groups = {};
+  DATA.forEach(function (o) { if (年(o) < y0) return; var d = 派生(o, mk); if (!d.q || !d.売) return; var k = 鍵(o); if (q && !文字が合う(k + ' ' + (o['製品名'] || '') + ' ' + (o['得意先コード'] || ''), q)) return; (groups[k] = groups[k] || { k: k, rows: [] }).rows.push({ o: o, d: d, y: 年(o) }); });
+  var list = Object.keys(groups).map(function (k) { var g = groups[k]; var rs = g.rows; var 作業千 = rs.map(function (x) { return x.d.作業千; }).filter(function (v) { return v > 0; }); var 率 = rs.map(function (x) { return x.d.掛け率; }).filter(function (v) { return v != null && isFinite(v); }); var 単 = rs.map(function (x) { return x.d.単価; }); var 取 = rs.map(function (x) { return x.d.取り分率; }).filter(function (v) { return v != null; });
+    return { k: k, n: rs.length, 直近: rs.filter(function (x) { return x.y === yNow; }).length, 作業千: 中央値(作業千), 作業千25: 分位(作業千, .25), 作業千75: 分位(作業千, .75), 率: 中央値(率), 単価: 中央値(単), 取り分率: 中央値(取), rows: rs }; }).sort(function (a, b) { return b.n - a.n; });
+  var h = '<table class="t"><thead><tr><th>束（' + list.length + '）</th><th class="r">件数</th><th class="r">今年</th><th class="r">作業原価/1,000 中央</th><th class="r">25%</th><th class="r">75%</th><th class="r">作業の掛け率</th><th class="r">売価単価 中央</th><th class="r">取り分率</th></tr></thead><tbody>';
+  list.forEach(function (g, i) { var few = g.n < minn; h += '<tr class="g' + (few ? ' few' : '') + '" data-i="' + i + '"><td>' + esc(g.k) + '</td><td class="r">' + g.n + '</td><td class="r">' + g.直近 + '</td><td class="r"><b>' + 円(g.作業千) + '</b></td><td class="r">' + 円(g.作業千25) + '</td><td class="r">' + 円(g.作業千75) + '</td><td class="r">' + (g.率 ? (Math.round(g.率 * 100) / 100) + '×' : '—') + '</td><td class="r">' + (g.単価 ? (Math.round(g.単価 * 100) / 100) : '—') + '</td><td class="r">' + (g.取り分率 != null ? Math.round(g.取り分率 * 100) + '%' : '—') + '</td></tr>';
+    if (開いている[g.k]) { h += '<tr class="sub"><td colspan="9"><table><tr><td>伝票</td><td>起票日</td><td>得意先</td><td>製品名</td><td class="r">数量</td><td class="r">売価</td><td class="r">単価</td><td class="r">材料</td><td class="r">印刷代</td><td class="r">加工賃</td><td class="r">人件費</td><td class="r">作業/1,000</td><td class="r">掛け率</td></tr>' + g.rows.sort(function (a, b) { return String(b.o['起票日']).slice(6) + String(b.o['起票日']).slice(0, 5) < String(a.o['起票日']).slice(6) + String(a.o['起票日']).slice(0, 5) ? -1 : 1; }).slice(0, 60).map(function (x) { var o = x.o, d = x.d; return '<tr><td><a href="fm-juchu-hub.html?no=' + encodeURIComponent(o['伝票番号']) + '" target="_blank">' + esc(o['伝票番号']) + '</a></td><td>' + esc(o['起票日']) + '</td><td>' + esc(o['得意先コード']) + '</td><td>' + esc(String(o['製品名'] || '').slice(0, 18)) + '</td><td class="r">' + 円(d.q) + '</td><td class="r">' + 円(d.売) + '</td><td class="r">' + (Math.round(d.単価 * 100) / 100) + '</td><td class="r">' + 円(d.材料) + '</td><td class="r">' + 円(数(o['印刷代'])) + '</td><td class="r">' + 円(数(o['加工賃'])) + '</td><td class="r">' + 円(数(o['人件費'])) + '</td><td class="r">' + 円(d.作業千) + '</td><td class="r">' + (d.掛け率 != null ? Math.round(d.掛け率 * 100) / 100 + '×' : '—') + '</td></tr>'; }).join('') + '</table>' + (g.rows.length > 60 ? '<div class="note">先頭 60 件</div>' : '') + '</td></tr>'; } });
+  h += '</tbody></table>';
+  $('out').innerHTML = h; window._list = list;
+  Array.prototype.forEach.call(document.querySelectorAll('tr.g'), function (tr) { tr.onclick = function () { var g = list[Number(tr.getAttribute('data-i'))]; 開いている[g.k] = !開いている[g.k]; 描く(); }; });
+}
+function 文字が合う(hay, q) { var groups = String(q).normalize('NFKC').toLowerCase().split(/\s+(?:or|または)\s+|\s*[|｜]\s*/).map(function (g) { return g.split(/[\s　]+/).filter(Boolean); }).filter(function (g) { return g.length; }); if (!groups.length) return true; hay = String(hay).normalize('NFKC').toLowerCase(); return groups.some(function (g) { return g.every(function (t) { if (t.length > 1 && t.charAt(0) === '-') return hay.indexOf(t.slice(1)) < 0; return hay.indexOf(t) >= 0; }); }); }
+function CSV() { var list = window._list || []; var s = '﻿束,件数,今年,作業原価/1000 中央,25%,75%,作業の掛け率,売価単価 中央,取り分率\n' + list.map(function (g) { return [g.k, g.n, g.直近, Math.round(g.作業千), Math.round(g.作業千25), Math.round(g.作業千75), g.率 ? Math.round(g.率 * 100) / 100 : '', g.単価 ? Math.round(g.単価 * 100) / 100 : '', g.取り分率 != null ? Math.round(g.取り分率 * 100) : ''].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\n'); var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([s], { type: 'text/csv' })); a.download = '単価分析_' + new Date().toISOString().slice(0, 10) + '.csv'; a.click(); }
+(function () {
+  FM.サインインのボタンを置く($('fm-signin'));
+  function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
+  名(); window.addEventListener('fm-signin', function () { 名(); 読む(false); });
+  $('reload').onclick = function () { 読む(true); }; $('csv').onclick = CSV;
+  Array.prototype.forEach.call(document.querySelectorAll('#ctl input, #ctl select'), function (el) { el.addEventListener('change', 描く); }); $('q').addEventListener('input', 描く);
+  読む(false);
+})();
+</script>
+<script>window.KAIZEN_KEY = 'tanka-bunseki';</script>
+<script src="kaizen.js"></script>
+</body>
+</html>

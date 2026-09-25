@@ -85,7 +85,7 @@ function doPost(e) {
   try {
     var req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     // SEIZO-7: 製造指示書の QR 確認は誰でも（返すのは「最新かどうか」と回数・日時だけ。伝票の中身は返さない）
-    if (req.action === '指示書_確認') return json_({ ok: true, user: 'public', data: 指示書_確認(req['伝票番号'], req['記録id']) });
+    if (req.action === '指示書_確認') return json_({ ok: true, user: 'public', data: 指示書_確認(req['伝票番号'], req['記録id'], req['kind']) });
     var who = authorize_(req);
     いま呼んでいる人 = who;                 // 画面_* が Session を使わずに済むように
     try {
@@ -858,6 +858,25 @@ function 手配_一覧() {
   }
   return { ok: true, user: who.email, 一覧: out };
 }
+/** TANKA-1: 過去 N 年の受注（写し 受注_<年>）から、単価分析に要る列だけ返す。列は固定・行は配列（軽くするため） */
+var 単価列 = ['伝票番号', '起票日', '得意先コード', '製品名', '品種', 'サイズ横', 'サイズ縦', '色数1', '色MAX1', 'パーツ数', '紙質1', '製本加工', '横ミシン1', '縦ミシン1', '合計数1', '売価金額', '売価単価', '用紙代', '版代', '梱包代', '配送代', '印刷代', '加工賃', '人件費', '合計金額', '案件区分'];
+function 単価_集計(年数) {
+  var who = 画面_利用者_(); var n = Math.max(1, Math.min(5, Number(年数) || 3)); var y0 = new Date().getFullYear();
+  var out = [];
+  for (var y = y0 - n + 1; y <= y0; y++) {
+    var sh; try { sh = 写し_開く_(写し.年別名 + y); } catch (e) { continue; }
+    var last = sh.getLastRow(); if (last < 2) continue;
+    var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String); var pos = 単価列.map(function (c) { return head.indexOf(c); });
+    var cols = {}; pos.forEach(function (ci, i) { if (ci < 0) return; cols[i] = sh.getRange(2, ci + 1, last - 1, 1).getValues(); });
+    for (var r = 0; r < last - 1; r++) {
+      var row = 単価列.map(function (c, i) { var v = cols[i] ? cols[i][r][0] : ''; if (v instanceof Date) v = 日付_(v); return v === null || v === undefined ? '' : (typeof v === 'number' ? v : String(v)); });
+      var kb = String(row[25] || ''); if (kb && kb !== '受注') continue;
+      if (!Number(row[15]) || !Number(row[14])) continue;   // 売価金額・数量が無いものは除く
+      out.push(row);
+    }
+  }
+  return { ok: true, user: who.email, 列: 単価列, 行: out, 件数: out.length, 年: n };
+}
 /** SPEC-1: 手配（事前情報・未確定・手配）を 元 → 先 に写す。先に既にあれば触らない */
 function 手配_写す(元, 先) {
   var who = 画面_利用者_(); var a = String(元 || '').trim(), b = String(先 || '').trim(); if (!a || !b || a === b) return { ok: true, user: who.email, 写した: false };
@@ -905,7 +924,7 @@ function 手配_書く(伝票番号, 手配) {
   } finally { lock.releaseLock(); }
 }
 // ------------------------------------------------------- SEIZO-7: 製造指示書の出力記録（QR の確認用。保管庫「製造指示書出力」）
-var 指示書列 = ['id', '伝票番号', 'n', 'at', 'by', 'pc', 'comment'];
+var 指示書列 = ['id', '伝票番号', 'n', 'at', 'by', 'pc', 'comment', 'kind'];   // QR-2: kind = seizo（製造）／gaichu（外注）。空は seizo
 function 指示書_帳簿_() { return 写し_帳簿_('製造指示書出力', 指示書列).getSheets()[0]; }
 function 指示書_記録(記録) {
   var who = 画面_利用者_(); 記録 = 記録 || {};
@@ -913,17 +932,17 @@ function 指示書_記録(記録) {
   if (!no || !id) throw new Error('伝票番号と id が要ります');
   var sh = 指示書_帳簿_(); var v = sh.getDataRange().getValues();
   for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === id) return { ok: true, user: who.email, 既に: true }; }
-  sh.appendRow([id, no, Number(記録.n || 0), String(記録.at || new Date().toISOString()), String(記録.by || who.email || ''), String(記録.pc || ''), String(記録.comment || '').slice(0, 500)]);
+  sh.appendRow([id, no, Number(記録.n || 0), String(記録.at || new Date().toISOString()), String(記録.by || who.email || ''), String(記録.pc || ''), String(記録.comment || '').slice(0, 500), String(記録.kind || 'seizo')]);
   return { ok: true, user: who.email };
 }
-function 指示書_確認(伝票番号, 記録id) {
-  var no = String(伝票番号 || '').trim(); var id = String(記録id || 'latest').trim();
+function 指示書_確認(伝票番号, 記録id, kind) {
+  var no = String(伝票番号 || '').trim(); var id = String(記録id || 'latest').trim(); kind = String(kind || 'seizo');
   if (!no) return { status: 'none', why: '伝票番号がありません' };
   var sh = 指示書_帳簿_(); var v = sh.getDataRange().getValues(); var recs = [];
-  for (var i = 1; i < v.length; i++) { if (String(v[i][1]) !== no) continue; recs.push({ id: String(v[i][0]), n: Number(v[i][2] || 0), at: (v[i][3] instanceof Date) ? v[i][3].toISOString() : String(v[i][3] || ''), pc: String(v[i][5] || '') }); }
+  for (var i = 1; i < v.length; i++) { if (String(v[i][1]) !== no) continue; if (String(v[i][7] || 'seizo') !== kind) continue; recs.push({ id: String(v[i][0]), n: Number(v[i][2] || 0), at: (v[i][3] instanceof Date) ? v[i][3].toISOString() : String(v[i][3] || ''), pc: String(v[i][5] || '') }); }
   recs.sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
   var last = recs[recs.length - 1] || null;
-  if (!last) return { status: 'none', 伝票番号: no, why: 'まだ製造指示書を出していません' };
+  if (!last) return { status: 'none', 伝票番号: no, why: 'まだ' + (kind === 'gaichu' ? '外注' : '製造') + '指示書を出していません' };
   var mine = id === 'latest' ? last : (recs.filter(function (r) { return r.id === id; })[0] || null);
   if (!mine) return { status: 'old', 伝票番号: no, lastN: last.n, lastAt: last.at, why: 'この紙の出力記録が見つかりません。最新は 第' + last.n + '回' };
   if (mine.id !== last.id) return { status: 'old', 伝票番号: no, n: mine.n, at: mine.at, lastN: last.n, lastAt: last.at, why: 'この紙は 第' + mine.n + '回。最新は 第' + last.n + '回' };
@@ -1017,6 +1036,7 @@ function handle_(action, req, who) {
     case '手配_読む':         return 手配_読む(req['伝票番号']);                          // TEHAI-1
     case '手配_書く':         return 手配_書く(req['伝票番号'], req['手配']);             // TEHAI-1
     case '手配_一覧':         return 手配_一覧();                                        // MITEI-1
+    case '単価_集計':         return 単価_集計(req['年数']);                             // TANKA-1
     case '手配_写す':         return 手配_写す(req['元'], req['先']);                     // SPEC-1: 段階・Repeat で新しい番号へ
     case '仕様書_置く':       return 仕様書_置く(req['番号'], req['名'], req['mime'], req['base64']);   // SPEC-1
     case '仕様書_一覧':       return 仕様書_一覧(req['番号']);                            // SPEC-1
