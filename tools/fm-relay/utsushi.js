@@ -26,7 +26,7 @@ var 写し = {
   索引名:   '受注_索引',
   年別名:   '受注_',
   索引の列: ['recordId', 'modId', '年', '伝票番号', '見積番号', '案件区分', '案件ID', '起票日', '納品日',
-             '得意先コード', 'ユーザー名', '担当者コード', '製品名', '品種', '合計数1', '売価金額', '合計金額', '修正日'],
+             '得意先コード', 'ユーザー名', '担当者コード', '製品名', '品種', '合計数1', '売価金額', '合計金額', '修正日', 'ロット契約単位'],   // LOT-1: 数量＝ロット契約単位（末尾に足す。既存行は 索引の列を揃える_ が埋める）
   ページ:   1000,         // 1回に FileMaker から読む件数
   制限秒:   330           // これを超えたら続きは次回に
 };
@@ -180,6 +180,7 @@ function トリガーを外す_(fn) {
 /** 修正日が昨日以降のものを写し直す（索引・年別の該当行を置き換える） */
 function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日からの修正を取り込む（止まっていた分の追いつき用）。省略時は昨日から
   var lay = LAYOUTS.juchu;
+  try { 索引の列を揃える_(); } catch (e) { Logger.log('索引の列を揃える: ' + e.message); }   // LOT-1: 列が増えていたら先に埋める
   var d = new Date(); d.setDate(d.getDate() - 1);
   var 昨日 = String(以降 || '').trim() || 日付_(d);
   var rows = find_(lay, [{ '修正日': '>=' + 昨日 }], 2000, 1, null);
@@ -225,6 +226,39 @@ function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日
   索引キャッシュを捨てる_(); 写し_索引_();   // 索引の json を作り直しておく（朝一番の人を待たせない）
   Logger.log('毎晩の写し: 更新 ' + 更新 + '・追加 ' + 追加 + '（修正日 ' + 昨日 + ' 以降 ' + rows.records.length + ' 件）');
   return { 件数: rows.records.length, 更新: 更新, 追加: 追加, 以降: 昨日 };
+}
+
+/** LOT-1: 索引シートに列が増えたとき、見出しを足して 年別シート（全項目）から値を埋める。増えていなければ何もしない。
+ *  年別は 索引の「年」の値ごとに開き、recordId で引く。列ごとに 1 回の読み書きなので 7 万行でも 1 分ほど */
+function 索引の列を揃える_() {
+  var sh = 写し_帳簿_(写し.索引名, 写し.索引の列).getSheets()[0];
+  var w = Math.max(sh.getLastColumn(), 1), n = sh.getLastRow();
+  var 見出し = sh.getRange(1, 1, 1, w).getValues()[0].map(String);
+  var 足す = 写し.索引の列.filter(function (c) { return 見出し.indexOf(c) < 0; });
+  if (!足す.length) return 0;
+  sh.getRange(1, w + 1, 1, 足す.length).setValues([足す]);
+  if (n < 2) return 足す.length;
+  var ids = sh.getRange(2, 1, n - 1, 1).getValues().map(function (r) { return String(r[0]); });
+  var yi = 見出し.indexOf('年'); var years = {};
+  if (yi >= 0) sh.getRange(2, yi + 1, n - 1, 1).getValues().forEach(function (r) { var y = String(r[0] || '').trim(); if (y) years[y] = 1; });
+  var p = 進捗_(); var 列 = (p && p.列) || null;
+  var map = {};   // recordId → { 列名: 値 }
+  Object.keys(years).forEach(function (y) {
+    var ysh; try { ysh = 写し_帳簿_(写し.年別名 + y, 列 || ['recordId']).getSheets()[0]; } catch (e) { return; }
+    var yn = ysh.getLastRow(); if (yn < 2) return;
+    var yh = ysh.getRange(1, 1, 1, Math.max(ysh.getLastColumn(), 1)).getValues()[0].map(String);
+    var yids = ysh.getRange(2, 1, yn - 1, 1).getValues();
+    足す.forEach(function (c) {
+      var ci = yh.indexOf(c); if (ci < 0) return;
+      var vals = ysh.getRange(2, ci + 1, yn - 1, 1).getValues();
+      for (var i = 0; i < yids.length; i++) { var id = String(yids[i][0]); if (!id) continue; (map[id] = map[id] || {})[c] = 値を整える_(vals[i][0]); }
+    });
+  });
+  var out = ids.map(function (id) { var m = map[id] || {}; return 足す.map(function (c) { return m[c] === undefined ? '' : m[c]; }); });
+  sh.getRange(2, w + 1, out.length, 足す.length).setValues(out);
+  索引キャッシュを捨てる_();
+  Logger.log('索引に列を足しました: ' + 足す.join('・') + '（' + out.length + ' 行）');
+  return 足す.length;
 }
 
 function 写し_毎晩を登録() {
@@ -285,7 +319,7 @@ function 写し_索引_() {
   return objs;
 }
 /** 画面の手元検索用に、索引の json をそのまま配る（要る列だけ・73k 行で 8MB ほど。gzip で 2MB） */
-var 配る列 = ['recordId', '年', '伝票番号', '見積番号', '案件区分', '案件ID', '起票日', '納品日', '得意先コード', 'ユーザー名', '製品名', '品種', '合計数1', '売価金額', '合計金額', '納期', '単位', '売価単価', '修正日', '担当者コード', '前回伝票番号'];   // GROUP-2: 前回伝票番号（Hub の案件IDを引き継ぐ手がかり）
+var 配る列 = ['recordId', '年', '伝票番号', '見積番号', '案件区分', '案件ID', '起票日', '納品日', '得意先コード', 'ユーザー名', '製品名', '品種', '合計数1', '売価金額', '合計金額', '納期', '単位', '売価単価', '修正日', '担当者コード', '前回伝票番号', 'ロット契約単位'];   // LOT-1   // GROUP-2: 前回伝票番号（Hub の案件IDを引き継ぐ手がかり）
 function 写し_索引を配る() {
   var who = 画面_利用者_();
   写し_索引_();   // json が無ければ作る

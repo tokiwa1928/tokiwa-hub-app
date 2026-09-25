@@ -145,7 +145,7 @@ function 画面_利用者_() {
 var 一覧の列 = [
   '伝票番号', '見積番号', '案件区分', '案件ID', '起票日', '納品日', '納品書番号',
   '得意先コード', 'ユーザー名', '担当者コード', '製品名', '品種',
-  '合計数1', '単位', '売価単価', '売価金額', '合計金額', '注残数', '注文書No'
+  '合計数1', '単位', '売価単価', '売価金額', '合計金額', '注残数', '注文書No', 'ロット契約単位'   // LOT-1: 数量＝ロット契約単位
 ];
 
 /** FileMaker の日付は MM/DD/YYYY で渡す */
@@ -1119,7 +1119,8 @@ function handle_(action, req, who) {
     case 'マスタ_配る':       return マスタ_配る(req.layout);
     case 'マスタ_写す':       return マスタ_写す(req.layout);
     case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }
-    case '写し_毎晩':         return 写し_毎晩(req['以降']);   // 手で動かす（止まっていた分の追いつき）。以降 'MM/DD/YYYY'
+    case '写し_毎晩':         return 写し_毎晩(req['以降']);
+    case '索引_列を揃える':   return { ok: true, 足した: 索引の列を揃える_() };   // LOT-1: 手で動かす（毎晩の写しでも自動で走る）   // 手で動かす（止まっていた分の追いつき）。以降 'MM/DD/YYYY'
     case '共有ドライブを作る': {   // Google の共有ドライブを名前で作る（あれば返す）。実行者 info@tokiwap-group.com の権限で
       var nm = String(req['名前'] || '').trim(); if (!nm) throw new Error('名前が要ります');
       var have = Drive.Drives.list({ pageSize: 100 }).drives || [];

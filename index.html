@@ -45980,7 +45980,8 @@ function _projAnyText_(r){
     if(typeof v === 'object'){ Object.keys(v).forEach(function(k){ if(k.charAt(0) === '_') return; walk(v[k], d + 1); }); }
   };
   walk(r, 0);
-  try{ if(typeof _projFmNo_ === 'function') out.push(_projFmNo_(r)); if(r.master_no) out.push('P' + r.master_no); if(typeof _ankenName_ === 'function') out.push(_ankenName_(r)); }catch(e){}
+  try{ if(typeof _projFmNo_ === 'function') out.push(_projFmNo_(r)); if(r.master_no) out.push('P' + r.master_no); if(typeof _ankenName_ === 'function') out.push(_ankenName_(r));
+    var _cc = r.custCode || r.custcd || (r.fm && r.fm['fm-custcd']) || ''; if(_cc && typeof _custNameOf_ === 'function') out.push(_custNameOf_(_cc)); }catch(e){}
   return out.join(' ').toLowerCase();
 }
 function _projAnyQ_(){ return (document.getElementById('proj-anyq')?.value || '').trim(); }
@@ -46093,6 +46094,50 @@ function _ankenHistoryHTML_(r){
 function _projByFmNo_(no){ no=String(no||''); if(!no) return null; return (DB.projects||[]).find(function(p){ return p && _projFmNo_(p)===no; })||null; }
 window._projGrpOpen_ = window._projGrpOpen_ || {};
 function _projGrpToggle_(key){ window._projGrpOpen_[key]=!window._projGrpOpen_[key]; renderProjects(); }
+// ANYQ-2: 何でも検索の文字で FileMaker の受注（受注入力が同じブラウザに置いた索引・全年）も探し、Hub に無いものを表の下に出す
+window._fmIdxCache_ = null;
+function _fmIdxLoad_(){
+  if(window._fmIdxCache_ && (Date.now() - window._fmIdxCache_.at) < 5*60*1000) return Promise.resolve(window._fmIdxCache_.idx);
+  return new Promise(function(res){ try{ var q=indexedDB.open('tokiwa_fm_index',1); q.onupgradeneeded=function(){ try{ q.result.createObjectStore('idx'); }catch(e){} }; q.onsuccess=function(){ try{ var d=q.result; var g=d.transaction('idx','readonly').objectStore('idx').get('juchu'); g.onsuccess=function(){ d.close(); res(g.result||null); }; g.onerror=function(){ d.close(); res(null); }; }catch(e){ res(null); } }; q.onerror=function(){ res(null); }; }catch(e){ res(null); } })
+    .then(function(idx){ window._fmIdxCache_ = { at: Date.now(), idx: idx }; return idx; });
+}
+function _fmIdxDate_(v){ v=String(v||''); var m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v); if(m) return m[3]+'-'+('0'+m[1]).slice(-2)+'-'+('0'+m[2]).slice(-2); return v; }
+function _projFmHits_(rows){
+  var tbl = document.getElementById('proj-body'); tbl = tbl && tbl.closest('table'); if(!tbl) return;
+  var box = document.getElementById('proj-fm-hits');
+  var q = _projAnyQ_();
+  if(!q){ if(box) box.remove(); return; }
+  if(!box){ box = document.createElement('div'); box.id = 'proj-fm-hits'; box.style.cssText = 'margin:10px 0 0;border:1px solid #cbd5e1;background:#fff'; tbl.parentNode.insertBefore(box, tbl.nextSibling); }
+  var token = (window._projFmHitsToken_ = (window._projFmHitsToken_||0) + 1);
+  box.innerHTML = '<div style="padding:6px 10px;font-size:12px;color:#64748b">🗄 FileMaker の受注から探しています…</div>';
+  _fmIdxLoad_().then(function(idx){
+    if(token !== window._projFmHitsToken_) return;
+    if(!idx || !idx.列 || !idx.行){ box.innerHTML = '<div style="padding:6px 10px;font-size:12px;color:#64748b">🗄 FileMaker の索引がまだありません。受注登録の画面を一度開くと取れます（全年の受注が探せるようになります）</div>'; return; }
+    var P = {}; idx.列.forEach(function(c,i){ P[c]=i; });
+    var shown = {}; (rows||[]).forEach(function(r){ var no = (typeof _projFmNo_==='function') ? _projFmNo_(r) : ''; if(no) shown[no]=1; });
+    var col = function(r,c){ return P[c]==null ? '' : String(r[P[c]]==null ? '' : r[P[c]]); };
+    var hits = [];
+    idx.行.forEach(function(r){
+      var no = col(r,'伝票番号') || col(r,'見積番号'); if(!no || shown[no]) return;
+      var cc = col(r,'得意先コード'); var cn = (cc && typeof _custNameOf_==='function') ? _custNameOf_(cc) : '';
+      var hay = [no, col(r,'伝票番号'), col(r,'見積番号'), col(r,'案件区分'), col(r,'案件ID'), col(r,'起票日'), _fmIdxDate_(col(r,'起票日')), cc, cn, col(r,'ユーザー名'), col(r,'製品名'), col(r,'品種'), col(r,'合計数1'), col(r,'ロット契約単位'), col(r,'売価金額'), col(r,'納期'), col(r,'前回伝票番号')].join(' ');
+      if(!_qMatch_(hay, q)) return;
+      hits.push({ no:no, kubun:col(r,'案件区分'), anken:col(r,'案件ID'), date:_fmIdxDate_(col(r,'起票日')), cust:cn||cc, user:col(r,'ユーザー名'), item:col(r,'製品名'), qty:(col(r,'ロット契約単位') || col(r,'合計数1')), amt:col(r,'売価金額'), due:_fmIdxDate_(col(r,'納期')) });
+    });
+    hits.sort(function(a,b){ return String(b.date).localeCompare(String(a.date)) || String(b.no).localeCompare(String(a.no)); });
+    var LIM = 200, disp = hits.slice(0, LIM);
+    var esc = function(v){ return String(v==null?'':v).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+    var yen = function(v){ var n = Number(String(v).replace(/[^\d.-]/g,'')); return n ? '¥' + n.toLocaleString() : ''; };
+    var h = '<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid #e2e8f0;background:#f8fafc"><b style="font-size:12px;color:#1e293b">🗄 FileMaker の受注（全年）から ' + hits.length + ' 件</b><span style="font-size:11px;color:#64748b">Hub のカードに無い伝票。番号を押すと受注入力で開きます' + (hits.length > LIM ? '（新しい ' + LIM + ' 件だけ表示。言葉を足して絞ってください）' : '') + '</span></div>';
+    if(!hits.length){ box.innerHTML = h; return; }
+    h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#1e293b;color:#fff"><th style="padding:4px 6px;text-align:left">伝票番号</th><th style="padding:4px 6px">区分</th><th style="padding:4px 6px">起票日</th><th style="padding:4px 6px;text-align:left">得意先</th><th style="padding:4px 6px;text-align:left">ユーザー</th><th style="padding:4px 6px;text-align:left">製品名</th><th style="padding:4px 6px;text-align:right">数量</th><th style="padding:4px 6px;text-align:right">売価</th><th style="padding:4px 6px">納期</th><th style="padding:4px 6px">案件ID</th></tr></thead><tbody>';
+    disp.forEach(function(x){
+      h += '<tr style="border-bottom:1px solid #e2e8f0"><td style="padding:4px 6px"><a href="tools/fm-juchu-hub.html?no=' + encodeURIComponent(x.no) + '" target="_blank" style="color:#0369a1;font-weight:600">' + esc(x.no) + '</a></td><td style="padding:4px 6px;text-align:center">' + esc(x.kubun) + '</td><td style="padding:4px 6px;text-align:center;white-space:nowrap">' + esc(x.date) + '</td><td style="padding:4px 6px">' + esc(x.cust) + '</td><td style="padding:4px 6px">' + esc(x.user) + '</td><td style="padding:4px 6px">' + esc(x.item) + '</td><td style="padding:4px 6px;text-align:right">' + esc(x.qty) + '</td><td style="padding:4px 6px;text-align:right">' + yen(x.amt) + '</td><td style="padding:4px 6px;text-align:center;white-space:nowrap">' + esc(x.due) + '</td><td style="padding:4px 6px;text-align:center">' + esc(x.anken) + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+    box.innerHTML = h;
+  });
+}
 // 受注入力ページが同じブラウザに置いている索引（IndexedDB tokiwa_fm_index）から、案件IDを持たないカードに 案件ID を補う
 function _projBackfillAnken_(){
   return new Promise(function(res){ try{ var q=indexedDB.open('tokiwa_fm_index',1); q.onupgradeneeded=function(){ try{ q.result.createObjectStore('idx'); }catch(e){} }; q.onsuccess=function(){ try{ var d=q.result; var g=d.transaction('idx','readonly').objectStore('idx').get('juchu'); g.onsuccess=function(){ d.close(); res(g.result||null); }; g.onerror=function(){ d.close(); res(null); }; }catch(e){ res(null); } }; q.onerror=function(){ res(null); }; }catch(e){ res(null); } })
@@ -46419,10 +46464,11 @@ function renderProjects(){
   if(typeof _renderProjChips_ === 'function') _renderProjChips_();
   // ⚡ 期間フィルタ
   var allProjs = DB.projects || [];
-  var periodFilteredProjs = _filterByPeriod_(allProjs, 'proj-body', ['orderDate','createdAt']);
+  // ANYQ-2: 何でも検索に文字があるときは期間を外して全部から探す（古い案件が「直近6ヶ月」で隠れていた）
+  var periodFilteredProjs = _projAnyQ_() ? allProjs : _filterByPeriod_(allProjs, 'proj-body', ['orderDate','createdAt']);
   // 期間セレクタを描画
   var pwProj = document.getElementById('proj-period-wrapper');
-  if(pwProj) pwProj.innerHTML = _renderPeriodFilter_('proj-body', 'renderProjects', allProjs.length);
+  if(pwProj) pwProj.innerHTML = _renderPeriodFilter_('proj-body', 'renderProjects', allProjs.length) + (_projAnyQ_() ? '<span style="font-size:11px;color:#b45309;margin-left:6px">何でも検索中は全期間</span>' : '');
   // 状態フィルタ以外の条件で絞った基準リスト（＝ステータス別カウント用）
   const _custFL = custF.toLowerCase();
   const baseRows=periodFilteredProjs.filter(r=>{
@@ -46452,8 +46498,9 @@ function renderProjects(){
   // XPPPP-1: 集計バー (絞り込み結果の 件数・受注金額・粗利)
   if(typeof _renderProjSummaryBar_ === 'function') _renderProjSummaryBar_(rows);
   const body=document.getElementById('proj-body');if(!body)return;
+  try{ _projFmHits_(rows); }catch(e){ console.warn('[FM索引]', e); }
   if(!rows.length){
-    body.innerHTML=`<tr><td colspan="16" style="text-align:center;padding:2rem;color:#aaa">該当する案件がありません。絞り込みを変えるか「＋ 新規登録」で追加できます</td></tr>`;
+    body.innerHTML=`<tr><td colspan="16" style="text-align:center;padding:2rem;color:#aaa">${_projAnyQ_() ? 'Hub の案件カードには見つかりません。FileMaker の受注から探した結果を下に出します' : '該当する案件がありません。絞り込みを変えるか「＋ 新規登録」で追加できます'}</td></tr>`;
     return;
   }
   var _movingN = rows.filter(_projIsMoving_).length;
@@ -46708,7 +46755,7 @@ function _renderProjFlatList_(){
   var stage = window._projStageTab_ || 'all';
 
   var all = DB.projects || [];
-  var rows = _filterByPeriod_(all, 'proj-body', ['orderDate','createdAt']).filter(function(r){
+  var rows = (_projAnyQ_() ? all : _filterByPeriod_(all, 'proj-body', ['orderDate','createdAt'])).filter(function(r){
     if(sf && r.status !== sf) return false;
     if(stage !== 'all' && stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
     if(q && !_qMatch_(((r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')+' '+(r.id||'')+' '+(r.assignee||'')).toLowerCase(),q)) return false;
