@@ -406,7 +406,7 @@
           <div class="row fill">
             <span class="lb" style="min-width:70px">ロット区分</span><select id="f-lotkind" class="in w6"></select>
             <span class="lb">パーツ数</span><input id="f-parts" class="in w3" oninput="applyRowVis()">
-            <span class="lb">表紙</span><select id="f-cover" class="in w4" onchange="applyRowVis()"><option>なし</option><option>あり</option></select>
+            <span class="lb">表紙</span><select id="f-cover" class="in w5" onchange="applyRowVis()"><option>なし</option><option>あり</option></select>
             <span class="lb">(in)</span><input id="f-in1" class="in w4"><span>/</span><input id="f-in2" class="in w4">
             <span>×</span><input id="f-in3" class="in w4"><span>/</span><input id="f-in4" class="in w4">
           </div>
@@ -2218,6 +2218,15 @@ function setPane(p){
   });
   // FMHUB-23: 見積番号・区分（案件区分）は画面の頭に直接置いた欄（FMUSE には無い）
   [['f-mitsuno', '見積番号'], ['f-kubun', '案件区分']].forEach(function (p) { TO_FM[p[0]] = p[1]; (FROM_FM[p[1]] = FROM_FM[p[1]] || []).push(p[0]); });
+  // COVER-1: 表紙行（p0/k0/w0）は FileMaker の「…0」列（紙質0・色数0・インキ表0・版下0・横ミシン0 …）。1 行目の対応から機械的に作る
+  ['p', 'k', 'w'].forEach(function (t) {
+    Object.keys(FMUSE).forEach(function (id) {
+      if (id.indexOf(t + '1-') !== 0) return; var col = FMUSE[id].c; if (!col || col.indexOf('FM') === 0 || !/1$/.test(col)) return;
+      var id0 = id.replace(t + '1-', t + '0-'), col0 = col.replace(/1$/, '0');
+      TO_FM[id0] = col0; (FROM_FM[col0] = FROM_FM[col0] || []).push(id0);
+    });
+  });
+  var 表紙の項目 = Object.keys(TO_FM).filter(function (id) { return /^[pkw]0-/.test(id); });
   var MONEY = ['合計金額','売価金額','用紙代','印刷代','版代','加工賃','梱包代','配送代','人件費',
                '用紙代1','用紙代2','用紙代3','印刷代1','印刷代2','印刷代3','売価単価'];
   var STAGE_CLASS = { '予算見積':'yosan', '見積':'mitsu', '受注':'juchu', '失注':'shitchu' };
@@ -2268,8 +2277,19 @@ function setPane(p){
     札を出す(rec);
     try { calc(); } catch (e) {}
     try { onInk(); } catch (e) {}
+    try { 表紙を決める(null); } catch (e) {}
     try { applyRowVis(); } catch (e) {}
     try { refreshNote(); } catch (e) {}
+  }
+  // COVER-1: 表紙の有無。手配に覚えた値 > 表紙行に何か入っている > 既存データは「あり」。名刺・封筒などの簡単な品目だけ「なし」
+  function 表紙を決める(o) {
+    var el = $('f-cover'); if (!el) return;
+    var 記憶 = (o && o.表紙) || '';
+    var 入っている = 表紙の項目.some(function (id) { var x = $(id); return !!(x && String(x.value || '').trim()); });
+    var 簡単 = (typeof 簡単か === 'function') ? 簡単か() : false;
+    el.value = 記憶 ? 記憶 : (入っている ? 'あり' : (簡単 ? 'なし' : 'あり'));
+    if (el.value !== 'あり' && el.value !== 'なし') el.value = 'あり';
+    try { applyRowVis(); } catch (e) {}
   }
 
   function 札を出す(rec) {
@@ -3493,7 +3513,55 @@ function setPane(p){
     b5.onclick = function () { window.open('tanka-bunseki.html', '_blank'); }; lay.parentNode.insertBefore(b5, lay);
     var b6 = document.createElement('button'); b6.className = 'fb'; b6.textContent = 'マスタ管理'; b6.title = '用紙・封筒・得意先・ユーザー名・基本原価のマスタ。FileMaker のマスタは Hub で直して反映';
     b6.onclick = function () { window.open('master.html', '_blank'); }; lay.parentNode.insertBefore(b6, lay);
+    // COPY-1: 仕様を文章にしてコピー（印刷手配の担当に LINE WORKS などで渡す）
+    var b7 = document.createElement('button'); b7.className = 'fb or'; b7.textContent = '仕様をコピー'; b7.title = '顧客名・製品名・数量・表紙・本文の用紙・印刷色と、この伝票の Hub の URL を文章にしてコピーします。LINE WORKS やメールに貼って渡せます';
+    b7.onclick = function () { 仕様をコピー(); }; lay.parentNode.insertBefore(b7, lay);
   })();
+  function 仕様の文を作る() {
+    var v = function (id) { var x = $(id); return x ? String(x.value || '').trim() : ''; };
+    var 行 = [];
+    var no = v('f-denpyo') || v('f-mitsuno') || (現在 ? String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || '') : '');
+    var 区分 = v('f-kubun') || (現在 ? String(現在.fields['案件区分'] || '') : '');
+    行.push('【' + (区分 || '受注') + ' ' + no + '】');
+    var 客 = v('f-cust'); var ユ = v('f-user'); 行.push('顧客: ' + 客 + (ユ ? '／' + ユ : ''));
+    行.push('製品名: ' + v('f-item') + (v('f-prod') ? '（' + v('f-prod') + '）' : ''));
+    var 数 = v('f-lotset'), 単 = v('f-unit'), 契 = v('f-lotunit');
+    行.push('数量: ' + (数 ? 数 + (単 || '') : '') + (契 && 契 !== 数 ? '（ロット契約単位 ' + 契 + '）' : ''));
+    if (v('f-w') || v('f-h')) 行.push('サイズ: ' + v('f-w') + '×' + v('f-h') + 'mm' + (v('f-size') ? '（' + v('f-size') + '）' : ''));
+    var 紙 = function (n) { return [v('p' + n + '-kind'), v('p' + n + '-mk'), v('p' + n + '-nm'), v('p' + n + '-th'), v('p' + n + '-sz')].filter(Boolean).join(' '); };
+    var 色 = function (n) { var a = []; var i1 = v('k' + n + '-iro1'), i2 = v('k' + n + '-iro2'), ink = v('k' + n + '-ink'), ura = v('k' + n + '-ura'), han = v('k' + n + '-han');
+      if (i1 || ink) a.push('表 ' + [i1 ? i1 + '色' : '', ink].filter(Boolean).join(' ')); if (i2 || ura) a.push('裏 ' + [i2 ? i2 + '色' : '', ura].filter(Boolean).join(' ')); if (han) a.push('版下 ' + han); return a.join('／'); };
+    var 手 = function (種, n) { var x = ((手配 || {})[種] || {})[String(n)]; return x && x.k ? x.k + (x.who ? ' ' + x.who : '') : ''; };
+    if (v('f-cover') === 'あり') { var c = 紙(0), cc = 色(0); 行.push('表紙: ' + (c || '（用紙未記入）') + (cc ? '　印刷 ' + cc : '') + (手('用紙', 0) ? '　[' + 手('用紙', 0) + ']' : '')); }
+    else 行.push('表紙: なし');
+    var n本 = parseInt(v('f-parts'), 10) || 1; if (n本 > 9) n本 = 9; var 本 = [];
+    for (var i = 1; i <= 9; i++) { var p = 紙(i), k = 色(i); if (!p && !k) continue; if (i > n本 && !p) continue; 本.push((n本 > 1 ? 'パーツ' + i + ': ' : '') + (p || '（用紙未記入）') + (k ? '　印刷 ' + k : '') + (手('用紙', i) ? '　[' + 手('用紙', i) + ']' : '')); }
+    if (本.length) { if (n本 > 1) { 行.push('本文の用紙・印刷色:'); 本.forEach(function (x) { 行.push('　' + x); }); } else 行.push('本文の用紙・印刷色: ' + 本[0]); }
+    else 行.push('本文の用紙・印刷色: （未記入）');
+    if (v('f-bind')) 行.push('加工: ' + v('f-bind'));
+    // 納期は最終納期。外注に出すときの納期は遅くても 1 日前（本多さん 9/25）。曜日も付けて判断しやすく
+    var 曜 = ['日', '月', '火', '水', '木', '金', '土'];
+    var 日付文 = function (d) { return d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate() + '（' + 曜[d.getDay()] + '）'; };
+    var 納 = null; try { var m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(v('f-due')); if (m) 納 = new Date(+m[1], +m[2] - 1, +m[3]); } catch (e) {}
+    if (納) { 行.push('最終納期: ' + 日付文(納)); var g = new Date(納.getTime() - 86400000); var 前 = g.getDay() === 0 ? new Date(g.getTime() - 86400000) : null; 行.push('外注納期: ' + 日付文(g) + ' まで（最終納期の 1 日前。これより遅くしない' + (前 ? '。日曜なので実際は ' + 日付文(前) + ' 着' : '') + '）'); }
+    else if (v('f-due')) 行.push('最終納期: ' + v('f-due'));
+    var hs = (手配 || {}).発送 || {}; var jz = (手配 || {}).事前 || {};
+    var 配 = [hs.how, hs.who].filter(Boolean).join(' ') || jz.配送 || '';
+    if (配) 行.push('配送: ' + 配 + (hs.how && hs.how.indexOf('直送') >= 0 && !hs.who ? '（直送先を確認）' : ''));
+    if (jz.梱包) 行.push('梱包: ' + jz.梱包);
+    var hako = (手配 || {}).箱 || {}; if (hako.perbox) 行.push('箱: ' + hako.perbox + ' 入 × ' + (hako.boxes || '?') + ' 箱');
+    var mt = (手配 || {}).未確定 || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); if (ks.length) 行.push('⚠ 仕様未確定: ' + ks.join('・') + (mt.memo ? '（' + mt.memo + '）' : ''));
+    try { 行.push('Hub: ' + location.origin + location.pathname + '?no=' + encodeURIComponent(no)); } catch (e) {}
+    return 行.join('\n');
+  }
+  window.FM仕様文 = 仕様の文を作る;
+  function 仕様をコピー() {
+    if (!現在) { 状態('伝票を読み込んでからコピーしてください', 'ng'); return; }
+    var t = 仕様の文を作る();
+    var done = function () { 状態('仕様をコピーしました（LINE WORKS やメールに貼れます）', 'ok'); };
+    var fallback = function () { var ta = document.createElement('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;left:-9999px'; document.body.appendChild(ta); ta.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.remove(); if (ok) done(); else { window.prompt('コピーできませんでした。この文を選んでコピーしてください', t); } };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done).catch(fallback); else fallback();
+  }
   帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '0'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
 
   setTimeout(索引を用意, 1500);                       // 開いたら索引を手元に（サインイン前なら次回）
@@ -3550,7 +3618,8 @@ function setPane(p){
     Object.keys(先頭).forEach(function (t) {
       var el = $(先頭[t]); if (!el) return; var tb = el.closest('table'); if (!tb || tb.getAttribute('data-aligned')) return;
       表[t] = tb; var def = 列並び[t];
-      Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n'), function (tr) {
+      Array.prototype.forEach.call(tb.querySelectorAll('tr.r-cover'), function (tr) { tr.setAttribute('data-n', '0'); });   // COVER-1: 表紙行は 0
+      Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n, tr.r-cover'), function (tr) {
         var n = tr.getAttribute('data-n'); var byId = {};
         Array.prototype.forEach.call(tr.querySelectorAll('td'), function (td) { var inp = td.querySelector('input,select'); if (inp && inp.id) byId[inp.id.replace(t + n + '-', '')] = td; });
         def.順.forEach(function (sfx) { var td = byId[sfx]; if (!td) return; if (def.隠す.indexOf(sfx) >= 0) td.classList.add('fm-hide'); tr.appendChild(td); });
@@ -3561,6 +3630,7 @@ function setPane(p){
       tb.setAttribute('data-aligned', '1');
     });
     Array.prototype.forEach.call(document.querySelectorAll('table.g td.tehai select, table.g td.tehai input'), function (el) { el.addEventListener('change', 手配が変わった); el.addEventListener('input', function () { 手配の見た目(el.closest('td')); }); });
+    if ($('f-cover')) $('f-cover').addEventListener('change', 手配が変わった);   // COVER-1: 表紙の有無は手配に覚える
     Array.prototype.forEach.call(document.querySelectorAll('table.g td.tehai .th-ord'), function (b) { b.onclick = function () { 発注を切替(b); 手配が変わった(); }; });
     Array.prototype.forEach.call(document.querySelectorAll('table.g td.tehai'), 手配の見た目);
   }
@@ -3607,7 +3677,7 @@ function setPane(p){
     var o = { 用紙: {}, 印刷: {}, 加工: {}, 発送: {}, 箱: {} };
     [['p', '用紙'], ['k', '印刷'], ['w', '加工']].forEach(function (pr) {
       var tb = 表[pr[0]]; if (!tb) return;
-      Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n'), function (tr) {
+      Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n, tr.r-cover'), function (tr) {
         var td = tr.querySelector('td.tehai'); if (!td) return; var sel = td.querySelector('select'), who = td.querySelector('input.th-who');
         var v = sel.value, w = who ? who.value.trim() : ''; var def = pr[0] === 'p' ? '仕入' : '社内';
         var ob = td.querySelector('.th-ord'); var ord = (ob && ob.classList.contains('done')) ? { done: true, at: ob.getAttribute('data-at') || '' } : null;
@@ -3621,13 +3691,14 @@ function setPane(p){
     var mt = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k:checked'), function (c) { mt[c.value] = true; }); var mm = ($('mt-memo') || {}).value || ''; if (Object.keys(mt).length || mm.trim()) { mt.memo = mm.trim(); o.未確定 = mt; }
     if ($('hs-how')) { var how = $('hs-how').value, hw = $('hs-how-who').value.trim(); if (how || hw) o.発送 = { how: how, who: hw }; }
     if ($('t-perbox')) { var pb = Number($('t-perbox').value) || 0; if (pb) o.箱 = { perbox: pb, boxes: Number($('t-boxes').value) || 0 }; }
+    if ($('f-cover') && 現在) o.表紙 = $('f-cover').value;   // COVER-1
     return o;
   }
   function 手配を置く(o) {
     o = o || {}; 手配読込中 = true;
     [['p', '用紙'], ['k', '印刷'], ['w', '加工']].forEach(function (pr) {
       var tb = 表[pr[0]]; if (!tb) return;
-      Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n'), function (tr) {
+      Array.prototype.forEach.call(tb.querySelectorAll('tr.r-n, tr.r-cover'), function (tr) {
         var td = tr.querySelector('td.tehai'); if (!td) return; var sel = td.querySelector('select'), who = td.querySelector('input.th-who');
         var x = (o[pr[1]] || {})[tr.getAttribute('data-n')] || {}; sel.value = x.k || (pr[0] === 'p' ? '仕入' : '社内'); if (who) who.value = x.who || ''; 手配の見た目(td);
         var ob = td.querySelector('.th-ord'); if (ob) 発注ボタンを描く(ob, x.ord);
@@ -3636,6 +3707,7 @@ function setPane(p){
     Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord'), function (b) { 発注ボタンを描く(b, ((o.外注 || {})[b.getAttribute('data-i')] || {}).ord); });
     var mt = o.未確定 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.checked = !!mt[c.value]; }); if ($('mt-memo')) $('mt-memo').value = mt.memo || ''; 未確定の印();
     var gq = o.外注見積 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { i.value = gq[i.getAttribute('data-n')] || ''; });
+    if (o.表紙) { try { 表紙を決める(o); } catch (e) {} }
     昨年比確認 = o.昨年比確認 || null; 昨年比の見た目();
     var jz = o.事前 || {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { if ($(p[0])) $(p[0]).value = jz[p[1]] || ''; });
     if ($('fmjizen')) $('fmjizen').style.display = 手配の伝票 ? 'block' : 'none'; 仕様書を出す(); 同じ依頼を出す();

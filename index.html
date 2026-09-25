@@ -1509,6 +1509,8 @@ setTimeout(_removeBootLoader_, 5000);
         <input id="proj-q" list="proj-q-suggest" placeholder="🔍 得意先/品名/案件番号/担当/仕様… 部分一致でAND検索 (Enterで追加)" style="flex:1;min-width:160px;border:none;outline:none;font-size:12px;padding:3px 2px" onkeydown="_projSearchKeydown_(event)" oninput="if(window._inqDeferSearch_!==1)_onProjFilterChange_()">
         <datalist id="proj-q-suggest"></datalist>
       </div>
+      <!-- ANYQ-1: 何でも検索 — 行の全項目が対象。空白=AND、OR／または、先頭 - で除外。受注入力の何でも検索と同じ書き方 -->
+      <input id="proj-anyq" placeholder="🔍 何でも検索（空白=AND・OR・-除外）" title="案件の全項目（案件番号・P番号・案件名・得意先・ユーザー・品名・仕様・金額・日付・担当・メモ・手配…）を対象に検索。例: 日本レット はがき / チラシ OR ポスター / 名刺 -封筒" style="flex:0 0 auto;width:230px;font-size:12px;padding:4px 8px;border:1px solid #cbd5e1;border-radius:8px;background:#fff" oninput="if(window._inqDeferSearch_!==1)_onProjFilterChange_()">
       <select id="proj-cat-f" style="font-size:12px;padding:4px 8px" onchange="_addProjChipFromSelect_('種別',this.value);this.value='';" title="品目の種別で絞り込み (選ぶとチップ追加)">
         <option value="">📦 種別で追加</option>
         <option>名刺・カード</option><option>封筒</option><option>チラシ・ポスター</option><option>冊子・パンフ</option><option>帳票・伝票</option><option>シール・ラベル</option><option>その他</option>
@@ -45965,8 +45967,27 @@ function _projSearchKeydown_(ev){
     _removeProjChip_(window._projSearchChips_.length - 1);
   }
 }
+// ANYQ-1: 行の全項目を 1 本の文字列に（入れ子 2 段・配列まで。関数と長すぎる値は除く）。案件番号・P番号・案件名・ステータスも足す
+function _projAnyText_(r){
+  if(!r) return '';
+  var out = [];
+  var walk = function(v, d){
+    if(v == null || typeof v === 'function') return;
+    if(typeof v === 'string'){ if(v.length <= 400 && !/^data:|^https?:\/\/[^ ]{60,}/.test(v)) out.push(v); return; }
+    if(typeof v === 'number' || typeof v === 'boolean'){ out.push(String(v)); return; }
+    if(d > 4) return;
+    if(Array.isArray(v)){ v.forEach(function(x){ walk(x, d + 1); }); return; }
+    if(typeof v === 'object'){ Object.keys(v).forEach(function(k){ if(k.charAt(0) === '_') return; walk(v[k], d + 1); }); }
+  };
+  walk(r, 0);
+  try{ if(typeof _projFmNo_ === 'function') out.push(_projFmNo_(r)); if(r.master_no) out.push('P' + r.master_no); if(typeof _ankenName_ === 'function') out.push(_ankenName_(r)); }catch(e){}
+  return out.join(' ').toLowerCase();
+}
+function _projAnyQ_(){ return (document.getElementById('proj-anyq')?.value || '').trim(); }
 // チップ + 一時入力中テキストで案件1件が通るか判定
 function _projMatchesChips_(r){
+  // ANYQ-1: 何でも検索（全項目・AND/OR/除外）
+  var _aq = _projAnyQ_(); if(_aq && !_qMatch_(_projAnyText_(r), _aq)) return false;
   var chips = window._projSearchChips_ || [];
   var text = ((r.cust||'') + ' ' + (r.from_company||'') + ' ' + (r.enduser||'') + ' ' + (r.item||'') + ' ' + (r.spec||'') + ' ' + (r.id||'') + ' ' + (r.quoteNo||'') + ' ' + (r.assignee||'') + ' ' + (r.status||'') + ' ' + (r.memo||'')).toLowerCase();
   for(var i=0; i<chips.length; i++){
@@ -45979,7 +46000,7 @@ function _projMatchesChips_(r){
   }
   // 入力途中のテキスト (まだEnter押してない) も即時絞り込み
   var live = (document.getElementById('proj-q')?.value || '').trim().toLowerCase();
-  if(live && text.indexOf(live) < 0) return false;
+  if(live && !_qMatch_(text, live)) return false;
   // 追加条件: ユーザー名・区分(新規/リピート)・数量範囲・期間（ピッカー検索と同一化）
   var fUser = (document.getElementById('proj-user-f')?.value || '').trim().toLowerCase();
   if(fUser && ((r.enduser||r.endUser||'') + ' ' + (r.spec||'') + ' ' + (r.memo||'')).toLowerCase().indexOf(fUser) < 0) return false;
@@ -46012,7 +46033,7 @@ function _onProjFilterChange_(){
 function _clearProjFilters_(){
   window._projSearchChips_ = [];
   _renderProjChips_();
-  ['proj-q','proj-cat-f','proj-status-f','proj-company-f','proj-cust-f','proj-user-f','proj-jt-f','proj-qmin-f','proj-qmax-f','proj-period-f','proj-seizo-f'].forEach(function(id){
+  ['proj-q','proj-anyq','proj-cat-f','proj-status-f','proj-company-f','proj-cust-f','proj-user-f','proj-jt-f','proj-qmin-f','proj-qmax-f','proj-period-f','proj-seizo-f'].forEach(function(id){
     var el = document.getElementById(id); if(el) el.value = '';
   });
   _onProjFilterChange_();
@@ -46691,6 +46712,7 @@ function _renderProjFlatList_(){
     if(sf && r.status !== sf) return false;
     if(stage !== 'all' && stage !== 'orders' && typeof _projStageOf_ === 'function' && _projStageOf_(r.status) !== stage) return false;
     if(q && !_qMatch_(((r.cust||'')+' '+(r.item||'')+' '+(r.spec||'')+' '+(r.id||'')+' '+(r.assignee||'')).toLowerCase(),q)) return false;
+    var _aq = _projAnyQ_(); if(_aq && !_qMatch_(_projAnyText_(r), _aq)) return false;
     if(cf === 'own'){
       var isOwn = r.companyId === currentAuth.companyId || (!r.companyId && currentAuth.companyId === 'COMP001');
       if(!isOwn) return false;
@@ -46799,6 +46821,7 @@ function _renderProjQuoteList_(stageArg){
   var estimates = (DB.estimates || []).filter(function(e){
     if(!_showAllQuotes && e.status === 'ordered') return false; // 見積中は受注済を除外
     if(q && !_qMatch_(((e.cust||'') + ' ' + (e.item||'') + ' ' + (e.spec||'')).toLowerCase(),q)) return false;
+    var _aq = _projAnyQ_(); if(_aq && !_qMatch_(_projAnyText_(e), _aq)) return false;
     return true;
   }).sort(function(a,b){ return (b.createdAt||'').localeCompare(a.createdAt||''); });
 
