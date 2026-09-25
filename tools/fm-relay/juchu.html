@@ -1910,7 +1910,7 @@ function setPane(p){
     <span id="pg-src" style="color:#166534"></span>
     <label>種にする伝票 <input id="pg-prev" style="width:80px;font-size:11px" placeholder="前回伝票番号"></label>
     <button id="pg-go" style="font-size:11px;padding:2px 8px">出す</button>
-    <span style="margin-left:auto;color:#166534">目安: 昨年 <input class="n" id="pg-u1" value="5">% ／ 一昨年 <input class="n" id="pg-u2" value="10">% ／ それ以前 <input class="n" id="pg-u3" value="20">%　印刷代の固定分 <input class="n" id="pg-pf" value="30">%</span>
+    <span style="margin-left:auto;color:#166534">目安: 昨年 <input class="n" id="pg-u1" value="5">% ／ 一昨年 <input class="n" id="pg-u2" value="10">% ／ それ以前 <input class="n" id="pg-u3" value="20">%　印刷代の固定分 <input class="n" id="pg-pf" value="30">%　最低受注金額 ¥<input class="n" id="pg-min" value="" style="width:56px" title="合計売価がこれを下回るときはこの金額にします。原価テーブルの「最低受注金額」の行があればそれが既定"> <button id="pg-detail" type="button" style="font-size:11px;padding:1px 6px">内訳を出す</button> <a href="master.html?t=原価テーブル" target="_blank" style="color:#166534">原価テーブル</a></span>
   </div>
   <div id="pg-body" style="margin-top:4px;color:#475569">得意先と品名（か前回伝票番号）を入れると、昨年の伝票を種に数量ごとの金額が出ます</div>
 </div>
@@ -2371,25 +2371,60 @@ window.FM見た目 = function () {};
     var 上げ = Math.max(u, 用紙差);   // 「用紙差以上」を保証
     var pf = Math.min(100, Math.max(0, 数値($('pg-pf').value))) / 100;
     var qNow = 数値(($('f-lotunit') || {}).value) || q0;
+    // KAKAKU-2: 項目ごとの原価テーブル（Hub マスタ）。行が無い項目は今までどおり（種から比例・原価率を保つ）
+    var 表 = 原価表(); var ctx = '品種:' + String(f['品種'] || '') + ' ' + String(f['製本加工'] || '') + ' ' + String(f['製品名'] || '') + ' ' + String(($('f-prod') || {}).value || '') + ' ' + String(($('f-bind') || {}).value || '');
+    function 原価行(項目) { var hit = null; 表.forEach(function (r) { if (String(r.項目 || '').trim() !== 項目 || r.消) return; var c = String(r.条件 || '').trim(); if (!c) { if (!hit) hit = r; return; } var ok = c.split(/[,、\s]+/).filter(Boolean).some(function (w) { return ctx.indexOf(w) >= 0; }); if (ok && (!hit || !String(hit.条件 || '').trim())) hit = r; }); return hit; }
+    function 空か(v) { return v === undefined || v === null || String(v).trim() === ''; }
+    var 項目定義 = [
+      { 名: '版代',   種: 版,   固定既定: 版,        比例: 0 },
+      { 名: '用紙',   種: 用紙, 固定既定: 0,         比例: 用紙 * (1 + 用紙差 / 100) },
+      { 名: '印刷代', 種: 印刷, 固定既定: 印刷 * pf, 比例: 印刷 * (1 - pf) },
+      { 名: '加工賃', 種: 加工, 固定既定: 0,         比例: 加工 },
+      { 名: '外注',   種: 外注0, 固定既定: 0,        比例: 外注0 },
+      { 名: '梱包代', 種: 梱包, 固定既定: 0,         比例: 梱包 },
+      { 名: '配送代', 種: 配送, 固定既定: 0,         比例: 配送 },
+      { 名: '人件費', 種: 人件, 固定既定: 0,         比例: 人件 }
+    ];
+    var 項目 = 項目定義.map(function (d) {
+      var m = 原価行(d.名);
+      var 固定 = (m && !空か(m.固定)) ? 数値(m.固定) : d.固定既定;
+      var 千 = (m && !空か(m.千単価)) ? 数値(m.千単価) : (q0 ? d.比例 / q0 * 1000 : 0);
+      var 最低原価 = (m && !空か(m.最低原価)) ? 数値(m.最低原価) : 0;
+      var 率 = (m && !空か(m.掛け率)) ? 数値(m.掛け率) : 0;
+      var 最低売価 = (m && !空か(m.最低売価)) ? 数値(m.最低売価) : 0;
+      return { 名: d.名, 固定: 固定, 千: 千, 最低原価: 最低原価, 率: 率, 最低売価: 最低売価, 表: !!m, 条件: m ? String(m.条件 || '') : '' };
+    });
+    var 最低行 = 原価行('最低受注金額'); var 最低受注 = 数値($('pg-min').value) || (最低行 ? 数値(最低行.最低売価) || 数値(最低行.固定) : 0);
+    if (!$('pg-min').value && 最低受注) $('pg-min').placeholder = String(最低受注);
+    var 表の項目 = 項目.filter(function (x) { return x.表; }).map(function (x) { return x.名 + (x.条件 ? '（' + x.条件 + '）' : ''); });
     var 階段 = [500, 1000, 2000, 3000, 5000, 10000, qNow, Math.round(qNow * 0.8), Math.round(qNow * 1.2), Math.round(qNow * 0.5), Math.round(qNow * 1.5)]
       .filter(function (x, i, arr) { return x > 0 && arr.indexOf(x) === i; }).sort(function (a, b) { return a - b; });
     var rows = 階段.map(function (n) {
-      var k = n / q0;
-      var 用紙n = 用紙 * k * (1 + 用紙差 / 100), 印刷n = 印刷 * (pf + (1 - pf) * k), 加工n = 加工 * k, 外注n = 外注0 * k, 梱包n = (梱包 + 配送) * k, 人件n = 人件 * k;
-      var 原価n = 版 + 用紙n + 印刷n + 加工n + 外注n + 梱包n + 人件n;
-      var 売価n = 率0 ? (原価n / 率0) : 原価n * 1.5;   // 昨年の原価率を保つ
-      売価n = 売価n * (1 + 上げ / 100);
+      // KAKAKU-2: 項目ごとに 原価(n) = max(最低原価, 固定 + 千単価×n/1000)。掛け率のある項目はその売価、無い項目はまとめて種の原価率＋上げ
+      var 内訳 = [], 原価n = 0, 売価表 = 0, 原価pool = 0;
+      項目.forEach(function (x) {
+        var c = Math.max(x.最低原価, x.固定 + x.千 * n / 1000); if (!(c > 0)) c = 0;
+        var p = null; if (x.率 > 0) { p = Math.max(x.最低売価, c * x.率); 売価表 += p; } else 原価pool += c;
+        原価n += c; 内訳.push({ 名: x.名, 原価: c, 売価: p, 表: x.表 });
+      });
+      var 売価pool = (率0 ? 原価pool / 率0 : 原価pool * 1.5) * (1 + 上げ / 100);   // 昨年の原価率を保つ＋目安の上げ
+      var 売価n = 売価表 + 売価pool; var 最低で = false;
+      if (最低受注 && 売価n < 最低受注) { 売価n = 最低受注; 最低で = true; }
       var 単価n = Math.round((売価n / n) * 10) / 10; 売価n = 単価n * n;
       var 粗利 = 売価n ? (1 - 原価n / 売価n) * 100 : 0;
-      return { n: n, 原価: 原価n, 売価: 売価n, 単価: 単価n, 粗利: 粗利, 前年比: 単価0 ? (単価n / 単価0 - 1) * 100 : 0 };
+      return { n: n, 原価: 原価n, 売価: 売価n, 単価: 単価n, 粗利: 粗利, 前年比: 単価0 ? (単価n / 単価0 - 1) * 100 : 0, 内訳: 内訳, 最低で: 最低で, 売価pool: 売価pool };
     });
+    var 内訳出す = !!window.pg内訳;
+    var 内訳文 = function (r) { return r.内訳.map(function (x) { return x.名 + ' ' + 円整(x.原価) + (x.売価 != null ? '→' + 円整(x.売価) : ''); }).join('／') + (r.売価pool ? '　（掛け率の無い項目の売価 ' + 円整(r.売価pool) + '）' : ''); };
     var h = '<div><span class="k">種:</span> <b>' + esc(ガイド種.番号) + '</b> ' + esc(f['製品名'] || '') + '　起票 ' + esc(日付(f['起票日'])) + '（' + 経過 + ' 年前 → 目安 +' + u + '%）'
       + '　数量 ' + 円整(q0) + '　単価 ' + (単価0 ? 単価0.toFixed(1) : '—') + '　売価 ¥' + 円整(売価0) + '　原価 ¥' + 円整(原価0) + '　原価率 ' + (率0 * 100).toFixed(1) + '%'
       + (用紙注 ? '　<span class="warn">' + esc(用紙注) + '</span>' : '　<span style="color:#94a3b8">（用紙差は、いまの用紙単価が入っていれば出ます）</span>')
       + '　<span class="k">今回の上げ幅 <b>+' + 上げ.toFixed(1) + '%</b></span></div>'
-      + '<div style="color:#64748b;font-size:11px">内訳（種）: 版 ' + 円整(版) + '／用紙 ' + 円整(用紙) + '／印刷 ' + 円整(印刷) + '／加工 ' + 円整(加工) + '／外注 ' + 円整(外注0) + '／梱包・配送 ' + 円整(梱包 + 配送) + '　※版代は固定、印刷代は ' + Math.round(pf * 100) + '% 固定、ほかは数量比例。段をクリックで数量と単価をフォームへ</div>'
-      + '<table><thead><tr><th>数量</th><th>原価</th><th>売価</th><th>単価</th><th>粗利率</th><th>前回単価比</th></tr></thead><tbody>'
-      + rows.map(function (r) { return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単価 + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円整(r.原価) + '</td><td>¥' + 円整(r.売価) + '</td><td>' + r.単価.toFixed(1) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td></tr>'; }).join('')
+      + '<div style="color:#64748b;font-size:11px">内訳（種）: 版 ' + 円整(版) + '／用紙 ' + 円整(用紙) + '／印刷 ' + 円整(印刷) + '／加工 ' + 円整(加工) + '／外注 ' + 円整(外注0) + '／梱包・配送 ' + 円整(梱包 + 配送)
+      + '　※' + (表の項目.length ? '原価テーブルの行を使った項目: <b>' + esc(表の項目.join('・')) + '</b>。ほかは' : '原価テーブルに行が無いので、') + '版代は固定、印刷代は ' + Math.round(pf * 100) + '% 固定、ほかは数量比例で昨年の原価率を保ちます' + (最低受注 ? '。最低受注金額 ¥' + 円整(最低受注) : '') + '。段をクリックで数量と単価をフォームへ</div>'
+      + '<table><thead><tr><th>数量</th><th>原価</th><th>売価</th><th>単価</th><th>粗利率</th><th>前回単価比</th>' + (内訳出す ? 項目.map(function (x) { return '<th style="font-weight:500">' + esc(x.名) + (x.表 ? ' <span title="原価テーブルの行">▣</span>' : '') + '<br><span style="font-weight:400">原価→売価</span></th>'; }).join('') : '') + '</tr></thead><tbody>'
+      + rows.map(function (r) { return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単価 + '" title="' + esc(内訳文(r)) + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円整(r.原価) + '</td><td>¥' + 円整(r.売価) + (r.最低で ? ' <span style="background:#fef3c7;color:#92400e;font-size:10px;padding:0 4px;border-radius:3px" title="最低受注金額で止めています">最低</span>' : '') + '</td><td>' + r.単価.toFixed(1) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td>'
+          + (内訳出す ? r.内訳.map(function (x) { return '<td style="font-size:11px;white-space:nowrap">' + 円整(x.原価) + '→' + (x.売価 != null ? 円整(x.売価) : '<span style="color:#94a3b8">率</span>') + '</td>'; }).join('') : '') + '</tr>'; }).join('')
       + '</tbody></table>';
     $('pg-body').innerHTML = h + '<div id="pg-quotes" style="margin-top:6px;color:#475569">前回の見積書を探しています…</div>'; $('pg-src').textContent = '';
     見積実績を出す(f);
@@ -2441,6 +2476,15 @@ window.FM見た目 = function () {};
     }).catch(function (e) { if (box()) box().textContent = '前回の見積書: ' + String(e.message || e); });
   }
   ['f-custcd', 'f-item', 'f-lotno', 'f-lotunit'].forEach(function (id) { var el = $(id); if (!el) return; el.addEventListener('change', function () { if (id === 'f-lotunit' && ガイド種) ガイドを描く(); else ガイドを出す(); }); });
+  // KAKAKU-2: 原価テーブル（Hub マスタ）。取れたら描き直す。最低受注金額は PC に覚える
+  var 原価表キャッシュ = null;
+  function 原価表() { if (原価表キャッシュ) return 原価表キャッシュ; try { var c = JSON.parse(localStorage.getItem('fm_hubmaster_原価テーブル') || 'null'); if (c && c.行) return c.行; } catch (e) {} return []; }
+  function 原価表を用意() { if (typeof Hubマスタを用意 !== 'function') return; Hubマスタを用意('原価テーブル').then(function (rows) { 原価表キャッシュ = rows || []; if (ガイド種) try { ガイドを描く(); } catch (e) {} }); }
+  setTimeout(原価表を用意, 2500);
+  try { var pm = localStorage.getItem('pg_min'); if (pm !== null && $('pg-min')) $('pg-min').value = pm; } catch (e) {}
+  if ($('pg-min')) $('pg-min').addEventListener('change', function () { try { localStorage.setItem('pg_min', $('pg-min').value.trim()); } catch (e) {} if (ガイド種) ガイドを描く(); });
+  if ($('pg-detail')) $('pg-detail').onclick = function () { window.pg内訳 = !window.pg内訳; $('pg-detail').textContent = window.pg内訳 ? '内訳を隠す' : '内訳を出す'; if (ガイド種) ガイドを描く(); };
+  window.FMガイド試す = function (fields) { ガイド種 = { 番号: String(fields['伝票番号'] || 'test'), fields: fields }; ガイドを描く(); };   // 見本で確かめる用
   ['pg-u1', 'pg-u2', 'pg-u3', 'pg-pf'].forEach(function (id) { $(id).addEventListener('change', function () { if (ガイド種) ガイドを描く(); }); });
   $('pg-go').onclick = function () { ガイド種 = null; ガイドを出す(); };
   $('pg-prev').addEventListener('keydown', function (e) { if (e.key === 'Enter') { ガイド種 = null; ガイドを出す(); } });

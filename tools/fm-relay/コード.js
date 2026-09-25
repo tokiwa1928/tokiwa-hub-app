@@ -885,7 +885,7 @@ function マスタ_作る(layout, 項目) {
   return { ok: true, user: who.email, recordId: r.response.recordId };
 }
 // Hub だけのマスタ（封筒・ユーザー名・基本原価・用紙単価履歴）。保管庫「Hubマスタ_<名>」に 1 行＝1 件（id, json, at, by）
-var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴'];
+var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル'];   // KAKAKU-2: 原価テーブル（価格ガイド）
 var Hubマスタ列 = ['id', 'json', 'at', 'by', '消'];
 function Hubマスタ_帳簿_(名) { if (Hubマスタ名.indexOf(名) < 0) throw new Error('知らないマスタです: ' + 名); return 写し_帳簿_('Hubマスタ_' + 名, Hubマスタ列).getSheets()[0]; }
 function Hubマスタ_一覧(名) {
