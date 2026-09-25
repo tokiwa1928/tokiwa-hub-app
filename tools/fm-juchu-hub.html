@@ -3383,6 +3383,7 @@ function setPane(p){
       if (n1 || n2) { var nd = 日を数に(r[P['納品日']]); if (!nd) continue; if (n1 && nd < n1) continue; if (n2 && nd > n2) continue; }
       if (custSet) { if (!custSet[String(r[P['得意先コード']])]) continue; } else if (cust && String(r[P['得意先コード']]) !== cust) continue;
       if (段階 && String(r[P['案件区分']]) !== 段階) continue;
+      if (!段階 && !段階が合う(r[P['案件区分']])) continue;   // STAGE-1: 段階を選んでいなければ、この画面の段階だけ
       if (未確定だけ) { var mi2 = 手配一覧[String(r[P['伝票番号']] || '')]; if (!(mi2 && mi2.未確定 && mi2.未確定.length)) continue; }
       if (結果で && 行の結果(r) !== 結果で) continue;   // KIN-1
       if (未出力だけ) { var kb = String(r[P['案件区分']] || ''); if (kb && kb !== '受注') continue; if (製造指示書状態(r[P['伝票番号']]) && !製造指示書が古い(r[P['伝票番号']], r[P['修正日']])) continue; }
@@ -3558,16 +3559,77 @@ function setPane(p){
     全件モード = true;
     if (!手元で探す(false)) 探す();
   }, '新しい順に 200 件を出します');
-  帯に付ける('Repeat登録', function () { 読んでから(function () {
-    if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて Repeat 登録しますか？')) return;
-    var no = String(現在.fields['伝票番号'] || '');
-    if (!confirm(no + ' を元に、新しい受注を起こします。\n\n前回伝票番号 = ' + no + '、起票日 = 今日。番号・納品日・注残は引き継ぎません。\nよろしいですか？')) return;
-    待機(true); 失敗(''); diff.style.display = 'none'; 状態('Repeat 登録しています… 元 ' + no);
-    var t0 = Date.now();
-    呼ぶ('画面_Repeat登録', [現在.recordId])
-      .then(function (r) { var n2 = r.record.fields['伝票番号'] || ''; 受け取る(r, 'Repeat 登録しました  ' + n2 + '（元 ' + no + '）', Date.now() - t0); try { 手配を写して読む(no, String(n2)); } catch (e) {} })
-      .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
-  }); }, '読み込んでいる伝票を元に、新しい受注を FileMaker に起こします');
+  // ================================================================ STAGE-1: Repeat は同じ案件の一番新しい伝票から（選べる）
+  var リピート予約 = (function () { try { return new URLSearchParams(location.search).get('repeat') || ''; } catch (e) { return ''; } })();
+  function 段階の注意(f) {
+    var k = String((f || {})['案件区分'] || ''); if (段階が合う(k)) return;
+    var 先 = (k === '予算見積' || k === '見積' || k === '失注') ? 'mitsu' : 'juchu'; var no = String(f['伝票番号'] || f['見積番号'] || '');
+    状態('この伝票は「' + (k || '受注') + '」です。' + (モード === 'mitsu' ? '受注入力' : '見積入力') + 'で扱う伝票なので、ここでは参照と Repeat だけにしてください', 'warn');
+    try { var u = location.pathname + '?mode=' + 先 + '&no=' + encodeURIComponent(no); if (!$('fm-stage-jump')) { var a = document.createElement('a'); a.id = 'fm-stage-jump'; a.style.cssText = 'margin-left:8px;color:#fff;text-decoration:underline'; stat.appendChild(a); } $('fm-stage-jump').href = u; $('fm-stage-jump').textContent = (先 === 'mitsu' ? '見積入力' : '受注入力') + 'で開く'; } catch (e) {}
+  }
+  // 同じ案件の伝票（索引から）。案件ID が同じもの ＋ 前回伝票番号でつながるもの（前後 10 段まで・全年）。新しい順
+  function 案件の伝票() {
+    var out = [], seen = {}; if (!現在) return out;
+    var me = String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''); var 案件 = String(現在.fields['案件ID'] || '');
+    out.push({ no: me, recordId: 現在.recordId, 区分: String(現在.fields['案件区分'] || '受注'), 起票日: String(現在.fields['起票日'] || ''), 数量: 現在.fields['ロット契約単位'] || 現在.fields['合計数1'] || '', 売価: 現在.fields['売価金額'] || '', 案件ID: 案件, 前: String(現在.fields['前回伝票番号'] || ''), 今: true }); seen[me] = 1;
+    if (!索引) return out;
+    var P = 索引位置; var by番号 = {}, by前 = {}, by案件 = {};
+    索引.行.forEach(function (r) { var no = String(r[P['伝票番号']] || r[P['見積番号']] || '').trim(); if (!no) return; var o = { no: no, recordId: String(r[P['recordId']] || ''), 区分: String(r[P['案件区分']] || '受注'), 起票日: String(r[P['起票日']] || ''), 数量: r[P['ロット契約単位']] || r[P['合計数1']] || '', 売価: r[P['売価金額']] || '', 案件ID: String(r[P['案件ID']] || ''), 前: String(r[P['前回伝票番号']] || '') };
+      by番号[no] = o; if (o.前) (by前[o.前] = by前[o.前] || []).push(o); if (o.案件ID) (by案件[o.案件ID] = by案件[o.案件ID] || []).push(o); });
+    var queue = [out[0]], hops = 0;
+    while (queue.length && hops < 400) { var x = queue.shift(); hops++;
+      var near = [].concat(x.案件ID ? (by案件[x.案件ID] || []) : [], x.前 && by番号[x.前] ? [by番号[x.前]] : [], by前[x.no] || []);
+      near.forEach(function (o) { if (seen[o.no]) return; seen[o.no] = 1; out.push(o); queue.push(o); }); }
+    var 日 = function (d) { var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(d || ''); return m ? m[3] + ('0' + m[1]).slice(-2) + ('0' + m[2]).slice(-2) : String(d || '').replace(/-/g, ''); };
+    out.sort(function (a, b) { return 日(b.起票日).localeCompare(日(a.起票日)) || b.no.localeCompare(a.no); });
+    return out;
+  }
+  function リピートを選ぶ(種別) {
+    if (!現在) { alert('先に元にする伝票を読み込んでください'); return; }
+    種別 = 種別 || (モード === 'mitsu' ? '' : '受注');
+    if (!索引) { 状態('索引を待っています…', ''); var w0 = 0; var t = setInterval(function () { w0++; if (索引 || w0 > 20) { clearInterval(t); リピートを選ぶ(種別); } }, 500); return; }
+    var list = 案件の伝票(); var old = $('fm-repeat-pick'); if (old) old.remove();
+    var m = document.createElement('div'); m.id = 'fm-repeat-pick'; m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+    var 種別欄 = モード === 'mitsu'
+      ? '<div style="margin:6px 0">起こす段階: <label><input type="radio" name="rp-k" value="予算見積"' + (種別 === '予算見積' || !種別 ? ' checked' : '') + '> 予算見積</label>　<label><input type="radio" name="rp-k" value="見積"' + (種別 === '見積' ? ' checked' : '') + '> 見積</label></div>'
+      : '<div style="margin:6px 0">起こす段階: <b>受注</b>（前回伝票番号に元の番号が入ります）</div>';
+    m.innerHTML = '<div style="background:#fff;border-radius:8px;padding:16px 18px;width:min(720px,96vw);max-height:90vh;overflow:auto;font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
+      + '<div style="font-size:15px;font-weight:700">Repeat 登録 — 元にする伝票を選んでください</div>'
+      + '<div style="color:#475569;margin:4px 0">同じ案件の伝票を新しい順に出しています（予算見積・見積・受注、全年）。一番新しいものを選んであります。昨年受注が無ければ予算見積や見積から起こせます</div>'
+      + 種別欄
+      + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#e2e8f0"><th></th><th style="text-align:left;padding:3px 6px">番号</th><th style="padding:3px 6px">段階</th><th style="padding:3px 6px">起票日</th><th style="padding:3px 6px;text-align:right">数量</th><th style="padding:3px 6px;text-align:right">売価</th><th style="padding:3px 6px">案件ID</th></tr></thead><tbody>'
+      + list.map(function (o, i) { return '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:3px 6px"><input type="radio" name="rp-src" value="' + i + '"' + (i === 0 ? ' checked' : '') + '></td><td style="padding:3px 6px"><b>' + esc(o.no) + '</b>' + (o.今 ? ' <span style="color:#64748b">（表示中）</span>' : '') + '</td><td style="padding:3px 6px;text-align:center">' + esc(o.区分) + '</td><td style="padding:3px 6px;text-align:center">' + esc(日付(o.起票日)) + '</td><td style="padding:3px 6px;text-align:right">' + esc(o.数量) + '</td><td style="padding:3px 6px;text-align:right">' + esc(円(o.売価)) + '</td><td style="padding:3px 6px;text-align:center">' + esc(o.案件ID) + '</td></tr>'; }).join('')
+      + '</tbody></table>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="rp-x" style="padding:5px 14px">やめる</button><button id="rp-go" style="padding:5px 16px;background:#1a1a1a;color:#fff;border:0;border-radius:6px;font-weight:700">この伝票を元に起こす</button></div></div>';
+    document.body.appendChild(m);
+    $('rp-x').onclick = function () { m.remove(); };
+    $('rp-go').onclick = function () {
+      var i = Number((m.querySelector('input[name="rp-src"]:checked') || {}).value || 0); var src = list[i]; if (!src) return;
+      var k = モード === 'mitsu' ? ((m.querySelector('input[name="rp-k"]:checked') || {}).value || '予算見積') : '受注';
+      if (!src.recordId) { alert('この伝票の recordId が索引にありません。先にその番号を読み込んでから Repeat してください'); return; }
+      if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて起こしますか？')) return;
+      m.remove(); 待機(true); 失敗(''); diff.style.display = 'none'; 状態(k + ' を起こしています… 元 ' + src.no); var t0 = Date.now();
+      var p = k === '受注' ? 呼ぶ('画面_Repeat登録', [src.recordId]) : 呼ぶ('画面_流用新規', [src.recordId, k, true]);
+      p.then(function (r) { var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || ''); 受け取る(r, k + ' を起こしました  ' + n2 + '（元 ' + src.no + '）', Date.now() - t0); try { 手配を写して読む(src.no, n2); } catch (e) {} })
+       .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+    };
+  }
+  帯に付ける('Repeat登録', function () { 読んでから(function () { リピートを選ぶ(モード === 'mitsu' ? '' : '受注'); }); }, '同じ案件の一番新しい伝票（予算見積・見積・受注、全年）を元に、新しく起こします。元は選べます');
+  // 区分の選択: 受注入力では隠す（受注しか出ないため）。見積入力で「受注」にしたら受注処理（この案件の続きとして受注を起こす。見積は残る）
+  (function () {
+    var k = $('f-kubun'); if (!k) return;
+    if (モード === 'juchu' || モード === '') { k.classList.add('fm-taihi'); var lb = k.previousElementSibling; if (lb && lb.classList.contains('lb')) lb.classList.add('fm-taihi'); return; }
+    if (モード === 'mitsu') {
+      Array.prototype.forEach.call(k.options, function (o) { if (o.value === '受注') { o.textContent = '受注（受注処理する）'; } });
+      k.addEventListener('change', function () {
+        if (k.value !== '受注') return; var before = 読込時['f-kubun'] || '';
+        if (!現在) { k.value = before; alert('先に見積を読み込んでから受注にしてください'); return; }
+        k.value = before;
+        if (!confirm('この見積を受注にします。\n\nこの案件の続きとして新しい受注伝票を起こし、受注入力で扱えるようにします（見積はそのまま残ります）。よいですか？')) return;
+        var b = document.querySelector('#fmbar button.new[data-kind="受注"]'); if (b) b.click();
+      });
+    }
+  })();
   帯に付ける('データ削除', function () { 読んでから(function () {
     var no = String(現在.fields['伝票番号'] || '');
     var t = prompt('FileMaker からこの伝票を削除します。取り消せません。\n\n確認のため伝票番号（' + no + '）を入れてください');
@@ -4228,11 +4290,13 @@ function setPane(p){
 
   // ================================================================ NAV-1: ◀ 前／次 ▶ は索引（起票日→伝票番号の順）を送る
   var 送り = null, 送り元 = null;
+  // STAGE-1: 受注入力は受注（と区分の無い従来の受注）だけ、見積入力は予算見積・見積・失注だけ
+  function 段階が合う(区分) { 区分 = String(区分 || ''); if (モード === 'ichiran') return true; if (モード === 'mitsu') return 区分 === '予算見積' || 区分 === '見積' || 区分 === '失注'; return 区分 === '' || 区分 === '受注'; }
   function 送り一覧() {
     if (!索引) return [];
     if (送り && 送り元 === 索引.行) return 送り;
-    var c = 索引位置['伝票番号'], d = 索引位置['起票日']; var rows = [];
-    索引.行.forEach(function (r, i) { var no = String(r[c] || '').trim(); if (!no) return; rows.push([索引日 ? 索引日[i] : 0, no]); });
+    var c = 索引位置['伝票番号'], d = 索引位置['起票日'], kb = 索引位置['案件区分']; var rows = [];
+    索引.行.forEach(function (r, i) { var no = String(r[c] || (モード === 'mitsu' ? r[索引位置['見積番号']] : '') || '').trim(); if (!no) return; if (kb != null && !段階が合う(r[kb])) return; rows.push([索引日 ? 索引日[i] : 0, no]); });
     rows.sort(function (a, b) { return a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0); });
     送り = rows.map(function (x) { return x[1]; }); 送り元 = 索引.行; return 送り;
   }
@@ -4251,7 +4315,9 @@ function setPane(p){
   var 受け取る元 = 受け取る;
   受け取る = function (r, msg, ms) {
     受け取る元(r, msg, ms);
-    if (r && r.record) { 手配を読む(String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); 送り位置を出す(); try { 金額を出す(); } catch (e) {} }
+    if (r && r.record) { 手配を読む(String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); 送り位置を出す(); try { 金額を出す(); } catch (e) {}
+      try { 段階の注意(r.record.fields); } catch (e) {}
+      if (リピート予約) { var s1 = リピート予約; リピート予約 = ''; setTimeout(function () { リピートを選ぶ(s1); }, 600); } }
     else { try { 金額を出す(); } catch (e) {} }
   };
 

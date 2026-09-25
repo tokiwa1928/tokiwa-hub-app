@@ -369,7 +369,7 @@ function 画面_新規案件(種別, 初期値) {
 }
 
 /** RYUYO-1: 読み込んでいる伝票の内容を写して、別の案件（新しい案件ID）として 種別 を起こす。似た案件の流用 */
-function 画面_流用新規(recordId, 種別) {
+function 画面_流用新規(recordId, 種別, 同じ案件) {   // STAGE-1: 同じ案件=true なら 前回伝票番号・前回起票日 を付ける（翌年の予算見積など。Hub の P 番号がつながる）
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
@@ -379,6 +379,7 @@ function 画面_流用新規(recordId, 種別) {
   var base = {};
   Object.keys(種の全部).forEach(function (k) { if (除く[k]) return; var v = 種の全部[k]; if (v === null || v === undefined || v === '') return; base[k] = String(v); });
   base['起票日'] = 日付_(new Date());
+  if (同じ案件 === true || 同じ案件 === 'true' || 同じ案件 === 1) { base['前回伝票番号'] = String(種の全部['伝票番号'] || 種の全部['見積番号'] || ''); base['前回起票日'] = String(種の全部['起票日'] || ''); }
   var rec = 作成_(COPY_LAYOUT, base);
   var 案件ID = String(rec.fields['no'] || '');
   if (!案件ID) { 削除_(lay, rec.recordId); throw new Error('番号が自動採番されませんでした。作成を取り消しました。'); }
@@ -455,7 +456,7 @@ function 画面_Repeat登録(recordId) {
     if (v === null || v === undefined || v === '') return;
     base[k] = String(v);
   });
-  base['前回伝票番号'] = String(種の全部['伝票番号'] || '');
+  base['前回伝票番号'] = String(種の全部['伝票番号'] || 種の全部['見積番号'] || '');   // STAGE-1: 予算見積・見積からの Repeat は見積番号
   base['前回起票日'] = String(種の全部['起票日'] || '');
   base['起票日'] = 日付_(new Date());
 
@@ -1110,7 +1111,7 @@ function handle_(action, req, who) {
     case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
-    case '画面_流用新規':     return 画面_流用新規(req.recordId, req['種別']);   // RYUYO-1
+    case '画面_流用新規':     return 画面_流用新規(req.recordId, req['種別'], req['同じ案件']);   // RYUYO-1
     case '画面_削除':         return 画面_削除(req.recordId, req.modId);
     case '画面_案件にまとめる': return 画面_案件にまとめる(req.recordIds, req['案件ID'], req['確認']);   // FMHUB-21: 選んだ伝票の 案件ID を揃える
     case '画面_履歴':         return 画面_履歴(req.recordId, req['伝票番号']);          // GRP-1: 伝票ごとの変更履歴（読むだけ）

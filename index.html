@@ -46076,17 +46076,40 @@ function _ankenNameEdit_(id, auto){
   if(typeof saveDB==='function') saveDB(); renderProjects();
 }
 // この案件（P番号）の履歴: 年ごとに 受注（← いま）と 見積
+// STAGE-1: FileMaker の全段階（予算見積・見積・受注、全年）を索引から出し、どの伝票からでも Repeat（受注／見積／予算見積）できる
+function _ankenFmHistory_(r, elId){
+  var el=document.getElementById(elId); if(!el) return;
+  var me=(typeof _projFmNo_==='function')?_projFmNo_(r):''; var anken=String((r.fm&&r.fm['fm-anken'])||''); if(!me&&!anken){ el.remove(); return; }
+  _fmIdxLoad_().then(function(idx){
+    if(!idx||!idx.列||!idx.行){ el.innerHTML='<span style="color:#94a3b8;font-size:11px">FileMaker の索引がまだありません（受注登録を一度開くと取れます）</span>'; return; }
+    var P={}; idx.列.forEach(function(c,i){ P[c]=i; }); var col=function(x,c){ return P[c]==null?'':String(x[P[c]]==null?'':x[P[c]]); };
+    var by番号={}, by前={}, by案件={};
+    idx.行.forEach(function(x){ var no=col(x,'伝票番号')||col(x,'見積番号'); if(!no) return; var o={ no:no, 区分:col(x,'案件区分')||'受注', 日:_fmIdxDate_(col(x,'起票日')), 数量:col(x,'ロット契約単位')||col(x,'合計数1'), 売価:col(x,'売価金額'), 案件ID:col(x,'案件ID'), 前:col(x,'前回伝票番号') }; by番号[no]=o; if(o.前) (by前[o.前]=by前[o.前]||[]).push(o); if(o.案件ID) (by案件[o.案件ID]=by案件[o.案件ID]||[]).push(o); });
+    var start=by番号[me]||(anken&&(by案件[anken]||[])[0]); if(!start){ el.innerHTML='<span style="color:#94a3b8;font-size:11px">FileMaker の索引にこの伝票がありません</span>'; return; }
+    var out=[], seen={}, q=[start], hops=0; seen[start.no]=1; out.push(start);
+    while(q.length&&hops<400){ var x=q.shift(); hops++; [].concat(x.案件ID?(by案件[x.案件ID]||[]):[], x.前&&by番号[x.前]?[by番号[x.前]]:[], by前[x.no]||[]).forEach(function(o){ if(seen[o.no]) return; seen[o.no]=1; out.push(o); q.push(o); }); }
+    out.sort(function(a,b){ return String(b.日).localeCompare(String(a.日))||b.no.localeCompare(a.no); });
+    var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+    var yen=function(v){ var n=Number(String(v).replace(/[^\d.-]/g,'')); return n?'¥'+n.toLocaleString():''; };
+    var link=function(no,mode,kind,label,color){ return '<a href="tools/fm-juchu-hub.html?mode='+mode+'&no='+encodeURIComponent(no)+'&repeat='+encodeURIComponent(kind)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;padding:1px 6px;border:1px solid '+color+';color:'+color+';border-radius:3px;text-decoration:none;white-space:nowrap">'+label+'</a>'; };
+    var tag=function(k){ var c=k==='受注'?'#1e3a8a;background:#dbeafe':k==='見積'?'#1e40af;background:#eff6ff':k==='失注'?'#991b1b;background:#fee2e2':'#92400e;background:#fef3c7'; return '<span style="padding:0 6px;border-radius:3px;font-weight:700;color:'+c+'">'+esc(k)+'</span>'; };
+    el.innerHTML='<div style="font-size:11px;font-weight:700;color:#1e40af;margin:6px 0 2px">🗄 FileMaker の段階（全年・'+out.length+' 件）　<span style="font-weight:400;color:#64748b">どの伝票からでも Repeat できます。受注入力／見積入力が開き、元を確かめてから起こします</span></div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tbody>'+out.map(function(o){ return '<tr style="border-top:1px dotted #e2e8f0'+(o.no===me?';background:#f0f9ff':'')+'"><td style="padding:2px 4px;white-space:nowrap">'+esc(o.日)+'</td><td style="padding:2px 4px">'+tag(o.区分)+'</td><td style="padding:2px 4px"><a href="tools/fm-juchu-hub.html?mode='+(o.区分==='受注'?'juchu':'mitsu')+'&no='+encodeURIComponent(o.no)+'" target="_blank" onclick="event.stopPropagation()" style="color:#0369a1;font-weight:600">'+esc(o.no)+'</a>'+(o.no===me?' <span style="color:#64748b">（この行）</span>':'')+'</td><td style="padding:2px 4px;text-align:right">'+esc(o.数量)+'</td><td style="padding:2px 4px;text-align:right">'+yen(o.売価)+'</td><td style="padding:2px 4px;color:#64748b">'+esc(o.案件ID)+'</td><td style="padding:2px 4px;white-space:nowrap">'+link(o.no,'juchu','受注','受注でリピート','#1e3a8a')+' '+link(o.no,'mitsu','見積','見積を起こす','#1e40af')+' '+link(o.no,'mitsu','予算見積','予算見積を起こす','#92400e')+'</td></tr>'; }).join('')+'</tbody></table>';
+  });
+}
 function _ankenHistoryHTML_(r){
-  if(!r||!r.master_no) return '';
+  var _fmId='anken-fm-'+String((r&&r.id)||'').replace(/[^\w-]/g,'_'); var _fmBox='';
+  if(r&&(typeof _projFmNo_==='function'&&_projFmNo_(r)||(r.fm&&r.fm['fm-anken']))){ _fmBox='<div id="'+_fmId+'" style="margin:0 0 10px;padding:6px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;color:#64748b">FileMaker の段階を探しています…</div>'; setTimeout(function(){ try{ _ankenFmHistory_(r,_fmId); }catch(e){ console.warn('[FM段階]',e); } },50); }
+  if(!r||!r.master_no) return _fmBox;
   var mn=r.master_no; var esc=function(v){ return (typeof _escDiff==='function')?_escDiff(String(v==null?'':v)):String(v==null?'':v); };
   var yen=function(n){ n=Number(n)||0; return n?'¥'+Math.round(n).toLocaleString():''; };
   var items=[];
   (DB.projects||[]).forEach(function(p){ if(p && p.master_no===mn) items.push({ kind:'受注', y:String(p.orderDate||p.createdAt||'').slice(0,4), d:String(p.orderDate||p.createdAt||'').slice(0,10), no:(typeof _projFmNo_==='function'&&_projFmNo_(p))||p.id, id:p.id, qty:p.qty, unit:p.unit, amt:p.exTax||p.grand, st:p.status||'', now:p===r, cur:_projIsMoving_(p), open:"jumpToProject('"+String(p.id).replace(/'/g,'')+"')" }); });
   (DB.estimates||[]).forEach(function(e){ if(e && String(e.master_no||'')===String(mn) && !e.linkedProjectId) items.push({ kind:(e.kind==='予算見積'||/予算/.test(e.status||''))?'予算見積':'見積', y:String(e.date||e.createdAt||'').slice(0,4), d:String(e.date||e.createdAt||'').slice(0,10), no:e.id, id:e.id, qty:e.qty, unit:e.unit, amt:e.exTax||e.grand||e.total, st:e.status||'', lost:e.status==='失注', open:(typeof jumpToEstimate==='function')?"jumpToEstimate('"+String(e.id).replace(/'/g,'')+"')":'' }); });
-  if(items.length<2) return '';
+  if(items.length<2) return _fmBox;
   items.sort(function(a,b){ return String(b.d).localeCompare(String(a.d)); });
   var years={}; var order=[]; items.forEach(function(x){ var y=x.y||'（年不明）'; if(!years[y]){ years[y]=[]; order.push(y); } years[y].push(x); });
-  return '<div style="margin:0 0 10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px"><div style="font-size:11px;font-weight:700;color:#1e40af;margin-bottom:4px">📚 この案件 P'+esc(mn)+' の履歴（受注 '+items.filter(function(x){return x.kind==='受注';}).length+'・見積 '+items.filter(function(x){return x.kind!=='受注';}).length+'）'+(_ankenName_(r)?'　<span style="color:#334155;font-weight:400">'+esc(_ankenName_(r))+'</span>':'')+'</div>'+
+  return _fmBox + '<div style="margin:0 0 10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px"><div style="font-size:11px;font-weight:700;color:#1e40af;margin-bottom:4px">📚 この案件 P'+esc(mn)+' の履歴（受注 '+items.filter(function(x){return x.kind==='受注';}).length+'・見積 '+items.filter(function(x){return x.kind!=='受注';}).length+'）'+(_ankenName_(r)?'　<span style="color:#334155;font-weight:400">'+esc(_ankenName_(r))+'</span>':'')+'</div>'+
     order.map(function(y){ return '<div style="display:grid;grid-template-columns:52px 1fr;gap:2px 10px;font-size:11.5px;padding:2px 0;border-top:1px dotted #e2e8f0"><div style="color:#64748b;padding-top:3px">'+esc(y)+'</div><div>'+
       years[y].map(function(x){ var tag=x.kind==='受注'?'<span style="background:#dbeafe;color:#1e3a8a;padding:0 6px;border-radius:3px;font-weight:700">受注</span>':'<span style="background:'+(x.lost?'#f1f5f9':'#ede9fe')+';color:'+(x.lost?'#94a3b8':'#5b21b6')+';padding:0 6px;border-radius:3px">'+esc(x.kind)+'</span>';
         return '<div style="display:flex;gap:8px;align-items:center;padding:2px 0;'+(x.lost?'color:#94a3b8;':'')+(x.open?'cursor:pointer':'')+'" '+(x.open?'onclick="event.stopPropagation();'+x.open+'"':'')+'>'+tag+'<span style="font-family:monospace">'+esc(x.no)+'</span><span>'+(x.qty?Number(x.qty).toLocaleString()+(x.unit||''):'')+'</span><span>'+yen(x.amt)+'</span><span style="color:#64748b">'+esc(x.st)+'</span>'+(x.now?'<span style="color:#1e40af;font-weight:700">← いま</span>':(x.cur&&x.kind==='受注'?'<span style="color:#15803d">動いている</span>':''))+'</div>'; }).join('')+'</div></div>'; }).join('')+'</div>';
