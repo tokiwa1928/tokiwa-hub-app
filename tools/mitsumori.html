@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>見積書 | Tokiwa Hub</title>
+<style>
+  /* 予算見積書・御見積書（A4 縦）。FileMaker の予算見積／見積の伝票から作る。画面では上に操作、印刷では紙だけ */
+  body{ margin:0; font-family:"Noto Sans JP","Yu Gothic","Meiryo",sans-serif; background:#e5e7eb; color:#111; }
+  #bar{ background:#0d0d0d; color:#e5e7eb; padding:6px 14px; display:flex; gap:10px; align-items:center; font-size:13px; flex-wrap:wrap; }
+  #bar a{ color:#93c5fd; text-decoration:none; }
+  #bar input{ font-size:13px; padding:3px 6px; border:1px solid #64748b; border-radius:4px; width:120px; }
+  #bar button{ font-size:13px; padding:3px 12px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#111; cursor:pointer; }
+  #bar .st{ color:#fbbf24; }
+  #paper{ width:210mm; min-height:297mm; margin:12px auto; background:#fff; box-shadow:0 2px 12px rgba(0,0,0,.2); padding:16mm 16mm 14mm; box-sizing:border-box; font-size:10.5pt; line-height:1.5; }
+  h1{ text-align:center; font-size:20pt; letter-spacing:.6em; margin:0 0 6mm; font-weight:700; }
+  .hd{ display:flex; justify-content:space-between; gap:8mm; }
+  .to{ font-size:13pt; border-bottom:1.5px solid #000; padding:0 2mm 1mm; min-width:80mm; }
+  .meta{ font-size:9.5pt; text-align:right; }
+  .issuer{ font-size:9.5pt; text-align:left; margin-top:4mm; line-height:1.55; }
+  .issuer b{ font-size:11pt; }
+  .lead{ margin:6mm 0 3mm; }
+  table.t{ width:100%; border-collapse:collapse; margin-top:3mm; }
+  table.t th, table.t td{ border:0.4mm solid #000; padding:1.4mm 2mm; }
+  table.t th{ background:#f1f5f9; font-weight:600; text-align:center; }
+  table.t td.r{ text-align:right; white-space:nowrap; }
+  table.t td.c{ text-align:center; }
+  table.t tr.total td{ font-weight:700; background:#f8fafc; }
+  .cond{ margin-top:4mm; }
+  .cond td{ padding:1mm 3mm 1mm 0; vertical-align:top; }
+  .cond td.k{ white-space:nowrap; color:#334155; width:22mm; }
+  .note{ margin-top:4mm; border:0.3mm solid #000; padding:2mm 3mm; min-height:16mm; white-space:pre-wrap; }
+  [contenteditable]{ outline:none; }
+  [contenteditable]:hover{ background:#fefce8; }
+  @media print{ body{ background:#fff; } #bar{ display:none; } #paper{ margin:0; box-shadow:none; width:auto; min-height:auto; } [contenteditable]:hover{ background:none; } @page{ size:A4 portrait; margin:0; } }
+</style>
+<style>/* 表組は角（本多さん指定）。ボタンは丸くてよい */ table,thead,tbody,tr,th,td,div:has(> table),section:has(> table){border-radius:0 !important}</style>
+</head>
+<body>
+<div id="bar">
+  <a href="fm-juchu-hub.html" onclick="var n=(document.getElementById('no')||{}).value; if(n){ this.href='fm-juchu-hub.html?no='+encodeURIComponent(n.trim()); }">← 受注入力</a>
+  <b id="kind-label">見積書</b>
+  <input id="no" placeholder="見積番号・伝票番号" autocomplete="off">
+  <button id="go">出す</button>
+  <button id="pr">🖨 印刷／PDF</button>
+  <button id="issuer" title="発行者（会社名・住所・TEL・担当）を直します。この PC に残ります">発行者</button>
+  <label style="font-size:12px"><input type="checkbox" id="tax" checked> 消費税を別に出す</label>
+  <span class="st" id="st"></span>
+  <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
+</div>
+<div id="paper"><div style="text-align:center;color:#9ca3af;padding-top:60mm">番号を入れて「出す」（紙の中の文字は印刷前に直せます）</div></div>
+
+<script src="fm-bridge.js"></script>
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function 数(v) { var x = Number(String(v == null ? '' : v).replace(/[,\s]/g, '')); return isNaN(x) ? 0 : x; }
+function 円(n) { return '¥' + Math.round(n).toLocaleString(); }
+function 和暦(d) { var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate(); return '令和' + (y - 2018) + '年' + m + '月' + dd + '日'; }
+function 日付(v) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v || '').trim()); if (m) return 和暦(new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]))); var m2 = /^(\d{4})-(\d\d)-(\d\d)$/.exec(String(v || '').trim()); if (m2) return 和暦(new Date(Number(m2[1]), Number(m2[2]) - 1, Number(m2[3]))); return String(v || ''); }
+var マスタ = {};
+function マスタを用意() {
+  var L = '得意先マスタ';
+  try { var c = JSON.parse(localStorage.getItem('fm_master_' + L) || 'null'); if (c && c.取った && Date.now() - new Date(c.取った).getTime() < 24 * 3600 * 1000) { マスタ[L] = c; return Promise.resolve(); } } catch (e) {}
+  return FM.呼ぶ('マスタ_配る', [L]).then(function (j) { j.取った = new Date().toISOString(); マスタ[L] = j; try { localStorage.setItem('fm_master_' + L, JSON.stringify(j)); } catch (e) {} });
+}
+function 得意先(code) { var m = マスタ['得意先マスタ']; if (!m) return null; return m.行.filter(function (r) { return String(r['得意先コード']) === String(code); })[0] || null; }
+function 列を探す(row, words) { if (!row) return ''; var keys = Object.keys(row); for (var i = 0; i < words.length; i++) { var k = keys.filter(function (x) { return x.indexOf(words[i]) >= 0; })[0]; if (k && row[k]) return String(row[k]); } return ''; }
+function 発行者() { var d = { 名: 'トキワ印刷株式会社', 住所: '', TEL: '', FAX: '', 担当: '' }; try { var o = JSON.parse(localStorage.getItem('mitsumori_issuer') || 'null'); if (o) Object.keys(o).forEach(function (k) { d[k] = o[k]; }); } catch (e) {} return d; }
+function 発行者を直す() { var d = 発行者(); var 名 = prompt('会社名', d.名); if (名 === null) return; var 住所 = prompt('住所（〒から）', d.住所); if (住所 === null) return; var TEL = prompt('TEL', d.TEL); if (TEL === null) return; var FAX = prompt('FAX', d.FAX); if (FAX === null) return; var 担当 = prompt('担当者名（空なら伝票の担当者）', d.担当); if (担当 === null) return; try { localStorage.setItem('mitsumori_issuer', JSON.stringify({ 名: 名, 住所: 住所, TEL: TEL, FAX: FAX, 担当: 担当 })); } catch (e) {} if (直近) 描く(直近, 直近手配); }
+var 直近 = null, 直近手配 = null;
+function 仕様の文(f) {
+  var parts = [];
+  var 紙 = [f['紙質1'], f['メーカー1'], f['品名1']].filter(Boolean).join(' '); if (紙) parts.push(紙);
+  if (f['サイズ横'] || f['サイズ縦']) parts.push((f['サイズ横'] || '') + '×' + (f['サイズ縦'] || '') + 'mm');
+  var 色 = []; if (f['色数1']) 色.push('表' + f['色数1'] + '色'); if (f['色MAX1']) 色.push('裏' + f['色MAX1'] + '色'); if (色.length) parts.push(色.join('・')); else if (f['インキ表1']) parts.push(f['インキ表1']);
+  if (f['製本加工']) parts.push(f['製本加工']);
+  if (f['パーツ数'] && Number(f['パーツ数']) > 1) parts.push(f['パーツ数'] + 'パーツ');
+  return parts.join('　');
+}
+function 描く(f, 手配) {
+  直近 = f; 直近手配 = 手配 || null;
+  var 区分 = String(f['案件区分'] || ''); var 予算 = 区分 === '予算見積';
+  document.title = (予算 ? '予算見積書' : '御見積書') + '_' + (f['見積番号'] || f['伝票番号'] || '');
+  $('kind-label').textContent = 予算 ? '予算見積書' : '御見積書';
+  var 客 = 得意先(f['得意先コード']); var 客名 = (客 && 客['得意先名']) || f['得意先名'] || String(f['得意先コード'] || '');
+  var 客住所 = 列を探す(客, ['住所']); var 客先担当 = f['先方担当者名'] || '';
+  var is = 発行者(); var 担当 = is.担当 || f['担当者名'] || '';
+  var qty = 数(f['合計数1'] || f['ロット契約単位'] || f['数量']); var 単価 = 数(f['売価単価']); var 金額 = 数(f['売価金額']) || Math.round(qty * 単価);
+  var 税 = $('tax').checked ? Math.round(金額 * 0.1) : 0;
+  var 事前 = (手配 && 手配.事前) || {};
+  var h = '<h1>' + (予算 ? '予 算 見 積 書' : '御 見 積 書') + '</h1>';
+  h += '<div class="hd"><div><div class="to" contenteditable="true">' + esc(客名) + '　御中' + (客先担当 ? '<br><span style="font-size:10pt">' + esc(客先担当) + ' 様</span>' : '') + '</div>'
+    + (客住所 ? '<div style="font-size:9pt;color:#334155;margin-top:1mm" contenteditable="true">' + esc(客住所) + '</div>' : '') + '</div>'
+    + '<div><div class="meta">' + (予算 ? '予算見積' : '見積') + '番号　<b>' + esc(f['見積番号'] || f['伝票番号'] || '') + '</b><br>発行日　<span contenteditable="true">' + esc(日付(f['起票日']) || 和暦(new Date())) + '</span></div>'
+    + '<div class="issuer" contenteditable="true"><b>' + esc(is.名) + '</b>' + (is.住所 ? '<br>' + esc(is.住所) : '') + (is.TEL ? '<br>TEL ' + esc(is.TEL) + (is.FAX ? '　FAX ' + esc(is.FAX) : '') : '') + (担当 ? '<br>担当　' + esc(担当) : '') + '</div></div></div>';
+  h += '<div class="lead" contenteditable="true">' + (予算 ? '下記のとおり予算見積を申し上げます。ご検討のほどよろしくお願いいたします。' : '下記のとおりお見積り申し上げます。ご検討のほどよろしくお願いいたします。') + '</div>';
+  h += '<table class="t"><thead><tr><th style="width:40%">品名・仕様</th><th>数量</th><th>単位</th><th>単価</th><th>金額</th></tr></thead><tbody>';
+  h += '<tr><td contenteditable="true"><b>' + esc(f['製品名'] || '') + '</b>' + (仕様の文(f) ? '<br><span style="font-size:9pt;color:#334155">' + esc(仕様の文(f)) + '</span>' : '') + '</td><td class="r" contenteditable="true">' + (qty ? qty.toLocaleString() : '') + '</td><td class="c" contenteditable="true">' + esc(f['単位'] || '') + '</td><td class="r" contenteditable="true">' + (単価 ? 単価.toLocaleString() : '') + '</td><td class="r" contenteditable="true">' + (金額 ? 金額.toLocaleString() : '') + '</td></tr>';
+  for (var i = 0; i < 3; i++) h += '<tr><td contenteditable="true">&nbsp;</td><td contenteditable="true"></td><td contenteditable="true"></td><td contenteditable="true"></td><td contenteditable="true"></td></tr>';
+  h += '<tr class="total"><td colspan="4" class="r">小計</td><td class="r">' + 円(金額) + '</td></tr>';
+  if (税) h += '<tr class="total"><td colspan="4" class="r">消費税（10%）</td><td class="r">' + 円(税) + '</td></tr>';
+  h += '<tr class="total"><td colspan="4" class="r">合計</td><td class="r" style="font-size:12pt">' + 円(金額 + 税) + '</td></tr></tbody></table>';
+  h += '<table class="cond"><tr><td class="k">納期</td><td contenteditable="true">' + esc(日付(f['納期']) || (事前.希望納期 ? 日付(事前.希望納期) + '（ご希望）' : 'ご相談')) + '</td></tr>'
+    + '<tr><td class="k">納品場所</td><td contenteditable="true">' + esc(事前.配送 || '貴社ご指定場所') + '</td></tr>'
+    + '<tr><td class="k">支払条件</td><td contenteditable="true">従来どおり</td></tr>'
+    + '<tr><td class="k">有効期限</td><td contenteditable="true">' + esc(f['有効期限'] || '発行日より 1 か月') + '</td></tr>'
+    + (事前.梱包 ? '<tr><td class="k">梱包</td><td contenteditable="true">' + esc(事前.梱包) + '</td></tr>' : '') + '</table>';
+  h += '<div class="note" contenteditable="true">' + esc(f['備考'] || '') + (事前.memo ? (f['備考'] ? '\n' : '') + esc(事前.memo) : '') + '</div>';
+  $('paper').innerHTML = h;
+}
+function 出す() {
+  var no = $('no').value.trim(); if (!no) return;
+  $('st').textContent = '読んでいます… ' + no;
+  Promise.all([FM.呼ぶ('画面_読み込み', [no]), マスタを用意()]).then(function (rs) {
+    var r = rs[0]; if (!r.record) throw new Error('見つかりません: ' + no);
+    var key = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || no);
+    return Promise.all([FM.呼ぶ('画面_全項目', [r.record.recordId]), FM.呼ぶ('手配_読む', [key]).catch(function () { return null; })]).then(function (rs2) {
+      var f = rs2[0].fields; f['担当者名'] = f['担当者名'] || ''; 描く(f, (rs2[1] && rs2[1].手配) || null);
+      try { history.replaceState(null, '', '?no=' + encodeURIComponent(no)); } catch (e) {}
+      $('st').textContent = '出しました（紙の中の文字は押すと直せます）';
+    });
+  }).catch(function (e) { $('st').textContent = String(e.message || e); });
+}
+(function () {
+  FM.サインインのボタンを置く($('fm-signin'));
+  function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
+  名(); window.addEventListener('fm-signin', 名);
+  $('go').onclick = 出す; $('no').addEventListener('keydown', function (e) { if (e.key === 'Enter') 出す(); });
+  $('pr').onclick = function () { window.print(); }; $('issuer').onclick = 発行者を直す; $('tax').onchange = function () { if (直近) 描く(直近, 直近手配); };
+  var q = new URLSearchParams(location.search); var no = q.get('no'); if (no) { $('no').value = no; var 試す = 0; var t = setInterval(function () { 試す++; if (FM.名乗っている()) { clearInterval(t); 出す(); } else if (試す > 40) clearInterval(t); }, 500); }
+})();
+</script>
+<script>window.KAIZEN_KEY = 'mitsumori';</script>
+<script src="kaizen.js"></script>
+</body>
+</html>

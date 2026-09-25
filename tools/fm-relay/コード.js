@@ -247,6 +247,17 @@ function 画面_読み込み(番号) {
       if (best) { 前段階 = { recordId: best.recordId, 番号: best.fields['見積番号'] || best.fields['伝票番号'] || '', 起票日: best.fields['起票日'] || '', 区分: String(best.fields['案件区分'] || '') }; 前段階差分 = 差分_(best.fields, rec.fields); }
     }
   } catch (e) { 前段階 = null; 前段階差分 = []; }
+  // COST-1: 前回の受注（前回伝票番号、無ければ同じ案件の前の受注）の原価内訳。原価差の助言に使う
+  var 前回原価 = null;
+  try {
+    if (rec) {
+      var pv = null; var pno = String(rec.fields['前回伝票番号'] || '').trim();
+      if (pno) { var f1 = find_(lay, [{ '伝票番号': '==' + pno }], 1, 1, null); pv = f1.records[0] || null; }
+      if (!pv && rec.fields['案件ID']) { var f2 = find_(lay, [{ '案件ID': '==' + String(rec.fields['案件ID']), '案件区分': '==受注' }], 200, 1, null); var my2 = 日付数_(String(rec.fields['起票日'] || '')); var bestp = null;
+        f2.records.forEach(function (r) { if (String(r.recordId) === String(rec.recordId)) return; var d = 日付数_(String(r.fields['起票日'] || '')); if (my2 && d > my2) return; if (!bestp || d > 日付数_(String(bestp.fields['起票日'] || ''))) bestp = r; }); pv = bestp; }
+      if (pv) { var cols = ['伝票番号', '起票日', '売価金額', '売価単価', '合計数1', '用紙代', '印刷代', '加工賃', '人件費', '梱包代', '版代', '配送代', '合計金額', '用紙単価1', '紙質1', '品名1']; 前回原価 = {}; cols.forEach(function (c) { 前回原価[c] = pv.fields[c] === undefined ? '' : pv.fields[c]; }); }
+    }
+  } catch (e) { 前回原価 = null; }
 
   return {
     ok: true,
@@ -257,6 +268,7 @@ function 画面_読み込み(番号) {
     差分: 差分,
     前段階: 前段階,
     前段階差分: 前段階差分,
+    前回原価: 前回原価,
     履歴: rec ? 案件の履歴_(lay, rec.fields['案件ID']) : []
   };
 }
@@ -353,6 +365,26 @@ function 画面_新規案件(種別, 初期値) {
   }
   var r = 番号と段階を入れる_(lay, rec, 案件ID, 種別, who);
   return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [],
+           writable: fieldInfo_(lay).writable, 履歴: 案件の履歴_(lay, 案件ID) };
+}
+
+/** RYUYO-1: 読み込んでいる伝票の内容を写して、別の案件（新しい案件ID）として 種別 を起こす。似た案件の流用 */
+function 画面_流用新規(recordId, 種別) {
+  var who = 画面_利用者_();
+  var lay = LAYOUTS.juchu;
+  if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
+  if (!recordId) throw new Error('recordId がありません');
+  var 種の全部 = getByDenpyo_複製用_({ recordId: recordId });
+  var 除く = {}; 引き継がない.concat(['前回伝票番号', '前回起票日', '修正日']).forEach(function (n) { 除く[n] = true; });
+  var base = {};
+  Object.keys(種の全部).forEach(function (k) { if (除く[k]) return; var v = 種の全部[k]; if (v === null || v === undefined || v === '') return; base[k] = String(v); });
+  base['起票日'] = 日付_(new Date());
+  var rec = 作成_(COPY_LAYOUT, base);
+  var 案件ID = String(rec.fields['no'] || '');
+  if (!案件ID) { 削除_(lay, rec.recordId); throw new Error('番号が自動採番されませんでした。作成を取り消しました。'); }
+  var r = 番号と段階を入れる_(lay, rec, 案件ID, 種別, who);
+  log_(who, lay, rec.recordId, { '流用新規': '元 ' + String(種の全部['伝票番号'] || 種の全部['見積番号'] || '') + ' → ' + 案件ID + '（' + 種別 + '）' }, {});
+  return { ok: true, 案件ID: 案件ID, record: r, 参考: null, 差分: [], 流用元: String(種の全部['伝票番号'] || 種の全部['見積番号'] || ''),
            writable: fieldInfo_(lay).writable, 履歴: 案件の履歴_(lay, 案件ID) };
 }
 
@@ -974,6 +1006,7 @@ function handle_(action, req, who) {
     case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
+    case '画面_流用新規':     return 画面_流用新規(req.recordId, req['種別']);   // RYUYO-1
     case '画面_削除':         return 画面_削除(req.recordId, req.modId);
     case '画面_案件にまとめる': return 画面_案件にまとめる(req.recordIds, req['案件ID'], req['確認']);   // FMHUB-21: 選んだ伝票の 案件ID を揃える
     case '画面_履歴':         return 画面_履歴(req.recordId, req['伝票番号']);          // GRP-1: 伝票ごとの変更履歴（読むだけ）

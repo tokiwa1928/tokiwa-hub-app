@@ -1974,6 +1974,7 @@ function setPane(p){
     <span>原価率 <span class="rate" id="kn-rate">—</span></span>
     <span id="kn-prev" style="color:#334155"></span>
   </div>
+  <div id="kn-advice" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:3px"></div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:3px"><span>この案件の段階:</span><span id="kn-stages">（索引を読んでから出ます）</span><span id="kn-result" style="font-weight:700"></span></div>
   <details style="margin-top:3px"><summary style="cursor:pointer;color:#334155">外注見積（業者と金額。FileMaker の 見積業者1〜5・見積金額1）</summary>
     <table class="gq"><thead><tr><th>#</th><th>業者</th><th>金額</th><th>数量</th><th>単価</th><th>見積日</th></tr></thead><tbody>
@@ -2198,6 +2199,7 @@ window.FM見た目 = function () {};
     番号欄.value = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
     差分を出す(r['参考'], r['差分']);
     try { 前段階比を出す(r['前段階'], r['前段階差分']); } catch (e) {}   // YOY-2
+    前回原価 = r['前回原価'] || null;   // COST-1
     状態(msg + (ms ? '（' + ms + 'ms）' : ''), 'ok');
     待機(false);
     外注を読む(r.record.fields['伝票番号']);
@@ -2691,27 +2693,40 @@ window.FM見た目 = function () {};
       if (Object.keys(変更分()).length
           && !confirm('保存していない編集があります。捨てて新しく起こしますか？')) return;
 
-      var 文 = 案件ID
-        ? ('案件 ' + 案件ID + ' の ' + 種別 + ' を起こします。\n\n'
-           + '内容はこの案件のいちばん新しい段階から引き継ぎます。\n'
-           + '前回の ' + 種別 + ' があれば、変わったところを表示します。')
-        : ('まっさらな案件として ' + 種別 + ' を起こします。\n\n'
-           + '既にある案件の続きにしたいときは、先にその番号を読み込んでください。');
-      if (!confirm(文)) { 起こした後 = null; return; }
-
+      // RYUYO-1: 伝票を読み込んでいるときは 3 通り（続き／流用新規／まっさら）
+      起こし方を選ぶ(種別, 案件ID).then(function (way) {
+      if (!way) { 起こした後 = null; return; }
       待機(true); 失敗(''); diff.style.display = 'none';
-      状態((案件ID ? '起こしています… ' : '新規案件を起こしています… ') + 種別);
+      状態((way === '続き' ? '起こしています… ' : way === '流用' ? '流用して新しい案件を起こしています… ' : '新規案件を起こしています… ') + 種別);
       var t0 = Date.now();
-      var p = 案件ID ? 呼ぶ('画面_新規段階', [案件ID, 種別])
-                     : 呼ぶ('画面_新規案件', [種別, {}]);
+      var p = way === '続き' ? 呼ぶ('画面_新規段階', [案件ID, 種別])
+            : way === '流用' ? 呼ぶ('画面_流用新規', [現在.recordId, 種別])
+            : 呼ぶ('画面_新規案件', [種別, {}]);
       p.then(function (r) {
         var no = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
-        受け取る(r, 種別 + ' を起こしました  ' + no, Date.now() - t0);
-        try { if (r.種 && r.種.番号) 手配を写して読む(String(r.種.番号), String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}   // SPEC-1
+        受け取る(r, 種別 + ' を起こしました  ' + no + (r.流用元 ? '（' + r.流用元 + ' から流用・別の案件）' : ''), Date.now() - t0);
+        try { var 元no = (r.種 && r.種.番号) || r.流用元 || ''; if (元no) 手配を写して読む(String(元no), String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}   // SPEC-1
         if (起こした後) { var f = 起こした後; 起こした後 = null; try { f(); } catch (e) {} }
       }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); 起こした後 = null; });
+      });
     };
   });
+  // RYUYO-1: 起こし方を選ぶ小さな窓。読み込んでいなければ「まっさら」だけ
+  function 起こし方を選ぶ(種別, 案件ID) {
+    return new Promise(function (res) {
+      if (!現在) { res(confirm('まっさらな案件として ' + 種別 + ' を起こします。\n\n似た案件を元にしたいときは、先にその番号を読み込んでから押してください。') ? '新規' : null); return; }
+      var no = String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || '');
+      var w = document.createElement('div'); w.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+      w.innerHTML = '<div style="background:#fff;border-radius:8px;padding:16px 18px;width:min(560px,94vw);font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
+        + '<div style="font-size:15px;font-weight:700;margin-bottom:8px">' + esc(種別) + ' を起こします — ' + esc(no) + ' を元にどうしますか</div>'
+        + '<button data-w="続き" style="display:block;width:100%;text-align:left;padding:10px 12px;margin:6px 0;border:2px solid #1e40af;border-radius:6px;background:#eff6ff;cursor:pointer"' + (案件ID ? '' : ' disabled') + '><b>この案件の続き</b><br><span style="color:#334155">同じ案件ID' + (案件ID ? '（' + esc(案件ID) + '）' : '') + '。毎年のもの・同じ仕事の次の段階。前回の同じ段階と比べて変わったところを出します</span></button>'
+        + '<button data-w="流用" style="display:block;width:100%;text-align:left;padding:10px 12px;margin:6px 0;border:2px solid #b45309;border-radius:6px;background:#fffbeb;cursor:pointer"><b>流用新規（別の案件）</b><br><span style="color:#334155">内容だけ写して、新しい案件IDで起こします。似ているけれど別のお客様・別の仕事のとき</span></button>'
+        + '<button data-w="新規" style="display:block;width:100%;text-align:left;padding:10px 12px;margin:6px 0;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer"><b>まっさら</b><br><span style="color:#334155">何も写さない</span></button>'
+        + '<div style="text-align:right;margin-top:6px"><button data-w="" style="padding:4px 14px">やめる</button></div></div>';
+      document.body.appendChild(w);
+      Array.prototype.forEach.call(w.querySelectorAll('button'), function (b) { b.onclick = function () { w.remove(); res(b.getAttribute('data-w') || null); }; });
+    });
+  }
 
   // -------------------------------------------------- 保存
 
@@ -3290,6 +3305,10 @@ window.FM見た目 = function () {};
     var b3 = document.createElement('button'); b3.className = 'fb or'; b3.textContent = '製造指示書'; b3.title = '読み込んでいる伝票の製造指示書（内製用: 用紙→印刷→加工→製本・梱包→納品の順、工程チェック欄つき）を出します';
     b3.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')) + '&type=seizo', '_blank'); }); };
     lay.parentNode.insertBefore(b3, lay);
+    // MITSU-1: 予算見積書／御見積書を Hub から出す（今まで Excel で作っていたもの）
+    var b4 = document.createElement('button'); b4.className = 'fb or'; b4.textContent = '見積書'; b4.title = '読み込んでいる伝票から 予算見積書（予算見積のとき）／御見積書 を出します。紙の中の文字は印刷前に直せます';
+    b4.onclick = function () { 読んでから(function () { window.open('mitsumori.html?no=' + encodeURIComponent(String(現在.fields['見積番号'] || 現在.fields['伝票番号'] || '')), '_blank'); }); };
+    lay.parentNode.insertBefore(b4, lay);
   })();
   帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '0'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
 
@@ -3493,7 +3512,31 @@ window.FM見た目 = function () {};
     結果表 = m; 結果表元 = 索引.行; return m;
   }
   function 行の結果(r) { var P = 索引位置; var arr = Array.isArray(r); var id = String((arr ? r[P['案件ID']] : r['案件ID']) || ''); var no = String((arr ? (r[P['伝票番号']] || r[P['見積番号']]) : (r['伝票番号'] || r['見積番号'])) || ''); var m = 案件の結果表(); var g = id ? m[id] : m['#' + no]; return g ? g.結果 : ''; }
-  var 金額タイマー = null;
+  var 金額タイマー = null, 前回原価 = null;
+  // COST-1: 原価差の助言。材料費（用紙・版・梱包・配送・外注）を引いた「取り分」（印刷・加工・人件費・利益）を前回と同じだけ確保する売価を出す
+  function 材料費(f, g) { var 用 = g('用紙代'), 版 = g('版代'), 梱 = g('梱包代'), 配 = g('配送代'), 印 = g('印刷代'), 加 = g('加工賃'), 人 = g('人件費'), 合 = g('合計金額'); var 外 = Math.max(0, 合 - (用 + 版 + 梱 + 配 + 印 + 加 + 人)); return { 材料: 用 + 版 + 梱 + 配 + 外, 外注: 外, 用紙: 用, 人件: 人, 印刷: 印, 加工: 加 }; }
+  function 原価差の助言() {
+    var box = $('kn-advice'); if (!box) return; if (!現在 || !前回原価) { box.style.display = 'none'; return; }
+    var now = function (k) { var id = { '用紙代': 'c-paper', '版代': 'c-plate', '梱包代': 'c-pack', '配送代': 'c-ship', '印刷代': 'c-print', '加工賃': 'c-work', '人件費': 'c-labor', '合計金額': 'c-total' }[k]; return 金額(($(id) || {}).value); };
+    var prv = function (k) { return 金額(前回原価[k]); };
+    var A = 材料費(null, prv), B = 材料費(null, now); var 売前 = prv('売価金額'), 売今 = 金額(($('f-amt') || {}).value), 数前 = prv('合計数1'), 数今 = 金額(($('p1-tot') || {}).value) || 金額(($('f-lotunit') || {}).value);
+    if (!売前) { box.style.display = 'none'; return; }
+    var 取り分前 = 売前 - A.材料; var 率前 = 取り分前 / 売前;
+    var 単価前 = 金額(前回原価['用紙単価1']), 単価今 = 金額(($('p1-up') || {}).value); var 用紙差率 = (単価前 && 単価今) ? (単価今 / 単価前 - 1) : null;
+    var 人差率 = (A.人件 && B.人件) ? (B.人件 / A.人件 - 1) : 0; var inp = $('kn-labor'); var 人上げ = inp && inp.value !== '' ? Number(inp.value) / 100 : 人差率;
+    // 数量が違うときは取り分を数量比で伸ばす（単価ベースで考える）
+    var 倍 = (数前 && 数今) ? 数今 / 数前 : 1;
+    var 必要売価 = B.材料 + 取り分前 * 倍 * (1 + (人上げ || 0)); var 必要単価 = 数今 ? 必要売価 / 数今 : 0; var 単価前売 = 数前 ? 売前 / 数前 : 0;
+    var 差 = 売今 - 必要売価;
+    var pct = function (r) { return (r >= 0 ? '+' : '') + (Math.round(r * 1000) / 10) + '%'; };
+    var h = '<div style="font-weight:700;color:#334155">原価差の助言（前回 ' + esc(String(前回原価['伝票番号'] || '')) + ' ' + esc(String(前回原価['起票日'] || '').slice(0, 10)) + ' との比較）</div>'
+      + '<div>用紙単価 ' + (用紙差率 == null ? '—' : esc(String(単価前)) + ' → ' + esc(String(単価今)) + '（<b>' + pct(用紙差率) + '</b>）') + '　材料費（用紙・版・梱包・配送・外注） ' + 円表示(A.材料) + ' → ' + 円表示(B.材料) + '（' + (A.材料 ? pct(B.材料 / A.材料 - 1) : '—') + '）'
+      + '　人件費の上げ <input id="kn-labor" type="number" step="0.5" style="width:56px;text-align:right" value="' + (inp && inp.value !== '' ? esc(inp.value) : (人差率 ? Math.round(人差率 * 1000) / 10 : '')) + '" placeholder="0">%' + (数前 && 数今 && 数前 !== 数今 ? '　数量 ' + 数前.toLocaleString() + ' → ' + 数今.toLocaleString() : '') + '</div>'
+      + '<div>前回の取り分（売価 − 材料費）' + 円表示(取り分前) + '（' + pct(率前) + '）を守るには、売価は最低 <b>' + 円表示(必要売価) + '</b>（単価 ' + (必要単価 ? Math.round(必要単価 * 100) / 100 : '—') + (単価前売 ? '、前回単価 ' + (Math.round(単価前売 * 100) / 100) + ' 比 <b>' + pct(必要単価 / 単価前売 - 1) + '</b>' : '') + '）'
+      + (売今 ? '　いまの売価 ' + 円表示(売今) + ' は <b style="color:' + (差 >= 0 ? '#166534' : '#b91c1c') + '">' + (差 >= 0 ? '足りています（+' : '不足（') + Math.round(Math.abs(差)).toLocaleString() + '）</b>' : '') + '</div>';
+    box.innerHTML = h; box.style.display = 'block';
+    var i2 = $('kn-labor'); if (i2) i2.addEventListener('change', 原価差の助言);
+  }
   function 金額を出す() {
     var box = $('fmkin'); if (!box) return; if (!現在) { box.style.display = 'none'; return; } box.style.display = 'block';
     var uri = 金額(($('f-amt') || {}).value), gen = 金額(($('c-total') || {}).value); var rate = (uri && gen) ? gen / uri : null;
@@ -3517,8 +3560,9 @@ window.FM見た目 = function () {};
           return '<a class="stg ' + (cls[kb] || '') + (no === myNo ? ' now' : '') + '" href="?no=' + encodeURIComponent(no) + '" title="' + esc(String(r[P['起票日']] || '')) + '">' + esc(kb) + ' ' + esc(String(r[P['起票日']] || '').slice(6, 10)) + ' ' + esc(u ? '¥' + Math.round(u).toLocaleString() : '—') + '</a>'; }).join('');
         var res = g2.結果; rs.textContent = res === '予算見積だけ' ? '→ 予算見積だけ。見積をもらいに行く' : res === '失注' ? '→ 失注。金額を見直す' : res === '見積まで' ? '→ 見積まで（未受注）' : res === '受注' ? '→ 受注あり' : ''; rs.style.color = res === '失注' ? '#b91c1c' : res === '予算見積だけ' ? '#1d4ed8' : '#166534'; } else { se.textContent = '—'; rs.textContent = ''; } }
     else { se.textContent = 索引 ? '（案件IDなし）' : '（索引を読んでから出ます）'; rs.textContent = ''; }
+    try { 原価差の助言(); } catch (e) {}
   }
-  document.addEventListener('input', function (e) { var t = e.target; if (!t || !t.id) return; if (t.id === 'f-amt' || t.id === 'c-total' || t.id === 'f-price' || /^c-/.test(t.id)) { clearTimeout(金額タイマー); 金額タイマー = setTimeout(金額を出す, 300); } }, true);
+  document.addEventListener('input', function (e) { var t = e.target; if (!t || !t.id) return; if (t.id === 'f-amt' || t.id === 'c-total' || t.id === 'f-price' || t.id === 'p1-up' || t.id === 'p1-tot' || /^c-/.test(t.id)) { clearTimeout(金額タイマー); 金額タイマー = setTimeout(金額を出す, 300); } }, true);
   Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { i.addEventListener('change', 手配が変わった); });
   (function () { var 元 = 索引を据える; 索引を据える = function (j) { 元(j); try { 金額を出す(); } catch (e) {} }; })();
   function 発注ボタンを描く(b, ord) {
