@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>マスタ管理 | Tokiwa Hub</title>
+<style>
+  body{ margin:0; font-family:"Noto Sans JP","Yu Gothic","Meiryo",sans-serif; background:#f1f5f9; color:#111; font-size:13px; }
+  #bar{ background:#0d0d0d; color:#e5e7eb; padding:6px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  #bar a{ color:#93c5fd; text-decoration:none; }
+  #bar button, #ctl button{ font-size:13px; padding:3px 12px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#111; cursor:pointer; }
+  #bar .st{ color:#fbbf24; }
+  #tabs{ display:flex; gap:4px; padding:8px 14px 0; }
+  #tabs button{ font-size:13px; padding:6px 16px; border:1px solid #cbd5e1; border-bottom:0; background:#e2e8f0; cursor:pointer; }
+  #tabs button.on{ background:#fff; font-weight:700; }
+  #ctl{ background:#fff; border-top:1px solid #cbd5e1; border-bottom:1px solid #cbd5e1; padding:8px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  #ctl input[type=text]{ font-size:13px; padding:3px 6px; width:240px; }
+  #ctl .go{ background:#b45309; color:#fff; border-color:#b45309; font-weight:700; }
+  #wrap{ padding:10px 14px; overflow:auto; }
+  table.t{ border-collapse:collapse; background:#fff; }
+  table.t th{ background:#e2e8f0; padding:4px 8px; font-weight:600; text-align:left; white-space:nowrap; position:sticky; top:0; cursor:pointer; }
+  table.t td{ padding:0; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
+  table.t td input{ border:0; padding:3px 6px; font-size:12.5px; width:100%; box-sizing:border-box; background:transparent; min-width:60px; }
+  table.t td input.num{ text-align:right; width:90px; }
+  table.t td.dirty input{ background:#fef9c3; }
+  table.t td.ro input{ color:#64748b; }
+  table.t tr.new td input{ background:#ecfdf5; }
+  table.t tr.del{ opacity:.45; text-decoration:line-through; }
+  .note{ color:#475569; font-size:12px; margin:6px 0; }
+  .hist{ font-size:12px; color:#334155; }
+  #diffbox{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:99; align-items:center; justify-content:center; }
+  #diffbox .box{ background:#fff; width:min(760px,94vw); max-height:80vh; overflow:auto; padding:14px 16px; border-radius:6px; font-size:13px; }
+</style>
+<style>/* 表組は角（本多さん指定）。ボタンは丸くてよい */ table,thead,tbody,tr,th,td,div:has(> table),section:has(> table){border-radius:0 !important}</style>
+</head>
+<body>
+<div id="bar">
+  <a href="fm-juchu-hub.html">← 受注入力</a>
+  <b>マスタ管理</b><span style="color:#94a3b8">FileMaker を使いながら、直すのは Hub で。反映は「FileMaker に反映」を押したときだけ</span>
+  <span class="st" id="st"></span>
+  <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
+</div>
+<div id="tabs">
+  <button data-t="用紙" class="on">用紙（FileMaker 用紙マスタ）</button>
+  <button data-t="封筒">封筒（Hub）</button>
+  <button data-t="得意先">得意先（FileMaker 得意先マスタ）</button>
+  <button data-t="ユーザー名">ユーザー名（Hub・得意先ごと）</button>
+  <button data-t="基本原価">基本原価（作業の指針）</button>
+  <button data-t="用紙単価履歴">用紙単価の履歴</button>
+</div>
+<div id="ctl">
+  <input type="text" id="q" placeholder="🔍 絞る（空白=AND、OR も可）">
+  <button id="add">＋ 行を足す</button>
+  <button id="reload">読み直す</button>
+  <button id="apply" class="go">FileMaker に反映（変更した行だけ）</button>
+  <button id="save" class="go" style="display:none">Hub に保存</button>
+  <button id="csv">CSV</button>
+  <span id="cnt" style="color:#475569"></span>
+</div>
+<div id="wrap"><div class="note" id="note"></div><div id="out">読んでいます…</div></div>
+<div id="diffbox"><div class="box"><div id="difftxt"></div><div style="text-align:right;margin-top:10px"><button id="diff-ok" style="background:#b45309;color:#fff;border:0;padding:6px 16px;border-radius:4px;cursor:pointer">この内容で反映する</button> <button id="diff-x" style="padding:6px 14px">やめる</button></div></div></div>
+
+<script src="fm-bridge.js"></script>
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function 文字が合う(hay, q) { var groups = String(q).normalize('NFKC').toLowerCase().split(/\s+(?:or|または)\s+|\s*[|｜]\s*/).map(function (g) { return g.split(/[\s　]+/).filter(Boolean); }).filter(function (g) { return g.length; }); if (!groups.length) return true; hay = String(hay).normalize('NFKC').toLowerCase(); return groups.some(function (g) { return g.every(function (t) { if (t.length > 1 && t.charAt(0) === '-') return hay.indexOf(t.slice(1)) < 0; return hay.indexOf(t) >= 0; }); }); }
+// 種類ごとの定義。FM = FileMaker のマスタ（読み込み → 直す → 反映）、Hub = 中継の保管庫だけ
+var 定義 = {
+  '用紙':   { FM: '用紙マスタ', 鍵: ['品名', '種類', 'メーカー'], 数: ['単価', '厚さ'], 履歴: '単価' },
+  '得意先': { FM: '得意先マスタ', 鍵: ['得意先コード', '得意先名'], 数: [], 触らない: ['得意先コード'] },
+  '封筒':   { Hub: '封筒', 列: ['型', 'メーカー', '品名', '窓', '色', '仕入単価', '売単価', '有効日', '備考'], 数: ['仕入単価', '売単価'] },
+  'ユーザー名': { Hub: 'ユーザー名', 列: ['得意先コード', '得意先名', 'ユーザー名', '読み', '備考'], 数: [] },
+  '基本原価': { Hub: '基本原価', 列: ['鍵', '作業原価_1000', '掛け率', '加工内訳', '件数', '売価単価_中央', '備考', '出どころ'], 数: ['作業原価_1000', '掛け率', '件数', '売価単価_中央'] },
+  '用紙単価履歴': { Hub: '用紙単価履歴', 列: ['品名', '種類', 'メーカー', '旧単価', '新単価', '有効日', '誰が', '日時'], 数: ['旧単価', '新単価'], 読むだけ: true }
+};
+var 今 = '用紙', 行 = [], 列 = [], 元 = {}, 新規n = 0;
+function 読む() {
+  var d = 定義[今]; $('out').textContent = '読んでいます…'; $('cnt').textContent = ''; 行 = []; 元 = {}; 新規n = 0;
+  $('apply').style.display = d.FM ? '' : 'none'; $('save').style.display = d.Hub && !d.読むだけ ? '' : 'none'; $('add').style.display = d.読むだけ ? 'none' : '';
+  $('note').textContent = d.FM ? '黄色＝直した欄。「FileMaker に反映」で変更した行だけ書き込みます（誰が・何を・いつ を記録します）' : d.読むだけ ? '用紙の単価を直したときに自動で残る履歴です' : '「Hub に保存」で中継の保管庫に残ります。受注入力の候補に出ます';
+  var p = d.FM ? FM.呼ぶ('マスタ_配る', [d.FM]).then(function (j) { 列 = []; (j.行 || []).forEach(function (r) { Object.keys(r).forEach(function (k) { if (k !== '_recordId' && 列.indexOf(k) < 0) 列.push(k); }); }); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r._recordId); return o; }); })
+                  : FM.呼ぶ('Hubマスタ_一覧', [d.Hub]).then(function (j) { 列 = d.列.slice(); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r.id); return o; }); });
+  return p.then(function () { 行.forEach(function (r) { 元[r._id] = JSON.stringify(r); }); 描く(); $('st').textContent = ''; }).catch(function (e) { $('out').textContent = String(e.message || e); });
+}
+function 描く() {
+  var d = 定義[今]; var q = $('q').value.trim(); var 触らない = d.触らない || [];
+  var rows = 行.filter(function (r) { return !q || 文字が合う(列.map(function (c) { return r[c]; }).join(' '), q); });
+  var h = '<table class="t"><thead><tr>' + 列.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + (d.読むだけ ? '' : '<th></th>') + '</tr></thead><tbody>';
+  rows.slice(0, 2000).forEach(function (r) {
+    var dirty = 元[r._id] !== JSON.stringify(r);
+    h += '<tr data-id="' + esc(r._id) + '" class="' + (r._new ? 'new' : '') + (r._del ? ' del' : '') + '">' + 列.map(function (c) { var ro = d.読むだけ || 触らない.indexOf(c) >= 0 && !r._new; var num = (d.数 || []).indexOf(c) >= 0; var was = r._new ? null : (JSON.parse(元[r._id] || '{}')[c]); var cd = !r._new && 元[r._id] && was !== r[c];
+      return '<td class="' + (cd ? 'dirty ' : '') + (ro ? 'ro' : '') + '"><input data-c="' + esc(c) + '" value="' + esc(r[c]) + '"' + (ro ? ' readonly' : '') + (num ? ' class="num"' : '') + (c === '有効日' || c === '日時' ? ' placeholder="2026-10-01"' : '') + '></td>'; }).join('')
+      + (d.読むだけ ? '' : '<td><button class="x" title="この行を消す（Hub のマスタだけ。FileMaker のマスタは消しません）" style="border:0;background:none;cursor:pointer;color:#94a3b8">✕</button></td>') + '</tr>';
+  });
+  h += '</tbody></table>' + (rows.length > 2000 ? '<div class="note">先頭 2,000 行だけ出しています。絞ってください</div>' : '');
+  $('out').innerHTML = h; $('cnt').textContent = rows.length.toLocaleString() + ' 行';
+  Array.prototype.forEach.call($('out').querySelectorAll('input[data-c]'), function (inp) { inp.addEventListener('change', function () { var tr = inp.closest('tr'); var r = 行.filter(function (x) { return x._id === tr.getAttribute('data-id'); })[0]; if (!r) return; r[inp.getAttribute('data-c')] = inp.value; inp.closest('td').classList.toggle('dirty', !r._new && JSON.parse(元[r._id] || '{}')[inp.getAttribute('data-c')] !== inp.value); }); });
+  Array.prototype.forEach.call($('out').querySelectorAll('button.x'), function (b) { b.onclick = function () { var tr = b.closest('tr'); var r = 行.filter(function (x) { return x._id === tr.getAttribute('data-id'); })[0]; if (!r) return; if (r._new) { 行 = 行.filter(function (x) { return x !== r; }); } else if (定義[今].FM) { alert('FileMaker のマスタの行はここでは消しません（FileMaker で消してください）'); return; } else { r._del = !r._del; } 描く(); }; });
+}
+function 変更行() { return 行.filter(function (r) { return r._new || r._del || 元[r._id] !== JSON.stringify(r); }); }
+function 反映() {
+  var d = 定義[今]; if (!d.FM) return; var ch = 変更行(); if (!ch.length) { $('st').textContent = '変更はありません'; return; }
+  var lines = ch.map(function (r) { if (r._new) return '＋ 新規: ' + (d.鍵 || []).map(function (k) { return r[k]; }).filter(Boolean).join(' ');
+    var was = JSON.parse(元[r._id] || '{}'); var diffs = 列.filter(function (c) { return was[c] !== r[c]; }).map(function (c) { return c + ': ' + (was[c] || '（空）') + ' → ' + (r[c] || '（空）'); }); return '✎ ' + (d.鍵 || []).map(function (k) { return r[k]; }).filter(Boolean).join(' ') + '　' + diffs.join('、'); });
+  $('difftxt').innerHTML = '<b>FileMaker の ' + esc(d.FM) + ' に ' + ch.length + ' 行を書き込みます</b><div style="margin-top:6px;white-space:pre-wrap;font-size:12px">' + esc(lines.join('\n')) + '</div>'; $('diffbox').style.display = 'flex';
+  $('diff-ok').onclick = function () {
+    $('diffbox').style.display = 'none'; $('st').textContent = '反映しています…'; var i = 0, ok = 0, ng = [];
+    var next = function () { if (i >= ch.length) { $('st').textContent = ok + ' 行を反映しました' + (ng.length ? '　できなかった: ' + ng.join('、') : ''); 読む(); return; }
+      var r = ch[i++]; var fields = {}; 列.forEach(function (c) { if (r._new ? r[c] !== '' : JSON.parse(元[r._id] || '{}')[c] !== r[c]) fields[c] = r[c]; });
+      var p = r._new ? FM.呼ぶ('マスタ_作る', [d.FM, fields]) : FM.呼ぶ('マスタ_書く', [d.FM, r._id, fields, JSON.parse(元[r._id] || '{}')]);
+      p.then(function () { ok++; next(); }).catch(function (e) { ng.push(((d.鍵 || []).map(function (k) { return r[k]; }).filter(Boolean).join(' ') || r._id) + '（' + String(e.message || e) + '）'); next(); }); };
+    next();
+  };
+}
+function Hubに保存() {
+  var d = 定義[今]; if (!d.Hub) return; var ch = 変更行(); if (!ch.length) { $('st').textContent = '変更はありません'; return; }
+  $('st').textContent = '保存しています…'; var i = 0;
+  var next = function () { if (i >= ch.length) { $('st').textContent = ch.length + ' 行を保存しました'; 読む(); return; } var r = ch[i++]; var row = {}; 列.forEach(function (c) { row[c] = r[c]; }); row.id = r._new ? '' : r._id;
+    var p = r._del ? FM.呼ぶ('Hubマスタ_消す', [d.Hub, r._id]) : FM.呼ぶ('Hubマスタ_書く', [d.Hub, row]); p.then(next).catch(function (e) { $('st').textContent = String(e.message || e); }); };
+  next();
+}
+function CSV() { var s = '﻿' + 列.join(',') + '\n' + 行.map(function (r) { return 列.map(function (c) { return '"' + String(r[c] == null ? '' : r[c]).replace(/"/g, '""') + '"'; }).join(','); }).join('\n'); var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([s], { type: 'text/csv' })); a.download = 'マスタ_' + 今 + '_' + new Date().toISOString().slice(0, 10) + '.csv'; a.click(); }
+(function () {
+  FM.サインインのボタンを置く($('fm-signin'));
+  function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
+  名(); window.addEventListener('fm-signin', function () { 名(); 読む(); });
+  Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) { b.onclick = function () { if (変更行().length && !confirm('直した内容を捨てて切り替えますか？')) return; Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (x) { x.classList.remove('on'); }); b.classList.add('on'); 今 = b.getAttribute('data-t'); $('q').value = ''; 読む(); }; });
+  $('q').addEventListener('input', 描く); $('reload').onclick = 読む; $('apply').onclick = 反映; $('save').onclick = Hubに保存; $('csv').onclick = CSV; $('diff-x').onclick = function () { $('diffbox').style.display = 'none'; };
+  $('add').onclick = function () { var o = { _id: 'new' + (++新規n), _new: true }; 列.forEach(function (c) { o[c] = ''; }); 行.unshift(o); 描く(); };
+  var q = new URLSearchParams(location.search); var t = q.get('t'); if (t && 定義[t]) { 今 = t; Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (x) { x.classList.toggle('on', x.getAttribute('data-t') === t); }); }
+  if (FM.名乗っている()) 読む(); else $('out').textContent = 'ログインしてください';
+})();
+</script>
+<script>window.KAIZEN_KEY = 'master';</script>
+<script src="kaizen.js"></script>
+</body>
+</html>

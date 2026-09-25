@@ -35,6 +35,8 @@
   <b>単価分析（材料を除いた作業の原価と掛け率）</b>
   <button id="reload" title="中継から取り直します（ふだんは 1 日 1 回、自動で取ります）">取り直す</button>
   <button id="csv">CSV</button>
+  <button id="tobase" title="いま出ている束（最低件数以上）を Hub の「基本原価」表に書きます。受注入力の相場はこの表を優先します">基本原価表に登録</button>
+  <a href="master.html?t=基本原価" target="_blank">基本原価表を見る</a>
   <span class="st" id="st"></span>
   <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
 </div>
@@ -45,7 +47,7 @@
   <label><input type="checkbox" class="k" value="サイズ" checked> サイズ</label>
   <label><input type="checkbox" class="k" value="色数" checked> 色数</label>
   <label><input type="checkbox" class="k" value="パーツ" checked> パーツ数</label>
-  <label><input type="checkbox" class="k" value="加工"> 加工</label>
+  <label><input type="checkbox" class="k" value="加工"> 加工の内訳</label>
   <label><input type="checkbox" class="k" value="紙質"> 紙質</label>
   <label><input type="checkbox" class="k" value="得意先種類"> 得意先種類</label>
   <label><input type="checkbox" class="k" value="数量帯" checked> 数量帯</label>
@@ -93,12 +95,31 @@ function 鍵(o) {
     if (k === 'サイズ') return (o['サイズ横'] || '') + '×' + (o['サイズ縦'] || '');
     if (k === '色数') return (o['色数1'] || '?') + (o['色MAX1'] ? '/' + o['色MAX1'] : '') + '色';
     if (k === 'パーツ') return (o['パーツ数'] || '1') + 'P';
-    if (k === '加工') return [o['製本加工'] ? '製本:' + String(o['製本加工']).slice(0, 8) : '', o['横ミシン1'] ? '横ミシン' + o['横ミシン1'] : '', o['縦ミシン1'] ? '縦ミシン' + o['縦ミシン1'] : ''].filter(Boolean).join('・') || '加工なし';
+    if (k === '加工') return 加工内訳(o);
     if (k === '紙質') return String(o['紙質1'] || '—').slice(0, 10);
     if (k === '得意先種類') return PARTNER[String(o['得意先コード'])] ? '関連会社' : '直接';
     if (k === '数量帯') return 数量帯(数(o['合計数1']));
     return '';
   }).join(' | ');
+}
+// TANKA-2: 加工の内訳。FileMaker の 加工賃 は 1 つの数字なので、記録にある加工の印で「どの加工が入っている束か」を分ける
+function 加工内訳(o) {
+  var a = [];
+  var ym = 数(o['横ミシン1']), tm = 数(o['縦ミシン1']), cm = 数(o['中間横ミシン1']); if (ym || tm || cm) a.push('ミシン' + (ym ? '横' + ym : '') + (cm ? '中' + cm : '') + (tm ? '縦' + tm : ''));
+  var b = String(o['製本加工'] || ''); if (b) a.push(/中綴|中とじ/.test(b) ? '中綴じ' : /無線/.test(b) ? '無線綴じ' : /ブック|冊|背糊|マーブル/.test(b) ? 'ブック製本' : /バラ/.test(b) ? 'バラ' : /角丸|ラミ|エンボス|箔|PP/.test(b) ? '表面加工' : '製本他');
+  if (o['マージナルパンチa1'] || o['ファイル穴1']) a.push('パンチ');
+  if (o['種類1']) a.push('ナンバリング');
+  return a.length ? a.join('+') : '断裁のみ';
+}
+function 基本原価表に登録() {
+  var list = window._list || []; var minn = Number($('minn').value) || 1; var rows = list.filter(function (g) { return g.n >= minn; });
+  if (!rows.length) { alert('登録する束がありません'); return; }
+  var ks = Array.prototype.filter.call(document.querySelectorAll('#ctl .k'), function (c) { return c.checked; }).map(function (c) { return c.value; }).join('・');
+  if (!confirm(rows.length + ' 束を「基本原価」表に登録します（同じ鍵があれば上書き）。\n鍵: ' + ks + '\n期間: ' + $('per').value + ' 年　材料の掛け率: ' + $('mk').value)) return;
+  $('st').textContent = '登録しています…';
+  var 行s = rows.map(function (g) { return { id: g.k, 鍵: g.k, 作業原価_1000: Math.round(g.作業千), 掛け率: Math.round(g.率 * 100) / 100, 加工内訳: (g.k.match(/(ミシン[^|]*|断裁のみ|中綴じ|無線綴じ|ブック製本|バラ|表面加工|製本他|パンチ|ナンバリング)[^|]*/) || [''])[0].trim(), 件数: g.n, 売価単価_中央: Math.round(g.単価 * 100) / 100, 備考: '', 出どころ: '単価分析 ' + new Date().toISOString().slice(0, 10) + '（鍵 ' + ks + '、' + $('per').value + ' 年、材料×' + $('mk').value + '）' }; });
+  var i = 0; var next = function () { if (i >= 行s.length) { $('st').textContent = 行s.length + ' 束を基本原価表に登録しました'; return; } var part = 行s.slice(i, i + 200); i += 200; FM.呼ぶ('Hubマスタ_まとめて書く', ['基本原価', part]).then(next).catch(function (e) { $('st').textContent = String(e.message || e); }); };
+  next();
 }
 function 年(o) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(o['起票日'] || '')); return m ? Number(m[3]) : (/^(\d{4})/.exec(String(o['起票日'] || '')) ? Number(RegExp.$1) : 0); }
 function 描く() {
@@ -121,7 +142,7 @@ function CSV() { var list = window._list || []; var s = '﻿束,件数,今年,�
   FM.サインインのボタンを置く($('fm-signin'));
   function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
   名(); window.addEventListener('fm-signin', function () { 名(); 読む(false); });
-  $('reload').onclick = function () { 読む(true); }; $('csv').onclick = CSV;
+  $('reload').onclick = function () { 読む(true); }; $('csv').onclick = CSV; $('tobase').onclick = 基本原価表に登録;
   Array.prototype.forEach.call(document.querySelectorAll('#ctl input, #ctl select'), function (el) { el.addEventListener('change', 描く); }); $('q').addEventListener('input', 描く);
   読む(false);
 })();

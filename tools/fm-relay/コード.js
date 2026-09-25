@@ -858,8 +858,64 @@ function 手配_一覧() {
   }
   return { ok: true, user: who.email, 一覧: out };
 }
+// ═══════════ MASTER-1: マスタ ═══════════
+// FileMaker のマスタ（用紙マスタ・得意先マスタ）を Hub から直す。本多さん・福永さんだけ。何を直したかは log_ に残す
+var 書けるマスタ = ['用紙マスタ', '得意先マスタ'];
+var マスタ管理者 = ['honda@tokiwap.co.jp', 'fukunaga@tokiwap.co.jp'];
+function マスタ管理者か_(who) { if (マスタ管理者.indexOf(String(who.email || '').toLowerCase()) < 0) throw new Error('マスタの書き込みは本多さん・福永さんだけです'); }
+function マスタ_書く(layout, recordId, 項目, 前) {
+  var who = 画面_利用者_(); マスタ管理者か_(who);
+  if (書けるマスタ.indexOf(layout) < 0) throw new Error('そのマスタは書けません: ' + layout);
+  if (!recordId) throw new Error('recordId がありません'); 項目 = 項目 || {}; if (!Object.keys(項目).length) throw new Error('直す内容がありません');
+  var got = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records/' + recordId); if (got.code !== '0') throw new Error('読めません (' + got.code + ') ' + got.message);
+  var d = (got.response.data || [])[0]; if (!d) throw new Error('見つかりません');
+  var r = update_(layout, recordId, d.modId, 項目, who); if (r.conflict) throw new Error('読み込んだあとに誰かが直しています。読み直してください');
+  // 用紙の単価を直したら履歴に残す
+  try { if (layout === '用紙マスタ' && 項目['単価'] !== undefined && String(項目['単価']) !== String(d.fieldData['単価'] || '')) Hubマスタ_書く('用紙単価履歴', { 品名: d.fieldData['品名'] || '', 種類: d.fieldData['種類'] || '', メーカー: d.fieldData['メーカー'] || '', 旧単価: d.fieldData['単価'] || '', 新単価: 項目['単価'], 有効日: 項目['有効日'] || 日付_(new Date()), 誰が: who.email, 日時: new Date().toISOString() }); } catch (e) {}
+  return { ok: true, user: who.email, recordId: recordId };
+}
+function マスタ_作る(layout, 項目) {
+  var who = 画面_利用者_(); マスタ管理者か_(who);
+  if (書けるマスタ.indexOf(layout) < 0) throw new Error('そのマスタは書けません: ' + layout);
+  var send = {}; Object.keys(項目 || {}).forEach(function (k) { if (項目[k] !== '' && 項目[k] != null) send[k] = String(項目[k]); });
+  if (!Object.keys(send).length) throw new Error('内容がありません');
+  var r = fmCall_('/layouts/' + encodeURIComponent(layout) + '/records', 'post', { fieldData: send });
+  if (r.code !== '0') throw new Error('作成に失敗 (' + r.code + ') ' + r.message);
+  log_(who, layout, r.response.recordId, send, {});
+  return { ok: true, user: who.email, recordId: r.response.recordId };
+}
+// Hub だけのマスタ（封筒・ユーザー名・基本原価・用紙単価履歴）。保管庫「Hubマスタ_<名>」に 1 行＝1 件（id, json, at, by）
+var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴'];
+var Hubマスタ列 = ['id', 'json', 'at', 'by', '消'];
+function Hubマスタ_帳簿_(名) { if (Hubマスタ名.indexOf(名) < 0) throw new Error('知らないマスタです: ' + 名); return 写し_帳簿_('Hubマスタ_' + 名, Hubマスタ列).getSheets()[0]; }
+function Hubマスタ_一覧(名) {
+  var who = 画面_利用者_(); var sh = Hubマスタ_帳簿_(名); var v = sh.getDataRange().getValues(); var out = [];
+  for (var i = 1; i < v.length; i++) { if (v[i][4]) continue; var o = {}; try { o = JSON.parse(v[i][1] || '{}') || {}; } catch (e) { continue; } o.id = String(v[i][0]); o.at = (v[i][2] instanceof Date) ? v[i][2].toISOString() : String(v[i][2] || ''); out.push(o); }
+  return { ok: true, user: who.email, 名: 名, 行: out };
+}
+function Hubマスタ_書く(名, 行) {
+  var who = 画面_利用者_(); var sh = Hubマスタ_帳簿_(名); 行 = 行 || {}; var id = String(行.id || '').trim() || ('H' + Date.now() + Math.floor(Math.random() * 1000));
+  var o = {}; Object.keys(行).forEach(function (k) { if (k !== 'id' && k !== 'at') o[k] = 行[k]; }); var js = JSON.stringify(o); var now = new Date().toISOString();
+  var v = sh.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === id) { sh.getRange(i + 1, 2, 1, 4).setValues([[js, now, who.email || '', '']]); return { ok: true, user: who.email, id: id, 更新: true }; } }
+  sh.appendRow([id, js, now, who.email || '', '']); return { ok: true, user: who.email, id: id, 更新: false };
+}
+function Hubマスタ_まとめて書く(名, 行s) {
+  var who = 画面_利用者_(); var sh = Hubマスタ_帳簿_(名); 行s = 行s || []; var v = sh.getDataRange().getValues(); var pos = {}; for (var i = 1; i < v.length; i++) pos[String(v[i][0])] = i + 1;
+  var now = new Date().toISOString(); var add = [], upd = 0;
+  行s.forEach(function (行) { var id = String(行.id || '').trim() || ('H' + Date.now() + Math.floor(Math.random() * 100000)); var o = {}; Object.keys(行).forEach(function (k) { if (k !== 'id' && k !== 'at') o[k] = 行[k]; }); var js = JSON.stringify(o);
+    if (pos[id]) { sh.getRange(pos[id], 2, 1, 4).setValues([[js, now, who.email || '', '']]); upd++; } else add.push([id, js, now, who.email || '', '']); });
+  if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, 5).setValues(add);
+  return { ok: true, user: who.email, 追加: add.length, 更新: upd };
+}
+function Hubマスタ_消す(名, id) {
+  var who = 画面_利用者_(); var sh = Hubマスタ_帳簿_(名); var v = sh.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === String(id)) { sh.getRange(i + 1, 5).setValue('消 ' + who.email + ' ' + new Date().toISOString()); return { ok: true, user: who.email }; } }
+  return { ok: true, user: who.email, 無い: true };
+}
+
 /** TANKA-1: 過去 N 年の受注（写し 受注_<年>）から、単価分析に要る列だけ返す。列は固定・行は配列（軽くするため） */
-var 単価列 = ['伝票番号', '起票日', '得意先コード', '製品名', '品種', 'サイズ横', 'サイズ縦', '色数1', '色MAX1', 'パーツ数', '紙質1', '製本加工', '横ミシン1', '縦ミシン1', '合計数1', '売価金額', '売価単価', '用紙代', '版代', '梱包代', '配送代', '印刷代', '加工賃', '人件費', '合計金額', '案件区分'];
+var 単価列 = ['伝票番号', '起票日', '得意先コード', '製品名', '品種', 'サイズ横', 'サイズ縦', '色数1', '色MAX1', 'パーツ数', '紙質1', '製本加工', '横ミシン1', '縦ミシン1', '合計数1', '売価金額', '売価単価', '用紙代', '版代', '梱包代', '配送代', '印刷代', '加工賃', '人件費', '合計金額', '案件区分', 'マージナルパンチa1', 'ファイル穴1', '種類1', '中間横ミシン1'];
 function 単価_集計(年数) {
   var who = 画面_利用者_(); var n = Math.max(1, Math.min(5, Number(年数) || 3)); var y0 = new Date().getFullYear();
   var out = [];
@@ -1037,6 +1093,12 @@ function handle_(action, req, who) {
     case '手配_書く':         return 手配_書く(req['伝票番号'], req['手配']);             // TEHAI-1
     case '手配_一覧':         return 手配_一覧();                                        // MITEI-1
     case '単価_集計':         return 単価_集計(req['年数']);                             // TANKA-1
+    case 'マスタ_書く':       return マスタ_書く(req.layout, req.recordId, req['項目'], req['前']);   // MASTER-1
+    case 'マスタ_作る':       return マスタ_作る(req.layout, req['項目']);
+    case 'Hubマスタ_一覧':    return Hubマスタ_一覧(req['名']);
+    case 'Hubマスタ_書く':    return Hubマスタ_書く(req['名'], req['行']);
+    case 'Hubマスタ_まとめて書く': return Hubマスタ_まとめて書く(req['名'], req['行']);
+    case 'Hubマスタ_消す':    return Hubマスタ_消す(req['名'], req.id);
     case '手配_写す':         return 手配_写す(req['元'], req['先']);                     // SPEC-1: 段階・Repeat で新しい番号へ
     case '仕様書_置く':       return 仕様書_置く(req['番号'], req['名'], req['mime'], req['base64']);   // SPEC-1
     case '仕様書_一覧':       return 仕様書_一覧(req['番号']);                            // SPEC-1

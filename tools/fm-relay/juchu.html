@@ -1976,6 +1976,7 @@ function setPane(p){
   </div>
   <div id="kn-advice" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:3px"></div>
   <div id="kn-souba" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:3px"></div>
+  <div id="kn-yosan" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #93c5fd;background:#eff6ff;border-radius:3px"></div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:3px"><span>この案件の段階:</span><span id="kn-stages">（索引を読んでから出ます）</span><span id="kn-result" style="font-weight:700"></span></div>
   <details style="margin-top:3px"><summary style="cursor:pointer;color:#334155">外注見積（業者と金額。FileMaker の 見積業者1〜5・見積金額1）</summary>
     <table class="gq"><thead><tr><th>#</th><th>業者</th><th>金額</th><th>数量</th><th>単価</th><th>見積日</th></tr></thead><tbody>
@@ -3312,6 +3313,8 @@ window.FM見た目 = function () {};
     lay.parentNode.insertBefore(b4, lay);
     var b5 = document.createElement('button'); b5.className = 'fb'; b5.textContent = '単価分析'; b5.title = '過去 3 年の受注から、仕様ごとの作業原価と掛け率（材料を除いた部分）を見ます';
     b5.onclick = function () { window.open('tanka-bunseki.html', '_blank'); }; lay.parentNode.insertBefore(b5, lay);
+    var b6 = document.createElement('button'); b6.className = 'fb'; b6.textContent = 'マスタ管理'; b6.title = '用紙・封筒・得意先・ユーザー名・基本原価のマスタ。FileMaker のマスタは Hub で直して反映';
+    b6.onclick = function () { window.open('master.html', '_blank'); }; lay.parentNode.insertBefore(b6, lay);
   })();
   帯に付ける('受注一覧', function () { 探し.style.display = 'block'; $('ff-days').value = '0'; $('ff-n').value = '0'; 全件モード = true; if (!手元で探す(false)) 探す(); }, '探す窓に新しい順で出します');
 
@@ -3435,7 +3438,7 @@ window.FM見た目 = function () {};
     });
     var gq = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { var v = Number(i.value); if (v) gq[i.getAttribute('data-n')] = v; }); if (Object.keys(gq).length) o.外注見積 = gq;
     if (昨年比確認) o.昨年比確認 = 昨年比確認;
-    var jz = {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
+    var jz = {}; if (手配 && 手配.事前 && 手配.事前.予算上乗せ !== undefined) jz.予算上乗せ = 手配.事前.予算上乗せ; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
     o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord.done'), function (b) { o.外注[b.getAttribute('data-i')] = { ord: { done: true, at: b.getAttribute('data-at') || '' } }; });
     var mt = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k:checked'), function (c) { mt[c.value] = true; }); var mm = ($('mt-memo') || {}).value || ''; if (Object.keys(mt).length || mm.trim()) { mt.memo = mm.trim(); o.未確定 = mt; }
     if ($('hs-how')) { var how = $('hs-how').value, hw = $('hs-how-who').value.trim(); if (how || hw) o.発送 = { how: how, who: hw }; }
@@ -3530,8 +3533,42 @@ window.FM見た目 = function () {};
   }
   function 中央(a) { if (!a.length) return 0; var s2 = a.slice().sort(function (x, y) { return x - y; }); var m = Math.floor(s2.length / 2); return s2.length % 2 ? s2[m] : (s2[m - 1] + s2[m]) / 2; }
   function 数量帯(q) { return q <= 500 ? '〜500' : q <= 1000 ? '〜1,000' : q <= 3000 ? '〜3,000' : q <= 10000 ? '〜10,000' : '10,001〜'; }
+  // YOSAN-1: 予算見積 ＝ 積み上げ × (1 + 上乗せ%)。上乗せは PC に覚える（案件ごとの上書きは事前情報に）
+  var 積み上げ売価 = 0;
+  function 予算上乗せ() { var jz = (手配 && 手配.事前) || {}; if (jz.予算上乗せ !== undefined && jz.予算上乗せ !== '') return Number(jz.予算上乗せ); var v = localStorage.getItem('yosan_markup'); return v === null ? 10 : Number(v); }
+  function 予算行を出す() {
+    var box = $('kn-yosan'); if (!box || !現在) return; var 区分 = String(現在.fields['案件区分'] || ''); var pct = 予算上乗せ();
+    var 売今 = 金額(($('f-amt') || {}).value); var 数 = 金額(($('p1-tot') || {}).value) || 金額(($('f-lotunit') || {}).value) || 金額(現在.fields['合計数1']);
+    // この案件で「予算見積と見積が同額」だった年があるか（索引から）
+    var 同額 = [], id = String(現在.fields['案件ID'] || '');
+    if (索引 && id) { var g = 案件の結果表()[id]; var P = 索引位置; if (g) { var by = {}; g.行.forEach(function (i) { var r = 索引.行[i]; var y = String(r[P['起票日']] || '').slice(6, 10); var kb = String(r[P['案件区分']] || ''); if (kb !== '予算見積' && kb !== '見積') return; (by[y] = by[y] || {})[kb] = 金額(r[P['売価金額']]); }); Object.keys(by).forEach(function (y) { if (by[y]['予算見積'] && by[y]['予算見積'] === by[y]['見積']) 同額.push(y); }); } }
+    var yosan = 積み上げ売価 ? Math.round(積み上げ売価 * (1 + pct / 100)) : 0;
+    var h = '<b style="color:#1e40af">予算見積</b>　上乗せ <input id="kn-markup" type="number" step="0.5" style="width:56px;text-align:right" value="' + pct + '">%'
+      + (積み上げ売価 ? '　積み上げ ' + 円表示(積み上げ売価) + ' → 予算見積額 <b>' + 円表示(yosan) + '</b>' + (数 ? '（単価 ' + (Math.round(yosan / 数 * 100) / 100) + '）' : '') + (区分 === '予算見積' ? ' <button type="button" class="plain up" id="kn-yosan-set" style="font-size:11px;padding:1px 8px">売価に入れる</button>' : '') : '　積み上げ売価が出ると、ここに予算見積額が出ます')
+      + (売今 && 積み上げ売価 ? '　いまの売価は積み上げ比 ' + (売今 >= 積み上げ売価 ? '+' : '') + (Math.round((売今 / 積み上げ売価 - 1) * 1000) / 10) + '%' : '')
+      + (同額.length ? '<div style="color:#1e3a8a;margin-top:2px">この案件は ' + esc(同額.join('・')) + ' 年に予算見積と見積が同額でした → 見積依頼が来たら、予算見積をそのまま見積にできます（都度確認）。' + (区分 === '予算見積' ? '見積を起こすときは金額を変えずに保存すれば同じ流れです' : '') + '</div>' : (区分 === '予算見積' ? '<div style="color:#475569;margin-top:2px">見積依頼が来たら「見積」を押して起こし、予算見積の額のまま通せるか確認してください</div>' : ''));
+    box.style.display = 'block'; box.innerHTML = h;
+    var mi = $('kn-markup'); if (mi) mi.addEventListener('change', function () { var v = Number(mi.value); if (isNaN(v)) return; try { localStorage.setItem('yosan_markup', String(v)); } catch (e) {} if (手配 && 現在) { 手配.事前 = 手配.事前 || {}; 手配.事前.予算上乗せ = v; } 予算行を出す(); });
+    var sb = $('kn-yosan-set'); if (sb) sb.onclick = function () { if (!yosan) return; if ($('f-amt')) { $('f-amt').value = yosan; $('f-amt').dispatchEvent(new Event('input', { bubbles: true })); } if ($('f-price') && 数) { $('f-price').value = Math.round(yosan / 数 * 100) / 100; $('f-price').dispatchEvent(new Event('input', { bubbles: true })); } try { if (typeof calc === 'function') calc(); } catch (e) {} 状態('予算見積額 ' + 円表示(yosan) + ' を売価に入れました（保存で FileMaker へ）', 'ok'); };
+  }
   function 相場を出す() {
-    var box = $('kn-souba'); if (!box) return; if (!現在) { box.style.display = 'none'; return; }
+    var box = $('kn-souba'); if (!box) return; if (!現在) { box.style.display = 'none'; if ($('kn-yosan')) $('kn-yosan').style.display = 'none'; return; }
+    積み上げ売価 = 0;
+    // MASTER-1: 基本原価表（Hubマスタ）に同じ鍵があればそれを優先
+    var f0 = 現在.fields; var myQ0 = 金額(($('p1-tot') || {}).value) || 金額(($('f-lotunit') || {}).value) || 金額(f0['合計数1']);
+    var g0 = function (c) { var id = { '品種': 'f-hinshu2', 'サイズ横': 'f-w', 'サイズ縦': 'f-h', '色数1': 'k1-iro1', '色MAX1': 'k1-iro2', 'パーツ数': 'f-parts' }[c]; var v = id && $(id) ? $(id).value : f0[c]; if (c === '合計数1') return myQ0; return v == null ? '' : String(v).trim(); };
+    var key0 = ['品種' + (g0('品種') || '—'), (g0('サイズ横') || '') + '×' + (g0('サイズ縦') || ''), (g0('色数1') || '?') + (g0('色MAX1') ? '/' + g0('色MAX1') : '') + '色', (g0('パーツ数') || '1') + 'P', 数量帯(金額(g0('合計数1')))].join(' | ');
+    Hubマスタを用意('基本原価').then(function (rows) {
+      var hit = rows.filter(function (r) { return String(r['鍵'] || '') === key0; })[0];
+      if (hit) { var mk = 1.15; var now = function (k) { var id = { '用紙代': 'c-paper', '版代': 'c-plate', '梱包代': 'c-pack', '配送代': 'c-ship', '印刷代': 'c-print', '加工賃': 'c-work', '人件費': 'c-labor', '合計金額': 'c-total' }[k]; return 金額(($(id) || {}).value); };
+        var B = 材料費(null, now); var 材料売今 = (B.用紙 + B.外注) * mk + now('版代') + now('梱包代') + now('配送代'); var 作業今 = myQ0 ? 金額(hit['作業原価_1000']) * myQ0 / 1000 : 0; var 率 = 金額(hit['掛け率']) || 1; var 積み上げ = 材料売今 + 作業今 * 率; var 売今 = 金額(($('f-amt') || {}).value);
+        積み上げ売価 = 積み上げ; 予算行を出す();
+        box.style.display = 'block'; box.innerHTML = '<b style="color:#3730a3">基本原価表</b>（' + esc(key0) + '、' + esc(hit['件数'] || '') + ' 件から）　作業原価 ' + 円表示(金額(hit['作業原価_1000'])) + '/1,000　掛け率 ' + 率 + '×' + (hit['加工内訳'] ? '　' + esc(hit['加工内訳']) : '') + (myQ0 ? '　→ 積み上げ売価 <b>' + 円表示(積み上げ) + '</b>（材料 ' + 円表示(材料売今) + ' ＋ 作業 ' + 円表示(作業今) + ' × ' + 率 + '）' + (売今 ? '　いま ' + 円表示(売今) + ' <span style="color:' + (売今 >= 積み上げ ? '#166534' : '#b91c1c') + '">' + (売今 >= 積み上げ ? '+' : '') + Math.round(売今 - 積み上げ).toLocaleString() + '</span>' : '') : '') + '　<a href="master.html?t=基本原価" target="_blank" style="color:#3730a3">表</a>'; return; }
+      相場を出す2();
+    });
+  }
+  function 相場を出す2() {
+    var box = $('kn-souba');
     単価データを用意().then(function (j) {
       if (!j || !j.列) { box.style.display = 'block'; box.innerHTML = '<span style="color:#475569">この仕様の相場: 単価分析のデータをまだ取っていません（ログインしていれば自動で取ります。<a href="tanka-bunseki.html" target="_blank">単価分析</a>）</span>'; return; }
       var P = {}; j.列.forEach(function (c, i) { P[c] = i; }); var mk = 1.15;
@@ -3546,11 +3583,12 @@ window.FM見た目 = function () {};
           var 外 = Math.max(0, 合 - (用 + 版 + 梱 + 配 + 印 + 加 + 人)); var 作業 = 印 + 加 + 人; var 材料売 = (用 + 外) * mk + 版 + 梱 + 配;
           if (!q || !売) return; hit.push({ 作業千: 作業 / q * 1000, 率: 作業 > 0 ? (売 - 材料売) / 作業 : null, 単価: 売 / q }); });
         if (hit.length >= 3 || lvl === 3) {
-          if (!hit.length) { box.style.display = 'block'; box.innerHTML = '<span style="color:#475569">この仕様の相場: 似た受注が見つかりません（<a href="tanka-bunseki.html" target="_blank">単価分析</a>）</span>'; return; }
+          if (!hit.length) { box.style.display = 'block'; box.innerHTML = '<span style="color:#475569">この仕様の相場: 似た受注が見つかりません（<a href="tanka-bunseki.html" target="_blank">単価分析</a>）</span>'; 予算行を出す(); return; }
           var 作業千 = 中央(hit.map(function (x) { return x.作業千; })), 率 = 中央(hit.filter(function (x) { return x.率 != null && isFinite(x.率); }).map(function (x) { return x.率; })), 単 = 中央(hit.map(function (x) { return x.単価; }));
           var now = function (k) { var id = { '用紙代': 'c-paper', '版代': 'c-plate', '梱包代': 'c-pack', '配送代': 'c-ship', '印刷代': 'c-print', '加工賃': 'c-work', '人件費': 'c-labor', '合計金額': 'c-total' }[k]; return 金額(($(id) || {}).value); };
           var B = 材料費(null, now); var 材料売今 = (B.用紙 + B.外注) * mk + now('版代') + now('梱包代') + now('配送代');
           var 作業今 = myQ ? 作業千 * myQ / 1000 : 0; var 積み上げ = 材料売今 + 作業今 * (率 || 1); var 売今 = 金額(($('f-amt') || {}).value);
+          積み上げ売価 = 積み上げ; 予算行を出す();
           box.style.display = 'block';
           box.innerHTML = '<b style="color:#3730a3">この仕様の相場</b>（' + esc(key) + (lvl ? '　※条件を ' + lvl + ' つ外して広げました' : '') + '、' + hit.length + ' 件）　作業原価 ' + 円表示(作業千) + '/1,000　掛け率 ' + (率 ? (Math.round(率 * 100) / 100) + '×' : '—') + '　売価単価の中央 ' + (Math.round(単 * 100) / 100)
             + (myQ ? '　→ 積み上げ売価 <b>' + 円表示(積み上げ) + '</b>（材料 ' + 円表示(材料売今) + '（×' + mk + '）＋ 作業 ' + 円表示(作業今) + ' × ' + (率 ? Math.round(率 * 100) / 100 : 1) + '）' + (売今 ? '　いま ' + 円表示(売今) + ' <span style="color:' + (売今 >= 積み上げ ? '#166534' : '#b91c1c') + '">' + (売今 >= 積み上げ ? '+' : '') + Math.round(売今 - 積み上げ).toLocaleString() + '</span>' : '') : '')
@@ -3683,6 +3721,26 @@ window.FM見た目 = function () {};
       呼ぶ('マスタ_配る', ['外注先マスタ']).then(function (j) { j.取った = new Date().toISOString(); try { localStorage.setItem('fm_master_外注先マスタ', JSON.stringify(j)); } catch (e) {} 使う(j); }).catch(function () {}); }, 1500);
   }
   列を整える(); 手配候補を用意(); 未確定を用意();
+  // MASTER-1: Hub のマスタ（ユーザー名・封筒）を候補に。1 日 1 回取る
+  var Hubマスタ = {};
+  function Hubマスタを用意(名) {
+    if (Hubマスタ[名]) return Promise.resolve(Hubマスタ[名]);
+    try { var c = JSON.parse(localStorage.getItem('fm_hubmaster_' + 名) || 'null'); if (c && c.取った && Date.now() - new Date(c.取った).getTime() < 24 * 3600 * 1000) { Hubマスタ[名] = c.行; return Promise.resolve(c.行); } } catch (e) {}
+    if (!(window.FM名乗っている ? FM名乗っている() : false)) return Promise.resolve([]);
+    return 呼ぶ('Hubマスタ_一覧', [名]).then(function (j) { Hubマスタ[名] = j.行 || []; try { localStorage.setItem('fm_hubmaster_' + 名, JSON.stringify({ 取った: new Date().toISOString(), 行: j.行 || [] })); } catch (e) {} return Hubマスタ[名]; }).catch(function () { return []; });
+  }
+  function ユーザー名の候補() {
+    var u = $('f-user'); if (!u) return; var dl = $('dl-user-hub'); if (!dl) { dl = document.createElement('datalist'); dl.id = 'dl-user-hub'; document.body.appendChild(dl); u.setAttribute('list', 'dl-user-hub'); }
+    var code = String(($('f-custcd') || {}).value || '').trim();
+    Hubマスタを用意('ユーザー名').then(function (rows) { dl.innerHTML = rows.filter(function (r) { return !code || String(r['得意先コード'] || '') === code; }).map(function (r) { return '<option value="' + esc(r['ユーザー名'] || '') + '">' + esc(r['得意先名'] || '') + '</option>'; }).join(''); });
+  }
+  function 封筒の候補() {
+    Hubマスタを用意('封筒').then(function (rows) { if (!rows.length) return; var dl = $('dl-fuuto'); if (!dl) { dl = document.createElement('datalist'); dl.id = 'dl-fuuto'; document.body.appendChild(dl); }
+      dl.innerHTML = rows.map(function (r) { var nm = [r['型'], r['メーカー'], r['品名'], r['窓'] ? '窓' + r['窓'] : '', r['色']].filter(Boolean).join(' '); return '<option value="' + esc(nm) + '">仕入 ' + esc(r['仕入単価'] || '') + '</option>'; }).join('');
+      for (var i = 1; i <= 9; i++) { var el = $('p' + i + '-nm'); if (el && !el.getAttribute('list')) { el.setAttribute('list', 'dl-fuuto'); el.addEventListener('change', (function (n) { return function () { var v = this.value.trim(); var hit = rows.filter(function (r) { return [r['型'], r['メーカー'], r['品名'], r['窓'] ? '窓' + r['窓'] : '', r['色']].filter(Boolean).join(' ') === v; })[0]; if (hit && hit['仕入単価'] && $('p' + n + '-up') && !$('p' + n + '-up').value) { $('p' + n + '-up').value = hit['仕入単価']; $('p' + n + '-up').dispatchEvent(new Event('input', { bubbles: true })); } }; })(i)); } } });
+  }
+  setTimeout(function () { ユーザー名の候補(); 封筒の候補(); }, 2500); window.addEventListener('fm-signin', function () { setTimeout(function () { ユーザー名の候補(); 封筒の候補(); }, 2000); });
+  if ($('f-custcd')) $('f-custcd').addEventListener('change', ユーザー名の候補);
   try { window.applyRowVis(); } catch (e) {}
 
   // ================================================================ KENSAKU-1: 検索モード（入力欄がそのまま検索欄）
