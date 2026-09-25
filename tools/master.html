@@ -51,6 +51,7 @@
 <div id="ctl">
   <input type="text" id="q" placeholder="🔍 絞る（空白=AND、OR も可）">
   <button id="add">＋ 行を足す</button>
+  <button id="seed" style="display:none">本多さんの案を入れる</button>
   <button id="reload">読み直す</button>
   <button id="apply" class="go">FileMaker に反映（変更した行だけ）</button>
   <button id="save" class="go" style="display:none">Hub に保存</button>
@@ -73,14 +74,23 @@ var 定義 = {
   'ユーザー名': { Hub: 'ユーザー名', 列: ['得意先コード', '得意先名', 'ユーザー名', '読み', '備考'], 数: [] },
   '基本原価': { Hub: '基本原価', 列: ['鍵', '作業原価_1000', '掛け率', '加工内訳', '件数', '売価単価_中央', '備考', '出どころ'], 数: ['作業原価_1000', '掛け率', '件数', '売価単価_中央'] },
   // KAKAKU-2: 価格ガイドの項目ごとの原価・売価テーブル。項目: 版代／用紙／印刷代／加工賃／人件費／梱包代／配送代／外注／最低受注金額。条件は 空＝既定、品種コード・加工の言葉・製品名の一部
-  '原価テーブル': { Hub: '原価テーブル', 列: ['項目', '条件', '固定', '千単価', '最低原価', '掛け率', '最低売価', '備考'], 数: ['固定', '千単価', '最低原価', '掛け率', '最低売価'],
-    説明: '価格ガイドの計算表。原価(n)＝max(最低原価, 固定＋千単価×n/1000)、売価(n)＝max(最低売価, 原価×掛け率)。固定・千単価が空なら種の伝票から出し、掛け率が空なら昨年の原価率を保ちます。項目「最低受注金額」の行は 最低売価 に金額を。条件が空の行が既定、条件（品種コード・ミシン・中綴じ・製品名の一部。複数は空白区切り）に当てはまる行が優先' },
+  '原価テーブル': { Hub: '原価テーブル', 列: ['項目', '条件', '固定', '台数掛け', '千単価', '最低原価', '掛け率', '最低売価', '備考'], 数: ['固定', '千単価', '最低原価', '掛け率', '最低売価'],
+    説明: '価格ガイドの計算表。原価(n)＝max(最低原価, 固定＋千単価×n/1000)、売価(n)＝max(最低売価, 原価×掛け率)。台数掛けが「有」の行は 固定・最低原価・最低売価 に台数（各パーツの表の色数＋裏の色数）を掛けます。固定・千単価が空なら種の伝票から出し、掛け率が空なら昨年の原価率を保ちます。条件が空の行が既定、条件（カラー／単色／品種コード／ミシン・中綴じ／製品名の一部。複数は空白区切り）に当てはまる行が優先。項目「最低受注金額」の行は 最低売価 に金額を（無くてよい）',
+    見本: [
+      { 項目: '版代',   条件: '',       固定: '2000', 台数掛け: '有', 最低売価: '2000', 備考: '1 台 2,000。色数×版の種類の台数を掛ける' },
+      { 項目: '印刷代', 条件: 'カラー', 固定: '2000', 台数掛け: '',   最低売価: '2000', 備考: 'カラー（オンデマンド）は 1 件 2,000 固定' },
+      { 項目: '印刷代', 条件: '',       固定: '2000', 台数掛け: '有', 最低売価: '2000', 備考: 'アナログ印刷は 1 台 2,000' },
+      { 項目: '加工賃', 条件: '',       固定: '3000', 台数掛け: '',   最低売価: '3000', 備考: '加工は最低 3,000' },
+      { 項目: '加工賃', 条件: 'ミシン', 固定: '2000', 台数掛け: '',   最低売価: '2000', 備考: 'ミシンは最低 2,000' },
+      { 項目: '加工賃', 条件: '中綴じ', 固定: '3000', 台数掛け: '',   最低売価: '3000', 備考: '中綴じは最低 3,000' },
+      { 項目: '梱包代', 条件: '',       固定: '1000', 台数掛け: '',   最低売価: '1000', 備考: '梱包は最低 1,000' }
+    ] },
   '用紙単価履歴': { Hub: '用紙単価履歴', 列: ['品名', '種類', 'メーカー', '旧単価', '新単価', '有効日', '誰が', '日時'], 数: ['旧単価', '新単価'], 読むだけ: true }
 };
 var 今 = '用紙', 行 = [], 列 = [], 元 = {}, 新規n = 0;
 function 読む() {
   var d = 定義[今]; $('out').textContent = '読んでいます…'; $('cnt').textContent = ''; 行 = []; 元 = {}; 新規n = 0;
-  $('apply').style.display = d.FM ? '' : 'none'; $('save').style.display = d.Hub && !d.読むだけ ? '' : 'none'; $('add').style.display = d.読むだけ ? 'none' : '';
+  $('apply').style.display = d.FM ? '' : 'none'; $('save').style.display = d.Hub && !d.読むだけ ? '' : 'none'; $('add').style.display = d.読むだけ ? 'none' : ''; $('seed').style.display = d.見本 ? '' : 'none';
   $('note').textContent = d.説明 ? d.説明 : d.FM ? '黄色＝直した欄。「FileMaker に反映」で変更した行だけ書き込みます（誰が・何を・いつ を記録します）' : d.読むだけ ? '用紙の単価を直したときに自動で残る履歴です' : '「Hub に保存」で中継の保管庫に残ります。受注入力の候補に出ます';
   var p = d.FM ? FM.呼ぶ('マスタ_配る', [d.FM]).then(function (j) { 列 = []; (j.行 || []).forEach(function (r) { Object.keys(r).forEach(function (k) { if (k !== '_recordId' && 列.indexOf(k) < 0) 列.push(k); }); }); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r._recordId); return o; }); })
                   : FM.呼ぶ('Hubマスタ_一覧', [d.Hub]).then(function (j) { 列 = d.列.slice(); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r.id); return o; }); });
@@ -130,6 +140,9 @@ function CSV() { var s = '﻿' + 列.join(',') + '\n' + 行.map(function (r) { r
   名(); window.addEventListener('fm-signin', function () { 名(); 読む(); });
   Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) { b.onclick = function () { if (変更行().length && !confirm('直した内容を捨てて切り替えますか？')) return; Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (x) { x.classList.remove('on'); }); b.classList.add('on'); 今 = b.getAttribute('data-t'); $('q').value = ''; 読む(); }; });
   $('q').addEventListener('input', 描く); $('reload').onclick = 読む; $('apply').onclick = 反映; $('save').onclick = Hubに保存; $('csv').onclick = CSV; $('diff-x').onclick = function () { $('diffbox').style.display = 'none'; };
+  // KAKAKU-3: 定義の見本行を足す（表が空のときだけ。保存は「Hub に保存」で）
+  $('seed').onclick = function () { var d = 定義[今]; if (!d.見本) return; if (行.some(function (r) { return !r._new; })) { if (!confirm('もう行があります。見本の ' + d.見本.length + ' 行を上に足しますか？')) return; }
+    d.見本.slice().reverse().forEach(function (m) { var o = { _id: 'new' + (++新規n), _new: true }; 列.forEach(function (c) { o[c] = m[c] === undefined ? '' : String(m[c]); }); 行.unshift(o); }); 描く(); $('st').textContent = '見本を ' + d.見本.length + ' 行足しました。数字を直して「Hub に保存」を押してください'; };
   $('add').onclick = function () { var o = { _id: 'new' + (++新規n), _new: true }; 列.forEach(function (c) { o[c] = ''; }); 行.unshift(o); 描く(); };
   var q = new URLSearchParams(location.search); var t = q.get('t'); if (t && 定義[t]) { 今 = t; Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (x) { x.classList.toggle('on', x.getAttribute('data-t') === t); }); }
   if (FM.名乗っている()) 読む(); else $('out').textContent = 'ログインしてください';

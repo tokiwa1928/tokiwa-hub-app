@@ -2372,7 +2372,17 @@ window.FM見た目 = function () {};
     var pf = Math.min(100, Math.max(0, 数値($('pg-pf').value))) / 100;
     var qNow = 数値(($('f-lotunit') || {}).value) || q0;
     // KAKAKU-2: 項目ごとの原価テーブル（Hub マスタ）。行が無い項目は今までどおり（種から比例・原価率を保つ）
-    var 表 = 原価表(); var ctx = '品種:' + String(f['品種'] || '') + ' ' + String(f['製本加工'] || '') + ' ' + String(f['製品名'] || '') + ' ' + String(($('f-prod') || {}).value || '') + ' ' + String(($('f-bind') || {}).value || '');
+    // KAKAKU-3: 台数 ＝ 各パーツ（表紙も）の 表の色数＋裏の色数 の合計。フォームの値を優先し、無ければ種の伝票（色数n／色MAXn）。色数の無いパーツは 1
+    var 台数 = 0, 最大色 = 0, 部 = 0;
+    for (var pi = 0; pi <= 9; pi++) {
+      var ki1 = 数値(($('k' + pi + '-iro1') || {}).value) || (pi ? 数値(f['色数' + pi]) : 0), ki2 = 数値(($('k' + pi + '-iro2') || {}).value) || (pi ? 数値(f['色MAX' + pi]) : 0);
+      var ある = ki1 || ki2 || String(($('p' + pi + '-kind') || {}).value || '').trim() || (pi ? String(f['紙質' + pi] || '').trim() : '');
+      if (pi === 0 && String(($('f-cover') || {}).value || '') !== 'あり') ある = ki1 || ki2;
+      if (!ある) continue; 部++; 台数 += (ki1 + ki2); 最大色 = Math.max(最大色, ki1, ki2);
+    }
+    if (!台数) 台数 = Math.max(1, 部);   // どのパーツにも色数が無い（古い伝票）ときはパーツ数
+    var 表 = 原価表(); var ctx = '品種:' + String(f['品種'] || '') + ' ' + String(f['製本加工'] || '') + ' ' + String(f['製品名'] || '') + ' ' + String(($('f-prod') || {}).value || '') + ' ' + String(($('f-bind') || {}).value || '') + ' ' + String(f['備考'] || '') + ' ' + String(($('f-memo') || {}).value || '')
+      + ' ' + (最大色 >= 4 ? 'カラー 4色' : 最大色 >= 2 ? '2色 単色系' : '単色 モノクロ 1色') + ' 台数:' + 台数 + ' 色数:' + 最大色;
     function 原価行(項目) { var hit = null; 表.forEach(function (r) { if (String(r.項目 || '').trim() !== 項目 || r.消) return; var c = String(r.条件 || '').trim(); if (!c) { if (!hit) hit = r; return; } var ok = c.split(/[,、\s]+/).filter(Boolean).some(function (w) { return ctx.indexOf(w) >= 0; }); if (ok && (!hit || !String(hit.条件 || '').trim())) hit = r; }); return hit; }
     function 空か(v) { return v === undefined || v === null || String(v).trim() === ''; }
     var 項目定義 = [
@@ -2387,16 +2397,17 @@ window.FM見た目 = function () {};
     ];
     var 項目 = 項目定義.map(function (d) {
       var m = 原価行(d.名);
-      var 固定 = (m && !空か(m.固定)) ? 数値(m.固定) : d.固定既定;
+      var 倍 = (m && /^(有|1|true|○|はい)$/i.test(String(m.台数掛け || '').trim())) ? 台数 : 1;   // KAKAKU-3: 台数掛け
+      var 固定 = (m && !空か(m.固定)) ? 数値(m.固定) * 倍 : d.固定既定;
       var 千 = (m && !空か(m.千単価)) ? 数値(m.千単価) : (q0 ? d.比例 / q0 * 1000 : 0);
-      var 最低原価 = (m && !空か(m.最低原価)) ? 数値(m.最低原価) : 0;
+      var 最低原価 = (m && !空か(m.最低原価)) ? 数値(m.最低原価) * 倍 : 0;
       var 率 = (m && !空か(m.掛け率)) ? 数値(m.掛け率) : 0;
-      var 最低売価 = (m && !空か(m.最低売価)) ? 数値(m.最低売価) : 0;
-      return { 名: d.名, 固定: 固定, 千: 千, 最低原価: 最低原価, 率: 率, 最低売価: 最低売価, 表: !!m, 条件: m ? String(m.条件 || '') : '' };
+      var 最低売価 = (m && !空か(m.最低売価)) ? 数値(m.最低売価) * 倍 : 0;
+      return { 名: d.名, 固定: 固定, 千: 千, 最低原価: 最低原価, 率: 率, 最低売価: 最低売価, 表: !!m, 条件: m ? String(m.条件 || '') : '', 倍: 倍 };
     });
     var 最低行 = 原価行('最低受注金額'); var 最低受注 = 数値($('pg-min').value) || (最低行 ? 数値(最低行.最低売価) || 数値(最低行.固定) : 0);
     if (!$('pg-min').value && 最低受注) $('pg-min').placeholder = String(最低受注);
-    var 表の項目 = 項目.filter(function (x) { return x.表; }).map(function (x) { return x.名 + (x.条件 ? '（' + x.条件 + '）' : ''); });
+    var 表の項目 = 項目.filter(function (x) { return x.表; }).map(function (x) { return x.名 + (x.条件 ? '（' + x.条件 + '）' : '') + (x.倍 > 1 ? ' ×' + x.倍 + '台' : ''); });
     var 階段 = [500, 1000, 2000, 3000, 5000, 10000, qNow, Math.round(qNow * 0.8), Math.round(qNow * 1.2), Math.round(qNow * 0.5), Math.round(qNow * 1.5)]
       .filter(function (x, i, arr) { return x > 0 && arr.indexOf(x) === i; }).sort(function (a, b) { return a - b; });
     var rows = 階段.map(function (n) {
@@ -2404,7 +2415,10 @@ window.FM見た目 = function () {};
       var 内訳 = [], 原価n = 0, 売価表 = 0, 原価pool = 0;
       項目.forEach(function (x) {
         var c = Math.max(x.最低原価, x.固定 + x.千 * n / 1000); if (!(c > 0)) c = 0;
-        var p = null; if (x.率 > 0) { p = Math.max(x.最低売価, c * x.率); 売価表 += p; } else 原価pool += c;
+        var p = null; var 率x = (率0 ? 1 / 率0 : 1.5) * (1 + 上げ / 100);   // 昨年の原価率＋上げ
+        if (x.率 > 0) { p = Math.max(x.最低売価, c * x.率); 売価表 += p; }                                  // 掛け率あり: 原価×掛け率
+        else if (x.表) { p = Math.max(x.最低売価, x.固定 + Math.max(0, c - x.固定) * 率x); 売価表 += p; }   // KAKAKU-3: 掛け率なし: 固定はそのまま売価（固定＝最低売価）、数量分だけ昨年の率
+        else 原価pool += c;
         原価n += c; 内訳.push({ 名: x.名, 原価: c, 売価: p, 表: x.表 });
       });
       var 売価pool = (率0 ? 原価pool / 率0 : 原価pool * 1.5) * (1 + 上げ / 100);   // 昨年の原価率を保つ＋目安の上げ
@@ -2421,6 +2435,7 @@ window.FM見た目 = function () {};
       + (用紙注 ? '　<span class="warn">' + esc(用紙注) + '</span>' : '　<span style="color:#94a3b8">（用紙差は、いまの用紙単価が入っていれば出ます）</span>')
       + '　<span class="k">今回の上げ幅 <b>+' + 上げ.toFixed(1) + '%</b></span></div>'
       + '<div style="color:#64748b;font-size:11px">内訳（種）: 版 ' + 円整(版) + '／用紙 ' + 円整(用紙) + '／印刷 ' + 円整(印刷) + '／加工 ' + 円整(加工) + '／外注 ' + 円整(外注0) + '／梱包・配送 ' + 円整(梱包 + 配送)
+      + '　台数 ' + 台数 + '（' + 部 + ' パーツ・最大 ' + 最大色 + ' 色）'
       + '　※' + (表の項目.length ? '原価テーブルの行を使った項目: <b>' + esc(表の項目.join('・')) + '</b>。ほかは' : '原価テーブルに行が無いので、') + '版代は固定、印刷代は ' + Math.round(pf * 100) + '% 固定、ほかは数量比例で昨年の原価率を保ちます' + (最低受注 ? '。最低受注金額 ¥' + 円整(最低受注) : '') + '。段をクリックで数量と単価をフォームへ</div>'
       + '<table><thead><tr><th>数量</th><th>原価</th><th>売価</th><th>単価</th><th>粗利率</th><th>前回単価比</th>' + (内訳出す ? 項目.map(function (x) { return '<th style="font-weight:500">' + esc(x.名) + (x.表 ? ' <span title="原価テーブルの行">▣</span>' : '') + '<br><span style="font-weight:400">原価→売価</span></th>'; }).join('') : '') + '</tr></thead><tbody>'
       + rows.map(function (r) { return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単価 + '" title="' + esc(内訳文(r)) + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円整(r.原価) + '</td><td>¥' + 円整(r.売価) + (r.最低で ? ' <span style="background:#fef3c7;color:#92400e;font-size:10px;padding:0 4px;border-radius:3px" title="最低受注金額で止めています">最低</span>' : '') + '</td><td>' + r.単価.toFixed(1) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td>'
