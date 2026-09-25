@@ -52877,7 +52877,10 @@ function renderInquiryFolderList(){
   var externalSources = ['gmail','linesvc','webform','manual','fax','phone',''];
   var myUser = (currentAuth && currentAuth.userName) || '';
   var myAssignedCount = 0;
+  var binCounts = {}; INQ_BINS.forEach(function(b){ binCounts[b.k]=0; });   // BUNRUI-1: 未対応の件数
+  window._inqBinCounts_ = binCounts;
   all.forEach(function(inq){
+    if(inq.status !== 'done'){ try { var _bk = _inqBin_(inq); if(binCounts[_bk] !== undefined) binCounts[_bk]++; } catch(e){} }
     var f = _inqAutoFolder_(inq);
     if(counts[f] !== undefined) counts[f]++;
     if(f !== 'inbox' && f !== 'done' && counts.inbox !== undefined) counts.inbox++;   // INQ-KEEP: 受信トレイは対応済以外ぜんぶ
@@ -52948,6 +52951,17 @@ function renderInquiryFolderList(){
       (s.count > 0 ? '<span class="inq-folder-count">' + s.count + '</span>' : '') +
     '</div>';
   });
+  // BUNRUI-1: 仕分け（自動＋手直し）。件数は未対応だけ
+  folderHtml += '<div class="inq-folder-divider"></div>' +
+    '<div class="inq-folder-section" title="言葉と差出人で自動に分けます。見積・受注はジャンクに入りません。行の札の ▾ で直すと差出人を覚えます">仕分け' + (window._inqBinSel_ ? ' <span onclick="setInqBin(\'\')" style="cursor:pointer;color:#1a73e8;font-weight:400">（解除）</span>' : '') + '</div>';
+  folderHtml += INQ_BINS.map(function(b){
+    var c = (window._inqBinCounts_||{})[b.k] || 0; var act = window._inqBinSel_ === b.k;
+    return '<div class="inq-folder-item' + (act ? ' act' : '') + '" onclick="setInqBin(\'' + b.k + '\')" title="' + b.label + '（未対応 ' + c + '）">' +
+      '<span class="inq-folder-icon" style="color:' + (act ? '#fff' : b.color) + '">' + b.icon + '</span>' +
+      '<span class="inq-folder-label">' + b.label + '</span>' +
+      (c > 0 ? '<span class="inq-folder-count"' + (b.k==='受注'||b.k==='見積'||b.k==='予算見積' ? ' style="background:#dc2626"' : '') + '>' + c + '</span>' : '') +
+    '</div>';
+  }).join('');
   folderHtml += '<div class="inq-folder-divider"></div>' +
     '<div class="inq-folder-section">ステータス</div>';
 
@@ -53223,7 +53237,7 @@ function _inqKanbanCard_(inq, col){
     'style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid ' + accent + ';border-radius:6px;padding:6px 9px;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.06)" ' +
     'title="ドラッグで列を移動 / クリックで詳細">' +
     // 上段: 顧客区分 + 種別・滞留・緊急 + 受信元 を1行に集約 (コンパクト化)
-    '<div style="display:flex;gap:3px;flex-wrap:wrap;align-items:center;margin-bottom:3px">' + custTypeBadge + prio + stale + kindBadge + srcBadge + '</div>' +
+    '<div style="display:flex;gap:3px;flex-wrap:wrap;align-items:center;margin-bottom:3px">' + custTypeBadge + _inqBinChip_(inq) + prio + stale + kindBadge + srcBadge + '</div>' +
     // 件名
     '<div style="font-size:12.5px;font-weight:700;color:#1a1a1a;line-height:1.3;margin-bottom:2px">' + _escDiff(subj.slice(0,44)) + '</div>' +
     // 送信元 (会社 + 名前)
@@ -53334,6 +53348,85 @@ function _updateInqSpamToggle_(){
   btn.style.borderColor = window._inqShowSpam_ ? '#fca5a5' : '#e5e7eb';
 }
 
+// ═══════════ BUNRUI-1: 問い合わせの仕分け（半自動） ═══════════
+const INQ_BINS = [
+  { k:'受注',     label:'受注',     icon:'✅', color:'#065f46', kind:'order' },
+  { k:'見積',     label:'見積書',   icon:'📝', color:'#1d4ed8', kind:'quote_req' },
+  { k:'予算見積', label:'予算見積', icon:'📘', color:'#1e40af', kind:'quote_req' },
+  { k:'校正',     label:'校正',     icon:'🖍', color:'#7c3aed', kind:'proof_return' },
+  { k:'質問',     label:'質問',     icon:'❓', color:'#0891b2', kind:'general' },
+  { k:'経営',     label:'経営',     icon:'🏢', color:'#b45309', kind:'' },
+  { k:'その他',   label:'その他',   icon:'📄', color:'#6b7280', kind:'' },
+  { k:'ジャンク', label:'ジャンク', icon:'🗑', color:'#9ca3af', kind:'' }
+];
+const _INQ_BIN_WORDS = {
+  受注:   ['発注', '注文', '注文書', '発注書', '正式に', '進めてください', 'お願いします。数量', '部数', '部 お願い', '増刷', 'リピート', '前回と同じ', '同じ内容で', '納品', '納期', 'いつまでに', '受注', '確定', '決定しました', 'ご注文', 'オーダー', 'order'],
+  見積:   ['見積', '御見積', 'お見積', 'みつもり', '単価', 'いくら', '費用', '金額', '価格', '料金', 'お値段', '概算', '予算', 'quote', 'estimate', '見積り', '見積もり'],
+  予算見積: ['予算', '概算', '予算取り', '予算どり', '来年度', '次年度', '予算計上', '予算見積'],
+  校正:   ['校正', '校了', '初校', '再校', '二校', '三校', '修正', '赤字', '訂正', 'ゲラ', '入稿', 'データ', 'pdf', '確認をお願い', 'ご確認ください', '差し替え', 'チェック', '文字', '誤字', '色味', '色校'],
+  経営:   ['請求', '請求書', '支払', 'お支払い', '入金', '振込', '振り込み', '契約', '保険', '税', '税務', '銀行', '融資', '経理', '決算', '役員', '株主', '総務', '年末調整', '社会保険', '労務', '労働', '給与', '助成金', '補助金申請', '登記', '監査', '法人'],
+  質問:   ['？', '?', '教えて', 'でしょうか', 'できますか', '可能ですか', '可能でしょうか', '確認したい', 'お伺い', '質問', '問い合わせ', 'お尋ね', 'ご相談', '相談']
+};
+const _INQ_JUNK_WORDS = ['配信停止', '購読解除', 'unsubscribe', 'メルマガ', 'メールマガジン', 'ニュースレター', 'newsletter', '広告', 'セミナー', 'ウェビナー', 'キャンペーン', '無料', '資料ダウンロード', 'ダウンロードはこちら', '求人', '転職', 'ポイント', '当選', 'sns', 'seo', 'アクセスアップ', '集客', 'ホームページ制作', '営業のご案内', 'ご案内です', '限定', 'お得', 'クーポン', '登録はこちら', 'noreply', 'no-reply', 'mailer-daemon', 'notification', 'お知らせメール'];
+const _INQ_BUSINESS_WORDS = ['印刷', '名刺', '封筒', '伝票', 'チラシ', '冊子', 'パンフ', '用紙', '部', '枚', '納品', '見積', '発注', '校正', '注文', '請求'];
+function _inqDomain_(e){ e=String(e||'').toLowerCase(); var i=e.indexOf('@'); return i>=0?e.slice(i+1):''; }
+// 知っている相手か: 得意先・外注先・会社のメール、過去に案件／見積／得意先に結び付いた差出人
+window._inqKnownCache_ = null;
+function _inqKnownContacts_(){
+  if(window._inqKnownCache_ && Date.now()-window._inqKnownCache_.at < 5*60*1000) return window._inqKnownCache_;
+  var emails={}, domains={};
+  var add=function(e){ e=String(e||'').trim().toLowerCase(); if(!e||e.indexOf('@')<0) return; emails[e]=1; var d=_inqDomain_(e); if(d && !/gmail\.com|yahoo\.co\.jp|yahoo\.com|outlook\.com|hotmail\.com|icloud\.com|docomo\.ne\.jp|ezweb\.ne\.jp|softbank\.ne\.jp|au\.com/.test(d)) domains[d]=1; };
+  (DB.master&&DB.master.cust||[]).forEach(function(r){ if(r&&typeof r==='object'){ add(r.email); add(r.orgEmail); } });
+  (DB.outsourceVendors||[]).forEach(function(v){ add(v&&v.email); }); (DB.vendorMaster||[]).forEach(function(v){ add(v&&v.email); });
+  (DB.inquiries||[]).forEach(function(q){ if(q&&(q.linked_project_id||q.linked_quote_id||q.cust_id||q.status==='won'||q.bin==='受注'||q.bin==='見積'||q.bin==='予算見積'||q.bin==='校正')) add(q.from_email||q.email); });
+  window._inqKnownCache_={ at:Date.now(), emails:emails, domains:domains }; return window._inqKnownCache_;
+}
+function _inqKnownContact_(inq){ var k=_inqKnownContacts_(); var e=String(inq.from_email||inq.email||'').toLowerCase(); if(!e) return false; return !!(k.emails[e]||k.domains[_inqDomain_(e)]); }
+function _inqBinRules_(){ DB.inqBinRules = DB.inqBinRules || { byEmail:{}, byDomain:{} }; if(!DB.inqBinRules.byEmail) DB.inqBinRules.byEmail={}; if(!DB.inqBinRules.byDomain) DB.inqBinRules.byDomain={}; return DB.inqBinRules; }
+// 自動仕分け。{ bin, reason }
+function _inqBinAuto_(inq){
+  var subj=String(inq.subject||''), body=String(inq.body||inq.summary||'').slice(0,2000); var text=(subj+' '+body).toLowerCase(); var sl=subj.toLowerCase();
+  var email=String(inq.from_email||inq.email||'').toLowerCase(); var dom=_inqDomain_(email); var src=inq.source_type||'manual';
+  if(src==='internal_msg') return { bin:'その他', reason:'社内連絡' };
+  if(src==='interco'||inq.kind==='order') return { bin:'受注', reason:'社間の発注' };
+  var rules=_inqBinRules_(); if(email&&rules.byEmail[email]) return { bin:rules.byEmail[email], reason:'前に同じ差出人をそう仕分けた' }; if(dom&&rules.byDomain[dom]) return { bin:rules.byDomain[dom], reason:'前に同じ会社（ドメイン）をそう仕分けた' };
+  var score={}; Object.keys(_INQ_BIN_WORDS).forEach(function(b){ var n=0, hit=[]; _INQ_BIN_WORDS[b].forEach(function(w){ var wl=w.toLowerCase(); if(sl.indexOf(wl)>=0){ n+=2; hit.push(w); } else if(text.indexOf(wl)>=0){ n+=1; hit.push(w); } }); score[b]={ n:n, hit:hit.slice(0,4) }; });
+  var junk=0, jhit=[]; _INQ_JUNK_WORDS.forEach(function(w){ if(text.indexOf(w.toLowerCase())>=0||email.indexOf(w)>=0){ junk++; jhit.push(w); } });
+  var biz=_INQ_BUSINESS_WORDS.some(function(w){ return text.indexOf(w)>=0; }); var known=_inqKnownContact_(inq);
+  var why=function(b){ return score[b].hit.length?('「'+score[b].hit.join('」「')+'」'):''; };
+  // 受注 > 見積 > 校正 > 経営 > 質問。見積・受注が優先で、ジャンクには絶対に入れない
+  if(score['受注'].n>=2 && score['受注'].n>=score['見積'].n) return { bin:'受注', reason:why('受注') };
+  if(score['見積'].n>=1){ if(score['予算見積'].n>=2) return { bin:'予算見積', reason:why('予算見積')+' '+why('見積') }; return { bin:'見積', reason:why('見積') }; }
+  if(score['受注'].n>=1) return { bin:'受注', reason:why('受注') };
+  if(score['校正'].n>=2) return { bin:'校正', reason:why('校正') };
+  if(score['経営'].n>=2 && !known) return { bin:'経営', reason:why('経営') };
+  if(score['経営'].n>=3) return { bin:'経営', reason:why('経営') };
+  if(junk>=2 && !known && !biz) return { bin:'ジャンク', reason:'「'+jhit.slice(0,3).join('」「')+'」・知らない差出人' };
+  if(score['校正'].n>=1) return { bin:'校正', reason:why('校正') };
+  if(score['質問'].n>=1) return { bin:'質問', reason:why('質問') };
+  if(junk>=3 && !known) return { bin:'ジャンク', reason:'「'+jhit.slice(0,3).join('」「')+'」' };
+  return { bin:'その他', reason:known?'知っている相手（言葉では決められず）':'言葉では決められず' };
+}
+function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; if(!inq.bin_auto){ try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } } return inq.bin_auto; }
+function _inqBinMeta_(k){ return INQ_BINS.find(function(b){ return b.k===k; })||INQ_BINS[6]; }
+// 人が直す: 覚える（差出人のメール）。見積・受注・校正・経営・質問・ジャンク は覚え、その他は覚えない
+function _inqSetBin_(id, bin){
+  var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return;
+  inq.bin=bin; inq.bin_by=(currentAuth&&currentAuth.userName)||''; inq.bin_at=new Date().toISOString();
+  var m=_inqBinMeta_(bin); if(m.kind && !inq.kind) inq.kind=m.kind;
+  var email=String(inq.from_email||inq.email||'').toLowerCase(); if(email && bin!=='その他'){ var r=_inqBinRules_(); r.byEmail[email]=bin; }
+  window._inqKnownCache_=null;
+  if(typeof saveDB==='function') try{ saveDB(); }catch(e){}
+  if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ bin:bin, bin_by:inq.bin_by, bin_at:inq.bin_at, kind:inq.kind||'' } }); }catch(e){}
+  try{ renderInquiryList(); }catch(e){}
+}
+function _inqBinChip_(inq){
+  var k=_inqBin_(inq), m=_inqBinMeta_(k); var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  var auto=!inq.bin; var title=(auto?'自動の仕分け':'手で仕分け（'+(inq.bin_by||'')+'）')+(inq.bin_reason?'：'+inq.bin_reason:'');
+  return '<span style="display:inline-flex;align-items:center;gap:2px;background:'+m.color+';color:#fff;font-size:9px;padding:1px 4px 1px 6px;border-radius:3px;font-weight:700" title="'+esc(title)+'">'+m.icon+' '+esc(m.label)+(auto?'<span style="opacity:.7;font-weight:400">（自動）</span>':'')
+    +'<select onclick="event.stopPropagation()" onchange="event.stopPropagation();_inqSetBin_(\''+esc(inq.id)+'\',this.value)" title="仕分けを直す（差出人を覚えて次から同じにします）" style="font-size:9px;border:0;background:rgba(255,255,255,.25);color:#fff;padding:0 2px;max-width:16px"><option value="">▾</option>'+INQ_BINS.map(function(b){ return '<option value="'+b.k+'" style="color:#111">'+b.icon+' '+b.label+'</option>'; }).join('')+'</select></span>';
+}
+function setInqBin(k){ window._inqBinSel_ = (window._inqBinSel_===k) ? '' : k; try{ renderInquiryList(); }catch(e){} try{ renderInquiryFolderList(); }catch(e){} }
 function renderInquiryList() {
   const container = document.getElementById('inq-list');
   if(!container) return;
@@ -53421,6 +53514,7 @@ function renderInquiryList() {
     if(assignF && inq.assignee !== assignF) return false;
     if(sourceF && inq.source_type !== sourceF) return false;
     if(kindF && inq.kind !== kindF) return false;
+    if(window._inqBinSel_ && _inqBin_(inq) !== window._inqBinSel_) return false;   // BUNRUI-1
     if(q) {
       // INQ-2: 案件番号（P番号・案件ID・FileMaker 伝票番号）・連絡ID・タグ・担当・種別でも当たる
       const _lp = inq.linked_project_id ? (DB.projects||[]).find(function(p){ return p.id === inq.linked_project_id; }) : null;
