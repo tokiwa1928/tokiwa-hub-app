@@ -885,7 +885,7 @@ function マスタ_作る(layout, 項目) {
   return { ok: true, user: who.email, recordId: r.response.recordId };
 }
 // Hub だけのマスタ（封筒・ユーザー名・基本原価・用紙単価履歴）。保管庫「Hubマスタ_<名>」に 1 行＝1 件（id, json, at, by）
-var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル'];   // KAKAKU-2: 原価テーブル（価格ガイド）
+var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目'];   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
 var Hubマスタ列 = ['id', 'json', 'at', 'by', '消'];
 function Hubマスタ_帳簿_(名) { if (Hubマスタ名.indexOf(名) < 0) throw new Error('知らないマスタです: ' + 名); return 写し_帳簿_('Hubマスタ_' + 名, Hubマスタ列).getSheets()[0]; }
 function Hubマスタ_一覧(名) {
@@ -912,6 +912,35 @@ function Hubマスタ_消す(名, id) {
   var who = 画面_利用者_(); var sh = Hubマスタ_帳簿_(名); var v = sh.getDataRange().getValues();
   for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === String(id)) { sh.getRange(i + 1, 5).setValue('消 ' + who.email + ' ' + new Date().toISOString()); return { ok: true, user: who.email }; } }
   return { ok: true, user: who.email, 無い: true };
+}
+
+/** HIDE-1: 画面項目の退避・戻す・削除。1 行＝1 項目 { id, label, 状態(表示|退避|削除), 退避日, 戻し日, 削除日, 履歴[], 入力数, 変更数, 最終入力, 最終使用 } */
+function 画面項目_退避(id, label, 状態) {
+  var who = 画面_利用者_(); id = String(id || '').trim(); if (!id) throw new Error('id がありません');
+  if (['表示', '退避', '削除'].indexOf(状態) < 0) throw new Error('状態は 表示／退避／削除 のどれか');
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var rows = Hubマスタ_一覧('画面項目').行; var cur = null; rows.forEach(function (r) { if (String(r.id) === id) cur = r; });
+    cur = cur || { id: id, label: label || id, 履歴: [] }; if (label) cur.label = label;
+    var d = new Date().toISOString(); cur.状態 = 状態;
+    if (状態 === '退避') cur.退避日 = d; else if (状態 === '表示') cur.戻し日 = d; else cur.削除日 = d;
+    (cur.履歴 = cur.履歴 || []).push({ 状態: 状態, 日: d, 誰: who.email || '' }); if (cur.履歴.length > 50) cur.履歴 = cur.履歴.slice(-50);
+    Hubマスタ_書く('画面項目', cur); return { ok: true, user: who.email, 行: cur };
+  } finally { lock.releaseLock(); }
+}
+/** HIDE-1: 使われ方を足す。rows = [{ id, label, 入力, 変更 }]。日付は今日 */
+function 画面項目_使った(rows) {
+  var who = 画面_利用者_(); rows = rows || []; if (!rows.length) return { ok: true, user: who.email, 件数: 0 };
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var all = Hubマスタ_一覧('画面項目').行; var by = {}; all.forEach(function (r) { by[String(r.id)] = r; });
+    var d = new Date().toISOString().slice(0, 10); var out = [];
+    rows.forEach(function (u) { var id = String(u.id || '').trim(); if (!id) return; var r = by[id] || { id: id, label: u.label || id, 状態: '表示' }; if (!r.label && u.label) r.label = u.label;
+      var a = Number(u.入力) || 0, b = Number(u.変更) || 0; if (!a && !b) return;
+      r.入力数 = (Number(r.入力数) || 0) + a; r.変更数 = (Number(r.変更数) || 0) + b; r.最終使用 = d; if (a) r.最終入力 = d; if (!r.記録開始) r.記録開始 = d; by[id] = r; out.push(r); });
+    if (out.length) Hubマスタ_まとめて書く('画面項目', out);
+    return { ok: true, user: who.email, 件数: out.length };
+  } finally { lock.releaseLock(); }
 }
 
 /** TANKA-1: 過去 N 年の受注（写し 受注_<年>）から、単価分析に要る列だけ返す。列は固定・行は配列（軽くするため） */
@@ -1120,7 +1149,9 @@ function handle_(action, req, who) {
     case 'マスタ_写す':       return マスタ_写す(req.layout);
     case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }
     case '写し_毎晩':         return 写し_毎晩(req['以降']);
-    case '索引_列を揃える':   return { ok: true, 足した: 索引の列を揃える_() };   // LOT-1: 手で動かす（毎晩の写しでも自動で走る）   // 手で動かす（止まっていた分の追いつき）。以降 'MM/DD/YYYY'
+    case '索引_列を揃える':   return { ok: true, 足した: 索引の列を揃える_() };   // LOT-1: 手で動かす（毎晩の写しでも自動で走る）
+    case '画面項目_退避':     return 画面項目_退避(req.id, req.label, req['状態']);           // HIDE-1
+    case '画面項目_使った':   return 画面項目_使った(req.rows);                                // HIDE-1   // 手で動かす（止まっていた分の追いつき）。以降 'MM/DD/YYYY'
     case '共有ドライブを作る': {   // Google の共有ドライブを名前で作る（あれば返す）。実行者 info@tokiwap-group.com の権限で
       var nm = String(req['名前'] || '').trim(); if (!nm) throw new Error('名前が要ります');
       var have = Drive.Drives.list({ pageSize: 100 }).drives || [];
