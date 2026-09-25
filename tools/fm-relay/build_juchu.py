@@ -2037,6 +2037,20 @@ LOGIC = r"""
     // HIDE-1: 使っていない項目を退避する
     var b8 = document.createElement('button'); b8.className = 'fb'; b8.id = 'fm-taihi'; b8.textContent = '項目を退避'; b8.title = '使っていない入力欄やボタンを一時的に消します（退避）。退避棚からいつでも同じ場所に戻せます。退避・戻した日と、誰がいつ入力したかを記録します';
     b8.onclick = function () { 棚を開閉(); }; lay.parentNode.insertBefore(b8, lay);
+    // SHIIRE-2: 表示中の案件の用紙（仕入／外注先手配）を、FileMaker 連携の用紙注文書に流し込む
+    var b9 = document.createElement('button'); b9.className = 'fb'; b9.textContent = '用紙注文書へ'; b9.title = 'この案件の用紙（手配が 在庫 以外の行）を用紙注文書に入れて開きます。注文書を保存すると手配が発注済になります';
+    b9.onclick = function () { 読んでから(function () {
+      var rows = [], fm = [], who = '';
+      for (var n = 0; n <= 9; n++) { var g = function (sfx) { var e = $('p' + n + '-' + sfx); return e ? String(e.value || '').trim() : ''; }; if (!g('kind') && !g('nm')) continue;
+        var tr = $('p' + n + '-kind') && $('p' + n + '-kind').closest('tr'); if (tr && tr.classList.contains('off')) continue;
+        var td = tr && tr.querySelector('td.tehai'); var sel = td && td.querySelector('select'); var w = td && td.querySelector('input.th-who'); if (sel && sel.value === '在庫') continue;
+        if (!who && w && w.value.trim()) who = w.value.trim();
+        rows.push({ 伝票番号: String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''), パーツ: String(n), 品名: [g('kind'), g('nm')].filter(Boolean).join(' '), 厚さ: g('th'), サイズ: g('sz'), 切数: g('ki'), 数量: g('tot'), 紙目: g('kme'), 得意先: String(($('f-cust') || {}).value || '').trim(), 入荷希望日: '最短', 納品場所: 'トキワ印刷(株)', 単価: g('up') });
+        fm.push({ 伝票番号: String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''), n: String(n) }); }
+      if (!rows.length) { alert('用紙の行がありません（手配が「在庫」の行は入れません）'); return; }
+      try { localStorage.setItem('yoshi_chumon_prefill', JSON.stringify({ 注文先: who, 分類: '個別', 担当者: '', rows: rows, fm: fm, hubIds: [] })); } catch (e) {}
+      window.open('yoshi-chumon.html?prefill=1', '_blank');
+    }); }; lay.parentNode.insertBefore(b9, lay);
     var b7 = document.createElement('button'); b7.className = 'fb or'; b7.textContent = '仕様をコピー'; b7.title = '顧客名・製品名・数量・表紙・本文の用紙・印刷色と、この伝票の Hub の URL を文章にしてコピーします。LINE WORKS やメールに貼って渡せます';
     b7.onclick = function () { 仕様をコピー(); }; lay.parentNode.insertBefore(b7, lay);
   })();
@@ -2272,13 +2286,28 @@ LOGIC = r"""
         var td = tr.querySelector('td.tehai'); if (!td) return; var sel = td.querySelector('select'), who = td.querySelector('input.th-who');
         var v = sel.value, w = who ? who.value.trim() : ''; var def = pr[0] === 'p' ? '仕入' : '社内';
         var ob = td.querySelector('.th-ord'); var ord = (ob && ob.classList.contains('done')) ? { done: true, at: ob.getAttribute('data-at') || '' } : null;
-        if (v !== def || w || ord) o[pr[1]][tr.getAttribute('data-n')] = { k: v, who: w, ord: ord };
+        if (v !== def || w || ord) {
+          var rowObj = { k: v, who: w, ord: ord };
+          // SHIIRE-1: 用紙の 仕入／外注 は紙の写しを持たせる（Hub の仕入発注「発注待ち」に出す）
+          if (pr[0] === 'p' && v !== '在庫') { var n0 = tr.getAttribute('data-n'); var g = function (sfx) { var e = $('p' + n0 + '-' + sfx); return e ? String(e.value || '').trim() : ''; };
+            rowObj.紙 = { 紙質: g('kind'), メーカー: g('mk'), 品名: g('nm'), 厚さ: g('th'), サイズ: g('sz'), 切数: g('ki'), 面付: g('mn'), 紙目: g('kme'), 合計数: g('tot'), 用紙単価: g('up'), 用紙代: g('am'), パーツ: n0 }; }
+          o[pr[1]][tr.getAttribute('data-n')] = rowObj;
+        }
       });
     });
+    // SHIIRE-1: 案件の写し（注文書に載せる）
+    if (現在) { var gv = function (id) { var e = $(id); return e ? String(e.value || '').trim() : ''; };
+      o.案件 = { 伝票番号: String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''), 得意先コード: gv('f-custcd'), 得意先: gv('f-cust'), ユーザー: gv('f-user'), 製品名: gv('f-item'), 納期: gv('f-due'), 数量: gv('f-lotunit') || gv('f-lotset'), 単位: gv('f-unit') }; }
     var gq = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { var v = Number(i.value); if (v) gq[i.getAttribute('data-n')] = v; }); if (Object.keys(gq).length) o.外注見積 = gq;
     if (昨年比確認) o.昨年比確認 = 昨年比確認;
     var jz = {}; if (手配 && 手配.事前 && 手配.事前.予算上乗せ !== undefined) jz.予算上乗せ = 手配.事前.予算上乗せ; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
-    o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord.done'), function (b) { o.外注[b.getAttribute('data-i')] = { ord: { done: true, at: b.getAttribute('data-at') || '' } }; });
+    // GAICHU-2: 外注は 発注済 だけでなく 写し（外注先・発注内容・区分・数量・単価）も持つ → Hub の外注発注「発注待ち」に出る
+    o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows tr'), function (tr) {
+      var i2 = tr.getAttribute('data-i'); var gv = function (c) { var e = tr.querySelector('.' + c); return e ? String(e.value || '').trim() : ''; };
+      var b = tr.querySelector('.gc-ord'); var done = !!(b && b.classList.contains('done')); var name = gv('gc-name'), what = gv('gc-what');
+      if (!done && !name && !what) return; var m = /^【(部分外注|完全外注|仕入)】/.exec(what);
+      o.外注[i2] = { ord: done ? { done: true, at: (b && b.getAttribute('data-at')) || '' } : null, 写し: { 外注コード: gv('gc-code'), 会社名: name, 発注内容: what, 区分: m ? m[1] : '', 数量: gv('gc-qty'), 単価: gv('gc-price') } };
+    });
     var mt = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k:checked'), function (c) { mt[c.value] = true; }); var mm = ($('mt-memo') || {}).value || ''; if (Object.keys(mt).length || mm.trim()) { mt.memo = mm.trim(); o.未確定 = mt; }
     if ($('hs-how')) { var how = $('hs-how').value, hw = $('hs-how-who').value.trim(); if (how || hw) o.発送 = { how: how, who: hw }; }
     if ($('t-perbox')) { var pb = Number($('t-perbox').value) || 0; if (pb) o.箱 = { perbox: pb, boxes: Number($('t-boxes').value) || 0 }; }

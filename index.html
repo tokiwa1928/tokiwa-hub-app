@@ -1287,9 +1287,13 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
     <button class="btn btn-p" onclick="showAddPurchaseModal()">＋ 仕入発注</button>
+    <button class="btn" onclick="_poMakeSheet_()" title="発注待ちの行にチェックを入れて押すと、FileMaker 連携の用紙注文書に流し込みます（同じ仕入先だけ）。注文書を保存すると発注済になります">📄 選んだ発注待ちを用紙注文書へ</button>
+    <button class="btn" onclick="showStockOrderModal()" title="案件に紐づかない在庫の発注（ハートの名刺用紙・案内状など）。発注待ちに入ります">＋ 在庫発注（名刺用紙など）</button>
+    <a class="btn" href="tools/zaiko.html" target="_blank" title="主要用紙のおおまかな在庫。入庫でバーコードを貼り、使い切ったら読んで −1">📦 用紙在庫</a>
     <button class="btn" onclick="_genArchiveRefresh_()" title="Hub の保管庫（GEN_発注・GEN_受入）を取り直します。手配区分「用紙」は仕入発注、それ以外は外注発注に並びます" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り直す</button>
     <span style="font-size:11px;color:#64748b">発注書番号は GEN の続き（PO＋5桁）。受入すると受入番号（AC＋年月＋5桁）が付きます</span>
   </div>
+  <div id="po-lowstock"></div>
   <div id="purchases-list" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden"></div>
 </div>
 
@@ -1299,7 +1303,9 @@ setTimeout(_removeBootLoader_, 5000);
     <strong>🤝 外注発注:</strong> 製本・特殊加工・配送など外注先への発注を管理する場所です。
   </div>
   <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-    <button class="btn btn-p" onclick="showAddOutsourceModal()">＋ 外注発注</button>
+    <button class="btn btn-p" onclick="showAddOutsourceModal('完全外注')" title="全部を外注に出す（用意するもの: 仕様書・データ・サンプル）">＋ フル外注</button>
+    <button class="btn btn-p" style="background:#6d28d9" onclick="showAddOutsourceModal('部分外注')" title="一部の工程だけ外注に出す（用意するもの: 仕様書・データ・サンプル。リピートはデータ・サンプル不要）">＋ 部分外注</button>
+    <span style="font-size:11px;color:#5b21b6">受注入力の外注欄（発注内容が【完全外注】【部分外注】）から自動で「発注待ち」に入ります。準備 ☐仕様書 ☐データ ☐サンプル をそろえてからメールで発注</span>
     <button class="btn" onclick="_genArchiveRefresh_()" title="Hub の保管庫（GEN_発注・GEN_受入）を取り直します" style="background:#e6f4f6;border-color:#0f4c5c;color:#0f4c5c">📥 GEN の発注・受入を取り直す</button>
     <span style="font-size:11px;color:#64748b">発注書番号は GEN の続き（PO＋5桁）。手配区分: 印刷／加工／完全外製</span>
   </div>
@@ -29918,6 +29924,10 @@ function renderPurchases(){
   var el = document.getElementById('purchases-list');
   if(!el) return;
   if(!Array.isArray(DB.purchaseOrders)) DB.purchaseOrders = [];
+  try{ _poPickupHandoffs_(); }catch(e){}
+  try{ _tehaiOrderSync_(false).then(function(n){ if(n) renderPurchases(); }); }catch(e){}
+  try{ _poLowStock_(); }catch(e){}
+  try{ _poAckPoll_(false); }catch(e){}
   var esc=(typeof _escDiff==='function')?_escDiff:function(s){return String(s==null?'':s);};
   var stL={draft:'下書き',ordered:'発注済',received:'入荷済'};
   _renderLedger_({
@@ -29926,19 +29936,20 @@ function renderPurchases(){
     search:function(o){ return [o.vendor,o.item,o.itemCode,o.projectId,o.memo].join(' '); },
     dateOf:function(o){ return o.dueDate||o.createdAt; }, amountOf:function(o){ return o.amount||0; },
     tabs:[ {k:'',label:'すべて'},
-      {k:'ordered',label:'発注済',match:function(o){return o.status==='ordered';}},
-      {k:'received',label:'入荷済',match:function(o){return o.status==='received';}} ],
+      {k:'planned',label:'発注待ち',match:function(o){return _poSt_(o)==='planned';}},
+      {k:'ordered',label:'発注済',match:function(o){return _poSt_(o)==='ordered';}},
+      {k:'received',label:'入荷済',match:function(o){return _poSt_(o)==='received';}} ],
     columns:[
-      {h:'発注書',cell:function(o){return '<span style="font-family:monospace">'+esc(o.poNo||'')+'</span>'+(o.kind?('<div style="font-size:10px;color:#64748b">'+esc(o.kind)+'</div>'):'');}},
-      {h:'仕入先',cell:function(o){return '<b>'+esc(o.vendor||'')+'</b>';}},
-      {h:'受注',cell:function(o){return o.juchuNo?('<span style="font-family:monospace">'+esc(o.juchuNo)+'</span>'):(o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>');}},
+      {h:'発注書',cell:function(o){return (_poSt_(o)==='planned'?'<input type="checkbox" class="po-sel" data-id="'+esc(o.id)+'" onclick="event.stopPropagation()" title="用紙注文書に入れる" style="margin-right:4px">':'')+'<span style="font-family:monospace">'+esc(o.poNo||(_poSt_(o)==='planned'?'（待ち）':''))+'</span>'+(o.kind?('<div style="font-size:10px;color:#64748b">'+esc(o.kind)+'</div>'):'');}},
+      {h:'仕入先',cell:function(o){return '<b>'+esc(o.vendor||'')+'</b>'+(o.ack?_ackBadge_(o):'');}},
+      {h:'受注',cell:function(o){return o.juchuNo?('<a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(o.juchuNo)+'" target="_blank" onclick="event.stopPropagation()" style="font-family:monospace;color:#0369a1">'+esc(o.juchuNo)+'</a>'+(o.cust?'<div style="font-size:10px;color:#64748b">'+esc(o.cust)+'</div>':'')):(o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>');}},
       {h:'製品名',cell:function(o){return esc(o.item||'')+(o.itemCode?(' <span style="font-family:monospace;font-size:10px;color:#0f766e">'+esc(o.itemCode)+'</span>'):'');}},
       {h:'数量',align:'right',cell:function(o){return (o.qty?((o.qty).toLocaleString()+(o.unit||'')):'-');}},
       {h:'納期',cell:function(o){return o.dueDate||'-';}},
       {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||0)).toLocaleString()+'</b>';}},
-      {h:'状況',cell:function(o){var c=o.status==='received'?'#16a34a':'#1e40af';return '<span style="color:'+c+';font-weight:700">'+(stL[o.status]||o.status||'-')+'</span>';}}
+      {h:'状況',cell:function(o){var st=_poSt_(o); var c=st==='received'?'#16a34a':st==='planned'?'#b45309':'#1e40af';return '<span style="color:'+c+';font-weight:700">'+({planned:'発注待ち',ordered:'発注済',received:'入荷済'})[st]+'</span>'+(o.mailSentAt?'<div style="font-size:10px;color:#64748b">📧 '+esc(String(o.mailSentAt).slice(0,10))+'</div>':'');}}
     ],
-    actions:function(o){ return (o.acNo?'':'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_receiveOrder_(\'purchaseOrders\',\''+o.id+'\')">📦 受入</button> ')+'<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deletePurchase(\''+o.id+'\')">🗑</button>'; },
+    actions:function(o){ return (_poSt_(o)==='planned'?'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_poMakeSheet_(\''+o.id+'\')">📄 注文書へ</button> ':'')+(_poSt_(o)!=='planned'&&o.poNo?'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_orderMail_(\'purchaseOrders\',\''+o.id+'\')">📧 メール</button> ':'')+(o.acNo?'':'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_receiveOrder_(\'purchaseOrders\',\''+o.id+'\')">📦 受入</button> ')+'<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deletePurchase(\''+o.id+'\')">🗑</button>'; },
     detail:function(o){
       return '<div style="padding:8px 14px;font-size:12px">'
         +'<div><span style="font-family:monospace;color:#8d897f">'+esc(o.id||'')+'</span>'+(o.projectId?('　紐付け案件: '+_ledgerProjLink_(o.projectId)):'')+'</div>'
@@ -29980,6 +29991,132 @@ function showAddPurchaseModal(){
     renderPurchases();
   }, { allowProject: true, fieldMap: { item:'item', dueDate:'dueDate', memo:'memo' } });
 }
+// ═══════════ SHIIRE-1〜4 / GAICHU-2 / ZAIKO-1（本多さん 9/26） ═══════════
+function _poSt_(o){ var s=String((o&&o.status)||''); if(s==='received'||s==='入荷済'||s==='done') return 'received'; if(s==='ordered'||s==='発注済'||s==='sent') return 'ordered'; return 'planned'; }
+function _outSt_(o){ var s=String((o&&o.status)||''); if(s==='done'||s==='completed'||s==='納品済'||s==='received'||s==='delivered') return 'done'; if(s==='sent'||s==='発注済'||s==='ordered') return 'sent'; return 'planned'; }
+function _num_(v){ var x=parseFloat(String(v==null?'':v).replace(/,/g,'')); return isNaN(x)?0:x; }
+// 受注入力の手配（用紙＝仕入／外注先手配、外注＝完全外注／部分外注）→ 仕入発注・外注発注の「発注待ち」。5 分に 1 回
+window._tehaiOrderSyncAt_=0;
+function _tehaiOrderSync_(force){
+  if(!window.FM||typeof FM.名乗っている!=='function'||!FM.名乗っている()) return Promise.resolve(0);
+  if(!force && Date.now()-window._tehaiOrderSyncAt_<5*60*1000) return Promise.resolve(0);
+  window._tehaiOrderSyncAt_=Date.now();
+  return FM.呼ぶ('手配_一覧',[]).then(function(r){
+    var L=(r&&r.一覧)||{}; var n=0;
+    if(!Array.isArray(DB.purchaseOrders)) DB.purchaseOrders=[]; if(!Array.isArray(DB.outsourceOrders)) DB.outsourceOrders=[];
+    var byP={}; DB.purchaseOrders.forEach(function(o){ if(o.id) byP[o.id]=o; }); var byO={}; DB.outsourceOrders.forEach(function(o){ if(o.id) byO[o.id]=o; });
+    Object.keys(L).forEach(function(no){ var e=L[no]; var a=e.案件||{}; var repeat=/リピート/.test(String(a.ロット区分||''));
+      (e.用紙||[]).forEach(function(x){ var id='FMT-'+no+'-'+x.n; var p=x.紙||{}; var qty=_num_(p.合計数), up=_num_(p.用紙単価), amt=_num_(p.用紙代)||Math.round(qty*up)||0; var o=byP[id];
+        if(!o){ o={ id:id, source:'fm', juchuNo:no, tehaiN:String(x.n), status:'planned', createdAt:new Date().toISOString() }; DB.purchaseOrders.push(o); byP[id]=o; n++; }
+        o.kind = x.k==='外注'?'用紙（外注先手配）':'用紙';
+        if(_poSt_(o)==='planned'){ o.vendor=x.who||'（仕入先未定）'; o.item=[p.紙質,p.品名].filter(Boolean).join(' ')+(p.サイズ?'　'+p.サイズ:'')+(p.厚さ?'　'+p.厚さ:''); o.qty=qty; o.unit='枚'; o.unitPrice=up; o.amount=amt; o.dueDate=a.納期||o.dueDate||''; o.cust=a.得意先||''; o.paper=p; o.anken=a; }
+        if(x.ord&&x.ord.done&&_poSt_(o)==='planned'){ o.status='ordered'; o.orderDate=String(x.ord.at||'').slice(0,10); o.statusDates=o.statusDates||{}; o.statusDates['発注済']=x.ord.at||new Date().toISOString(); n++; } });
+      (e.外注||[]).forEach(function(x){ var id='FMG-'+no+'-'+x.i; var w=x.写し||{}; var kind=w.区分||''; if(kind==='仕入') return; var o=byO[id];
+        if(!o){ o={ id:id, source:'fm', juchuNo:no, tehaiI:String(x.i), status:'planned', createdAt:new Date().toISOString(), prep:_prepDefault_(repeat), repeat:repeat }; DB.outsourceOrders.push(o); byO[id]=o; n++; }
+        o.gaichuKind = kind||o.gaichuKind||'部分外注'; o.kind = o.gaichuKind==='完全外注'?'完全外製':'加工';
+        if(_outSt_(o)==='planned'){ o.vendor=w.会社名||o.vendor||'（外注先未定）'; o.vendorCode=w.外注コード||''; o.item=String(w.発注内容||'').replace(/^【[^】]*】/,'')||o.item||''; o.qty=_num_(w.数量); o.unitPrice=_num_(w.単価); o.amount=Math.round(o.qty*o.unitPrice)||o.amount||0; o.dueDate=a.納期||o.dueDate||''; o.cust=a.得意先||''; o.anken=a; o.partnerCompanyId=_outPartnerOf_(o.vendor); }
+        if(x.ord&&x.ord.done&&_outSt_(o)==='planned'){ o.status='sent'; o.orderDate=String(x.ord.at||'').slice(0,10); n++; } }); });
+    if(n&&typeof saveDB==='function') saveDB(); return n;
+  }).catch(function(e){ console.warn('[手配→発注待ち]',e); return 0; });
+}
+// 準備チェック: 仕様書・データ・サンプル。リピートはデータ・サンプル不要
+function _prepDefault_(repeat){ return { 仕様書:false, データ:repeat?'不要':false, サンプル:repeat?'不要':false }; }
+function _prepDone_(o){ var p=(o&&o.prep)||_prepDefault_(false); return ['仕様書','データ','サンプル'].every(function(k){ return p[k]===true||p[k]==='不要'; }); }
+function _prepCell_(o){ var p=o.prep||(o.prep=_prepDefault_(!!o.repeat)); var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  var h=['仕様書','データ','サンプル'].map(function(k){ var v=p[k]; var st=v===true?'☑':v==='不要'?'－':'☐'; var col=v===true?'#166534':v==='不要'?'#94a3b8':'#b91c1c'; return '<span onclick="event.stopPropagation();_prepToggle_(\''+esc(o.id)+'\',\''+k+'\')" title="クリックで ☐→☑→不要 と変わります" style="cursor:pointer;color:'+col+';font-size:11px;white-space:nowrap;margin-right:6px">'+st+' '+k+'</span>'; }).join('');
+  return h+(_prepDone_(o)?'<div style="font-size:10px;color:#166534;font-weight:700">準備OK</div>':'<div style="font-size:10px;color:#b91c1c">準備中</div>'); }
+function _prepToggle_(id,k){ var o=(DB.outsourceOrders||[]).find(function(x){ return x.id===id; }); if(!o) return; o.prep=o.prep||_prepDefault_(!!o.repeat); var v=o.prep[k]; o.prep[k]=(v===false||v===undefined)?true:(v===true?'不要':false); o.prepBy=(currentAuth&&currentAuth.userName)||''; o.prepAt=new Date().toISOString(); if(typeof saveDB==='function') saveDB(); renderOutsource(); }
+// 関連会社かどうか（外注先の名前が Hub の会社名と一致）
+function _normCo_(s){ return String(s||'').replace(/株式会社|有限会社|\(株\)|\(有\)|㈱|㈲|\s/g,''); }
+function _outPartnerOf_(vendor){ var v=_normCo_(vendor); if(!v) return ''; var list=(DB&&DB.companies&&DB.companies.length)?DB.companies:(typeof COMPANY_INIT!=='undefined'?COMPANY_INIT:[]); var hit=list.find(function(c){ return c&&c.name&&(_normCo_(c.name)===v||_normCo_(c.name).indexOf(v)===0||v.indexOf(_normCo_(c.name))===0); }); return hit?hit.id:''; }
+function _outIsMine_(o){ var pid=o.partnerCompanyId||_outPartnerOf_(o.vendor||o.vendorName); return !!(pid&&currentAuth&&pid===currentAuth.companyId&&pid!==(o.companyId||'')); }
+function _outMarkSent_(id){ var o=(DB.outsourceOrders||[]).find(function(x){ return x.id===id; }); if(!o) return; if(!_prepDone_(o)&&!confirm('準備（仕様書・データ・サンプル）がそろっていません。発注済にしますか？')) return; o.status='sent'; o.orderDate=o.orderDate||new Date().toISOString().slice(0,10); o.poNo=o.poNo||_nextPoNo_(); if(o.source==='fm'&&o.juchuNo&&o.tehaiI&&window.FM){ FM.呼ぶ('手配_発注済',[o.juchuNo,'外注',o.tehaiI,true]).catch(function(){}); } if(typeof saveDB==='function') saveDB(); renderOutsource(); }
+function _outReply_(id){ var o=(DB.outsourceOrders||[]).find(function(x){ return x.id===id; }); if(!o) return; var due=prompt('納品（発送）できる日を入れてください（YYYY-MM-DD。発送日だけ入れるなら空で OK）', (o.reply&&o.reply.due)||o.dueDate||''); if(due===null) return; var sh=prompt('発送した日（まだなら空）', (o.reply&&o.reply.shipped)||''); if(sh===null) return; o.reply={ due:due.trim(), shipped:sh.trim(), by:(currentAuth&&currentAuth.userName)||'', at:new Date().toISOString() }; if(typeof saveDB==='function') saveDB(); renderOutsource(); }
+// 用紙注文書へ（FileMaker 連携の注文書に流し込む）。選んだ発注待ち（同じ仕入先だけ）
+function _poMakeSheet_(oneId){
+  var ids=oneId?[oneId]:Array.prototype.map.call(document.querySelectorAll('#purchases-list .po-sel:checked'),function(c){ return c.getAttribute('data-id'); });
+  if(!ids.length){ alert('発注待ちの行にチェックを入れてから押してください'); return; }
+  var rows=(DB.purchaseOrders||[]).filter(function(o){ return ids.indexOf(o.id)>=0&&_poSt_(o)==='planned'; }); if(!rows.length) return;
+  var vendors=[...new Set(rows.map(function(r){ return r.vendor||''; }))]; if(vendors.length>1){ alert('仕入先が違う行が混ざっています（'+vendors.join('・')+'）。同じ仕入先だけ選んでください'); return; }
+  var stock=rows.some(function(r){ return /在庫/.test(r.kind||''); });
+  var h={ 注文先:vendors[0], 分類:stock?'在庫1':'個別', 担当者:(currentAuth&&currentAuth.userName)||'', hubIds:rows.map(function(r){ return r.id; }), fm:rows.filter(function(r){ return r.source==='fm'; }).map(function(r){ return { 伝票番号:r.juchuNo, n:r.tehaiN }; }),
+    rows:rows.map(function(r){ var p=r.paper||{}; return { 伝票番号:r.juchuNo||'', パーツ:p.パーツ||'', 品名:[p.紙質,p.品名].filter(Boolean).join(' ')||r.item||'', 厚さ:p.厚さ||'', サイズ:p.サイズ||'', 切数:p.切数||'', 数量:String(r.qty||p.合計数||''), 紙目:p.紙目||'', 得意先:r.cust||'', 入荷希望日:'最短', 納品場所:'トキワ印刷(株)', 単価:r.unitPrice?String(r.unitPrice):'' }; }) };
+  try{ localStorage.setItem('yoshi_chumon_prefill', JSON.stringify(h)); }catch(e){}
+  window.open('tools/yoshi-chumon.html?prefill=1','_blank');
+}
+// 用紙注文書を保存したら（別タブ）、発注待ちを発注済に
+function _poMarkOrdered_(sv){ if(!sv||!sv.hubIds) return; var n=0; (DB.purchaseOrders||[]).forEach(function(o){ if(sv.hubIds.indexOf(o.id)<0) return; if(_poSt_(o)!=='planned') return; o.status='ordered'; o.poNo=sv.発注番号||o.poNo; o.orderDate=String(sv.at||'').slice(0,10)||new Date().toISOString().slice(0,10); o.statusDates=o.statusDates||{}; o.statusDates['発注済']=sv.at||new Date().toISOString(); n++; }); if(n){ if(typeof saveDB==='function') saveDB(); try{ renderPurchases(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('📄 用紙注文書 '+(sv.発注番号||'')+' で '+n+' 行を発注済にしました'); } }
+window.addEventListener('storage',function(e){ if(e.key==='yoshi_chumon_saved'&&e.newValue){ try{ _poMarkOrdered_(JSON.parse(e.newValue)); localStorage.removeItem('yoshi_chumon_saved'); }catch(x){} } if(e.key==='zaiko_order_req'&&e.newValue){ try{ _poPickupHandoffs_(); }catch(x){} } });
+function _poPickupHandoffs_(){
+  try{ var sv=JSON.parse(localStorage.getItem('yoshi_chumon_saved')||'null'); if(sv){ localStorage.removeItem('yoshi_chumon_saved'); _poMarkOrdered_(sv); } }catch(e){}
+  try{ var rq=JSON.parse(localStorage.getItem('zaiko_order_req')||'null'); if(rq&&rq.rows){ localStorage.removeItem('zaiko_order_req'); var n=0; rq.rows.forEach(function(r){ var id='ZKO-'+r.id; if((DB.purchaseOrders||[]).some(function(o){ return o.id.indexOf(id)===0&&_poSt_(o)==='planned'; })) return; DB.purchaseOrders.push({ id:id+'-'+Date.now(), source:'zaiko', itemCode:r.id, vendor:r.仕入先||'', kind:'在庫', item:r.品名, qty:_num_(r.数量)||1, unit:r.単位||'包', status:'planned', createdAt:new Date().toISOString() }); n++; }); if(n){ if(typeof saveDB==='function') saveDB(); if(typeof _toastMsg==='function') _toastMsg('📦 用紙在庫から '+n+' 品目を発注待ちに入れました'); } } }catch(e){}
+}
+// 在庫発注（案件に紐づかない。ハートの名刺用紙・案内状など）
+function showStockOrderModal(){
+  _showSimpleAddModal_('在庫発注（発注待ちに入ります）', '#0f766e', [
+    { key:'vendor', label:'仕入先 *', type:'text', default:'ハート' },
+    { key:'item', label:'品名 *', type:'text' },
+    { key:'itemCode', label:'在庫の品目コード（用紙在庫に登録してあれば。受入で在庫が増えます）', type:'text' },
+    { key:'qty', label:'数量', type:'number' },
+    { key:'unit', label:'単位', type:'text', default:'包' },
+    { key:'unitPrice', label:'単価', type:'number' },
+    { key:'dueDate', label:'入荷希望日', type:'date' },
+    { key:'memo', label:'備考', type:'textarea' }
+  ], function(data){
+    var o=Object.assign({ id:'STK-'+Date.now()+'-'+Math.floor(Math.random()*1000), kind:'在庫', status:'planned', createdAt:new Date().toISOString() }, data);
+    o.qty=_num_(o.qty)||1; o.unitPrice=_num_(o.unitPrice); o.amount=Math.round(o.qty*o.unitPrice)||0;
+    if(!DB.purchaseOrders) DB.purchaseOrders=[]; DB.purchaseOrders.push(o); if(typeof saveDB==='function') saveDB(); renderPurchases();
+  }, { allowProject:false });
+}
+// 用紙在庫: そろそろ注文（現在数 ≤ 最低数）
+window._zaikoCache_=null;
+function _zaikoRows_(force){ if(!window.FM||typeof FM.名乗っている!=='function'||!FM.名乗っている()) return Promise.resolve([]); if(!force&&window._zaikoCache_&&Date.now()-window._zaikoCache_.at<10*60*1000) return Promise.resolve(window._zaikoCache_.rows); return FM.呼ぶ('Hubマスタ_一覧',['用紙在庫']).then(function(j){ window._zaikoCache_={ at:Date.now(), rows:j.行||[] }; return window._zaikoCache_.rows; }).catch(function(){ return []; }); }
+function _poLowStock_(){ var box=document.getElementById('po-lowstock'); if(!box) return; _zaikoRows_(false).then(function(rows){ var low=rows.filter(function(r){ return _num_(r.現在数)<=_num_(r.最低数); }); if(!low.length){ box.innerHTML=''; return; } var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  box.innerHTML='<div style="background:#fff7ed;border:1px solid #fdba74;padding:8px 12px;margin-bottom:10px;font-size:12px"><b>⚠ 用紙在庫がそろそろ無くなります（'+low.length+' 品目）</b>　'+low.map(function(r){ var already=(DB.purchaseOrders||[]).some(function(o){ return o.itemCode===r.id&&_poSt_(o)!=='received'; }); return esc(r.品名)+'（'+_num_(r.現在数)+esc(r.単位||'')+'）'+(already?' <span style="color:#166534">発注済／待ち</span>':' <button class="btn" style="padding:1px 8px;font-size:11px" onclick="_poStockReq_(\''+esc(r.id)+'\')">発注待ちに入れる</button>'); }).join('　')+'　<a href="tools/zaiko.html" target="_blank" style="font-size:11px">用紙在庫を開く</a></div>'; }); }
+function _poStockReq_(code){ _zaikoRows_(false).then(function(rows){ var r=rows.find(function(x){ return String(x.id)===String(code); }); if(!r) return; DB.purchaseOrders.push({ id:'ZKO-'+code+'-'+Date.now(), source:'zaiko', itemCode:code, vendor:r.仕入先||'', kind:'在庫', item:r.品名, qty:_num_(r.注文数)||1, unit:r.単位||'包', status:'planned', createdAt:new Date().toISOString() }); if(typeof saveDB==='function') saveDB(); renderPurchases(); }); }
+function _zaikoAdd_(code, qty){ if(!code||!qty) return; _zaikoRows_(true).then(function(rows){ var r=rows.find(function(x){ return String(x.id)===String(code); }); if(!r) return; r.現在数=Math.max(0,_num_(r.現在数)+_num_(qty)); r.履歴=(r.履歴||[]).concat([{ 日:new Date().toISOString(), 増減:_num_(qty), 誰:(currentAuth&&currentAuth.userName)||'', メモ:'Hub 仕入発注の受入' }]).slice(-60); r.更新=new Date().toISOString(); return FM.呼ぶ('Hubマスタ_書く',['用紙在庫',r]).then(function(){ window._zaikoCache_=null; if(typeof _toastMsg==='function') _toastMsg('📦 用紙在庫 '+r.品名+' を +'+_num_(qty)+' しました'); }); }).catch(function(e){ console.warn('[在庫+]',e); }); }
+setTimeout(function(){ try{ if(typeof _receiveOrder_==='function'&&!_receiveOrder_._zk){ var orig=_receiveOrder_; _receiveOrder_=function(coll,id){ var r=orig.apply(this,arguments); try{ if(coll==='purchaseOrders'){ var o=(DB.purchaseOrders||[]).find(function(x){ return x.id===id; }); if(o&&/在庫/.test(o.kind||'')&&o.itemCode&&o.receivedAt&&!o._zaikoAdded){ o._zaikoAdded=true; _zaikoAdd_(o.itemCode,o.receivedQty||o.qty||0); } } }catch(e){} return r; }; _receiveOrder_._zk=true; } }catch(e){} },0);
+// 発注メール（本文＋同じ内容の PDF 添付、受け取り確認リンク）
+function _poCompany_(){ var list=(DB&&DB.companies&&DB.companies.length)?DB.companies:(typeof COMPANY_INIT!=='undefined'?COMPANY_INIT:[]); var c=list.find(function(x){ return x&&currentAuth&&x.id===currentAuth.companyId; })||list.find(function(x){ return x&&x.id==='COMP002'; })||{}; return { name:c.name||'トキワ印刷株式会社', zip:c.zip||'', addr:c.addr||'', tel:String(c.tel||'').replace(/^TEL/,''), fax:String(c.fax||'').replace(/^FAX/,''), email:c.email||'' }; }
+function _vendorEmail_(name){ name=String(name||'').trim(); if(!name) return ''; var v=(DB.outsourceVendors||[]).find(function(x){ return x&&x.name===name; }); if(v&&v.email) return v.email; var m=(DB.master&&DB.master.cust||[]).find(function(r){ return r&&typeof r==='object'&&r.org===name&&r.email; }); if(m) return m.email; var vm=(DB.vendorMaster||[]).find(function(x){ return x&&(x.name===name||x.vendor===name)&&x.email; }); if(vm) return vm.email; try{ return localStorage.getItem('po_mail_'+name)||''; }catch(e){ return ''; } }
+function _orderRowsText_(coll, rows){ var isPur=coll==='purchaseOrders'; return rows.map(function(r,i){ var p=r.paper||{}; if(isPur) return (i+1)+'. '+(r.item||'')+'　'+(r.qty?r.qty.toLocaleString()+(r.unit||''):'')+(r.unitPrice?'　@'+r.unitPrice:'')+(r.juchuNo?'　伝票 '+r.juchuNo+(p.パーツ?'-'+p.パーツ:''):'')+(r.cust?'　('+r.cust+')':'')+(r.dueDate?'　入荷希望 '+r.dueDate:''); return (i+1)+'. '+(r.gaichuKind?'【'+r.gaichuKind+'】':'')+(r.item||'')+'　'+(r.qty?r.qty.toLocaleString()+(r.unit||''):'')+(r.unitPrice?'　@'+r.unitPrice:'')+(r.juchuNo?'　伝票 '+r.juchuNo:'')+(r.cust?'　('+r.cust+')':'')+(r.dueDate?'　納期 '+r.dueDate:'')+(r.memo?'　'+r.memo:''); }).join('\n'); }
+function _orderMail_(coll, id){
+  var list=DB[coll]||[]; var o=list.find(function(x){ return x.id===id; }); if(!o) return;
+  var isPur=coll==='purchaseOrders'; var rows=(isPur&&o.poNo)?list.filter(function(x){ return x.poNo===o.poNo; }):[o]; var vendor=o.vendor||o.vendorName||'';
+  if(!isPur&&_outSt_(o)==='planned'&&!_prepDone_(o)&&!confirm('準備（仕様書・データ・サンプル）がそろっていません。それでも送りますか？')) return;
+  var co=_poCompany_(); var who=(currentAuth&&currentAuth.userName)||''; var po=o.poNo||('HUB-'+String(o.id).slice(-8)); var token=(po+'-'+Date.now().toString(36)+Math.random().toString(36).slice(2,8)).replace(/[^A-Za-z0-9_-]/g,'');
+  var ackUrl=(typeof CLOUD_CONFIG!=='undefined'&&CLOUD_CONFIG.GAS_URL)?(CLOUD_CONFIG.GAS_URL+'?action=poAck&t='+encodeURIComponent(token)+'&po='+encodeURIComponent(po)+'&v='+encodeURIComponent(vendor)+'&k='+encodeURIComponent(isPur?'仕入':'外注')):'';
+  var subject=(isPur?'用紙注文書 ':'外注発注書 ')+po+'　'+co.name;
+  var body=vendor+' 御中\n\nいつもお世話になっております。'+co.name+'の'+who+'です。\n'+(isPur?'下記のとおり発注をお願いします。':'下記のとおり外注をお願いします。')+'\n\n【'+(isPur?'注文書':'発注書')+' '+po+'　'+new Date().toISOString().slice(0,10).replace(/-/g,'/')+'】\n'+_orderRowsText_(coll,rows)+'\n'+(isPur?'':'\n用意するもの: 仕様書'+(o.prep&&o.prep.データ==='不要'?'':'・データ')+(o.prep&&o.prep.サンプル==='不要'?'':'・サンプル')+'（別途お送りします）\n')+'\n納品場所: '+co.name+(co.addr?'　'+co.addr:'')+'\n\n'+(ackUrl?'▼ 受け取りましたら、こちらを押してください（納品できる日・発送日も入れられます）\n'+ackUrl+'\n\n':'')+'よろしくお願いいたします。\n\n'+co.name+'　'+who+'\n'+(co.zip?'〒'+co.zip+' ':'')+co.addr+'\n'+(co.tel?'TEL '+co.tel:'')+(co.fax?'　FAX '+co.fax:'');
+  var old=document.getElementById('po-mail-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='po-mail-modal'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:12px';
+  var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  m.innerHTML='<div style="background:#fff;width:min(720px,96vw);max-height:92vh;overflow:auto;padding:16px 18px;font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.3)"><div style="font-size:15px;font-weight:700;margin-bottom:6px">📧 '+esc(isPur?'注文書':'発注書')+'をメールで送る — '+esc(vendor)+'</div>'
+    +'<div style="color:#64748b;font-size:11.5px;margin-bottom:8px">本文に内容をそのまま書き、同じ内容の PDF も添付します。本文の「受け取りました」のリンクを相手が押すと、この行に受領・納期回答・発送日が入ります</div>'
+    +'<label style="display:block;font-weight:700;margin-top:6px">宛先</label><input id="pm-to" style="width:100%;font:inherit;padding:5px" value="'+esc(_vendorEmail_(vendor))+'" placeholder="相手のメールアドレス">'
+    +'<label style="display:block;font-weight:700;margin-top:6px">CC（任意）</label><input id="pm-cc" style="width:100%;font:inherit;padding:5px" value="'+esc(co.email||'')+'">'
+    +'<label style="display:block;font-weight:700;margin-top:6px">件名</label><input id="pm-subj" style="width:100%;font:inherit;padding:5px" value="'+esc(subject)+'">'
+    +'<label style="display:block;font-weight:700;margin-top:6px">本文</label><textarea id="pm-body" rows="16" style="width:100%;font:inherit;padding:6px;box-sizing:border-box">'+esc(body)+'</textarea>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" id="pm-x">やめる</button><button class="btn btn-p" id="pm-go">送信</button></div><div id="pm-st" style="color:#b45309;margin-top:6px"></div></div>';
+  document.body.appendChild(m); m.querySelector('#pm-x').onclick=function(){ m.remove(); };
+  m.querySelector('#pm-go').onclick=function(){ var to=m.querySelector('#pm-to').value.trim(); if(!to||to.indexOf('@')<0){ alert('宛先のメールアドレスを入れてください'); return; } try{ localStorage.setItem('po_mail_'+vendor,to); }catch(e){}
+    var bodyText=m.querySelector('#pm-body').value; var subj=m.querySelector('#pm-subj').value.trim();
+    var html='<div style="font-family:Meiryo,sans-serif;font-size:13px;line-height:1.6"><pre style="font-family:inherit;white-space:pre-wrap;margin:0">'+esc(bodyText)+'</pre><hr><table style="border-collapse:collapse;font-size:12px"><tr>'+(isPur?'<th style="border:1px solid #333;padding:3px 6px">品名</th><th style="border:1px solid #333;padding:3px 6px">数量</th><th style="border:1px solid #333;padding:3px 6px">単価</th><th style="border:1px solid #333;padding:3px 6px">伝票</th><th style="border:1px solid #333;padding:3px 6px">得意先</th><th style="border:1px solid #333;padding:3px 6px">入荷希望</th>':'<th style="border:1px solid #333;padding:3px 6px">種類</th><th style="border:1px solid #333;padding:3px 6px">内容</th><th style="border:1px solid #333;padding:3px 6px">数量</th><th style="border:1px solid #333;padding:3px 6px">単価</th><th style="border:1px solid #333;padding:3px 6px">伝票</th><th style="border:1px solid #333;padding:3px 6px">納期</th>')+'</tr>'
+      +rows.map(function(r){ var td=function(v){ return '<td style="border:1px solid #333;padding:3px 6px">'+esc(v)+'</td>'; }; return '<tr>'+(isPur?td(r.item)+td(r.qty?r.qty.toLocaleString()+(r.unit||''):'')+td(r.unitPrice||'')+td(r.juchuNo||'')+td(r.cust||'')+td(r.dueDate||'最短'):td(r.gaichuKind||'')+td(r.item)+td(r.qty?r.qty.toLocaleString()+(r.unit||''):'')+td(r.unitPrice||'')+td(r.juchuNo||'')+td(r.dueDate||''))+'</tr>'; }).join('')+'</table></div>';
+    m.querySelector('#pm-st').textContent='送っています…'; m.querySelector('#pm-go').disabled=true;
+    callCloudAPI('sendPurchaseOrderMail',{},{ to:to, cc:m.querySelector('#pm-cc').value.trim(), subject:subj, body:bodyText, html:html, fileName:(isPur?'用紙注文書_':'外注発注書_')+po+'.pdf', fromName:co.name, replyTo:co.email||'', by:who, token:token, po:po, vendor:vendor, kind:isPur?'仕入':'外注' }).then(function(r){
+      if(!r||!r.success) throw new Error((r&&r.error)||'送れませんでした');
+      var now=new Date().toISOString(); rows.forEach(function(x){ x.mailSentAt=now; x.mailTo=to; x.mailToken=token; if(!isPur&&_outSt_(x)==='planned'){ x.status='sent'; x.orderDate=now.slice(0,10); x.poNo=x.poNo||po; if(x.source==='fm'&&x.juchuNo&&x.tehaiI&&window.FM) FM.呼ぶ('手配_発注済',[x.juchuNo,'外注',x.tehaiI,true]).catch(function(){}); } });
+      if(typeof saveDB==='function') saveDB(); m.remove(); if(isPur) renderPurchases(); else renderOutsource(); if(typeof _toastMsg==='function') _toastMsg('📧 送りました '+to+(r.attached?'（PDF 添付）':'（本文のみ）'));
+    }).catch(function(e){ m.querySelector('#pm-st').textContent='送れません: '+String(e.message||e); m.querySelector('#pm-go').disabled=false; }); };
+}
+// 受け取り確認・納期回答・発送日（会社 GAS のシート）を 10 分ごとに取り、行に載せる
+window._poAckAt_=0; window._poAckSince_=''; try{ window._poAckSince_=localStorage.getItem('po_ack_since')||''; }catch(e){}
+function _poAckPoll_(force){ if(typeof callCloudAPI!=='function') return; if(!force&&Date.now()-window._poAckAt_<10*60*1000) return; window._poAckAt_=Date.now();
+  callCloudAPI('poAckList',{ since:window._poAckSince_||'' }).then(function(r){ if(!r||!r.success||!r.rows||!r.rows.length) return; var n=0; var all=(DB.purchaseOrders||[]).concat(DB.outsourceOrders||[]);
+    r.rows.forEach(function(a){ if(a.act==='送信') return; all.filter(function(o){ return o.mailToken&&o.mailToken===a.token; }).forEach(function(o){ o.ack=o.ack||{}; if(a.act==='受領'&&!o.ack.opened) o.ack.opened=a.at; if(a.due||a.shipped||a.act==='納期回答'||a.act==='発送'){ o.reply=o.reply||{}; if(a.due) o.reply.due=a.due; if(a.shipped) o.reply.shipped=a.shipped; if(a.memo) o.reply.memo=a.memo; o.reply.at=a.at; o.reply.by=o.vendor||''; } o.ack.last=a.at; n++; }); if(a.at>window._poAckSince_) window._poAckSince_=a.at; });
+    try{ localStorage.setItem('po_ack_since',window._poAckSince_); }catch(e){} if(n){ if(typeof saveDB==='function') saveDB(); try{ renderPurchases(); }catch(e){} try{ renderOutsource(); }catch(e){} } }).catch(function(){}); }
+function _ackBadge_(o){ var a=o.ack||{}; var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }; if(a.opened) return '<div style="font-size:10px;color:#166534">✔ 受領 '+esc(String(a.opened).slice(0,10))+'</div>'; if(o.mailSentAt) return '<div style="font-size:10px;color:#b45309">受領未確認</div>'; return ''; }
 function deletePurchase(id){
   if(!confirm('削除しますか?')) return;
   DB.purchaseOrders = (DB.purchaseOrders || []).filter(function(o){ return o.id !== id; });
@@ -29992,6 +30129,8 @@ function renderOutsource(){
   var el = document.getElementById('outsource-list');
   if(!el) return;
   if(!Array.isArray(DB.outsourceOrders)) DB.outsourceOrders = [];
+  try{ _tehaiOrderSync_(false).then(function(n){ if(n) renderOutsource(); }); }catch(e){}
+  try{ _poAckPoll_(false); }catch(e){}
   var esc=(typeof _escDiff==='function')?_escDiff:function(s){return String(s==null?'':s);};
   var stL={draft:'下書き',sent:'発注済',completed:'完了'};
   _renderLedger_({
@@ -30000,18 +30139,21 @@ function renderOutsource(){
     search:function(o){ return [o.vendor,o.vendorName,o.item,o.workName,o.itemCode,o.projectId,o.memo].join(' '); },
     dateOf:function(o){ return o.dueDate||o.deliveryDate||o.createdAt; }, amountOf:function(o){ return o.amount||o.totalCost||0; },
     tabs:[ {k:'',label:'すべて'},
-      {k:'sent',label:'発注済',match:function(o){return o.status==='sent';}},
-      {k:'completed',label:'完了',match:function(o){return o.status==='completed';}} ],
+      {k:'planned',label:'発注待ち',match:function(o){return _outSt_(o)==='planned';}},
+      {k:'sent',label:'発注済',match:function(o){return _outSt_(o)==='sent';}},
+      {k:'completed',label:'完了',match:function(o){return _outSt_(o)==='done';}},
+      {k:'mine',label:'受託（自社宛）',match:function(o){return _outIsMine_(o);}} ],
     columns:[
-      {h:'外注先',cell:function(o){return '<b>'+esc(o.vendor||o.vendorName||'')+'</b>';}},
-      {h:'製造番号',cell:function(o){return o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>';}},
+      {h:'外注先',cell:function(o){return '<b>'+esc(o.vendor||o.vendorName||'')+'</b>'+(o.gaichuKind?'<div style="font-size:10px"><span style="background:'+(o.gaichuKind==='完全外注'?'#ede9fe;color:#5b21b6':'#e0f2fe;color:#075985')+';padding:0 6px;font-weight:700">'+esc(o.gaichuKind)+'</span></div>':'')+(o.ack?_ackBadge_(o):'');}},
+      {h:'製造番号',cell:function(o){return o.juchuNo?('<a href="tools/fm-juchu-hub.html?no='+encodeURIComponent(o.juchuNo)+'" target="_blank" onclick="event.stopPropagation()" style="font-family:monospace;color:#0369a1">'+esc(o.juchuNo)+'</a>'+(o.cust?'<div style="font-size:10px;color:#64748b">'+esc(o.cust)+'</div>':'')):(o.projectId?_ledgerProjLink_(o.projectId):'<span style="color:#cbd5e1">—</span>');}},
+      {h:'準備',cell:function(o){return _prepCell_(o);}},
       {h:'製品名',cell:function(o){var m=_ledgerProjMeta_(o.projectId); var nm=o.item||o.workName||''; return esc(nm)+((m&&m.item&&m.item!==nm)?(' <span style="font-size:10px;color:#8d897f">'+esc(m.item)+'</span>'):'')+(o.itemCode?(' <span style="font-family:monospace;font-size:10px;color:#0f766e">'+esc(o.itemCode)+'</span>'):'');}},
       {h:'数量',align:'right',cell:function(o){if(o.qty)return (o.qty).toLocaleString()+(o.unit||''); var m=_ledgerProjMeta_(o.projectId); return (m&&m.qty)?((m.qty).toLocaleString()+esc(m.unit||'')):'-';}},
       {h:'納期',cell:function(o){return o.dueDate||o.deliveryDate||'-';}},
       {h:'金額',align:'right',cell:function(o){return '<b style="font-family:monospace">¥'+((o.amount||o.totalCost||0)).toLocaleString()+'</b>';}},
-      {h:'状況',cell:function(o){var c=o.status==='completed'?'#16a34a':'#7c3aed';return '<span style="color:'+c+';font-weight:700">'+(stL[o.status]||o.status||'-')+'</span>';}}
+      {h:'状況',cell:function(o){var st=_outSt_(o); var c=st==='done'?'#16a34a':st==='planned'?'#b45309':'#7c3aed';return '<span style="color:'+c+';font-weight:700">'+({planned:'発注待ち',sent:'発注済',done:'完了'})[st]+'</span>'+(o.mailSentAt?'<div style="font-size:10px;color:#64748b">📧 '+esc(String(o.mailSentAt).slice(0,10))+'</div>':'')+(o.reply&&(o.reply.due||o.reply.shipped)?'<div style="font-size:10px;color:#166534">'+(o.reply.due?'納期回答 '+esc(o.reply.due):'')+(o.reply.shipped?' 発送 '+esc(o.reply.shipped):'')+'</div>':'');}}
     ],
-    actions:function(o){ return (o.acNo?'':'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_receiveOrder_(\'outsourceOrders\',\''+o.id+'\')">📦 受入</button> ')+'<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deleteOutsource(\''+o.id+'\')">🗑</button>'; },
+    actions:function(o){ var st=_outSt_(o); return (st==='planned'?'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_orderMail_(\'outsourceOrders\',\''+o.id+'\')">📧 発注メール</button> <button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_outMarkSent_(\''+o.id+'\')" title="メール以外で発注したとき">✔ 発注済にする</button> ':'')+(st==='sent'?'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_orderMail_(\'outsourceOrders\',\''+o.id+'\')">📧</button> ':'')+(_outIsMine_(o)?'<button class="btn" style="padding:3px 7px;font-size:11px;background:#ecfdf5" onclick="event.stopPropagation();_outReply_(\''+o.id+'\')" title="発注元（トキワ）に納期・発送日を知らせる">📅 納期／発送を入れる</button> ':'')+(o.acNo?'':'<button class="btn" style="padding:3px 7px;font-size:11px" onclick="event.stopPropagation();_receiveOrder_(\'outsourceOrders\',\''+o.id+'\')">📦 受入</button> ')+'<button class="btn" style="padding:3px 7px;font-size:11px;background:#fee;color:#dc2626" onclick="event.stopPropagation();deleteOutsource(\''+o.id+'\')">🗑</button>'; },
     detail:function(o){
       return '<div style="padding:8px 14px;font-size:12px">'
         +'<div><span style="font-family:monospace;color:#8d897f">'+esc(o.id||'')+'</span>'+(o.projectId?('　紐付け案件: '+_ledgerProjLink_(o.projectId)):'')+'</div>'
@@ -30022,8 +30164,10 @@ function renderOutsource(){
   });
 }
 
-function showAddOutsourceModal(){
-  _showSimpleAddModal_('外注発注', '#7c3aed', [
+function showAddOutsourceModal(区分){
+  区分 = 区分 || '部分外注';
+  _showSimpleAddModal_(区分==='完全外注'?'フル外注（発注待ちに入ります）':'部分外注（発注待ちに入ります）', '#7c3aed', [
+    { key:'gaichuKind', label:'外注の種類', type:'select', options:[区分, 区分==='完全外注'?'部分外注':'完全外注'] },
     { key:'poNo', label:'発注書番号', type:'text', default:_nextPoNo_() },
     { key:'orderDate', label:'発注日', type:'date', default:new Date().toISOString().slice(0,10) },
     { key:'vendor', label:'外注先 *', type:'text' },
@@ -30039,7 +30183,7 @@ function showAddOutsourceModal(){
   ], function(data){
     var o = Object.assign({
       id: 'OUT-' + Date.now() + '-' + Math.floor(Math.random()*1000),
-      status: 'sent',
+      status: 'planned', prep: _prepDefault_(data.repeat),
       createdAt: new Date().toISOString()
     }, data);
     o.qty = parseFloat(o.qty) || 0;
@@ -57924,7 +58068,9 @@ function hubRefreshNow(){
 })();
 </script>
 <style id="square-tables">/* 表組は全て角あり（本多さん指定）。ボタンは丸くてよい。後から読まれる角丸の !important に負けないよう :not(#_) で優先度を上げ、文書の末尾に置く */
-html body :is(table,thead,tbody,tr,th,td,caption):not(#_):not(#_),
-html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),:has(> :not(table) > table),:has(> * > :not(table) > table)):not(#_):not(#_){border-radius:0 !important}</style>
+html body :is(table,thead,tbody,tr,th,td,caption):not(#_):not(#_):not(#_):not(#_),
+html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),:has(> :not(table) > table),:has(> * > :not(table) > table)):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}
+/* 作業BOX の箱も角あり（9/26）。ボタン・入力欄は丸くてよい */
+html body #page-workbox :not(button):not(.btn):not(input):not(select):not(textarea):not(.tb-btn):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}</style>
 </body>
 </html>

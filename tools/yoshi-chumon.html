@@ -47,6 +47,7 @@
   <button id="save">保存</button>
   <button id="print">印刷</button>
   <button id="del" class="rd">削除</button>
+  <button id="copy" title="メールに貼れる文（注文の内容）をコピー">本文をコピー</button>
   <span class="st" id="st"></span>
   <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
 </div>
@@ -163,7 +164,7 @@ function 保存() {
   if (!f['注文先']) { toast('注文先を入れてください'); $('f-to').focus(); return; }
   $('st').textContent = '保存しています…';
   var p = 現在 ? FM.呼ぶ('用紙注文_保存', [現在.recordId, 現在.modId, f]) : FM.呼ぶ('用紙注文_作る', [f]);
-  p.then(function (r) { 画面へ(r); $('st').textContent = ''; toast('保存しました ' + r.fields['発注番号']); 一覧を読む(); 候補(); })
+  p.then(function (r) { 画面へ(r); $('st').textContent = ''; toast('保存しました ' + r.fields['発注番号']); 一覧を読む(); 候補(); if (引継) 引継後(r); })
    .catch(function (e) { $('st').textContent = String(e.message || e); });
 }
 function 新規() {
@@ -212,14 +213,40 @@ function マスタを用意() {
 }
 function 得意先名(code) { var m = マスタ['得意先マスタ']; if (!m) return ''; var h = m.行.filter(function (r) { return String(r['得意先コード']) === String(code); })[0]; return h ? h['得意先名'] : ''; }
 
+// ---- SHIIRE-2: Hub の仕入発注（発注待ち）／受注入力からの流し込み
+var 引継 = null;
+function 引継を入れる() {
+  try { 引継 = JSON.parse(localStorage.getItem('yoshi_chumon_prefill') || 'null'); } catch (e) {}
+  if (!引継) { toast('流し込むデータがありません'); return; }
+  画面へ(null); $('f-to').value = 引継.注文先 || ''; $('f-kind').value = 引継.分類 || '個別'; if (引継.担当者 && !$('f-tanto').value) $('f-tanto').value = 引継.担当者;
+  var trs = $('rows').querySelectorAll('tr'); var rows = 引継.rows || [];
+  rows.slice(0, 9).forEach(function (r, i) { var tr = trs[i]; 列.forEach(function (c) { if (r[c] != null && r[c] !== '') 置く(tr, c, r[c]); }); });
+  if (rows.length > 9) toast('9 行を超える分（' + (rows.length - 9) + ' 行）は入りませんでした。保存後に「新規」でもう 1 枚作ってください');
+  $('st').textContent = rows.length ? (Math.min(9, rows.length) + ' 行を入れました。注文先・担当者を確かめて「保存」') : '';
+  if (!$('f-to').value) $('f-to').focus();
+}
+function 引継後(r) {
+  var no = r.fields['発注番号']; var h = 引継; 引継 = null; try { localStorage.removeItem('yoshi_chumon_prefill'); } catch (e) {}
+  (h.fm || []).forEach(function (x) { FM.呼ぶ('手配_発注済', [x.伝票番号, '用紙', x.n, true]).catch(function () {}); });   // 受注入力の手配を発注済に
+  try { localStorage.setItem('yoshi_chumon_saved', JSON.stringify({ 発注番号: no, hubIds: h.hubIds || [], 注文先: $('f-to').value.trim(), at: new Date().toISOString() })); } catch (e) {}   // Hub の発注待ちを発注済に（Hub 側が拾う）
+  toast('受注入力の手配と Hub の発注待ちを発注済にしました（' + no + '）');
+}
+function 本文() {
+  var f = 画面から(); var L = [(f['注文先'] || '') + ' 御中', '', 'いつもお世話になっております。トキワ印刷株式会社の' + (f['担当者'] || '') + 'です。', '下記用紙の発注をお願いします。', '', '【用紙注文書 ' + ($('p-no').textContent || '') + '　' + 和暦($('f-date').value) + '】'];
+  var k = 0; for (var i = 1; i <= 9; i++) { if (!f['品名' + i] && !f['数量' + i]) continue; k++; L.push(k + '. ' + (f['品名' + i] || '') + (f['厚さ' + i] ? '　' + f['厚さ' + i] : '') + (f['サイズ' + i] ? '　' + f['サイズ' + i] : '') + (f['切数' + i] ? '　' + f['切数' + i] + '切' : '') + '　' + (f['数量' + i] || '') + '枚' + (f['紙目' + i] ? '　紙目' + f['紙目' + i] : '') + (f['伝票番号' + i] ? '　伝票 ' + f['伝票番号' + i] + (f['パーツ' + i] ? '-' + f['パーツ' + i] : '') : '') + (f['得意先' + i] ? '　(' + f['得意先' + i] + ')' : '') + '　入荷希望 ' + (f['入荷希望日' + i] || '最短') + '　納品 ' + (f['納品場所' + i] || 'トキワ印刷(株)')); }
+  L.push('', 'よろしくお願いいたします。', '', 'トキワ印刷株式会社　' + (f['担当者'] || ''), '〒432-8053 浜松市法枝町115　TEL 053-441-2784　FAX 053-442-1265');
+  return L.join('\n');
+}
 // ---- 起動
 (function () {
   FM.サインインのボタンを置く($('fm-signin'));
   function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
   名(); window.addEventListener('fm-signin', 名);
   行を描く(); 画面へ(null);
+  try { if (new URLSearchParams(location.search).get('prefill')) 引継を入れる(); } catch (e) {}   // SHIIRE-2: 流し込みはサインイン前でも入れる（保存にはサインインが要る）
   $('new').onclick = 新規; $('save').onclick = 保存; $('del').onclick = 削除;
   $('print').onclick = function () { window.print(); };
+  $('copy').onclick = function () { var t = 本文(); (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('本文をコピーしました。メールに貼ってください'); }).catch(function () { window.prompt('コピーしてください', t); }); };
   $('list').onchange = function () { 開く($('list').value); };
   $('f-date').addEventListener('change', function () { $('p-date').textContent = 和暦($('f-date').value); });
   window.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); 保存(); } });
@@ -227,13 +254,14 @@ function 得意先名(code) { var m = マスタ['得意先マスタ']; if (!m) r
     var q = new URLSearchParams(location.search);
     if (q.get('no')) { $('list').value = q.get('no'); 開く(q.get('no')); }
     else if (q.get('juchu')) { var tr = $('rows').querySelector('tr'); 置く(tr, '伝票番号', q.get('juchu')); 置く(tr, 'パーツ', '1'); 受注から埋める(tr); }
+
   });
 })();
 </script>
 <script>window.KAIZEN_KEY = 'yoshi-chumon';</script>
 <script src="kaizen.js"></script>
 <style id="square-tables">/* 表組は全て角あり（本多さん指定）。ボタンは丸くてよい。後から読まれる角丸の !important に負けないよう :not(#_) で優先度を上げ、文書の末尾に置く */
-html body :is(table,thead,tbody,tr,th,td,caption):not(#_):not(#_),
-html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),:has(> :not(table) > table),:has(> * > :not(table) > table)):not(#_):not(#_){border-radius:0 !important}</style>
+html body :is(table,thead,tbody,tr,th,td,caption):not(#_):not(#_):not(#_):not(#_),
+html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),:has(> :not(table) > table),:has(> * > :not(table) > table)):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}</style>
 </body>
 </html>

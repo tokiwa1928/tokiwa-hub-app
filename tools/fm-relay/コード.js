@@ -855,9 +855,27 @@ function 手配_一覧() {
     var mt = o.未確定 || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); var nb = 0;
     ['用紙', '印刷', '加工'].forEach(function (g) { Object.keys(o[g] || {}).forEach(function (n) { var x = o[g][n]; if (x && ((g === '用紙' && x.k !== '在庫') || x.k === '外注') && !(x.ord && x.ord.done)) nb++; }); });
     var jz = o.事前 || {};
-    if (ks.length || nb || (mt.memo && String(mt.memo).trim()) || jz.依頼ID) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb, 依頼ID: jz.依頼ID || '' };
+    // SHIIRE-1: 用紙の 仕入／外注 行（紙の写しがあるもの）を Hub の仕入発注へ
+    var 用紙 = []; Object.keys(o.用紙 || {}).forEach(function (n) { var x = o.用紙[n]; if (!x || x.k === '在庫' || !x.紙) return; 用紙.push({ n: n, k: x.k, who: x.who || '', 紙: x.紙, ord: x.ord || null }); });
+    // GAICHU-2: 外注の行（写しがあるもの）を Hub の外注発注へ
+    var 外注 = []; Object.keys(o.外注 || {}).forEach(function (i2) { var x = o.外注[i2]; if (!x || !x.写し || !(x.写し.会社名 || x.写し.発注内容)) return; 外注.push({ i: i2, 写し: x.写し, ord: x.ord || null }); });
+    if (ks.length || nb || (mt.memo && String(mt.memo).trim()) || jz.依頼ID || 用紙.length || 外注.length) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb, 依頼ID: jz.依頼ID || '', 用紙: 用紙, 外注: 外注, 案件: o.案件 || null, at: (v[i][2] instanceof Date) ? v[i][2].toISOString() : String(v[i][2] || '') };
   }
   return { ok: true, user: who.email, 一覧: out };
+}
+/** SHIIRE-1: Hub の仕入発注から 発注済／取り消し を手配に書く（用紙[n].ord）。誰が・いつ */
+function 手配_発注済(伝票番号, 種, n, done) {
+  var who = 画面_利用者_(); 伝票番号 = String(伝票番号 || '').trim(); 種 = String(種 || '用紙'); n = String(n || ''); if (!伝票番号 || !n) throw new Error('伝票番号と n がありません');
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = 手配_帳簿_(); var v = sh.getDataRange().getValues(); var at = -1, o = {};
+    for (var i = 1; i < v.length; i++) { if (String(v[i][0]) === 伝票番号) { at = i + 1; try { o = JSON.parse(v[i][1] || '{}') || {}; } catch (e) { o = {}; } break; } }
+    o[種] = o[種] || {}; o[種][n] = o[種][n] || { k: 種 === '用紙' ? '仕入' : '外注', who: '' };
+    o[種][n].ord = (done === false || done === 'false' || done === 0) ? null : { done: true, at: new Date().toISOString(), by: who.email || '', hub: true };
+    var js = JSON.stringify(o), now = new Date().toISOString();
+    if (at > 0) sh.getRange(at, 2, 1, 3).setValues([[js, now, who.email || '']]); else sh.appendRow([伝票番号, js, now, who.email || '']);
+    return { ok: true, user: who.email, 手配: o };
+  } finally { lock.releaseLock(); }
 }
 // ═══════════ MASTER-1: マスタ ═══════════
 // FileMaker のマスタ（用紙マスタ・得意先マスタ）を Hub から直す。本多さん・福永さんだけ。何を直したかは log_ に残す
@@ -886,7 +904,7 @@ function マスタ_作る(layout, 項目) {
   return { ok: true, user: who.email, recordId: r.response.recordId };
 }
 // Hub だけのマスタ（封筒・ユーザー名・基本原価・用紙単価履歴）。保管庫「Hubマスタ_<名>」に 1 行＝1 件（id, json, at, by）
-var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目'];   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
+var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目', '用紙在庫'];   // ZAIKO-1: 用紙在庫（主要用紙のおおまかな在庫）   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
 var Hubマスタ列 = ['id', 'json', 'at', 'by', '消'];
 function Hubマスタ_帳簿_(名) { if (Hubマスタ名.indexOf(名) < 0) throw new Error('知らないマスタです: ' + 名); return 写し_帳簿_('Hubマスタ_' + 名, Hubマスタ列).getSheets()[0]; }
 function Hubマスタ_一覧(名) {
@@ -1122,6 +1140,7 @@ function handle_(action, req, who) {
     case '手配_読む':         return 手配_読む(req['伝票番号']);                          // TEHAI-1
     case '手配_書く':         return 手配_書く(req['伝票番号'], req['手配']);             // TEHAI-1
     case '手配_一覧':         return 手配_一覧();                                        // MITEI-1
+    case '手配_発注済':       return 手配_発注済(req['伝票番号'], req['種'], req.n, req.done);   // SHIIRE-1
     case '単価_集計':         return 単価_集計(req['年数']);                             // TANKA-1
     case 'マスタ_書く':       return マスタ_書く(req.layout, req.recordId, req['項目'], req['前']);   // MASTER-1
     case 'マスタ_作る':       return マスタ_作る(req.layout, req['項目']);

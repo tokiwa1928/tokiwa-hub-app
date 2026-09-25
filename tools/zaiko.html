@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>用紙在庫 | Tokiwa Hub</title>
+<style>
+  /* ZAIKO-1（本多さん 9/26）: 主要用紙のおおまかな在庫。入庫したら包み（箱）ごとにバーコードを貼り、1 つ無くなったらスキャンで −1。
+     最低数を下回ったら「そろそろ注文」。Hub の保管庫「Hubマスタ_用紙在庫」に 1 行＝1 品目 */
+  body{ margin:0; font-family:"Noto Sans JP","Yu Gothic","Meiryo",sans-serif; background:#f1f5f9; color:#111; font-size:13px; }
+  #bar{ background:#0d0d0d; color:#e5e7eb; padding:6px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  #bar a{ color:#93c5fd; text-decoration:none; }
+  button{ font:inherit; font-size:12.5px; padding:3px 10px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#111; cursor:pointer; }
+  button.k{ background:#1a1a1a; color:#fff; border-color:#1a1a1a; }
+  button.rd{ color:#b91c1c; border-color:#fca5a5; }
+  #bar .st{ color:#fbbf24; }
+  #scan{ font-size:16px; padding:6px 10px; width:260px; border:2px solid #f59e0b; }
+  .wrap{ padding:12px 14px; }
+  .low{ background:#fff7ed; border:1px solid #fdba74; padding:8px 12px; margin-bottom:10px; }
+  table{ border-collapse:collapse; width:100%; background:#fff; }
+  th,td{ border:1px solid #cbd5e1; padding:5px 8px; text-align:left; vertical-align:middle; }
+  th{ background:#e2e8f0; font-weight:700; white-space:nowrap; }
+  td.n{ text-align:right; font-variant-numeric:tabular-nums; }
+  tr.lowrow td{ background:#fff1f2; }
+  input.e{ font:inherit; padding:3px 5px; border:1px solid #cbd5e1; width:100%; box-sizing:border-box; }
+  .big{ font-size:18px; font-weight:800; }
+  #add{ background:#fff; border:1px solid #cbd5e1; padding:8px 12px; margin:10px 0; display:grid; grid-template-columns:repeat(8,1fr) auto; gap:6px; align-items:end; }
+  #add label{ font-size:11px; color:#475569; display:block; }
+  #labels{ display:none; }
+  @media print{ body{ background:#fff; } #bar,.wrap{ display:none !important; } #labels{ display:grid !important; grid-template-columns:repeat(4,1fr); gap:0; }
+    .label{ border:1px dashed #94a3b8; height:30mm; box-sizing:border-box; padding:2mm; text-align:center; page-break-inside:avoid; } .label .nm{ font-size:11px; font-weight:700; } .label svg{ max-width:100%; height:16mm; } @page{ margin:8mm; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <a href="../index.html">← Hub</a><b>📦 用紙在庫</b>
+  <input id="scan" placeholder="バーコードを読む（USB スキャナ／手入力→Enter）" autocomplete="off">
+  <label><input type="radio" name="mode" value="out" checked> 出庫（−1）</label>
+  <label><input type="radio" name="mode" value="in"> 入庫（＋1）</label>
+  <span class="st" id="st"></span>
+  <span style="margin-left:auto" id="fm-who"></span><span id="fm-signin"></span>
+</div>
+<div class="wrap">
+  <div id="lowbox" class="low" style="display:none"></div>
+  <div id="add">
+    <div><label>品目コード（バーコードの中身。空なら自動）</label><input class="e" id="a-id"></div>
+    <div style="grid-column:span 2"><label>品名</label><input class="e" id="a-name" placeholder="例: ハート 名刺用紙 ホワイト 180kg"></div>
+    <div><label>仕入先</label><input class="e" id="a-vendor" placeholder="例: ハート"></div>
+    <div><label>単位</label><input class="e" id="a-unit" value="包"></div>
+    <div><label>入数（1 包／箱あたり）</label><input class="e" id="a-per" type="number" placeholder="100"></div>
+    <div><label>最低数（これ以下で注文）</label><input class="e" id="a-min" type="number" value="1"></div>
+    <div><label>注文するとき何個</label><label style="display:none"></label><input class="e" id="a-order" type="number" value="1"></div>
+    <div><button class="k" id="a-go">＋ 品目を足す</button></div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;margin:6px 0"><span id="cnt"></span><button id="reload">読み直す</button><a href="master.html?t=用紙在庫" target="_blank" style="font-size:12px">表で直す（マスタ管理）</a></div>
+  <table><thead><tr><th>品目コード</th><th>品名</th><th>仕入先</th><th>現在数</th><th>最低数</th><th>入数</th><th>注文数</th><th>最後の動き</th><th>操作</th></tr></thead><tbody id="rows"></tbody></table>
+  <p style="color:#64748b;font-size:11.5px">使い方: 入荷したら「＋入庫」（包み・箱の数）を押し、「ラベル」でその数のバーコードを印刷して 1 つずつ貼ります。1 包（1 箱）使い切ったらバーコードを読んで −1。現在数が最低数以下になると上に「そろそろ注文」が出て、Hub の仕入発注の発注待ちに入れられます。Hub の仕入発注で「受入」すると、品目コードが合えば自動で ＋入庫 されます。</p>
+</div>
+<div id="labels"></div>
+<script src="fm-bridge.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function 数(v) { var x = Number(String(v == null ? '' : v).replace(/,/g, '')); return isNaN(x) ? 0 : x; }
+var 行 = [];
+function 読む() {
+  $('st').textContent = '読んでいます…';
+  return FM.呼ぶ('Hubマスタ_一覧', ['用紙在庫']).then(function (j) { 行 = (j.行 || []).sort(function (a, b) { return String(a.品名 || '').localeCompare(String(b.品名 || ''), 'ja'); }); 描く(); $('st').textContent = ''; })
+    .catch(function (e) { $('st').textContent = String(e.message || e); });
+}
+function 低い(r) { return 数(r.現在数) <= 数(r.最低数); }
+function 描く() {
+  var low = 行.filter(低い);
+  $('lowbox').style.display = low.length ? 'block' : 'none';
+  $('lowbox').innerHTML = '<b>⚠ そろそろ注文（' + low.length + ' 品目）</b>　' + low.map(function (r) { return esc(r.品名) + '（' + 数(r.現在数) + esc(r.単位 || '') + '）'; }).join('・') + '　<button id="lo-req">Hub の仕入発注に「発注待ち」で入れる</button>';
+  $('lo-req').onclick = function () { var req = low.map(function (r) { return { id: r.id, 品名: r.品名, 仕入先: r.仕入先 || '', 数量: 数(r.注文数) || 1, 単位: r.単位 || '包', 入数: 数(r.入数) }; }); try { localStorage.setItem('zaiko_order_req', JSON.stringify({ at: new Date().toISOString(), rows: req })); } catch (e) {} window.open('../index.html', '_blank'); $('st').textContent = 'Hub を開くと仕入発注の発注待ちに入ります（' + req.length + ' 品目）'; };
+  $('cnt').textContent = 行.length + ' 品目';
+  $('rows').innerHTML = 行.map(function (r, i) {
+    var last = (r.履歴 || []).slice(-1)[0];
+    return '<tr' + (低い(r) ? ' class="lowrow"' : '') + '><td style="font-family:monospace">' + esc(r.id) + '</td><td><b>' + esc(r.品名) + '</b>' + (r.備考 ? '<br><span style="color:#64748b;font-size:11px">' + esc(r.備考) + '</span>' : '') + '</td><td>' + esc(r.仕入先 || '') + '</td>'
+      + '<td class="n"><span class="big">' + 数(r.現在数) + '</span> ' + esc(r.単位 || '') + '</td><td class="n">' + 数(r.最低数) + '</td><td class="n">' + (r.入数 ? 数(r.入数) : '') + '</td><td class="n">' + (r.注文数 ? 数(r.注文数) : '') + '</td>'
+      + '<td style="font-size:11px;color:#475569">' + (last ? esc(String(last.日 || '').slice(0, 10)) + ' ' + (last.増減 > 0 ? '+' : '') + last.増減 + (last.誰 ? ' ' + esc(last.誰.split('@')[0]) : '') : '') + '</td>'
+      + '<td style="white-space:nowrap"><button data-a="in" data-i="' + i + '">＋入庫</button> <button data-a="out" data-i="' + i + '">−出庫</button> <button data-a="label" data-i="' + i + '">ラベル</button> <button class="rd" data-a="del" data-i="' + i + '">消す</button></td></tr>';
+  }).join('') || '<tr><td colspan="9" style="color:#94a3b8">まだ品目がありません。上の欄から足してください</td></tr>';
+  Array.prototype.forEach.call($('rows').querySelectorAll('button[data-a]'), function (b) { b.onclick = function () { var r = 行[Number(b.getAttribute('data-i'))]; var a = b.getAttribute('data-a'); if (a === 'in') { var n = prompt('入庫する数（' + (r.単位 || '包') + '）', String(数(r.注文数) || 1)); if (n === null) return; 動かす(r, 数(n), '入庫'); } else if (a === 'out') 動かす(r, -1, '出庫'); else if (a === 'label') ラベル(r); else if (a === 'del') { if (confirm('「' + r.品名 + '」を在庫の一覧から消します。よいですか？')) FM.呼ぶ('Hubマスタ_消す', ['用紙在庫', r.id]).then(読む); } }; });
+}
+function 動かす(r, 増減, メモ) {
+  if (!増減) return; var who = FM.名乗っている ? (FM.名乗っている() || '') : '';
+  r.現在数 = Math.max(0, 数(r.現在数) + 増減); r.履歴 = (r.履歴 || []).concat([{ 日: new Date().toISOString(), 増減: 増減, 誰: who, メモ: メモ || '' }]).slice(-60); r.更新 = new Date().toISOString();
+  描く(); $('st').textContent = r.品名 + ' ' + (増減 > 0 ? '+' : '') + 増減 + ' → ' + r.現在数 + (r.単位 || '');
+  FM.呼ぶ('Hubマスタ_書く', ['用紙在庫', r]).catch(function (e) { $('st').textContent = '保存できません: ' + String(e.message || e); });
+}
+// バーコード（Code128、中身は 品目コード）。1 包ごとに 1 枚
+function ラベル(r) {
+  var n = prompt('ラベルを何枚印刷しますか（入庫した包み・箱の数）', String(数(r.注文数) || 1)); if (n === null) return; n = Math.max(1, Math.min(200, 数(n)));
+  var box = $('labels'); box.innerHTML = '';
+  for (var i = 0; i < n; i++) { var d = document.createElement('div'); d.className = 'label'; d.innerHTML = '<div class="nm">' + esc(r.品名) + '</div><svg class="bc"></svg><div style="font-size:9px">' + esc(r.id) + '　使い切ったら読む（−1）</div>'; box.appendChild(d); }
+  try { Array.prototype.forEach.call(box.querySelectorAll('svg.bc'), function (sv) { JsBarcode(sv, String(r.id), { format: 'CODE128', width: 1.6, height: 40, displayValue: false, margin: 0 }); }); } catch (e) { alert('バーコードを描けません: ' + e.message); return; }
+  setTimeout(function () { window.print(); }, 200);
+}
+// スキャン: 品目コードを読んだら 出庫 −1（入庫モードなら +1）
+$('scan').addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter') return; var code = $('scan').value.trim(); $('scan').value = ''; if (!code) return;
+  var r = 行.filter(function (x) { return String(x.id) === code || String(x.id).toUpperCase() === code.toUpperCase(); })[0];
+  if (!r) { $('st').textContent = '知らないコードです: ' + code; return; }
+  var mode = document.querySelector('input[name="mode"]:checked').value; 動かす(r, mode === 'in' ? 1 : -1, mode === 'in' ? '入庫（スキャン）' : '出庫（スキャン）');
+  $('scan').focus();
+});
+$('a-go').onclick = function () {
+  var name = $('a-name').value.trim(); if (!name) { alert('品名を入れてください'); return; }
+  var id = $('a-id').value.trim() || ('ZK' + Date.now().toString(36).toUpperCase());
+  var r = { id: id, 品名: name, 仕入先: $('a-vendor').value.trim(), 単位: $('a-unit').value.trim() || '包', 入数: 数($('a-per').value), 最低数: 数($('a-min').value), 注文数: 数($('a-order').value) || 1, 現在数: 0, 履歴: [], 更新: new Date().toISOString() };
+  FM.呼ぶ('Hubマスタ_書く', ['用紙在庫', r]).then(function () { ['a-id', 'a-name', 'a-vendor', 'a-per'].forEach(function (k) { $(k).value = ''; }); 読む(); }).catch(function (e) { $('st').textContent = String(e.message || e); });
+};
+$('reload').onclick = 読む;
+(function () {
+  FM.サインインのボタンを置く($('fm-signin'));
+  function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; if (m && !行.length) 読む(); }
+  名(); window.addEventListener('fm-signin', 名);
+  $('scan').focus();
+})();
+</script>
+<script>window.KAIZEN_KEY = 'zaiko';</script>
+<script src="kaizen.js"></script>
+<style id="square-tables">html body :is(table,thead,tbody,tr,th,td,caption):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}</style>
+</body>
+</html>
