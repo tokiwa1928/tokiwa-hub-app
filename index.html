@@ -22571,7 +22571,9 @@ async function ensureProofDriveFolder(proofingId, silent){
   var company = p.custName || proj.cust || '';
   var product = p.prodName || proj.item || '';
   try {
-    var r = await callCloudAPI('ensureProofFolder', {}, { seiban: seiban, company: company, product: product });
+    var _cf = null; try { if(proj && proj.master_no) _cf = await _caseFolderEnsure_(proj, true); } catch(e){}   // DRIVE-P1: P番号/05_校正/<年_伝票> の中に
+    var _parent = _cf && _cf.subs && _cf.subs['05_校正'] ? _cf.subs['05_校正'].id : '';
+    var r = await callCloudAPI('ensureProofFolder', {}, { seiban: seiban, company: company, product: product, parentId: _parent, year: String((p.createdAt||new Date().toISOString()).slice(0,4)) });
     if(r && r.success){
       p.driveFolderId = r.folderId;
       p.driveFolderUrl = r.folderUrl;
@@ -43768,6 +43770,7 @@ function confirmOrder(tabId){
   if(!DB.projects) DB.projects=[];
   DB.projects.push(proj);
   saveDB();
+  try{ if(proj.master_no) _caseFolderEnsure_(proj, true).then(function(){ _caseFolderMoveAttachments_(proj); }); }catch(e){}   // DRIVE-P1
   // 案件管理タブに切り替え
   const btn=document.querySelector('.tb-btn[onclick*="project"]');
   swPage('project',btn);
@@ -46220,6 +46223,54 @@ function _ankenNameEdit_(id, auto){
   if(typeof saveDB==='function') saveDB(); renderProjects();
 }
 // この案件（P番号）の履歴: 年ごとに 受注（← いま）と 見積
+// ═══════════ DRIVE-P1: P番号の案件フォルダ（本多さん 9/27: Hub から出したものは自動でここへ。人は Drive を歩かない） ═══════════
+var CASE_SUBS = ['01_問い合わせ','02_見積','03_受注','04_データ','05_校正','06_指示書','07_納品・請求'];
+function _caseDenpyos_(mn){ var out=[]; (DB.projects||[]).forEach(function(p){ if(p&&p.master_no===mn){ var no=(typeof _projFmNo_==='function')?_projFmNo_(p):''; if(no&&out.indexOf(no)<0) out.push(no); } }); return out; }
+function _caseOrg_(p){ return { orgCode: String(p.custCode||p.custcd||(p.fm&&p.fm['fm-custcd'])||''), org: String(p.cust||p.from_company||'') }; }
+// 会社 GAS に作らせて、同じ P番号の案件カード全部に控えを持たせる
+function _caseFolderEnsure_(p, silent){
+  if(!p||!p.master_no||typeof callCloudAPI!=='function') return Promise.resolve(null);
+  var mn=p.master_no; var known=(DB.projects||[]).find(function(x){ return x&&x.master_no===mn&&x.caseFolder&&x.caseFolder.id; });
+  var name=(typeof _ankenName_==='function')?_ankenName_(p):''; if(!name && typeof _ankenNameAuto_==='function'){ try{ name=_ankenNameAuto_(p); }catch(e){} }
+  var org=_caseOrg_(p); var denpyos=_caseDenpyos_(mn);
+  if(known && known.caseFolder.name===('P'+mn+(name?'_'+name:'')) && (known.caseFolder.denpyos||[]).length>=denpyos.length && Date.now()-new Date(known.caseFolder.at||0).getTime()<6*3600*1000){ p.caseFolder=known.caseFolder; return Promise.resolve(known.caseFolder); }
+  return callCloudAPI('ensureCaseFolder',{},{ pno:String(mn), ankenName:name, orgCode:org.orgCode, org:org.org, denpyos:denpyos }).then(function(r){
+    if(!r||!r.success) throw new Error((r&&r.error)||'案件フォルダを作れません');
+    var cf={ id:r.folderId, url:r.url, name:r.name, subs:r.subFolders, denpyos:denpyos, at:new Date().toISOString() };
+    (DB.projects||[]).forEach(function(x){ if(x&&x.master_no===mn) x.caseFolder=cf; }); if(typeof saveDB==='function') saveDB();
+    if(!silent&&typeof _toastMsg==='function') _toastMsg('📁 案件フォルダ '+cf.name); return cf;
+  }).catch(function(e){ console.warn('[案件フォルダ]',e); if(!silent) alert('案件フォルダを作れません: '+String(e.message||e)); return null; });
+}
+// 問い合わせの添付（Drive のファイル）を 01_問い合わせ へ移す
+function _caseFolderMoveAttachments_(p){
+  var cf=p&&p.caseFolder; if(!cf||!cf.subs||!cf.subs['01_問い合わせ']) return;
+  var ids=(p.attachments||[]).filter(function(a){ return a&&a.driveFileId&&!a.movedToCase; }).map(function(a){ return a.driveFileId; }); if(!ids.length) return;
+  callCloudAPI('moveFilesToFolder',{},{ fileIds:ids, folderId:cf.subs['01_問い合わせ'].id }).then(function(r){ if(r&&r.success){ (p.attachments||[]).forEach(function(a){ if(a&&ids.indexOf(a.driveFileId)>=0) a.movedToCase=true; }); if(typeof saveDB==='function') saveDB(); } }).catch(function(){});
+}
+function _caseFolderBlockHTML_(r){
+  if(!r||!r.master_no) return '';
+  var id='case-folder-'+String(r.id||'').replace(/[^\w-]/g,'_');
+  setTimeout(function(){ try{ _caseFolderFill_(r,id); }catch(e){ console.warn('[案件フォルダ]',e); } },60);
+  return '<div id="'+id+'" style="margin:0 0 10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11.5px"><div style="font-weight:700;color:#1e40af">📁 案件フォルダ P'+r.master_no+'</div><div style="color:#64748b">用意しています…</div></div>';
+}
+function _caseFolderFill_(r, elId){
+  var el=document.getElementById(elId); if(!el) return; var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  _caseFolderEnsure_(r,true).then(function(cf){
+    if(!cf){ el.innerHTML='<div style="font-weight:700;color:#1e40af">📁 案件フォルダ</div><div style="color:#b91c1c">作れませんでした（Drive のルートが未設定か、権限がありません）</div>'; return; }
+    var subs=cf.subs||{}; var head='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-weight:700;color:#1e40af">📁 '+esc(cf.name)+'</span><span style="color:#64748b">Hub から出した見積書・注文書・指示書・校正はここに自動で入ります。Drive を開かなくてもここから見られます</span><a href="'+esc(cf.url)+'" target="_blank" onclick="event.stopPropagation()" style="margin-left:auto;font-size:11px;color:#64748b">Drive で開く（管理用）</a></div>';
+    el.innerHTML=head+'<div id="'+elId+'-subs" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px;margin-top:6px"></div>';
+    var box=document.getElementById(elId+'-subs');
+    CASE_SUBS.forEach(function(name){ var sf=subs[name]; var d=document.createElement('div'); d.style.cssText='background:#fff;border:1px solid #e2e8f0;padding:6px 8px;min-height:44px'; d.innerHTML='<div style="display:flex;align-items:center;gap:6px"><b>'+esc(name)+'</b>'+(name==='04_データ'||name==='01_問い合わせ'?'<label style="margin-left:auto;font-size:10px;color:#1e40af;cursor:pointer">＋ 入れる<input type="file" multiple style="display:none" onchange="_caseFolderUpload_(\''+esc(r.id)+'\',\''+esc(name)+'\',this)"></label>':'')+'</div><div class="cf-files" style="color:#94a3b8">…</div>'; box.appendChild(d);
+      if(!sf||!sf.id){ d.querySelector('.cf-files').textContent='（無し）'; return; }
+      callCloudAPI('listFolderFiles',{},{ folderId:sf.id }).then(function(x){ var files=(x&&x.files)||[]; var f=d.querySelector('.cf-files'); if(!files.length){ f.textContent='まだありません'; return; } f.innerHTML=files.slice(0,5).map(function(fl){ return '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><a href="'+esc(fl.url)+'" target="_blank" onclick="event.stopPropagation()" style="color:#0369a1">'+esc(fl.name)+'</a> <span style="color:#94a3b8;font-size:10px">'+esc(String(fl.updated||'').slice(0,10))+'</span></div>'; }).join('')+(files.length>5?'<div style="color:#94a3b8">ほか '+(files.length-5)+' 件</div>':''); }).catch(function(){ d.querySelector('.cf-files').textContent='読めません'; });
+    });
+  });
+}
+function _caseFolderUpload_(pid, sub, input){
+  var p=(DB.projects||[]).find(function(x){ return x.id===pid; }); if(!p||!p.caseFolder||!p.caseFolder.subs[sub]) return; var files=Array.prototype.slice.call(input.files||[]); if(!files.length) return;
+  var fid=p.caseFolder.subs[sub].id; var done=0;
+  files.forEach(function(f){ var rd=new FileReader(); rd.onload=function(){ var b64=String(rd.result).split(',')[1]||''; callCloudAPI('uploadProofFile',{},{ folderId:fid, name:f.name, mime:f.type||'application/octet-stream', base64:b64 }).then(function(){ done++; if(done===files.length){ if(typeof _toastMsg==='function') _toastMsg('📁 '+sub+' に '+done+' 件入れました'); try{ showArtesProjectDetail(pid); }catch(e){} } }).catch(function(e){ alert('入れられません: '+String(e.message||e)); }); }; rd.readAsDataURL(f); });
+}
 // STAGE-1: FileMaker の全段階（予算見積・見積・受注、全年）を索引から出し、どの伝票からでも Repeat（受注／見積／予算見積）できる
 function _ankenFmHistory_(r, elId){
   var el=document.getElementById(elId); if(!el) return;
@@ -46785,6 +46836,7 @@ function renderProjects(){
           <!-- 基本タブ -->
           <div id="proj-tab-basic-${oi}" class="proj-tab-content" style="padding:14px">
             ${(typeof _ankenHistoryHTML_==='function') ? _ankenHistoryHTML_(r) : ''}
+            ${(typeof _caseFolderBlockHTML_==='function') ? _caseFolderBlockHTML_(r) : ''}
             ${(typeof _attachListHTML_==='function') ? _attachListHTML_(_projAttachments_(r), '📎 添付（問い合わせから引き継ぎ）') : ''}
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-bottom:10px">
               <div style="background:#dbeafe;padding:8px;border-radius:6px"><div style="font-size:10px;color:#1e3a8a">数量</div><div style="font-size:14px;font-weight:700">${r.qty?r.qty.toLocaleString():'-'}${r.unit||''}</div></div>
