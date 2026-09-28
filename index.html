@@ -52953,6 +52953,7 @@ function renderInquiryFolderList(){
   var externalSources = ['gmail','linesvc','webform','manual','fax','phone',''];
   var myUser = (currentAuth && currentAuth.userName) || '';
   var myAssignedCount = 0;
+  try { _inqAutoOutcomes_(all); } catch(e){ console.warn('[自動の結果]', e); }   // AUTO-OUTCOME
   var binCounts = {}; INQ_BINS.forEach(function(b){ binCounts[b.k]=0; });   // BUNRUI-1: 未対応の件数
   window._inqBinCounts_ = binCounts; window._inqAllForCounts_ = all;   // INQ-SLACK: 期限・後での件数用
   all.forEach(function(inq){
@@ -53596,8 +53597,8 @@ function _inqOutcomeMeta_(k){ return INQ_OUTCOMES.find(function(o){ return o.k==
 // いつ自動で付くか／いつ手でやるか（確認の窓に毎回出す）
 var _INQ_OUTCOME_HOW_ = {
   quote_sent: '【自動】返信画面で「見積送付」を選んで送ると自動で付きます。\n【手で】FAX や別の手段で見積を出したとき。',
-  ordered:    '【自動】いまは自動ではありません。\n【手で】受注入力で伝票を起こしたあとに。案件が紐づいていると、ボタンの横に一押しの案内が出ます。',
-  proofing:   '【自動】いまは自動ではありません。\n【手で】校正BOXにカードを作って回したあとに。',
+  ordered:    '【自動】この連絡から作った案件に、受注入力で伝票番号が付くと自動で付きます。\n【手で】Hub を通さずに受注入力で起こしたとき。',
+  proofing:   '【自動】この連絡から校正BOXにカードを作ると自動で付きます。\n【手で】別の経路で校正に回したとき。',
   answered:   '【手で】返信だけで終わる質問に答えたあとに。',
   archived:   '【自動】「受け付けました」「受注しました」「自動送信」などの通知は最初から「控え」に仕分けられます。\n【手で】それ以外で、発注・受付の記録として残したいメール。',
   junk:       '【手で】迷惑メール。この差出人を覚えて、次から自動でジャンクに仕分けます（取り消しは「戻す」）。'
@@ -53621,7 +53622,7 @@ function _inqSetOutcome_(id, k, silent){
   try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){}
   if(!silent&&typeof _toastMsg==='function') _toastMsg(om.icon+' '+om.label+' にしました'+(k==='junk'?'（差出人を覚えました）':''));
 }
-function _inqClearOutcome_(id){ var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return; var patch={ outcome:'', outcomeAt:'', status:(inq.status==='done'?'progress':inq.status) }; Object.keys(patch).forEach(function(x){ inq[x]=patch[x]; }); if(typeof saveDB==='function') try{ saveDB(); }catch(e){} if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:patch }); }catch(e){} try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} }
+function _inqClearOutcome_(id){ var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return; var patch={ outcome:'', outcomeAt:'', outcomeCleared:true, status:(inq.status==='done'?'progress':inq.status) }; Object.keys(patch).forEach(function(x){ inq[x]=patch[x]; }); if(typeof saveDB==='function') try{ saveDB(); }catch(e){} if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:patch }); }catch(e){} try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} }
 function _inqOutcomeSelect_(inq, big){ var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
   if(inq.outcome){ var om=_inqOutcomeMeta_(inq.outcome); return '<span style="display:inline-flex;align-items:center;gap:4px;font-size:'+(big?'12.5':'11.5')+'px;font-weight:700;color:'+(om?om.color:'#334155')+'">'+(om?om.icon+' '+esc(om.label):'完了')+'<button class="btn" style="font-size:10px;padding:1px 6px" onclick="event.stopPropagation();_inqClearOutcome_(\''+esc(inq.id)+'\')" title="完了を取り消して戻す">戻す</button></span>'; }
   var hint=(!inq.outcome && inq.linked_project_id) ? '<button class="btn" style="font-size:'+(big?'12':'11')+'px;padding:'+(big?'6px 10px':'3px 8px')+';border-color:#065f46;color:#065f46" onclick="event.stopPropagation();_inqSetOutcome_(\''+esc(inq.id)+'\',\'ordered\')" title="案件が紐づいています。受注入力で起こし終わっていれば これで終わりです">✅ 受注に進んだ にする（案件あり）</button>' : '';
@@ -53667,6 +53668,23 @@ function _inqBodyView_(body){
   var m=strip(main), q=strip(quoted);
   if(!m && q){ m=q; q=''; }
   return esc(m)+(q?'<details style="margin-top:10px;border-top:1px dashed #d6d3d1;padding-top:6px"><summary style="cursor:pointer;font-size:12px;color:#64748b">▶ 引用（前のやり取り '+q.split('\n').length+' 行）を見る</summary><div style="color:#57534e;font-size:13px;margin-top:6px">'+esc(q)+'</div></details>':'');
+}
+// AUTO-OUTCOME: 事実から自動で結果を付ける（描画のたびに軽く見る。付けたものは保管庫にも保存）
+function _inqAutoOutcomes_(list){
+  var n=0; var who=(currentAuth&&currentAuth.userName)||'';
+  (list||[]).forEach(function(inq){
+    if(!inq || inq.outcome || inq.status==='done' || inq.outcomeCleared) return;
+    var k='', why='';
+    if(inq.linked_proofing_id && (DB.proofings||[]).some(function(p){ return p && p.id===inq.linked_proofing_id; })){ k='proofing'; why='校正BOXにカード'; }
+    else if(inq.linked_project_id && !/^→/.test(String(inq.linked_project_id))){ var pj=(DB.projects||[]).find(function(p){ return p && p.id===inq.linked_project_id; }); if(pj && typeof _projFmNo_==='function' && _projFmNo_(pj)){ k='ordered'; why='受注入力で伝票 '+_projFmNo_(pj); } }
+    else if(inq.linked_quote_id){ var es=(DB.estimates||[]).find(function(e){ return e && e.id===inq.linked_quote_id; }); if(es && (es.status==='提出済'||es.status==='submitted'||es.submittedAt)){ k='quote_sent'; why='見積が提出済'; } }
+    if(!k) return;
+    inq.outcome=k; inq.outcomeAt=new Date().toISOString(); inq.outcomeBy=who+'（自動：'+why+'）'; if(inq.status==='new'||inq.status==='progress') inq.status='waiting';
+    if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ outcome:k, outcomeAt:inq.outcomeAt, outcomeBy:inq.outcomeBy, status:inq.status } }); }catch(e){}
+    n++;
+  });
+  if(n && typeof saveDB==='function') try{ saveDB(); }catch(e){}
+  return n;
 }
 function _inqSlackRank_(inq){ var order={ '受注':0, '見積':1, '予算見積':1, '校正':2, '質問':3, '経営':4, 'その他':5, 'ジャンク':9 }; var r=order[_inqBin_(inq)]; return r===undefined?5:r; }
 function _inqSlackRender_(container, items, totalCount){
