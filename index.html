@@ -1813,6 +1813,9 @@ setTimeout(_removeBootLoader_, 5000);
       <div class="f"><label>電話番号</label><input id="cbp-tel" placeholder="TEL(053)441-2784"></div>
       <div class="f"><label>FAX</label><input id="cbp-fax" placeholder="FAX(053)442-1265"></div>
       <div class="f"><label>メールアドレス</label><input id="cbp-email" placeholder="info@tokiwap.co.jp"></div>
+      <div class="f"><label>返信元メール（問い合わせの返信の From）</label><input id="cbp-reply-email" placeholder="info@tokiwap.co.jp"></div>
+      <div class="f"><label>差出人名（返信の名前）</label><input id="cbp-reply-name" placeholder="トキワ印刷株式会社"></div>
+      <div class="f" style="grid-column:1/-1"><label>メール署名（この会社宛の問い合わせに返信するとき自動で付きます）</label><textarea id="cbp-signature" rows="5" placeholder="トキワ印刷株式会社&#10;〒432-8053 浜松市中央区法枝町115&#10;TEL 053-441-2784　FAX 053-442-1265&#10;info@tokiwap.co.jp"></textarea></div>
       <div class="f" style="grid-column:1/-1"><label>住所（本社）</label><input id="cbp-addr" placeholder="静岡県浜松市中央区法枝町115"></div>
       <div class="f" style="grid-column:1/-1"><label>営業所など（任意・住所の下に1行）</label><input id="cbp-branch" placeholder="静岡営業所　静岡県葵区鷹匠2丁目8-10"></div>
       <div class="f" style="grid-column:1/-1"><label>インボイス登録番号</label><input id="cbp-regno" placeholder="T2080401003559"></div>
@@ -5360,6 +5363,7 @@ function loadCompanyBillingProfile(){
   var set=function(f,v){ var el=document.getElementById('cbp-'+f); if(el) el.value=(v==null?'':v); };
   set('zip',p.zip); set('tel',p.tel); set('addr',p.addr); set('fax',p.fax);
   set('email',p.email); set('branch',p.branch); set('regno',p.regNo);
+  set('reply-email',p.replyEmail); set('reply-name',p.replyName); set('signature',p.signature);   // INQ-OUTCOME: 各社の署名・返信元
   set('banks', Array.isArray(p.banks)?p.banks.join('\n'):(p.banks||''));
   var s=document.getElementById('cbp-saved'); if(s) s.textContent='';
 }
@@ -5370,7 +5374,8 @@ function saveCompanyBillingProfile(){
   var banks=(document.getElementById('cbp-banks')?.value||'').split(/\n/).map(function(s){return s.trim();}).filter(Boolean);
   var prof=Object.assign({}, DB.conf.companyProfiles[id]||{}, {
     zip:v('zip'), tel:v('tel'), addr:v('addr'), fax:v('fax'), email:v('email'),
-    branch:v('branch'), regNo:v('regno'), banks:banks
+    branch:v('branch'), regNo:v('regno'), banks:banks,
+    replyEmail:v('reply-email'), replyName:v('reply-name'), signature:(document.getElementById('cbp-signature')?.value||'').replace(/\r/g,'').trim()
   });
   DB.conf.companyProfiles[id]=prof;
   if(typeof saveDB==='function') saveDB();
@@ -36011,6 +36016,14 @@ function _pickSignatureProfile_(inq, channel){
       sigs.forEach(function(p){ if(_emailMatchesProfile_(myEmail, p)) hits.push(p); });
     }
   }
+  // INQ-OUTCOME: 2.5 宛先（受信窓口）の会社の帳票プロフィールに署名があればそれ（全 PC で同じ）
+  if(hits.length === 0 && inq && typeof _inqRecipient_ === 'function' && typeof _companyProfile_ === 'function'){
+    try {
+      var rc = _inqRecipient_(inq); var list = (DB && DB.companies && DB.companies.length) ? DB.companies : (typeof COMPANY_INIT !== 'undefined' ? COMPANY_INIT : []);
+      var co = rc && rc.key ? list.find(function(c){ return c && c.name && c.name.indexOf(rc.key) >= 0; }) : null;
+      if(co){ var cp = _companyProfile_(co.id) || {}; if(cp.signature || cp.replyEmail) return { id:'company:'+co.id, name:cp.replyName||co.name, receivingEmails:[cp.email||cp.replyEmail||''], replyEmail:cp.replyEmail||cp.email||'', signature:cp.signature||'', lwSignature:'', company:co.id }; }
+    } catch(e){}
+  }
   // 3. デフォルト or 最初
   if(hits.length === 0){
     var def = sigs.find(function(x){ return x.isDefault; });
@@ -53023,6 +53036,10 @@ function renderInquiryFolderList(){
   (function(){ var due=0, later=0; try { (window._inqAllForCounts_||[]).forEach(function(q){ if(q.status==='done') return; if(_inqSnoozed_(q)) { later++; return; } var d=_inqDeadline_(q); if(d && d.days<=3) due++; }); } catch(e){}
     folderHtml += '<div class="inq-folder-item' + (window._inqDueSoonSel_ ? ' act' : '') + '" onclick="_inqDueSoonToggle_()" title="見積期限・納期が 3 日以内（本文から拾った日付）"><span class="inq-folder-icon" style="color:' + (window._inqDueSoonSel_ ? '#fff' : '#dc2626') + '">⏰</span><span class="inq-folder-label">期限が近い</span>' + (due ? '<span class="inq-folder-count" style="background:#dc2626">' + due + '</span>' : '') + '</div>';
     folderHtml += '<div class="inq-folder-item' + (window._inqLaterSel_ ? ' act' : '') + '" onclick="_inqLaterToggle_()" title="「後で」にしたもの。期日が来ると受信トレイに戻ります"><span class="inq-folder-icon" style="color:' + (window._inqLaterSel_ ? '#fff' : '#64748b') + '">💤</span><span class="inq-folder-label">後で</span>' + (later ? '<span class="inq-folder-count" style="background:#64748b">' + later + '</span>' : '') + '</div>'; })();
+  // INQ-OUTCOME: 結果（完了にしたもの）。件数はこの会社の分（期間に関係なく）
+  (function(){ var oc={}; INQ_OUTCOMES.forEach(function(o){ oc[o.k]=0; }); try { (window._inqAllForCounts_||[]).forEach(function(q){ if(q.outcome && oc[q.outcome]!==undefined) oc[q.outcome]++; }); } catch(e){}
+    folderHtml += '<div class="inq-folder-divider"></div><div class="inq-folder-section" title="「完了にする ▾」で振り分けたもの。控えは発注・受付の記録">結果' + (window._inqOutcomeSel_ ? ' <span onclick="_inqOutcomeToggle_(\'\')" style="cursor:pointer;color:#1a73e8;font-weight:400">（解除）</span>' : '') + '</div>';
+    INQ_OUTCOMES.forEach(function(o){ var act=window._inqOutcomeSel_===o.k; folderHtml += '<div class="inq-folder-item' + (act ? ' act' : '') + '" onclick="_inqOutcomeToggle_(\'' + o.k + '\')" title="' + o.help + '"><span class="inq-folder-icon" style="color:' + (act ? '#fff' : o.color) + '">' + o.icon + '</span><span class="inq-folder-label">' + o.label + '</span>' + (oc[o.k] ? '<span class="inq-folder-count" style="background:#64748b">' + oc[o.k] + '</span>' : '') + '</div>'; }); })();
   folderHtml += '<div class="inq-folder-divider"></div>' +
     '<div class="inq-folder-section">ステータス</div>';
 
@@ -53418,6 +53435,7 @@ const INQ_BINS = [
   { k:'質問',     label:'質問',     icon:'❓', color:'#0891b2', kind:'general' },
   { k:'経営',     label:'経営',     icon:'🏢', color:'#b45309', kind:'' },
   { k:'その他',   label:'その他',   icon:'📄', color:'#6b7280', kind:'' },
+  { k:'控え',     label:'控え',     icon:'🗂', color:'#78716c', kind:'' },
   { k:'ジャンク', label:'ジャンク', icon:'🗑', color:'#9ca3af', kind:'' }
 ];
 const _INQ_BIN_WORDS = {
@@ -53453,6 +53471,8 @@ function _inqBinAuto_(inq){
   if(src==='internal_msg') return { bin:'その他', reason:'社内連絡' };
   if(src==='interco'||inq.kind==='order') return { bin:'受注', reason:'社間の発注' };
   if(dom && _inqOwnDomains_()[dom]) return { bin:'その他', reason:'社内の差出人（'+dom+'）' };   // INQ-SLACK-2
+  // INQ-OUTCOME: 受付・確認の通知（受け付けました／受注しました／自動送信）は「控え」。ただし要対応の文言があれば控えにしない
+  if(!_inqImportant_(inq) && /受け付けました|受付けました|受付いたしました|受付致しました|受注しました|受注いたしました|ご注文ありがとう|注文を承り|自動送信|自動配信|発注確認|注文確認|受領しました|受領いたしました|登録完了|お申し?込みありがとう|配送手配|出荷しました|発送しました/.test(subj+' '+body.slice(0,400)) && !/お願い|下さい|ください|でしょうか|ますか|いただけ/.test(subj+' '+body.slice(0,200))) return { bin:'控え', reason:'受付・確認の通知（発注の記録として残す）' };
   var rules=_inqBinRules_(); if(email&&rules.byEmail[email]) return { bin:rules.byEmail[email], reason:'前に同じ差出人をそう仕分けた' }; if(dom&&rules.byDomain[dom]) return { bin:rules.byDomain[dom], reason:'前に同じ会社（ドメイン）をそう仕分けた' };
   var score={}; Object.keys(_INQ_BIN_WORDS).forEach(function(b){ var n=0, hit=[]; _INQ_BIN_WORDS[b].forEach(function(w){ var wl=w.toLowerCase(); if(sl.indexOf(wl)>=0){ n+=2; hit.push(w); } else if(text.indexOf(wl)>=0){ n+=1; hit.push(w); } }); score[b]={ n:n, hit:hit.slice(0,4) }; });
   var junk=0, jhit=[]; _INQ_JUNK_WORDS.forEach(function(w){ if(text.indexOf(w.toLowerCase())>=0||email.indexOf(w)>=0){ junk++; jhit.push(w); } });
@@ -53487,13 +53507,14 @@ function _inqSetBin_(id, bin){
 function _inqBinChip_(inq){
   var k=_inqBin_(inq), m=_inqBinMeta_(k); var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
   var auto=!inq.bin; var title=(auto?'自動の仕分け':'手で仕分け（'+(inq.bin_by||'')+'）')+(inq.bin_reason?'：'+inq.bin_reason:'');
-  return '<span style="display:inline-flex;align-items:center;gap:2px;background:#fff;color:'+m.color+';border:1.5px solid '+m.color+';font-size:10px;padding:0 3px 0 6px;font-weight:700" title="'+esc(title)+'">'+m.icon+' '+esc(m.label)+(auto?'<span style="opacity:.7;font-weight:400">（自動）</span>':'')
-    +'<select onclick="event.stopPropagation()" onchange="event.stopPropagation();_inqSetBin_(\''+esc(inq.id)+'\',this.value)" title="仕分けを直す（差出人を覚えて次から同じにします）" style="font-size:9px;border:0;background:transparent;color:'+m.color+';padding:0 2px;max-width:16px"><option value="">▾</option>'+INQ_BINS.map(function(b){ return '<option value="'+b.k+'" style="color:#111">'+b.icon+' '+b.label+'</option>'; }).join('')+'</select></span>';
+  // INQ-OUTCOME: 押しやすい普通の選択に（選ぶと差出人を覚えて次から同じ）
+  return '<select onclick="event.stopPropagation()" onchange="event.stopPropagation();_inqSetBin_(\''+esc(inq.id)+'\',this.value)" title="'+esc(title)+'" style="font:inherit;font-size:11.5px;font-weight:700;color:'+m.color+';border:1.5px solid '+m.color+';background:#fff;padding:2px 6px;min-height:26px;max-width:150px">'+INQ_BINS.map(function(b){ return '<option value="'+b.k+'" style="color:#111"'+(b.k===k?' selected':'')+'>'+b.icon+' '+esc(b.label)+(b.k===k&&auto?'（自動）':'')+'</option>'; }).join('')+'</select>';
 }
 function setInqBin(k){ window._inqBinSel_ = (window._inqBinSel_===k) ? '' : k; try{ renderInquiryList(); }catch(e){} try{ renderInquiryFolderList(); }catch(e){} }
 // ═══════════ INQ-SLACK: Slack 風の流れ・期限・後で・今日やること ═══════════
 window._inqSlackOn_ = (function(){ try { var v = localStorage.getItem('inq_view_slack'); return v === null ? true : v === '1'; } catch(e){ return true; } })();
 function _inqSlackToggle_(on){ window._inqSlackOn_ = !!on; try { localStorage.setItem('inq_view_slack', on ? '1' : '0'); } catch(e){} try { renderInquiryList(); } catch(e){} }
+function _inqOutcomeToggle_(k){ window._inqOutcomeSel_ = (window._inqOutcomeSel_===k) ? '' : k; window._inqLaterSel_=false; window._inqDueSoonSel_=false; try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} }
 function _inqDueSoonToggle_(){ window._inqDueSoonSel_ = !window._inqDueSoonSel_; window._inqLaterSel_ = false; try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} }
 function _inqLaterToggle_(){ window._inqLaterSel_ = !window._inqLaterSel_; window._inqDueSoonSel_ = false; try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} }
 function _inqSnoozed_(inq){ var u = inq && inq.snoozeUntil; if(!u) return false; return String(u).slice(0,10) > new Date().toISOString().slice(0,10); }
@@ -53556,20 +53577,56 @@ var INQ_CO_COLORS = [ { key:'トキワ', label:'トキワ印刷', color:'#65a30d
 function _inqRecipient_(inq){ var t=String((inq&&(inq.channel_company||inq.companyCode||inq.company||''))||'')+' '+String((inq&&(inq.to_email||inq.delivered_to))||''); var hit=INQ_CO_COLORS.filter(function(c){ return t.indexOf(c.key)>=0||t.toLowerCase().indexOf(c.label.toLowerCase())>=0; })[0]; if(!hit){ var lo=t.toLowerCase(); if(/tokiwa/.test(lo)) hit=INQ_CO_COLORS[0]; else if(/murayama/.test(lo)) hit=INQ_CO_COLORS[1]; else if(/kitakami/.test(lo)) hit=INQ_CO_COLORS[2]; else if(/art-?s|arts/.test(lo)) hit=INQ_CO_COLORS[3]; else if(/tsushima/.test(lo)) hit=INQ_CO_COLORS[4]; else if(/nakao/.test(lo)) hit=INQ_CO_COLORS[5]; else if(/yamauchi/.test(lo)) hit=INQ_CO_COLORS[6]; } return hit||{ key:'', label:String(inq&&inq.channel_company||'').replace(/^\d+_/,'').split('/')[0].trim()||'宛先不明', color:'#64748b' }; }
 // INQ-SLACK-5: 受信日時（今日なら 時:分、今年なら 月/日 時:分、それ以前は 年/月/日）
 function _inqWhen_(q){ var v=q&&(q.received_at||q.createdAt); if(!v) return ''; var d=new Date(v); if(isNaN(d.getTime())) return String(v).slice(0,16); var now=new Date(); var hm=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); if(d.toDateString()===now.toDateString()) return '今日 '+hm; if(d.getFullYear()===now.getFullYear()) return (d.getMonth()+1)+'/'+d.getDate()+'（'+'日月火水木金土'[d.getDay()]+'）'+hm; return d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate()+' '+hm; }
+// ═══════════ INQ-OUTCOME: 完了の結果（具体的に）・要対応・添付サムネイル ═══════════
+const INQ_OUTCOMES = [
+  { k:'quote_sent', label:'見積提出済',            icon:'📤', color:'#0369a1', help:'見積を出して終わり（メール・FAX どちらでも）' },
+  { k:'ordered',    label:'受注に進んだ',          icon:'✅', color:'#065f46', help:'受注入力・案件に移した' },
+  { k:'proofing',   label:'校正に回した',          icon:'🖍', color:'#7c3aed', help:'校正BOXに移した' },
+  { k:'answered',   label:'回答済（返信で終わり）', icon:'💬', color:'#0891b2', help:'質問に答えて終わり' },
+  { k:'archived',   label:'控えに保管',            icon:'🗂', color:'#78716c', help:'受け付けました・受注しました などの記録。発注の記録として残る' },
+  { k:'junk',       label:'迷惑メール',            icon:'🗑', color:'#9ca3af', help:'差出人を覚えて、次から自動でジャンクへ' }
+];
+function _inqOutcomeMeta_(k){ return INQ_OUTCOMES.find(function(o){ return o.k===k; })||null; }
+var _INQ_IMPORTANT_RE_ = /不備|不足|エラー|再送|再度お送り|確認できません|受付できません|受け付けられません|受け付けできません|開けません|破損|文字化け|至急|大至急|緊急|期限切れ|失敗|未着|届いていません|届きません|欠落|不明な点|ご確認ください.*(データ|原稿)|(データ|原稿).*(不備|不足|誤り)/;
+function _inqImportant_(inq){ if(!inq) return false; if(inq._impCache!==undefined && inq._impSrc===String(inq.subject||'').length+':'+String(inq.body||'').length) return inq._impCache; var body=String(inq.body||inq.summary||'').replace(/\r/g,''); body=body.split(/\n-{3,}|\nFrom:\s|\n送信元:|\nOn .{6,80} wrote:/)[0].split('\n').filter(function(l){ return !/^\s*>/.test(l); }).join('\n').slice(0,1500); var v=_INQ_IMPORTANT_RE_.test(String(inq.subject||'')+'\n'+body); inq._impCache=v; inq._impSrc=String(inq.subject||'').length+':'+String(inq.body||'').length; return v; }
+function _inqRepliedAt_(inq){ var tl=(inq&&inq.timeline)||[]; for(var i=tl.length-1;i>=0;i--){ var t=tl[i]; if(t&&(t.type==='forward'||t.type==='reply')&&(!t.meta||t.meta.channel!=='internal')) return t.at||t.date||''; } return ''; }
+function _inqFlags_(inq){ var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }; var h=''; if(_inqImportant_(inq)) h+='<span style="font-size:11px;font-weight:900;color:#fff;background:#dc2626;padding:1px 7px" title="データの不備・エラー・至急 などの文言があります">⚠ 要対応</span>'; var ra=_inqRepliedAt_(inq); if(ra) h+='<span style="font-size:11px;color:#0369a1;font-weight:700" title="'+esc(ra)+'">✉ 返信済 '+esc(_inqWhen_({ received_at:ra }))+'</span>'; if(inq.outcome){ var om=_inqOutcomeMeta_(inq.outcome); if(om) h+='<span style="font-size:11px;font-weight:700;color:#fff;background:'+om.color+';padding:1px 7px" title="'+esc((inq.outcomeBy||'')+' '+(inq.outcomeAt||''))+'">'+om.icon+' '+esc(om.label)+'</span>'; } return h; }
+function _inqSetOutcome_(id, k, silent){
+  var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return; if(!k){ return; }
+  var om=_inqOutcomeMeta_(k); if(!om) return;
+  var patch={ outcome:k, outcomeAt:new Date().toISOString(), outcomeBy:(currentAuth&&currentAuth.userName)||'' };
+  if(k==='junk'){ patch.status='done'; patch.bin='ジャンク'; var e=String(inq.from_email||inq.email||'').toLowerCase(); if(e){ var r=_inqBinRules_(); r.byEmail[e]='ジャンク'; } }
+  else if(k==='archived'){ patch.status='done'; patch.bin='控え'; }
+  else if(k==='answered'){ patch.status='done'; }
+  else { if(inq.status==='new'||inq.status==='progress') patch.status='waiting'; }
+  Object.keys(patch).forEach(function(x){ inq[x]=patch[x]; }); window._inqKnownCache_=null;
+  if(typeof saveDB==='function') try{ saveDB(); }catch(e){}
+  if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:patch }); }catch(e){}
+  try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){}
+  if(!silent&&typeof _toastMsg==='function') _toastMsg(om.icon+' '+om.label+' にしました'+(k==='junk'?'（差出人を覚えました）':''));
+}
+function _inqClearOutcome_(id){ var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return; var patch={ outcome:'', outcomeAt:'', status:(inq.status==='done'?'progress':inq.status) }; Object.keys(patch).forEach(function(x){ inq[x]=patch[x]; }); if(typeof saveDB==='function') try{ saveDB(); }catch(e){} if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:patch }); }catch(e){} try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} }
+function _inqOutcomeSelect_(inq, big){ var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  if(inq.outcome){ var om=_inqOutcomeMeta_(inq.outcome); return '<span style="display:inline-flex;align-items:center;gap:4px;font-size:'+(big?'12.5':'11.5')+'px;font-weight:700;color:'+(om?om.color:'#334155')+'">'+(om?om.icon+' '+esc(om.label):'完了')+'<button class="btn" style="font-size:10px;padding:1px 6px" onclick="event.stopPropagation();_inqClearOutcome_(\''+esc(inq.id)+'\')" title="完了を取り消して戻す">戻す</button></span>'; }
+  return '<select onclick="event.stopPropagation()" onchange="event.stopPropagation();if(this.value){_inqSetOutcome_(\''+esc(inq.id)+'\',this.value);}" title="どう終わったかを選びます。控えは発注・受付の記録として残ります" style="font:inherit;font-size:'+(big?'13':'11.5')+'px;font-weight:700;padding:'+(big?'6px 10px':'3px 8px')+';border:1px solid #64748b;background:#fff;color:#0f172a;min-height:'+(big?'40':'28')+'px"><option value="">✔ 完了にする ▾</option>'+INQ_OUTCOMES.map(function(o){ return '<option value="'+o.k+'">'+o.icon+' '+esc(o.label)+'</option>'; }).join('')+'</select>'; }
+// 添付: Drive のサムネイル（触らなくても見える）。画像・PDF・Office はサムネイルが出る。開けないときはファイル名
+function _inqAttachThumbs_(inq, w, h){ var atts=(typeof _inqAttachLite_==='function')?_inqAttachLite_(inq):[]; if(!atts.length) return ''; var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }; var max=h>150?8:5;
+  return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+atts.slice(0,max).map(function(a){ var id=a.driveFileId; var url=id?('https://drive.google.com/file/d/'+id+'/view'):(a.url||'#'); var name=a.name||'ファイル'; if(!id) return '<a href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:11px;padding:4px 8px;border:1px solid #e2e8f0;background:#fff;color:#0369a1;text-decoration:none">📎 '+esc(name)+'</a>';
+    return '<a href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()" title="'+esc(name)+'（押すと Drive で開く）" style="display:inline-block;border:1px solid #e2e8f0;background:#fff;text-decoration:none;color:#334155"><img src="https://drive.google.com/thumbnail?id='+esc(id)+'&sz=w'+w+'" loading="lazy" alt="'+esc(name)+'" style="display:block;height:'+h+'px;max-width:'+w+'px;object-fit:contain;background:#f8fafc" onerror="this.style.display=\'none\';this.nextSibling.style.padding=\'10px 8px\'"><div style="font-size:10px;max-width:'+w+'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 4px">📎 '+esc(name)+'</div></a>'; }).join('')+(atts.length>max?'<span style="font-size:11px;color:#64748b;align-self:center">ほか '+(atts.length-max)+' 件</span>':'')+'</div>'; }
 function _inqSlackRank_(inq){ var order={ '受注':0, '見積':1, '予算見積':1, '校正':2, '質問':3, '経営':4, 'その他':5, 'ジャンク':9 }; var r=order[_inqBin_(inq)]; return r===undefined?5:r; }
 function _inqSlackRender_(container, items, totalCount){
   var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
   // 今日やること: フォルダ・期間に関係なく（会社の絞りだけ）。対応済・後で・ジャンクを除き、期限 3 日以内が先（近い順）、次に 受注→見積→校正→質問（古い順）
-  var base=_inqThreads_((window._inqAllForCounts_||items).filter(function(q){ return q && q.status!=='done' && !_inqSnoozed_(q) && _inqBin_(q)!=='ジャンク'; })).map(function(t){ return t.head; });   // INQ-THREAD: 1 スレッド 1 件
-  var todayAll=base.map(function(q){ var d=_inqDeadline_(q); return { q:q, d:d, key:[ (d&&d.days<=3)?0:1, (d&&d.days<=3)?d.days:99, _inqSlackRank_(q), new Date(q.received_at||q.createdAt||0).getTime() ] }; }).sort(function(a,b){ for(var i=0;i<4;i++){ if(a.key[i]!==b.key[i]) return a.key[i]-b.key[i]; } return 0; });
-  var cnt={ due:0 }; INQ_BINS.forEach(function(b){ cnt[b.k]=0; }); todayAll.forEach(function(x){ if(x.d&&x.d.days<=3) cnt.due++; cnt[_inqBin_(x.q)]=(cnt[_inqBin_(x.q)]||0)+1; });
+  var base=_inqThreads_((window._inqAllForCounts_||items).filter(function(q){ var b=_inqBin_(q); return q && q.status!=='done' && !q.outcome && !_inqSnoozed_(q) && b!=='ジャンク' && (b!=='控え' || _inqImportant_(q)); })).map(function(t){ return t.head; });   // INQ-THREAD: 1 スレッド 1 件。控えは要対応のときだけ
+  var todayAll=base.map(function(q){ var d=_inqDeadline_(q); return { q:q, d:d, key:[ _inqImportant_(q)?0:1, (d&&d.days<=3)?0:1, (d&&d.days<=3)?d.days:99, _inqSlackRank_(q), new Date(q.received_at||q.createdAt||0).getTime() ] }; }).sort(function(a,b){ for(var i=0;i<5;i++){ if(a.key[i]!==b.key[i]) return a.key[i]-b.key[i]; } return 0; });
+  var cnt={ due:0, imp:0 }; INQ_BINS.forEach(function(b){ cnt[b.k]=0; }); todayAll.forEach(function(x){ if(x.d&&x.d.days<=3) cnt.due++; if(_inqImportant_(x.q)) cnt.imp++; cnt[_inqBin_(x.q)]=(cnt[_inqBin_(x.q)]||0)+1; });
   var showN = window._inqTodayMore_ ? 20 : 5; var today=todayAll.slice(0, showN);
   var chipBtn=function(label, n, js, color){ return '<button class="btn" style="font-size:11px;padding:2px 8px;border-color:'+color+';color:'+color+';'+(n?'':'opacity:.45')+'" onclick="'+js+'">'+label+' <b>'+n+'</b></button>'; };
   var pin=''; if(!window._inqLaterSel_){ pin='<div style="margin:0 0 10px;border:2px solid #0f766e;background:#f0fdfa;padding:8px 12px">'
     +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-weight:900;color:#115e59;font-size:14px">★ 今日やること　あと <span style="font-size:18px">'+todayAll.length+'</span> 件</span>'
-    +chipBtn('⏰ 期限3日以内', cnt.due, "_inqDueSoonToggle_()", '#dc2626')+chipBtn('✅ 受注', cnt['受注']||0, "setInqBin('受注')", '#065f46')+chipBtn('📝 見積', (cnt['見積']||0)+(cnt['予算見積']||0), "setInqBin('見積')", '#1d4ed8')+chipBtn('🖍 校正', cnt['校正']||0, "setInqBin('校正')", '#7c3aed')+chipBtn('❓ 質問', cnt['質問']||0, "setInqBin('質問')", '#0891b2')+chipBtn('📄 その他', (cnt['その他']||0)+(cnt['経営']||0), "setInqBin('その他')", '#6b7280')
-    +'<span style="margin-left:auto;font-size:11px;color:#64748b">期限 3 日以内 → 受注 → 見積 → 校正 → 質問。フォルダを変えてもここは変わりません</span></div>'
-    +(today.length?today.map(function(x){ var q=x.q, m=_inqBinMeta_(_inqBin_(q)), na=_inqNextAction_(q); var rc=_inqRecipient_(q); return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #ccfbf1;border-left:6px solid '+rc.color+';padding:5px 8px;margin-top:5px;cursor:pointer" onclick="openInquiryDetail(\''+esc(q.id)+'\')"><span style="font-size:10px;font-weight:700;color:#fff;background:'+rc.color+';padding:1px 6px;white-space:nowrap">'+esc(rc.label)+'</span><span style="font-size:11px;font-weight:700;color:'+m.color+';border:1.5px solid '+m.color+';background:#fff;padding:0 6px;white-space:nowrap">'+m.icon+' '+esc(m.label)+'</span><span style="font-size:11px;color:#64748b;white-space:nowrap">'+esc(_inqWhen_(q))+'</span><b style="font-size:12.5px;white-space:nowrap">'+esc(q.from_company||q.custName||q.from_name||'')+'</b><span style="font-size:12.5px;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-grow:1">'+esc(q.subject||'(件名なし)')+'</span>'+_inqDlChip_(q)+'<button class="btn" style="font-size:11px;font-weight:700;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e;white-space:nowrap" onclick="event.stopPropagation();'+na.js+'">'+esc(na.label)+'</button></div>'; }).join(''):'<div style="margin-top:6px;color:#166534;font-weight:700">🎉 未対応はありません</div>')
+    +(cnt.imp?'<span style="font-size:11px;font-weight:900;color:#fff;background:#dc2626;padding:2px 8px">⚠ 要対応 '+cnt.imp+'</span>':'')+chipBtn('⏰ 期限3日以内', cnt.due, "_inqDueSoonToggle_()", '#dc2626')+chipBtn('✅ 受注', cnt['受注']||0, "setInqBin('受注')", '#065f46')+chipBtn('📝 見積', (cnt['見積']||0)+(cnt['予算見積']||0), "setInqBin('見積')", '#1d4ed8')+chipBtn('🖍 校正', cnt['校正']||0, "setInqBin('校正')", '#7c3aed')+chipBtn('❓ 質問', cnt['質問']||0, "setInqBin('質問')", '#0891b2')+chipBtn('📄 その他', (cnt['その他']||0)+(cnt['経営']||0), "setInqBin('その他')", '#6b7280')
+    +'<span style="margin-left:auto;font-size:11px;color:#64748b">⚠ 要対応 → 期限 3 日以内 → 受注 → 見積 → 校正 → 質問。完了にしたものは外れます</span></div>'
+    +(today.length?today.map(function(x){ var q=x.q, m=_inqBinMeta_(_inqBin_(q)), na=_inqNextAction_(q); var rc=_inqRecipient_(q); return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #ccfbf1;border-left:6px solid '+rc.color+';padding:5px 8px;margin-top:5px;cursor:pointer" onclick="openInquiryDetail(\''+esc(q.id)+'\')"><span style="font-size:10px;font-weight:700;color:#fff;background:'+rc.color+';padding:1px 6px;white-space:nowrap">'+esc(rc.label)+'</span>'+(_inqImportant_(q)?'<span style="font-size:10px;font-weight:900;color:#fff;background:#dc2626;padding:1px 6px;white-space:nowrap">⚠ 要対応</span>':'')+'<span style="font-size:11px;font-weight:700;color:'+m.color+';border:1.5px solid '+m.color+';background:#fff;padding:0 6px;white-space:nowrap">'+m.icon+' '+esc(m.label)+'</span><span style="font-size:11px;color:#64748b;white-space:nowrap">'+esc(_inqWhen_(q))+'</span><b style="font-size:12.5px;white-space:nowrap">'+esc(q.from_company||q.custName||q.from_name||'')+'</b><span style="font-size:12.5px;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-grow:1">'+esc(q.subject||'(件名なし)')+'</span>'+_inqDlChip_(q)+'<button class="btn" style="font-size:11px;font-weight:700;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e;white-space:nowrap" onclick="event.stopPropagation();'+na.js+'">'+esc(na.label)+'</button></div>'; }).join(''):'<div style="margin-top:6px;color:#166534;font-weight:700">🎉 未対応はありません</div>')
     +(todayAll.length>5?'<div style="text-align:right;margin-top:4px"><button class="btn" style="font-size:11px;padding:2px 10px" onclick="window._inqTodayMore_=!window._inqTodayMore_;renderInquiryList()">'+(window._inqTodayMore_?'たたむ':'もっと（あと '+(todayAll.length-5)+' 件）')+'</button></div>':'')
     +'</div>'; }
   var threads=_inqThreads_(items); window._inqThreadMap_={}; threads.forEach(function(t){ window._inqThreadMap_[t.head.id]=t; });
@@ -53586,11 +53643,11 @@ function _inqSlackRender_(container, items, totalCount){
     return '<div class="inq-slack-row" data-id="'+esc(q.id)+'" style="display:flex;gap:12px;padding:10px 12px 10px 8px;margin:0 0 8px;border:1px solid '+(selNow?'#0f766e':'#cbd5e1')+';border-left:6px solid '+rc.color+';background:'+(q.status==='done'?'#f8fafc':(selNow?'#f0fdfa':(!q.readAt?'#fffbeb':'#fff')))+';cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.05)" onclick="openInquiryDetail(\''+esc(q.id)+'\')">'
       +'<div style="width:36px;height:36px;flex-shrink:0;background:'+rc.color+';color:#fff;font-weight:900;display:flex;align-items:center;justify-content:center;font-size:14px" title="宛先: '+esc(rc.label)+'">'+esc(initial)+'</div>'
       +'<div style="flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:3px">'
-      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-weight:900;font-size:13.5px">'+esc(who)+'</span>'+(q.from_company&&q.from_company!==who?'<span style="font-size:12px;color:#64748b">'+esc(q.from_company)+'</span>':'')+coBadge+'<span style="font-size:11.5px;color:#334155;font-weight:700" title="受信日時">🕒 '+esc(_inqWhen_(q))+'</span><span style="font-size:11px;color:#94a3b8">（'+esc(getElapsedTime(q.received_at||q.createdAt))+'）</span>'+_inqBinChip_(q)+seen+(sn?'<span style="font-size:11px;color:#64748b">💤 '+esc(q.snoozeUntil)+' まで</span>':'')+(q.status==='done'?'<span style="font-size:11px;color:#16a34a;font-weight:700">✅ 対応済</span>':'')+'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-weight:900;font-size:13.5px">'+esc(who)+'</span>'+(q.from_company&&q.from_company!==who?'<span style="font-size:12px;color:#64748b">'+esc(q.from_company)+'</span>':'')+coBadge+'<span style="font-size:11.5px;color:#334155;font-weight:700" title="受信日時">🕒 '+esc(_inqWhen_(q))+'</span><span style="font-size:11px;color:#94a3b8">（'+esc(getElapsedTime(q.received_at||q.createdAt))+'）</span>'+_inqBinChip_(q)+seen+_inqFlags_(q)+(sn?'<span style="font-size:11px;color:#64748b">💤 '+esc(q.snoozeUntil)+' まで</span>':'')+(q.status==='done'&&!q.outcome?'<span style="font-size:11px;color:#16a34a;font-weight:700">✅ 対応済</span>':'')+'</div>'
       +'<div style="font-weight:700;font-size:13.5px">'+esc(q.subject||'(件名なし)')+'</div>'
-      +'<div style="font-size:12.5px;color:#334155;line-height:1.5;background:#f8fafc;border-left:3px solid #cbd5e1;padding:4px 10px">'+esc(_inqSummary_(q))+'</div>'+olderHtml
+      +'<div style="font-size:12.5px;color:#334155;line-height:1.5;background:#f8fafc;border-left:3px solid #cbd5e1;padding:4px 10px">'+esc(_inqSummary_(q))+'</div>'+_inqAttachThumbs_(q,140,90)+olderHtml
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+_inqDlChip_(q)+chips.map(function(c){ return '<span style="font-size:11px;padding:1px 7px;background:'+(c.red?'#fee2e2;color:#991b1b;font-weight:700':'#f1f5f9;color:#334155')+';border:1px solid #e2e8f0">'+esc(c.t)+'</span>'; }).join('')+(linked?'<span style="font-size:11px;padding:1px 7px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe">📁 '+esc(linked.master_no?'P'+linked.master_no:linked.id)+'</span>':'')+(att?'<span style="font-size:11px;padding:1px 7px;background:#f1f5f9;border:1px solid #e2e8f0">📎 '+att+'</span>':'')+'<span onclick="event.stopPropagation();_inqSlackSelect_(\''+esc(q.id)+'\')" title="右にやり取りを開く" style="font-size:11px;padding:1px 7px;border:1px solid #0f766e;color:#0f766e;cursor:pointer;font-weight:700">🧵 '+(th.all.length>1?th.all.length+' 通のやり取り':'スレッド')+(olderUnread?' <span style="color:#dc2626">●'+olderUnread+'</span>':'')+'</span>'+'</div>'
-      +'<div style="display:flex;gap:6px;align-items:center;margin-top:2px;flex-wrap:wrap"><button class="btn" style="font-size:11px;font-weight:700;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e" onclick="event.stopPropagation();'+na.js+'">'+esc(na.label)+'</button><button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();showEmailReplyModal(\''+esc(q.id)+'\')">返信</button>'+(sn?'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();_inqUnsnooze_(\''+esc(q.id)+'\')">戻す</button>':'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();_inqSnooze_(\''+esc(q.id)+'\')">後で ▾</button>')+(q.status!=='done'?'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();_inqMarkDone_(\''+esc(q.id)+'\')">対応済</button>':'')+'<span style="margin-left:auto;font-size:11px;color:#94a3b8">担当 '+esc(q.assignee||'—')+'</span></div>'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-top:2px;flex-wrap:wrap"><button class="btn" style="font-size:11px;font-weight:700;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e" onclick="event.stopPropagation();'+na.js+'">'+esc(na.label)+'</button><button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();showEmailReplyModal(\''+esc(q.id)+'\')">返信</button>'+_inqOutcomeSelect_(q,false)+(sn?'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();_inqUnsnooze_(\''+esc(q.id)+'\')">後でを解除</button>':'')+'<span style="margin-left:auto;font-size:11px;color:#94a3b8">担当 '+esc(q.assignee||'—')+'</span></div>'
       +'</div></div>';
   }).join('');
   var more = totalCount>items.length ? '<div style="text-align:center;padding:8px;font-size:12px;color:#64748b">'+threads.length+' スレッド（'+items.length+' / '+totalCount+' 通）を表示　<button class="btn" style="font-size:11px" onclick="_expandShowCount_(\'inq-list\', PAGE_LIMITS.inquiry); renderInquiryList()">さらに表示</button></div>' : '';
@@ -53614,14 +53671,14 @@ function _inqThreadPane_(){
   var h='<div style="padding:8px 12px;border-bottom:1px solid #e2e8f0;background:#f8fafc"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:11px;font-weight:700;color:#fff;background:'+m.color+';padding:1px 7px">'+m.icon+' '+esc(m.label)+'</span><b style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-grow:1">'+esc(inq.subject||'(件名なし)')+'</b><button class="btn" style="font-size:10px;padding:2px 6px" onclick="openInquiryDetail(\''+esc(inq.id)+'\')" title="今までの詳細画面（すべての機能）">全部見る</button></div>'
     +'<div style="font-size:11.5px;color:#334155;margin-top:4px">'+esc(inq.from_name||inq.custName||'')+(inq.from_company?'　'+esc(inq.from_company):'')+(inq.from_email?'　<span style="color:#64748b">'+esc(inq.from_email)+'</span>':'')+'</div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+_inqDlChip_(inq)+(linked?'<a href="javascript:void(0)" onclick="jumpToProject(\''+esc(linked.id)+'\')" style="font-size:11px;padding:1px 7px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;text-decoration:none">📁 '+esc(linked.master_no?'P'+linked.master_no:linked.id)+' 案件を開く</a>':'<span style="font-size:11px;color:#94a3b8">案件に未紐づけ</span>')+'</div>'
-    +(atts.length?'<div style="margin-top:6px;font-size:11.5px">📎 '+atts.slice(0,6).map(function(a){ var u=a.url||a.driveUrl||''; return u?'<a href="'+esc(u)+'" target="_blank" style="color:#0369a1">'+esc(a.name||a.filename||'ファイル')+'</a>':esc(a.name||a.filename||''); }).join('　')+(atts.length>6?'　ほか '+(atts.length-6):'')+'</div>':'')
+    +_inqAttachThumbs_(inq,340,220)
     +'</div>';
   h+='<div style="padding:10px 12px;display:flex;flex-direction:column;gap:10px">'+thread.map(function(x){
     var me=!!(own[_inqDomain_(x.from_email||x.email)]||x.source_type==='internal_msg'); var body=_inqSummary_(x); var when=_inqWhen_(x);
     return '<div style="display:flex;flex-direction:column;gap:3px;align-items:'+(me?'flex-end':'flex-start')+'"><div style="font-size:11px;color:#64748b">'+(x.readAt?'':'<span style="color:#dc2626;font-weight:700">● 未読 </span>')+esc(x.from_name||x.custName||x.from_company||'')+' · '+esc(when)+(x.id===inq.id?'　<b style="color:#0f766e">この通</b>':'')+'</div><div style="max-width:92%;font-size:12.5px;line-height:1.5;padding:7px 10px;background:'+(me?'#0f766e':'#f1f5f9')+';color:'+(me?'#fff':'#0f172a')+';cursor:pointer" onclick="openInquiryDetail(\''+esc(x.id)+'\')" title="押すと全文">'+esc(body)+'</div></div>';
   }).join('')+'</div>';
   var tl=(inq.timeline||[]).slice(-5); if(tl.length){ h+='<div style="padding:6px 12px;border-top:1px dashed #e2e8f0;font-size:11px;color:#64748b">履歴: '+tl.map(function(t){ return esc(String(t.at||t.date||'').slice(0,10))+' '+esc(t.type||'')+(t.by?' '+esc(t.by):''); }).join(' · ')+'</div>'; }
-  h+='<div style="padding:10px 12px;border-top:1px solid #e2e8f0;display:flex;flex-direction:column;gap:6px;position:sticky;bottom:0;background:#fff"><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" style="font-size:11.5px;font-weight:700;padding:5px 12px;background:#0f766e;color:#fff;border-color:#0f766e" onclick="'+na.js+'">'+esc(na.label)+'</button><button class="btn" style="font-size:11.5px;padding:5px 10px" onclick="showEmailReplyModal(\''+esc(inq.id)+'\')">✉ 返信</button>'+(_inqSnoozed_(inq)?'<button class="btn" style="font-size:11.5px;padding:5px 10px" onclick="_inqUnsnooze_(\''+esc(inq.id)+'\')">戻す</button>':'<button class="btn" style="font-size:11.5px;padding:5px 10px" onclick="_inqSnooze_(\''+esc(inq.id)+'\')">後で</button>')+(inq.status!=='done'?'<button class="btn" style="font-size:11.5px;padding:5px 10px" onclick="_inqMarkDone_(\''+esc(inq.id)+'\')">対応済</button>':'')+'</div><div style="font-size:10.5px;color:#94a3b8">返信は今までの返信画面で送ります（送ると「返信待ち」に）</div></div>';
+  h+='<div style="padding:10px 12px;border-top:1px solid #e2e8f0;display:flex;flex-direction:column;gap:6px;position:sticky;bottom:0;background:#fff"><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" style="font-size:11.5px;font-weight:700;padding:5px 12px;background:#0f766e;color:#fff;border-color:#0f766e" onclick="'+na.js+'">'+esc(na.label)+'</button><button class="btn" style="font-size:11.5px;padding:5px 10px" onclick="showEmailReplyModal(\''+esc(inq.id)+'\')">✉ 返信</button>'+_inqOutcomeSelect_(inq,false)+'</div><div style="display:flex;gap:6px;flex-wrap:wrap">'+_inqFlags_(inq)+'</div><div style="font-size:10.5px;color:#94a3b8">返信は今までの返信画面で送ります（送ると「返信待ち」に）</div></div>';
   pane.innerHTML=h;
 }
 setTimeout(function(){ try { var c = document.getElementById('inq-view-slack'); if(c) c.checked = !!window._inqSlackOn_; } catch(e){} }, 1500);
@@ -53658,6 +53715,7 @@ function renderInquiryList() {
   var companyTab = window._inqCompanyTab_ || 'all';
 
   let items = periodFiltered.filter(inq => {
+    if(window._inqOutcomeSel_){ return inq.outcome===window._inqOutcomeSel_ && (companyTab==='all' || _matchesCompanyTab_(inq, companyTab)) && (!q || _qMatch_(`${inq.custName||inq.from_name||''} ${inq.subject||''} ${inq.body||''} ${inq.from_company||''}`.toLowerCase(), q)); }   // INQ-OUTCOME: 結果で見るときは完了も出す
     // 迷惑メール: 通常は除外。迷惑表示モードでは迷惑のみ
     if(window._inqShowSpam_){ if(!inq.isSpam) return false; }
     else if(inq.isSpam){ return false; }
@@ -54789,6 +54847,7 @@ async function _sendInquiryReplyByChannel_(inqId){
     if(inq.status === 'new' || inq.status === 'progress') inq.status = 'waiting';
   } else if(replyKind === 'quote_sent'){
     inq.quote_sent_at = new Date().toISOString();
+    inq.outcome = 'quote_sent'; inq.outcomeAt = inq.quote_sent_at; inq.outcomeBy = (currentAuth && currentAuth.userName) || '';   // INQ-OUTCOME: 見積提出済で終わり
     // 紐付く見積を「提出済」に更新
     if(inq.linked_quote_id){
       var est = (DB.estimates||[]).find(function(e){ return e.id === inq.linked_quote_id; });
@@ -55315,13 +55374,12 @@ function _inqDetailTopBar_(inq){
   var b=function(label, js, primary){ return '<button class="btn" style="min-height:40px;font-size:13px;font-weight:700;padding:6px 14px;'+(primary?'background:#0f766e;color:#fff;border-color:#0f766e':'')+'" onclick="'+js+'">'+label+'</button>'; };
   var sn=(typeof _inqSnoozed_==='function')&&_inqSnoozed_(inq);
   return '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:.8rem;padding:10px 12px;background:#f0fdfa;border:1px solid #99f6e4">'
-    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%">'+chip+dl+(inq.linked_project_id?'<span style="font-size:11px;color:#15803d">✅ 案件 '+esc(inq.linked_project_id)+' に転記済</span>':'')+'</div>'
+    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%">'+chip+dl+(typeof _inqFlags_==='function'?_inqFlags_(inq):'')+(inq.linked_project_id?'<span style="font-size:11px;color:#15803d">✅ 案件 '+esc(inq.linked_project_id)+' に転記済</span>':'')+'</div>'
     +b(esc(na.label), na.js, true)
     +(bin!=='校正'?b('🖍 校正BOXへ', "_inqInsertToProofing_('"+esc(inq.id)+"')", false):'')
     +(bin!=='見積'&&bin!=='予算見積'&&bin!=='受注'?b('📝 見積・受注へ', "_inqAiExtractAndTransfer_('"+esc(inq.id)+"')", false):'')
     +b('✉ 返信', "showEmailReplyModal('"+esc(inq.id)+"')", false)
-    +(sn?b('戻す', "_inqUnsnooze_('"+esc(inq.id)+"');openInquiryDetail('"+esc(inq.id)+"')", false):b('後で', "_inqSnooze_('"+esc(inq.id)+"')", false))
-    +(inq.status!=='done'?b('✔ 対応済', "_inqMarkDone_('"+esc(inq.id)+"')", false):'')
+    +(typeof _inqOutcomeSelect_==='function'?_inqOutcomeSelect_(inq,true):'')
     +'</div>';
 }
 function _renderInquiryActionsSection_(inq){
