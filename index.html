@@ -4405,9 +4405,17 @@ function _idbBoot_(){
     console.log('[IDB] 端末の控えから読みました', new Date(rec.at||0).toLocaleString('ja-JP'));
   });
 }
+var _lsSaveTimer_=null;
 function _persistLocal_(){
   try { _genArchiveSettle_(); } catch(e){}
   if(_idbLoaded_) _idbSaveSoon_();   // 主: IndexedDB（起動直後に控えを読み終わるまでは書かない＝古い方で上書きしない）
+  // SPEED-1: 従の localStorage（5MB 超・同期で 100〜500ms）は 1.5 秒後にまとめて書く。押すたびに固まらないように
+  if(_lsSaveTimer_) clearTimeout(_lsSaveTimer_);
+  _lsSaveTimer_=setTimeout(function(){ _lsSaveTimer_=null; try{ _persistLocalNow_(); }catch(e){ console.warn('[控え]',e); } }, 1500);
+  return _idbLoaded_?0:(_lsFailAt_?-1:0);
+}
+try{ window.addEventListener('pagehide', function(){ if(_lsSaveTimer_){ clearTimeout(_lsSaveTimer_); _lsSaveTimer_=null; try{ _persistLocalNow_(); }catch(e){} } }); }catch(e){}
+function _persistLocalNow_(){
   // 従: localStorage（ツールが読む控え）。入らないときは 60 秒に 1 回だけ試す
   var now=Date.now();
   if(_lsFailAt_ && now-_lsFailAt_<60000) return _idbLoaded_?0:-1;
@@ -5250,7 +5258,31 @@ function _showAutoEstimateToast_(count, ids){
 }
 
 // クラウドに保存
-async function saveToCloud() {
+// SPEED-1: saveDB のたびに全量 POST していたのを、2.5 秒静かになってから 1 回にまとめる。送信中に変わったら終わってからもう 1 回
+var _cloudSaveTimer_=null, _cloudSaveInFlight_=null, _cloudSaveDirty_=false, _cloudSaveWaiters_=[];
+function saveToCloud(){
+  if (!currentAuth.loggedIn) return Promise.resolve(false);
+  _cloudSaveDirty_=true;
+  return new Promise(function(res){
+    _cloudSaveWaiters_.push(res);
+    if(_cloudSaveTimer_) clearTimeout(_cloudSaveTimer_);
+    _cloudSaveTimer_=setTimeout(_cloudSaveFlush_, 2500);
+  });
+}
+function _cloudSaveFlush_(){
+  _cloudSaveTimer_=null;
+  if(_cloudSaveInFlight_) return _cloudSaveInFlight_;   // 送信中: 終わったら dirty を見てもう 1 回
+  if(!_cloudSaveDirty_){ var w0=_cloudSaveWaiters_; _cloudSaveWaiters_=[]; w0.forEach(function(f){ try{ f(true); }catch(e){} }); return Promise.resolve(true); }
+  _cloudSaveDirty_=false; var waiters=_cloudSaveWaiters_; _cloudSaveWaiters_=[];
+  _cloudSaveInFlight_=_saveToCloudNow_().catch(function(e){ console.warn('[クラウド保存]',e); return false; }).then(function(ok){
+    _cloudSaveInFlight_=null; waiters.forEach(function(f){ try{ f(ok); }catch(e){} });
+    if(_cloudSaveDirty_ && !_cloudSaveTimer_) _cloudSaveTimer_=setTimeout(_cloudSaveFlush_, 800);
+    return ok;
+  });
+  return _cloudSaveInFlight_;
+}
+try{ window.addEventListener('pagehide', function(){ if(_cloudSaveDirty_ && !_cloudSaveInFlight_){ if(_cloudSaveTimer_){ clearTimeout(_cloudSaveTimer_); _cloudSaveTimer_=null; } _cloudSaveFlush_(); } }); }catch(e){}
+async function _saveToCloudNow_() {
   if (!currentAuth.loggedIn) return false;
   try { _genArchiveSettle_(); } catch(e){}   // FMHUB-8: 直した GEN の行は保存に乗せる
   try { (DB.proofings||[]).forEach(function(p){ if(p && p._driveFiles) delete p._driveFiles; }); } catch(e){}   // FMHUB-15: Drive の中身の控えは保存しない
