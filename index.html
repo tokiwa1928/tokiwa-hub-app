@@ -53791,8 +53791,11 @@ function _hubSampleRemove_(){
   if(typeof _toastMsg==='function') _toastMsg('🧪 サンプルを片付けました');
 }
 // ATTACH-2: 詳細を開いたら zip を自動で展開（1 回だけ試す）。展開後は詳細が描き直され、中身が枠に出る
+function _looksGarbled_(name){ return /[\u00c0-\u00ff\u00a1-\u00bf]{2,}/.test(String(name||'')) || /[ÄÜÆÖÉÍÓÚýþ]/.test(String(name||'')); }
 function _inqAutoUnzip_(inq){
   if(!inq || !inq.attachments || typeof _inqUnzipAttachment_!=='function') return;
+  // ATTACH-4: 前に Google 側で展開して名前が化けたものは、化けた分を捨てて一度だけやり直す
+  try { inq.attachments.forEach(function(a){ if(!a || !a.expanded || a._redone) return; var nm = String(a.name||a.filename||''); if(!/\.zip$/i.test(nm)) return; var kids = inq.attachments.filter(function(k){ return k && k.fromZip === nm; }); if(kids.length && kids.some(function(k){ return _looksGarbled_(k.name); })){ inq.attachments = inq.attachments.filter(function(k){ return !(k && k.fromZip === nm); }); a.expanded = null; a._unzipTried = false; a._redone = true; } }); } catch(e){}
   var idx = -1; inq.attachments.some(function(a, i){ var nm = String((a && (a.name||a.filename)) || ''); if(a && !a.expanded && !a._unzipTried && !a._unzipNeedPw && /\.zip$/i.test(nm)){ idx = i; return true; } return false; });
   if(idx < 0) return; var att = inq.attachments[idx]; att._unzipTried = true;
   window._inqUnzipAuto_ = true;
@@ -55228,43 +55231,35 @@ async function _inqUnzipAttachment_(inqId, attIdx){
   var st = function(t){ try { _toastMsg(t); } catch(e){} var el = document.getElementById('att-sum-' + inqId + '-' + attIdx); if(el){ el.style.display = 'block'; el.innerHTML = '<div style="font-size:11px;color:#3730a3;background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:6px 8px">' + t + '</div>'; } };
   var files = [];
   try {
-    st('📂 zip を Drive で展開しています… ' + name);
-    var r = await callCloudAPI('unzipToDrive', {}, { fileId: fileId, base64: fileId ? '' : (att.data || ''), name: name, inquiryId: inq.id });
-    if(r && r.success){ files = r.files || []; }
-    else {
-      // ATTACH-3: 会社 GAS で展開できないとき（日本語ファイル名の zip など）や パスワード付きは、この画面で zip.js を使って展開して Drive に置く
-      var pw = '';
-      if(r && r.encrypted){
-        pw = _findZipPassword_(inq);
-        if(window._inqUnzipAuto_ && !pw){ att._unzipNeedPw = true; st('🔐 パスワード付きの zip です。本文にパスワードが無いので、添付の「展開して Drive へ」を押して入れてください'); return; }
-        if(!(window._inqUnzipAuto_ && pw)) pw = prompt('パスワード付きの zip です。' + (pw ? 'メール本文に見つかったパスワードを入れました。' : 'パスワードを入れてください（メール本文にあれば自動で入ります）'), pw || '');
-        if(!pw) { st('やめました'); return; }
-        st('🔑 パスワードを解除して展開しています…');
-      } else {
-        st('📂 Drive で展開できなかったので、この画面で展開します（日本語のファイル名など）…' + ((r && r.error) ? '　理由: ' + String(r.error).slice(0, 90) : ''));
-      }
-      var b64 = att.data || '';
-      if(!b64){ var g = await callCloudAPI('getFileBase64', {}, { fileId: fileId }); if(!g || !g.success) throw new Error((g && g.error) || 'zip を読めません（Drive から取れません）'); b64 = g.base64; }
-      var zip = await _loadZipJs_();
-      var readerOpt = { filenameEncoding: 'shift_jis' }; if(pw) readerOpt.password = pw;
-      var reader = new zip.ZipReader(new zip.Uint8ArrayReader(_b64ToBytes_(b64)), readerOpt);
-      var entries;
-      try { entries = await reader.getEntries(); }
-      catch(e1){ if(!pw && /password|encrypt/i.test(String(e1 && e1.message))){ throw new Error('パスワード付きの zip です。「展開して Drive へ」を押してパスワードを入れてください'); } throw e1; }
-      var n = 0;
-      for(var i = 0; i < entries.length; i++){
-        var en = entries[i]; if(en.directory) continue; var full = en.filename || ''; if(/(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)(\/|$)/.test(full)) continue;
-        var sl = full.lastIndexOf('/'); var path = sl >= 0 ? full.slice(0, sl) : '', fname = sl >= 0 ? full.slice(sl + 1) : full;
-        var blob;
-        try { blob = await en.getData(new zip.BlobWriter(), pw ? { password: pw } : {}); }
-        catch(e2){ if(/password|encrypt/i.test(String(e2 && e2.message))){ throw new Error(pw ? 'パスワードが違います' : 'パスワード付きの zip です。「展開して Drive へ」を押してパスワードを入れてください'); } throw e2; }
-        st('⬆ Drive へ置いています… ' + (++n) + ' / ' + entries.length + '　' + fname);
-        var up = await callCloudAPI('uploadInquiryFile', {}, { inquiryId: inq.id, zipName: name, path: path, name: fname, mime: blob.type || '', base64: await _blobToBase64_(blob) });
-        if(!up || !up.success) throw new Error((up && up.error) || (fname + ' を置けませんでした'));
-        up.path = path; files.push(up);
-      }
-      await reader.close();
+    // ATTACH-4: 展開はこの画面で（zip.js）。Google 側の展開は日本語のファイル名を化かすので使わない
+    st('📂 zip を展開しています… ' + name);
+    var b64 = att.data || '';
+    if(!b64){ var g = await callCloudAPI('getFileBase64', {}, { fileId: fileId }); if(!g || !g.success) throw new Error((g && g.error) || 'zip を読めません（Drive から取れません）'); b64 = g.base64; }
+    var zip = await _loadZipJs_();
+    var reader = new zip.ZipReader(new zip.Uint8ArrayReader(_b64ToBytes_(b64)), { filenameEncoding: 'shift_jis' });
+    var entries = await reader.getEntries();
+    var needPw = entries.some(function(e){ return e && e.encrypted; });
+    var pw = '';
+    if(needPw){
+      pw = _findZipPassword_(inq);
+      if(window._inqUnzipAuto_ && !pw){ att._unzipNeedPw = true; st('🔐 パスワード付きの zip です。本文にパスワードが無いので、添付の「展開して Drive へ」を押して入れてください'); try { await reader.close(); } catch(e0){} return; }
+      if(!(window._inqUnzipAuto_ && pw)) pw = prompt('パスワード付きの zip です。' + (pw ? 'メール本文に見つかったパスワードを入れました。' : 'パスワードを入れてください（メール本文にあれば自動で入ります）'), pw || '');
+      if(!pw) { st('やめました'); try { await reader.close(); } catch(e0){} return; }
+      st('🔑 パスワードを解除して展開しています…');
     }
+    var n = 0;
+    for(var i = 0; i < entries.length; i++){
+      var en = entries[i]; if(en.directory) continue; var full = en.filename || ''; if(/(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)(\/|$)/.test(full)) continue;
+      var sl = full.lastIndexOf('/'); var path = sl >= 0 ? full.slice(0, sl) : '', fname = sl >= 0 ? full.slice(sl + 1) : full;
+      var blob;
+      try { blob = await en.getData(new zip.BlobWriter(), pw ? { password: pw } : {}); }
+      catch(e2){ if(/password|encrypt/i.test(String(e2 && e2.message))){ throw new Error(pw ? 'パスワードが違います' : 'パスワード付きの zip です。「展開して Drive へ」を押してパスワードを入れてください'); } throw e2; }
+      st('⬆ Drive へ置いています… ' + (++n) + ' / ' + entries.length + '　' + fname);
+      var up = await callCloudAPI('uploadInquiryFile', {}, { inquiryId: inq.id, zipName: name, path: path, name: fname, mime: blob.type || '', base64: await _blobToBase64_(blob) });
+      if(!up || !up.success) throw new Error((up && up.error) || (fname + ' を置けませんでした'));
+      up.path = path; files.push(up);
+    }
+    await reader.close();
     if(!files.length){ st('zip の中にファイルがありませんでした'); return; }
     var now = new Date().toISOString();
     files.forEach(function(f, i){ inq.attachments.push({ id: 'ZIP-' + Date.now() + '-' + i, name: f.name, path: f.path || '', fromZip: name, url: f.url, downloadUrl: f.downloadUrl, driveFileId: f.fileId, drive_file_id: f.fileId, mimeType: f.mime || '', size: f.size || 0, addedAt: now }); });
