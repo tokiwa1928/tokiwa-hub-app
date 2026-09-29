@@ -105,6 +105,7 @@
     期限 = p.exp; メール = p.email;
     try { localStorage.setItem(置き場, jwt); } catch (e) {}
     置き場所.forEach(function (el) { el.style.display = 'none'; });
+    ログイン案内を消す();
     知らせる();
     if (待っている) { var f = 待っている; 待っている = null; f(); }
   }
@@ -123,12 +124,33 @@
   }
 
   function 覚えているものを使う() {
-    if (トークン) return;
+    if (トークン && 期限 - Date.now() > 5 * 60 * 1000) return;   // SIGNIN-2: 手元のものが切れそうなら、ほかのタブが入れた新しいものを読み直す
     var jwt = '';
     try { jwt = localStorage.getItem(置き場) || ''; } catch (e) {}
     if (!jwt) return;
+    if (jwt === トークン) return;
     if (中身を読む(jwt).exp - Date.now() > 5 * 60 * 1000) 名乗る(jwt);
-    else { try { localStorage.removeItem(置き場); } catch (e) {} }
+    else if (!トークン) { try { localStorage.removeItem(置き場); } catch (e) {} }
+  }
+  // SIGNIN-2: ほかのタブ・親の画面・ログインの窓がトークンを入れたら、すぐ使う
+  try { global.addEventListener('storage', function (e) { if (e && e.key === 置き場 && e.newValue && e.newValue !== トークン && 中身を読む(e.newValue).exp - Date.now() > 5 * 60 * 1000) { 名乗る(e.newValue); ログイン案内を消す(); } }); } catch (e) {}
+  function 埋め込みか() { try { return global.parent && global.parent !== global; } catch (e) { return true; } }
+  function 親に頼む() {   // Hub の中（iframe）なら、一番外の画面の FM にサインインを頼む（そちらなら Google の窓が出せる）
+    try { var pf = 埋め込みか() && global.parent.FM; if (pf && typeof pf.トークンをもらう === 'function') return Promise.race([pf.トークンをもらう().then(function (t) { if (t) 名乗る(t); return t; }).catch(function () { return ''; }), new Promise(function (r) { setTimeout(function () { r(''); }, 8000); })]); } catch (e) {}
+    return Promise.resolve('');
+  }
+  function ログイン案内を消す() { try { var el = document.getElementById('fm-login-help'); if (el) el.remove(); } catch (e) {} }
+  function ログイン案内を出す() {
+    try { if (document.getElementById('fm-login-help') || !document.body) return;
+      var d = document.createElement('div'); d.id = 'fm-login-help';
+      d.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483000;background:#b45309;color:#fff;padding:8px 14px;font-size:14px;font-weight:700;display:flex;gap:12px;align-items:center;flex-wrap:wrap';
+      d.innerHTML = '<span>FileMaker（中継）のログインが切れました。</span><button type="button" style="font:inherit;font-weight:700;padding:4px 16px;border:0;background:#fff;color:#92400e;cursor:pointer">ログインする</button><span style="font-weight:400;font-size:12px">別の窓が開きます。ログインできたら、この画面は自動で読み直します</span>';
+      d.querySelector('button').onclick = function () { ログイン窓を開く(); };
+      document.body.appendChild(d); } catch (e) {}
+  }
+  function ログイン窓を開く() {
+    var base = ''; try { var sc = document.querySelector('script[src*="fm-bridge.js"]'); base = sc ? String(sc.getAttribute('src')).replace(/fm-bridge\.js.*$/, '') : ''; } catch (e) {}
+    try { global.open(base + 'fm-signin.html', 'fm_signin', 'width=460,height=420'); } catch (e) {}
   }
 
   function GISを待つ() {
@@ -188,16 +210,20 @@
   function トークンを得る() {
     覚えているものを使う();
     if (トークン && 期限 - Date.now() > 5 * 60 * 1000) return Promise.resolve(トークン);
-    トークン = '';
+    トークン = ''; メール = '';
+    return 親に頼む().then(function (t) { if (t && 期限 - Date.now() > 5 * 60 * 1000) return t; return 自分でサインイン(); });
+  }
+  function 自分でサインイン() {
     return 用意する().then(function () {
       if (トークン) return トークン;
       return new Promise(function (done, fail) {
         var 時間切れ = setTimeout(function () {
           待っている = null;
           置き場所.forEach(function (el) { el.style.display = 'inline-block'; });
-          fail(new Error('サインインしてください。「ログイン」を押して社内のアカウントを選んでください'
-                         + '（この画面が裏にあると Google の窓が出せません）'));
-        }, 20000);
+          ログイン案内を出す();
+          fail(new Error('ログインが切れました。上の「ログインする」を押してください'
+                         + '（別の窓でログインすると、この画面は自動で読み直します）'));
+        }, 埋め込みか() ? 6000 : 20000);
         待っている = function () { clearTimeout(時間切れ); done(トークン); };
         try { google.accounts.id.prompt(); } catch (e) {}
       });
@@ -248,7 +274,9 @@
 
   global.FM = {
     呼ぶ: 呼ぶ,
-    名乗っている: function () { 覚えているものを使う(); return メール; },
+    名乗っている: function () { 覚えているものを使う(); return (トークン && 期限 - Date.now() > 60 * 1000) ? メール : ''; },   // SIGNIN-2: 期限切れは「まだ」にする
+    トークンをもらう: function () { return トークンを得る(); },   // 組み込んだ画面（iframe）から頼まれたとき
+    ログイン窓を開く: ログイン窓を開く,
     サインインのボタンを置く: function (el) {
       if (!el) return;
       if (置き場所.indexOf(el) < 0) 置き場所.push(el);
