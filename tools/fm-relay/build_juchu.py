@@ -264,7 +264,7 @@ BAR = r"""
     <span id="pg-src" style="color:#166534"></span>
     <label>種にする伝票 <input id="pg-prev" style="width:80px;font-size:11px" placeholder="前回伝票番号"></label>
     <button id="pg-go" style="font-size:11px;padding:2px 8px">出す</button>
-    <span style="margin-left:auto;color:#166534">営業費（利益） <input class="n" id="pg-eigyo" value="30" title="積み上げた原価（項目ごとの売価）に足す営業費・利益の率。原価テーブルに「営業費」の行があればそれが既定（掛け率＝%、固定＝円）">%　印刷代の固定分 <input class="n" id="pg-pf" value="30">%　最低受注金額 ¥<input class="n" id="pg-min" value="" style="width:56px" title="合計売価がこれを下回るときはこの金額にします。原価テーブルの「最低受注金額」の行があればそれが既定"> <button id="pg-detail" type="button" style="font-size:11px;padding:1px 6px">内訳を出す</button> <a href="master.html?t=原価テーブル" target="_blank" style="color:#166534">原価テーブル</a></span>
+    <span style="margin-left:auto;color:#166534">版の変更 <select id="pg-han" title="予算見積では版下を直すか分からないことが多い。未定なら売価を「版なし」「版あり」の 2 列で出します。伝票ごとに手配（事前情報）に残ります"><option value="">（伝票に合わせる）</option><option value="あり">あり</option><option value="なし">なし</option><option value="未定">未定（両方出す）</option></select>　営業費（利益） <input class="n" id="pg-eigyo" value="30" title="積み上げた原価（項目ごとの売価）に足す営業費・利益の率。原価テーブルに「営業費」の行があればそれが既定（掛け率＝%、固定＝円）">%　印刷代の固定分 <input class="n" id="pg-pf" value="30">%　最低受注金額 ¥<input class="n" id="pg-min" value="" style="width:56px" title="合計売価がこれを下回るときはこの金額にします。原価テーブルの「最低受注金額」の行があればそれが既定"> <button id="pg-detail" type="button" style="font-size:11px;padding:1px 6px">内訳を出す</button> <a href="master.html?t=原価テーブル" target="_blank" style="color:#166534">原価テーブル</a></span>
   </div>
   <div id="pg-body" style="margin-top:4px;color:#475569">得意先と品名（か前回伝票番号）を入れると、昨年の伝票を種に数量ごとの金額が出ます</div>
 </div>
@@ -999,6 +999,9 @@ LOGIC = r"""
     var 営業行 = 原価行('営業費'); var 営業率 = $('pg-eigyo') && $('pg-eigyo').value.trim() !== '' ? 数値($('pg-eigyo').value) : (営業行 && !空か(営業行.掛け率) ? (数値(営業行.掛け率) > 3 ? 数値(営業行.掛け率) : (数値(営業行.掛け率) - 1) * 100) : 30);
     if (!(営業率 >= 0)) 営業率 = 30; var 営業固定 = 営業行 && !空か(営業行.固定) ? 数値(営業行.固定) : 0;
     if ($('pg-eigyo') && $('pg-eigyo').value.trim() === '') $('pg-eigyo').placeholder = String(営業率);
+    // HAN-1: 版の変更。欄が空なら 手配.事前.版、それも無ければ 予算見積は「未定」、ほかは「あり」
+    var 版モード = String(($('pg-han') || {}).value || '') || String(((手配 || {}).事前 || {}).版 || '') || (String(f['案件区分'] || (現在 && 現在.fields['案件区分']) || '') === '予算見積' ? '未定' : 'あり');
+    if ($('pg-han') && !$('pg-han').value) { var o0 = $('pg-han').querySelector('option[value=""]'); if (o0) o0.textContent = '（伝票に合わせる: ' + 版モード + '）'; }
     var 最低行 = 原価行('最低受注金額'); var 最低受注 = 数値($('pg-min').value) || (最低行 ? 数値(最低行.最低売価) || 数値(最低行.固定) : 0);
     if (!$('pg-min').value && 最低受注) $('pg-min').placeholder = String(最低受注);
     var 表の項目 = 項目.filter(function (x) { return x.表; }).map(function (x) { return x.名 + (x.条件 ? '（' + x.条件 + '）' : '') + (x.倍 > 1 ? ' ×' + x.倍 + '台' : ''); });
@@ -1017,7 +1020,11 @@ LOGIC = r"""
       if (最低受注 && 売価n < 最低受注) { 売価n = 最低受注; 最低で = true; }
       var 単価n = Math.round((売価n / n) * 10) / 10; 売価n = 単価n * n;
       var 粗利 = 売価n ? (1 - 原価n / 売価n) * 100 : 0;
-      return { n: n, 原価: 原価n, 売価: 売価n, 単価: 単価n, 粗利: 粗利, 前年比: 単価0 ? (単価n / 単価0 - 1) * 100 : 0, 内訳: 内訳, 最低で: 最低で, 売価pool: 売価pool };
+      // HAN-1: 版なし（版代を抜いた）売価も出す。版の変更が「なし」ならこちらが売価、「未定」なら両方
+      var 版x = 内訳.filter(function (x) { return x.名 === '版代'; })[0]; var 版売 = 版x ? (版x.売価 || 0) : 0, 版原 = 版x ? 版x.原価 : 0;
+      var 売価無 = (売価表 - 版売) * (1 + 営業率 / 100) + 営業固定; if (最低受注 && 売価無 < 最低受注) 売価無 = 最低受注; var 単価無 = Math.round((売価無 / n) * 10) / 10; 売価無 = 単価無 * n;
+      if (版モード === 'なし') { 内訳 = 内訳.map(function (x) { return x.名 === '版代' ? { 名: x.名, 原価: 0, 売価: 0, 表: x.表, 段: x.段, 抜き: true } : x; }); return { n: n, 原価: 原価n - 版原, 売価: 売価無, 単価: 単価無, 粗利: 売価無 ? (1 - (原価n - 版原) / 売価無) * 100 : 0, 前年比: 単価0 ? (単価無 / 単価0 - 1) * 100 : 0, 内訳: 内訳, 最低で: 最低で, 売価pool: (売価表 - 版売) * 営業率 / 100 + 営業固定, 版代: 版売 }; }
+      return { n: n, 原価: 原価n, 売価: 売価n, 単価: 単価n, 粗利: 粗利, 前年比: 単価0 ? (単価n / 単価0 - 1) * 100 : 0, 内訳: 内訳, 最低で: 最低で, 売価pool: 売価pool, 売価無: 売価無, 単価無: 単価無, 版代: 版売 };
     });
     var 内訳出す = !!window.pg内訳;
     var 内訳文 = function (r) { return r.内訳.map(function (x) { return x.名 + (x.段 ? '〔〜' + 円整(x.段) + 'の段〕' : '') + ' ' + 円整(x.原価) + (x.売価 != null ? '→' + 円整(x.売価) : ''); }).join('／') + '　＋営業費 ' + 円整(r.売価pool) + '（' + 営業率 + '%' + (営業固定 ? '＋' + 円整(営業固定) : '') + '）'; };
@@ -1028,8 +1035,9 @@ LOGIC = r"""
       + '<div style="color:#64748b;font-size:11px">内訳（種）: 版 ' + 円整(版) + '／用紙 ' + 円整(用紙) + '／印刷 ' + 円整(印刷) + '／加工 ' + 円整(加工) + '／外注 ' + 円整(外注0) + '／梱包・配送 ' + 円整(梱包 + 配送)
       + '　台数 ' + 台数 + '（' + 部 + ' パーツ・最大 ' + 最大色 + ' 色' + (カラー部 ? '・カラー ' + カラー部 + ' パーツは版なし' : '') + '）'
       + '　※' + (表の項目.length ? '原価テーブルの行を使った項目: <b>' + esc(表の項目.join('・')) + '</b>。ほかは' : '原価テーブルに行が無いので、') + '版代は固定、印刷代は ' + Math.round(pf * 100) + '% 固定、ほかは種の伝票から数量比例。<b>売価＝項目の積み上げ（掛け率のある項目はその売価）＋営業費 ' + 営業率 + '%</b>。数量上限のある行は数量の階段' + (最低受注 ? '。最低受注金額 ¥' + 円整(最低受注) : '') + '。段をクリックで数量と単価をフォームへ</div>'
-      + '<table><thead><tr><th>数量</th><th>原価</th><th>売価</th><th>単価</th><th>粗利率</th><th>前回単価比</th>' + (内訳出す ? 項目.map(function (x) { return '<th style="font-weight:500">' + esc(x.名) + (x.表 ? ' <span title="原価テーブルの行">▣</span>' : '') + '<br><span style="font-weight:400">原価→売価</span></th>'; }).join('') : '') + '</tr></thead><tbody>'
-      + rows.map(function (r) { return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単価 + '" title="' + esc(内訳文(r)) + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円整(r.原価) + '</td><td>¥' + 円整(r.売価) + (r.最低で ? ' <span style="background:#fef3c7;color:#92400e;font-size:10px;padding:0 4px;border-radius:3px" title="最低受注金額で止めています">最低</span>' : '') + '</td><td>' + r.単価.toFixed(1) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td>'
+      + (版モード === '未定' ? '<div style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;padding:3px 8px;margin:4px 0;font-size:11px">版の変更が未定なので、売価を「版なし」と「版あり」で出しています（段をクリックすると版なしの単価が入ります。版代 ¥' + 円整(rows.length ? rows[0].版代 : 0) + ' は見積書に「別途」と注記）</div>' : 版モード === 'なし' ? '<div style="color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;padding:3px 8px;margin:4px 0;font-size:11px">版の変更なし（版代を抜いた売価）</div>' : '')
+      + '<table><thead><tr><th>数量</th><th>原価</th>' + (版モード === '未定' ? '<th>売価（版なし）</th><th>売価（版あり）</th>' : '<th>売価</th>') + '<th>単価</th><th>粗利率</th><th>前回単価比</th>' + (内訳出す ? 項目.map(function (x) { return '<th style="font-weight:500">' + esc(x.名) + (x.表 ? ' <span title="原価テーブルの行">▣</span>' : '') + '<br><span style="font-weight:400">原価→売価</span></th>'; }).join('') : '') + '</tr></thead><tbody>'
+      + rows.map(function (r) { var 未定 = 版モード === '未定'; return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + (未定 ? r.単価無 : r.単価) + '" title="' + esc(内訳文(r)) + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円整(r.原価) + '</td>' + (未定 ? '<td>¥' + 円整(r.売価無) + '</td>' : '') + '<td>¥' + 円整(r.売価) + (r.最低で ? ' <span style="background:#fef3c7;color:#92400e;font-size:10px;padding:0 4px;border-radius:3px" title="最低受注金額で止めています">最低</span>' : '') + '</td><td>' + (未定 ? r.単価無.toFixed(1) + ' <span style="color:#94a3b8">/ ' + r.単価.toFixed(1) + '</span>' : r.単価.toFixed(1)) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td>'
           + (内訳出す ? r.内訳.map(function (x) { return '<td style="font-size:11px;white-space:nowrap"' + (x.段 ? ' title="〜' + 円整(x.段) + ' の段"' : '') + '>' + 円整(x.原価) + '→' + (x.売価 != null ? 円整(x.売価) : '<span style="color:#94a3b8">率</span>') + (x.段 ? '<span style="color:#94a3b8;font-size:10px"> 〜' + 円整(x.段) + '</span>' : '') + '</td>'; }).join('') : '') + '</tr>'; }).join('')
       + '</tbody></table>';
     $('pg-body').innerHTML = h + '<div id="pg-quotes" style="margin-top:6px;color:#475569">前回の見積書を探しています…</div>'; $('pg-src').textContent = '';
@@ -1092,6 +1100,7 @@ LOGIC = r"""
   if ($('pg-detail')) $('pg-detail').onclick = function () { window.pg内訳 = !window.pg内訳; $('pg-detail').textContent = window.pg内訳 ? '内訳を隠す' : '内訳を出す'; if (ガイド種) ガイドを描く(); };
   window.FMガイド試す = function (fields) { ガイド種 = { 番号: String(fields['伝票番号'] || 'test'), fields: fields }; ガイドを描く(); };   // 見本で確かめる用
   ['pg-pf', 'pg-eigyo'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', function () { if (ガイド種) ガイドを描く(); }); });
+  if ($('pg-han')) $('pg-han').addEventListener('change', function () { if (ガイド種) ガイドを描く(); try { if (現在 && 手配の伝票) { 手配.事前 = 手配.事前 || {}; if ($('pg-han').value) 手配.事前.版 = $('pg-han').value; else delete 手配.事前.版; 手配が変わった.call($('pg-han')); } } catch (e) {} });   // HAN-1
   try { var pe = localStorage.getItem('pg_eigyo'); if (pe !== null && $('pg-eigyo')) $('pg-eigyo').value = pe; } catch (e) {}   // KAKAKU-5
   if ($('pg-eigyo')) $('pg-eigyo').addEventListener('change', function () { try { localStorage.setItem('pg_eigyo', $('pg-eigyo').value.trim()); } catch (e) {} });
   $('pg-go').onclick = function () { ガイド種 = null; ガイドを出す(); };
@@ -2449,7 +2458,7 @@ LOGIC = r"""
       o.案件 = { 伝票番号: String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''), 得意先コード: gv('f-custcd'), 得意先: gv('f-cust'), ユーザー: gv('f-user'), 製品名: gv('f-item'), 納期: gv('f-due'), 数量: gv('f-lotunit') || gv('f-lotset'), 単位: gv('f-unit') }; }
     var gq = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { var v = Number(i.value); if (v) gq[i.getAttribute('data-n')] = v; }); if (Object.keys(gq).length) o.外注見積 = gq;
     if (昨年比確認) o.昨年比確認 = 昨年比確認;
-    var jz = {}; if (手配 && 手配.事前 && 手配.事前.予算上乗せ !== undefined) jz.予算上乗せ = 手配.事前.予算上乗せ; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
+    var jz = {}; if (手配 && 手配.事前 && 手配.事前.予算上乗せ !== undefined) jz.予算上乗せ = 手配.事前.予算上乗せ; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo'], ['pg-han', '版']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
     // GAICHU-2: 外注は 発注済 だけでなく 写し（外注先・発注内容・区分・数量・単価）も持つ → Hub の外注発注「発注待ち」に出る
     o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows tr'), function (tr) {
       var i2 = tr.getAttribute('data-i'); var gv = function (c) { var e = tr.querySelector('.' + c); return e ? String(e.value || '').trim() : ''; };
@@ -2478,7 +2487,7 @@ LOGIC = r"""
     var gq = o.外注見積 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { i.value = gq[i.getAttribute('data-n')] || ''; });
     if (o.表紙) { try { 表紙を決める(o); } catch (e) {} }
     昨年比確認 = o.昨年比確認 || null; 昨年比の見た目();
-    var jz = o.事前 || {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo']].forEach(function (p) { if ($(p[0])) $(p[0]).value = jz[p[1]] || ''; });
+    var jz = o.事前 || {}; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo'], ['pg-han', '版']].forEach(function (p) { if ($(p[0])) $(p[0]).value = jz[p[1]] || ''; });
     if ($('fmjizen')) $('fmjizen').style.display = 手配の伝票 ? 'block' : 'none'; 仕様書を出す(); 同じ依頼を出す();
     if ($('hs-how')) { $('hs-how').value = (o.発送 || {}).how || ''; $('hs-how-who').value = (o.発送 || {}).who || ''; }
     if ($('t-perbox')) { $('t-perbox').value = (o.箱 || {}).perbox || ''; 箱数を計算(); }
