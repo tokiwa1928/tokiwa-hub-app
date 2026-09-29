@@ -227,6 +227,7 @@ function 画面_読み込み(番号) {
   var lay = LAYOUTS.juchu;
   番号 = String(番号 || '').trim();
   if (!番号) throw new Error('番号を入れてください');
+  if (Hub番号か_(番号) || HubP番号か_(番号)) return 見積_読み込み_(番号);   // HUBMITSU-1: Hub の見積（P0042-M01 ／ P0042 は一番新しい段階）
 
   var rows = find_(lay, [{ '伝票番号': '==' + 番号 }], 1, 1, null);
   if (!rows.records.length) rows = find_(lay, [{ '見積番号': '==' + 番号 }], 1, 1, null);
@@ -294,6 +295,8 @@ function 案件の履歴_(lay, 案件ID) {
 
 /** 履歴の1件を開く */
 function 画面_recordIdで読む(recordId) {
+  if (HubのrecordIdか_(recordId)) return 見積_読み込み_(String(recordId).slice(4));   // HUBMITSU-1
+  if (/^no:/.test(String(recordId || ''))) return 画面_読み込み(String(recordId).slice(3));   // 履歴欄の「受注」（受注化した伝票）
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   var r = fmCall_('/layouts/' + encodeURIComponent(lay) + '/records/' + recordId);
@@ -316,6 +319,7 @@ function 画面_recordIdで読む(recordId) {
  *   強制 … true なら相手の値を見ずに自分の値で上書き
  */
 function 画面_保存(recordId, modId, fields, 元, 強制) {
+  if (HubのrecordIdか_(recordId)) return 見積_保存_(String(recordId).slice(4), modId, fields, 元, 強制);   // HUBMITSU-1
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   var r = update_(lay, recordId, modId, fields, who);
@@ -353,6 +357,7 @@ var 引き継がない = [
  *   レコードを作ると no が自動採番されるので、それを案件番号にする。
  */
 function 画面_新規案件(種別, 初期値) {
+  if (段階[種別] && 段階[種別].記号) return 見積_新規案件_(種別, 初期値);   // HUBMITSU-1: 予算見積・見積は Hub に（FileMaker は受注だけ）
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
@@ -369,7 +374,8 @@ function 画面_新規案件(種別, 初期値) {
 }
 
 /** RYUYO-1: 読み込んでいる伝票の内容を写して、別の案件（新しい案件ID）として 種別 を起こす。似た案件の流用 */
-function 画面_流用新規(recordId, 種別, 同じ案件) {   // STAGE-1: 同じ案件=true なら 前回伝票番号・前回起票日 を付ける（翌年の予算見積など。Hub の P 番号がつながる）
+function 画面_流用新規(recordId, 種別, 同じ案件, 初期値) {
+  var hb = 見積_流用新規_(recordId, 種別, 同じ案件, 初期値); if (hb) return hb;   // HUBMITSU-1: 予算見積・見積は Hub に。Hub の見積から受注は受注化   // STAGE-1: 同じ案件=true なら 前回伝票番号・前回起票日 を付ける（翌年の予算見積など。Hub の P 番号がつながる）
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
@@ -395,7 +401,8 @@ function 画面_流用新規(recordId, 種別, 同じ案件) {   // STAGE-1: 同
  *   ・前回の同じ段階を参考として返し、そこからの差分も返す
  *     （前年の予算見積の金額を見ながら、仕様の変化に気づけるように）
  */
-function 画面_新規段階(案件ID, 種別) {
+function 画面_新規段階(案件ID, 種別, 初期値) {
+  var hb = 見積_新規段階_(案件ID, 種別, 初期値); if (hb) return hb;   // HUBMITSU-1: P番号の続き／予算見積・見積は Hub に
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
@@ -443,6 +450,7 @@ function 画面_新規段階(案件ID, 種別) {
  *   前回伝票番号・前回起票日に種の番号と起票日を入れる。
  */
 function 画面_Repeat登録(recordId) {
+  if (HubのrecordIdか_(recordId)) return 見積_受注化(String(recordId).slice(4));   // HUBMITSU-1: Hub の見積からの Repeat（受注）＝受注化
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   if (!recordId) throw new Error('recordId がありません');
@@ -582,6 +590,7 @@ function 画面_外注保存(recordId, modId, 行) {
 
 /** 伝票を FileMaker から消す（画面の「データ削除」）。消す前の内容を記録に残す */
 function 画面_削除(recordId, modId) {
+  if (HubのrecordIdか_(recordId)) return 見積_消す_(recordId, modId);   // HUBMITSU-1
   var who = 画面_利用者_();
   var lay = LAYOUTS.juchu;
   if (!recordId) throw new Error('recordId がありません');
@@ -629,6 +638,7 @@ function マスタ_読む_(layout) {
 function 画面_全項目(recordId) {
   var who = 画面_利用者_();
   if (!recordId) throw new Error('recordId がありません');
+  if (HubのrecordIdか_(recordId)) { var o0 = 見積_探す_(String(recordId).slice(4)); if (!o0) throw new Error('見積が保管庫にありません'); return { ok: true, user: who.email, fields: 見積_fields_(o0) }; }   // HUBMITSU-1
   return { ok: true, user: who.email, fields: getByDenpyo_複製用_({ recordId: recordId }) };
 }
 
@@ -811,7 +821,7 @@ function 画面_案件にまとめる(recordIds, 案件ID, 確認) {
 
 /** 伝票ごとの変更履歴（中継が保存のたびに記録している「前の値」と「送った値」から、項目単位で組む）GRP-1 */
 function 画面_履歴(recordId, 伝票番号) {
-  var who = 画面_利用者_(); var lay = LAYOUTS.juchu;
+  var who = 画面_利用者_(); var lay = HubのrecordIdか_(recordId) ? 'Hub見積' : LAYOUTS.juchu;   // HUBMITSU-1: Hub の見積の記録も
   var sh = 記録の置き場_().getSheets()[0]; var last = sh.getLastRow(); if (last < 2) return { ok: true, user: who.email, 行: [] };
   var from = Math.max(2, last - 4000 + 1);
   var v = sh.getRange(from, 1, last - from + 1, 7).getValues(); var out = [];
@@ -1127,9 +1137,13 @@ function handle_(action, req, who) {
     case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields, req['元'], req['強制']);
     case '写し_差分':         return 写し_差分(req['日付']);
     case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
-    case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別']);
+    case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別'], req['初期値']);   // HUBMITSU-1: 初期値 { P番号, P番号ヒント }
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
-    case '画面_流用新規':     return 画面_流用新規(req.recordId, req['種別'], req['同じ案件']);   // RYUYO-1
+    case '画面_流用新規':     return 画面_流用新規(req.recordId, req['種別'], req['同じ案件'], req['初期値']);   // RYUYO-1／HUBMITSU-1
+    case '見積_索引':         return 見積_索引();                                        // HUBMITSU-1: Hub の見積（予算見積・見積）の一覧
+    case '見積_受注化':       return 見積_受注化(req['番号']);                           // HUBMITSU-1: 見積の内容で FileMaker に受注伝票を起こす
+    case '見積_状態':         return 見積_状態(req['番号'], req['状態']);                // HUBMITSU-1: 見積中／提出済／失注／保留
+    case '見積_P番号を揃える': return 見積_P番号を揃える(req['P番号']);                  // HUBMITSU-1: Hub 本体が付けた P番号を知らせる
     case '画面_削除':         return 画面_削除(req.recordId, req.modId);
     case '画面_案件にまとめる': return 画面_案件にまとめる(req.recordIds, req['案件ID'], req['確認']);   // FMHUB-21: 選んだ伝票の 案件ID を揃える
     case '画面_履歴':         return 画面_履歴(req.recordId, req['伝票番号']);          // GRP-1: 伝票ごとの変更履歴（読むだけ）

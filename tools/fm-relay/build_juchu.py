@@ -791,6 +791,7 @@ LOGIC = r"""
     if (!r.record) { 現在 = null; 状態('見つかりません', 'err'); 待機(false); return; }
     流し込む(r.record);
     得意先名を入れる();
+    try { Hub見積の帯(r); } catch (e) { console.warn('[Hub見積]', e); }   // HUBMITSU-1
     try { sessionStorage.setItem('fm_last_no', String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}
     履歴を出す(r['履歴']);
     番号欄.value = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
@@ -1357,12 +1358,15 @@ LOGIC = r"""
       待機(true); 失敗(''); diff.style.display = 'none';
       状態((way === '続き' ? '起こしています… ' : way === '流用' ? '流用して新しい案件を起こしています… ' : '新規案件を起こしています… ') + 種別);
       var t0 = Date.now();
-      var p = way === '続き' ? 呼ぶ('画面_新規段階', [案件ID, 種別])
-            : way === '流用' ? 呼ぶ('画面_流用新規', [現在.recordId, 種別])
-            : 呼ぶ('画面_新規案件', [種別, {}]);
+      // HUBMITSU-1: 予算見積・見積は Hub の保管庫に起こす（中継が振り分け）。P番号は元の伝票の Hub 案件から
+      var p = Hub初期値(現在 ? String(現在.fields['伝票番号'] || '') : '').then(function (初期値) {
+        return way === '続き' ? 呼ぶ('画面_新規段階', [案件ID, 種別, 初期値])
+             : way === '流用' ? 呼ぶ('画面_流用新規', [現在.recordId, 種別, false, 初期値])
+             : 呼ぶ('画面_新規案件', [種別, 初期値]); });
       p.then(function (r) {
         var no = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
-        受け取る(r, 種別 + ' を起こしました  ' + no + (r.流用元 ? '（' + r.流用元 + ' から流用・別の案件）' : ''), Date.now() - t0);
+        受け取る(r, (r.受注化 ? '受注化しました  ' : 種別 + ' を起こしました  ') + no + (r.流用元 ? '（' + r.流用元 + ' から流用・別の案件）' : '') + (r.hub ? '　保管: Hub' : ''), Date.now() - t0);
+        if (受注化のあと(r)) return;
         try { var 元no = (r.種 && r.種.番号) || r.流用元 || ''; if (元no) 手配を写して読む(String(元no), String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}   // SPEC-1
         if (起こした後) { var f = 起こした後; 起こした後 = null; try { f(); } catch (e) {} }
       }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); 起こした後 = null; });
@@ -1432,7 +1436,7 @@ LOGIC = r"""
     var 差 = 関連会社の差を絞る(変更分()), n = Object.keys(差).length;   // GRP-2: 関連会社はトキワの金額を送らない
     if (!n) { 状態('変更はありません', ''); return; }
     var 消す = 空にする項目(差);
-    var 文 = n + ' 項目を FileMaker に保存します。よろしいですか？\n\n'
+    var 文 = n + ' 項目を ' + (現在はHub() ? 'Hub の見積（' + 現在の番号() + '）' : 'FileMaker') + ' に保存します。よろしいですか？\n\n'
           + Object.keys(差).slice(0, 30).join('、')
           + (n > 30 ? ' …ほか' + (n - 30) + '件' : '');
     if (消す.length) {
@@ -1677,6 +1681,7 @@ LOGIC = r"""
     索引 = j; 索引位置 = {}; j.列.forEach(function (c, i) { 索引位置[c] = i; });
     var d = 索引位置['起票日'];
     索引日 = j.行.map(function (r) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(r[d] || '')); return m ? Number(m[3] + m[1] + m[2]) : 0; });
+    try { if (見積索引) 索引に見積を足す(); else setTimeout(見積索引を重ねる, 0); } catch (e) {}   // HUBMITSU-1
     try { setTimeout(案件管理表として出す, 0); } catch (e) {}
   }
   var 索引待ち = 0;
@@ -1897,10 +1902,10 @@ LOGIC = r"""
     var 案件 = 現在 && 現在.fields['案件ID'] ? ('案件 ' + 現在.fields['案件ID'] + ' の続きとして') : 'まっさらな案件として';
     m.innerHTML = '<div style="background:#fff;border-radius:10px;padding:16px 18px;width:min(460px,94vw);font-size:13px">'
       + '<div style="font-weight:700;font-size:14px;margin-bottom:6px">何を起こしますか？</div>'
-      + '<div style="color:#475569;margin-bottom:12px">' + 案件 + '起こします。番号と区分は FileMaker 側で付きます。</div>'
+      + '<div style="color:#475569;margin-bottom:12px">' + 案件 + '起こします。番号は Hub で付きます（P番号-YM01／P番号-M01）。受注するまで FileMaker には入りません。</div>'
       + '<div style="display:flex;gap:10px;flex-wrap:wrap">'
-      + '<button data-kind="予算見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #b45309;background:#fffbeb;color:#92400e;border-radius:8px;cursor:pointer">予算見積<br><span style="font-weight:400;font-size:11px">番号 aNNNNNN-YM01（概算・予算どり）</span></button>'
-      + '<button data-kind="見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #1d4ed8;background:#eff6ff;color:#1e3a8a;border-radius:8px;cursor:pointer">見積書<br><span style="font-weight:400;font-size:11px">番号 aNNNNNN-M01（提出する見積）</span></button>'
+      + '<button data-kind="予算見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #b45309;background:#fffbeb;color:#92400e;border-radius:8px;cursor:pointer">予算見積<br><span style="font-weight:400;font-size:11px">番号 PNNNN-YM01（概算・予算どり）</span></button>'
+      + '<button data-kind="見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #1d4ed8;background:#eff6ff;color:#1e3a8a;border-radius:8px;cursor:pointer">見積書<br><span style="font-weight:400;font-size:11px">番号 PNNNN-M01（提出する見積）</span></button>'
       + '</div><div style="text-align:right;margin-top:10px"><button id="fm-kind-x" style="font:inherit;padding:5px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer">やめる</button></div></div>';
     document.body.appendChild(m);
     m.querySelector('#fm-kind-x').onclick = function () { m.remove(); 起こした後 = null; };
@@ -1933,6 +1938,133 @@ LOGIC = r"""
   }, '新しい順に 200 件を出します');
   // ================================================================ STAGE-1: Repeat は同じ案件の一番新しい伝票から（選べる）
   var リピート予約 = (function () { try { return new URLSearchParams(location.search).get('repeat') || ''; } catch (e) { return ''; } })();
+  // HUBMITSU-1: Hub 本体の「＋予算見積」「＋見積」から ?new=予算見積 で開いたら、サインイン後に起こす
+  (function () { var 起こす予約 = ''; try { 起こす予約 = new URLSearchParams(location.search).get('new') || ''; } catch (e) {} if (!起こす予約 || モード !== 'mitsu') return;
+    var go = function () { if (!起こす予約) return; var n = document.querySelector('#fmbar button.new[data-kind="' + 起こす予約 + '"]'); 起こす予約 = ''; try { history.replaceState(null, '', location.pathname + '?mode=mitsu'); } catch (e) {} if (n) n.click(); };
+    if (window.FM名乗っている ? FM名乗っている() : true) setTimeout(go, 900); else window.addEventListener('fm-signin', function () { setTimeout(go, 900); }); })();
+  // ================================================================ HUBMITSU-1（本多さん 9/29）: 予算見積・見積は Hub の保管庫、FileMaker は受注だけ
+  //   番号 P0042-YM01／P0042-M01（P番号は Hub の案件番号＝案件フォルダ）。受注したら「受注化」で FileMaker に受注伝票を起こす
+  function Hub番号か(no) { return /^P\d{3,}-(YM|M)\d{2,}$/i.test(String(no || '').trim()); }
+  function 現在の番号() { return 現在 ? String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || '') : ''; }
+  function 現在はHub() { return !!(現在 && /^hub:/.test(String(現在.recordId || ''))); }
+  window.FM今 = function () { return { 現在: 現在, hub: 現在はHub(), 番号: 現在の番号() }; };   // 動作確認用（読むだけ）
+  function Hub本体DB() {
+    return new Promise(function (res) {
+      try { var r = indexedDB.open('tokiwa_hub_local', 1);
+        r.onupgradeneeded = function (e) { try { var d = e.target.result; if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); } catch (x) {} };
+        r.onsuccess = function () { try { var d = r.result, q = d.transaction('kv', 'readonly').objectStore('kv').get('db'); q.onsuccess = function () { var v = q.result; d.close(); var db = null; if (v && v.json) { try { db = JSON.parse(v.json); } catch (e) {} } res(db); }; q.onerror = function () { d.close(); res(null); }; } catch (e) { res(null); } };
+        r.onerror = function () { res(null); };
+      } catch (e) { res(null); }
+    }).then(function (db) { if (!db) { try { db = JSON.parse(localStorage.getItem('murayama_v15') || 'null'); } catch (e) { db = null; } } return db; });
+  }
+  // 新しく起こすときに中継へ渡す { P番号, P番号ヒント }: 元の伝票（FileMaker の受注）に Hub の案件カードがあればその P番号。無ければ Hub 側の一番大きい番号をヒントに（同じ番号を二度使わない）
+  function Hub初期値(元伝票番号) {
+    return Hub本体DB().then(function (db) {
+      var o = { P番号: '', P番号ヒント: '' }; if (!db) return o; var max = 0;
+      ['inquiries', 'estimates', 'history', 'projects', 'proofings', 'purchases', 'outsource', 'deliveryItems', 'invoices'].forEach(function (k) { (db[k] || []).forEach(function (e) { var n = parseInt(e && e.master_no, 10); if (n > max) max = n; }); });
+      try { var c = Number((db.conf || {})._masterNoCounter || 0); if (c > max) max = c; } catch (e) {}
+      if (max) o.P番号ヒント = 'P' + String(max).padStart(4, '0');
+      if (元伝票番号) { var p = (db.projects || []).find(function (x) { return x && ((x.fm && String(x.fm['fm-denpyo']) === String(元伝票番号)) || String(x.id) === String(元伝票番号)); }); if (p && p.master_no) o.P番号 = 'P' + String(p.master_no).padStart(4, '0'); }
+      return o;
+    }).catch(function () { return { P番号: '', P番号ヒント: '' }; });
+  }
+  // 受注化（Hub の見積 → FileMaker の受注伝票）のあと: 受注入力で開くか聞く
+  function 受注化のあと(r) {
+    if (!r || !r.受注化) return false;
+    var no = String(r.record && r.record.fields ? (r.record.fields['伝票番号'] || '') : '');
+    try { 見積索引を重ねる(); } catch (e) {}
+    setTimeout(function () { if (confirm('受注化しました。FileMaker に受注伝票 ' + no + ' を起こしました（見積 ' + r.見積番号 + ' は「採用」として Hub に残ります）。\n\n受注入力で開きますか？')) { location.href = location.pathname + '?mode=juchu&no=' + encodeURIComponent(no); } }, 300);
+    return true;
+  }
+  // Hub の見積の索引（予算見積・見積・全部）を FileMaker の索引に重ねる（検索・Repeat・案件の段階に出る）
+  var 見積索引 = null, 見積索引取得中 = false;
+  function 見積索引を重ねる() {
+    if (見積索引取得中) return Promise.resolve(); 見積索引取得中 = true;
+    return 呼ぶ('見積_索引', []).then(function (j) { 見積索引 = j; 索引に見積を足す(); }).catch(function (e) { console.warn('[見積索引]', e); }).then(function () { 見積索引取得中 = false; });
+  }
+  function 索引に見積を足す() {
+    if (!索引 || !見積索引 || !見積索引.列) return;
+    var pos = 索引.列.map(function (c) { return 見積索引.列.indexOf(c); }); var rid = 索引位置['recordId'];
+    var rows = 索引.行.filter(function (r) { return !(rid != null && /^hub:/.test(String(r[rid] || ''))); });
+    (見積索引.行 || []).forEach(function (h) { rows.push(pos.map(function (p) { return p < 0 ? '' : h[p]; })); });
+    索引.行 = rows; var d = 索引位置['起票日'];
+    索引日 = 索引.行.map(function (r) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(r[d] || '')); return m ? Number(m[3] + m[1] + m[2]) : 0; });
+    try { if (最後の件数) 手元で探す(false); } catch (e) {}
+  }
+  // P番号の案件フォルダ（会社 GAS）。見積を開いた時点で用意する（支給ファイルの置き場）。失注だけになったら名前に【失注】
+  var Hub案件フォルダ = {};
+  function Hub案件フォルダを用意(P番号, 案件名, 失注) {
+    if (!window.HubAPI || !P番号) return Promise.resolve(null);
+    var key = P番号 + '|' + (案件名 || '') + '|' + (失注 ? 1 : 0); if (Hub案件フォルダ[key]) return Hub案件フォルダ[key];
+    var f = 現在 ? 現在.fields : {}; var nm = String(案件名 || '').trim() || String(f['製品名'] || '').trim(); if (失注) nm = nm + '【失注】';
+    var pr = HubAPI.call('ensureCaseFolder', {}, { pno: String(P番号).replace(/^P/i, ''), ankenName: nm, orgCode: String(f['得意先コード'] || ''), org: (得意先名(f['得意先コード']) || ''), denpyos: [現在の番号()].filter(Boolean) })
+      .then(function (r) { if (!r || !r.success) throw new Error((r && r.error) || '案件フォルダを作れません'); return r; })
+      .catch(function (e) { console.warn('[案件フォルダ]', e); delete Hub案件フォルダ[key]; return null; });
+    Hub案件フォルダ[key] = pr; return pr;
+  }
+  function Hub支給ファイルを出す(no, el) {
+    var f = 現在 ? 現在.fields : {}; var P番号 = String(f['P番号'] || f['案件ID'] || no.split('-')[0]);
+    el.textContent = '案件フォルダを読んでいます…';
+    Hub案件フォルダを用意(P番号, f['案件名'], String(f['状態'] || '') === '失注').then(function (cf) {
+      if (手配の伝票 !== no) return;
+      if (!cf) { el.innerHTML = '<span style="color:#b91c1c">案件フォルダを用意できません（Drive のルートが未設定か、権限がありません）</span>'; return; }
+      var subs = cf.subFolders || {}; var names = ['01_問い合わせ', '02_見積', '04_データ'];
+      Promise.all(names.map(function (n) { var sf = subs[n]; if (!sf || !sf.id) return Promise.resolve({ files: [] }); return HubAPI.call('listFolderFiles', {}, { folderId: sf.id }).catch(function () { return { files: [] }; }); })).then(function (rs) {
+        if (手配の伝票 !== no) return;
+        var h = '<div style="margin-bottom:3px"><a href="' + esc(cf.url) + '" target="_blank" rel="noopener" style="color:#0369a1">📁 ' + esc(cf.name) + '</a> <span style="color:#64748b">支給ファイルは 04_データ に入ります（下の「置く」）。見積書 PDF は 02_見積</span></div>';
+        names.forEach(function (n, i) { var files = (rs[i] && rs[i].files) || []; if (!files.length) return; h += '<div><b style="color:#475569">' + esc(n) + '</b> ' + files.slice(0, 12).map(function (x) { return '<a href="' + esc(x.url) + '" target="_blank" rel="noopener">📄 ' + esc(x.name) + '</a>'; }).join('') + (files.length > 12 ? ' <span style="color:#64748b">…ほか ' + (files.length - 12) + '</span>' : '') + '</div>'; });
+        el.innerHTML = h;
+      });
+    });
+  }
+  function Hub支給ファイルを置く(no, files) {
+    var list = Array.prototype.slice.call(files || []); if (!list.length) return;
+    var f = 現在 ? 現在.fields : {}; var P番号 = String(f['P番号'] || f['案件ID'] || no.split('-')[0]);
+    $('jz-msg').textContent = '案件フォルダを用意しています…';
+    Hub案件フォルダを用意(P番号, f['案件名'], false).then(function (cf) {
+      var sf = cf && cf.subFolders && cf.subFolders['04_データ']; if (!sf || !sf.id) { $('jz-msg').textContent = '案件フォルダを用意できません'; return; }
+      var i = 0; var next = function () { if (i >= list.length) { $('jz-msg').textContent = list.length + ' 件を 04_データ に置きました'; 仕様書を出す(); return; }
+        var x = list[i++]; if (x.size > 25 * 1024 * 1024) { alert(x.name + ' は 25MB を超えています'); next(); return; }
+        $('jz-msg').textContent = '置いています… ' + x.name; var fr = new FileReader();
+        fr.onload = function () { var b64 = String(fr.result).split(',')[1] || ''; HubAPI.call('uploadProofFile', {}, { folderId: sf.id, name: x.name, mime: x.type || 'application/octet-stream', base64: b64 }).then(function (r) { if (!r || !r.success) throw new Error((r && r.error) || '置けません'); next(); }).catch(function (e) { $('jz-msg').textContent = x.name + ' を置けません: ' + String(e.message || e); }); };
+        fr.readAsDataURL(x); };
+      next();
+    });
+  }
+  // 段階札の横の帯: 状態（見積中／提出済／失注／保留）と 受注化
+  function Hub見積の帯(r) {
+    var el = $('hub-mitsu-st'); if (!el) { el = document.createElement('span'); el.id = 'hub-mitsu-st'; el.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-left:8px;font-size:11px;vertical-align:middle'; 段階札.parentNode.insertBefore(el, 段階札.nextSibling); }
+    if (!現在はHub()) { el.innerHTML = ''; return; }
+    if (r && r.hub) setTimeout(見積索引を重ねる, 150);   // 起こした・読んだ直後に索引へ（検索・Repeat・案件の段階に出る）
+    var f = 現在.fields; var st = String(f['状態'] || '見積中'); var 採用 = !!f['受注伝票番号'];
+    var color = { '見積中': '#b45309', '提出済': '#1d4ed8', '採用': '#166534', '失注': '#991b1b', '保留': '#475569' }[st] || '#475569';
+    var b = function (label, 状態, title) { return '<button type="button" data-st="' + 状態 + '" title="' + esc(title) + '" style="font:inherit;font-size:11px;padding:1px 7px;border:1px solid #cbd5e1;background:#fff;color:#111;border-radius:3px;cursor:pointer">' + label + '</button>'; };
+    el.innerHTML = '<span style="padding:1px 8px;border-radius:3px;font-weight:700;color:#fff;background:' + color + '">' + esc(st) + (採用 ? ' ' + esc(f['受注伝票番号']) : '') + '</span>'
+      + (採用 ? '<a href="?mode=juchu&no=' + encodeURIComponent(f['受注伝票番号']) + '" style="color:#fff;text-decoration:underline">受注入力で開く</a>'
+              : (st !== '提出済' ? b('提出済', '提出済', '見積書を出したら押します') : '') + (st !== '失注' ? b('失注', '失注', '失注にします。同じ P番号に生きている見積が無ければ案件フォルダの名前に【失注】が付きます') : '') + (st !== '見積中' ? b('見積中に戻す', '見積中', '') : '') + (st !== '保留' ? b('保留', '保留', '') : '')
+                + '<button type="button" data-st="受注化" title="この見積の内容で FileMaker に受注伝票を起こします（見積は「採用」として残ります）" style="font:inherit;font-size:11px;padding:1px 8px;border:1px solid #166534;background:#166534;color:#fff;border-radius:3px;cursor:pointer;font-weight:700">受注化</button>')
+      + '<span style="color:#e2e8f0">保管: Hub</span>';
+    Array.prototype.forEach.call(el.querySelectorAll('button[data-st]'), function (x) { x.onclick = function () { var 状態 = x.getAttribute('data-st'); if (状態 === '受注化') { 受注化する(); return; } 見積の状態を変える(状態); }; });
+    try { Hub案件フォルダを用意(f['P番号'] || f['案件ID'], f['案件名'], st === '失注'); } catch (e) {}
+  }
+  function 見積の状態を変える(新状態) {
+    if (!現在はHub()) return; var no = 現在の番号();
+    if (新状態 === '失注' && !confirm(no + ' を失注にします。よいですか？（あとで「見積中に戻す」で戻せます）')) return;
+    待機(true); 状態('状態を変えています… ' + 新状態);
+    呼ぶ('見積_状態', [no, 新状態]).then(function (r) {
+      現在.fields['状態'] = 新状態; Hub見積の帯(); 状態(no + ' を「' + 新状態 + '」にしました', 'ok'); 待機(false);
+      try { 見積索引を重ねる(); } catch (e) {}
+      try { if (r && r.P番号) { Hub案件フォルダ = {}; Hub案件フォルダを用意(r.P番号, r.案件名 || 現在.fields['案件名'], !!r.失注だけ); } } catch (e) {}
+    }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+  }
+  function 受注化する() {
+    if (!現在はHub()) return; var no = 現在の番号();
+    if (Object.keys(変更分()).length) { alert('保存していない編集があります。先に保存してから受注化してください'); return; }
+    if (!confirm(no + ' を受注化します。\n\nこの見積の内容で FileMaker に受注伝票を起こします（伝票番号は自動）。見積は「採用」として Hub に残り、支給ファイルも同じ案件フォルダのままです。よいですか？')) return;
+    待機(true); 失敗(''); diff.style.display = 'none'; 状態('受注化しています… ' + no); var t0 = Date.now();
+    呼ぶ('見積_受注化', [no]).then(function (r) { 受け取る(r, '受注化しました  ' + String(r.record.fields['伝票番号'] || ''), Date.now() - t0); 受注化のあと(r); })
+      .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+  }
   function 段階の注意(f) {
     var k = String((f || {})['案件区分'] || ''); if (段階が合う(k)) return;
     var 先 = (k === '予算見積' || k === '見積' || k === '失注') ? 'mitsu' : 'juchu'; var no = String(f['伝票番号'] || f['見積番号'] || '');
@@ -1981,8 +2113,8 @@ LOGIC = r"""
       if (!src.recordId) { alert('この伝票の recordId が索引にありません。先にその番号を読み込んでから Repeat してください'); return; }
       if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて起こしますか？')) return;
       m.remove(); 待機(true); 失敗(''); diff.style.display = 'none'; 状態(k + ' を起こしています… 元 ' + src.no); var t0 = Date.now();
-      var p = k === '受注' ? 呼ぶ('画面_Repeat登録', [src.recordId]) : 呼ぶ('画面_流用新規', [src.recordId, k, true]);
-      p.then(function (r) { var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || ''); 受け取る(r, k + ' を起こしました  ' + n2 + '（元 ' + src.no + '）', Date.now() - t0); try { 手配を写して読む(src.no, n2); } catch (e) {} })
+      var p = k === '受注' ? 呼ぶ('画面_Repeat登録', [src.recordId]) : Hub初期値(src.no).then(function (初期値) { return 呼ぶ('画面_流用新規', [src.recordId, k, true, 初期値]); });   // HUBMITSU-1
+      p.then(function (r) { var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || ''); 受け取る(r, (r.受注化 ? '受注化しました  ' : k + ' を起こしました  ') + n2 + '（元 ' + src.no + '）', Date.now() - t0); if (受注化のあと(r)) return; try { 手配を写して読む(src.no, n2); } catch (e) {} })
        .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
     };
   }
@@ -1997,6 +2129,7 @@ LOGIC = r"""
         if (k.value !== '受注') return; var before = 読込時['f-kubun'] || '';
         if (!現在) { k.value = before; alert('先に見積を読み込んでから受注にしてください'); return; }
         k.value = before;
+        if (現在はHub()) { 受注化する(); return; }   // HUBMITSU-1
         if (!confirm('この見積を受注にします。\n\nこの案件の続きとして新しい受注伝票を起こし、受注入力で扱えるようにします（見積はそのまま残ります）。よいですか？')) return;
         var b = document.querySelector('#fmbar button.new[data-kind="受注"]'); if (b) b.click();
       });
@@ -2340,6 +2473,7 @@ LOGIC = r"""
   function 仕様書を出す() {
     var el = $('jz-files'); if (!el) return; var no = 手配の伝票, gid = (($('jz-group') || {}).value || '').trim();
     if (!no) { el.textContent = '（なし）'; return; }
+    if (Hub番号か(no) && window.HubAPI) { Hub支給ファイルを出す(no, el); return; }   // HUBMITSU-1: 支給ファイルは P番号の案件フォルダ（01_問い合わせ／02_見積／04_データ）
     el.textContent = '読んでいます…';
     Promise.all([呼ぶ('仕様書_一覧', [no]).catch(function () { return { files: [] }; }), gid ? 呼ぶ('仕様書_一覧', [gid]).catch(function () { return { files: [] }; }) : Promise.resolve({ files: [] })]).then(function (rs) {
       if (手配の伝票 !== no) return; 仕様書一覧 = { 番号: rs[0].files || [], 依頼: rs[1].files || [] };
@@ -2355,6 +2489,7 @@ LOGIC = r"""
   }
   function 仕様書を置く(files) {
     var no = 手配の伝票; if (!no) { alert('先に伝票（見積）を読み込むか起こしてください'); return; }
+    if (Hub番号か(no) && window.HubAPI) { Hub支給ファイルを置く(no, files); return; }   // HUBMITSU-1
     var gid = (($('jz-group') || {}).value || '').trim(); var 置き先 = gid && confirm('まとめ依頼 ' + gid + ' の共有ファイルとして置きますか？\n\n[OK] 依頼 ' + gid + ' の共有　／　[キャンセル] この番号 ' + no + ' だけ') ? gid : no;
     var list = Array.prototype.slice.call(files || []); if (!list.length) return; var i = 0;
     var next = function () { if (i >= list.length) { $('jz-msg').textContent = list.length + ' 件を置きました（' + 置き先 + '）'; 仕様書を出す(); return; }
@@ -2754,6 +2889,7 @@ LOGIC = r"""
 
 
 KAIZEN = r"""
+<script src="hub-api.js"></script>   <!-- HUBMITSU-1: P番号の案件フォルダ（会社 GAS） -->
 <script>window.KAIZEN_KEY = 'juchu-fm';</script>
 <script src="kaizen.js"></script>
 """
@@ -2769,7 +2905,30 @@ def 組み立てる(src, which, 呼ぶ実装, back, 追加=''):
     return src.replace('</body>', addon + '\n</body>', 1)
 
 
+def 引数名を揃える(text):
+    """HUBMITSU-1: Hub 版の 引数名（fetch 用の名前つき引数）を tools/fm-bridge.js の表と合わせる。
+       片方だけに足して「知らない操作です」になっていた（手配_読む・Hubマスタ_一覧 など）"""
+    import re
+    pat = re.compile(r"^\s*'([^']+)':\s*(\[[^\]]*\])", re.M)
+    bridge = open(os.path.join(HERE, '..', 'fm-bridge.js'), encoding='utf-8').read()
+    m_b = re.search(r"var 引数名 = \{(.*?)\n  \};", bridge, re.S)
+    m_h = re.search(r"var 引数名 = \{(.*?)\n  \};", text, re.S)
+    if not m_b or not m_h:
+        print('△ 引数名の表が見つかりません（fm-bridge.js と合わせられません）')
+        return text
+    entries, order = {}, []
+    for blk in (m_h.group(1), m_b.group(1)):
+        for k, v in pat.findall(blk):
+            if k not in entries:
+                order.append(k)
+            entries[k] = v
+    body = '\n'.join("    '%s': %s," % (k, entries[k]) for k in order)
+    return text[:m_h.start(1)] + '\n' + body + text[m_h.end(1):]
+
+
 def main():
+    global 呼ぶ_HUB
+    呼ぶ_HUB = 引数名を揃える(呼ぶ_HUB)   # HUBMITSU-1: Hub 版の引数名は fm-bridge.js と同じに
     src = open(SRC, encoding='utf-8').read()
     if '</body>' not in src:
         print('× </body> が見つかりません')

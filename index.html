@@ -1443,8 +1443,11 @@ setTimeout(_removeBootLoader_, 5000);
     <button class="quote-subtab active" onclick="_navQuoteSubtab_('estimates', this)" style="padding:10px 24px;background:transparent;border:none;border-bottom:3px solid #1e40af;font-size:14px;font-weight:700;color:#1e40af;cursor:pointer;font-family:inherit;margin-bottom:-2px">📝 見積中</button>
     <button class="quote-subtab" onclick="_navQuoteSubtab_('history', this)" style="padding:10px 24px;background:transparent;border:none;border-bottom:3px solid transparent;font-size:14px;font-weight:600;color:#888;cursor:pointer;font-family:inherit;margin-bottom:-2px">📜 過去見積</button>
   </div>
+  <!-- HUBMITSU-1: Hub の保管庫の見積（予算見積・見積）。FileMaker には受注だけ。受注したら見積入力の「受注化」 -->
+  <div id="hub-quotes-box" style="margin-bottom:14px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0"></div>
   <!-- 使い方ガイド -->
   <div style="background:#fef3c7;border:1px solid #fde047;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#78350f;line-height:1.6">
+    <strong>📝 旧・見積メモ（この PC だけ）:</strong> 下の一覧は以前の簡易登録です。新しい見積は上の「＋予算見積」「＋見積」から起こしてください。<br>
     <strong>📝 見積中とは:</strong> お客様からの依頼を「メモ書き」として簡易登録した、まだ提出前の見積です。
     AI が問い合わせから自動抽出したもの、チャットボットで作ったもの、手動で簡易入力したものが並びます。<br>
     <strong>📝 詳細な見積書を作る場合は</strong>: 該当行の <strong>「📝 編集」</strong> をクリック → 見積作成タブで詳細計算 → 「📜 過去見積」に保存。
@@ -20639,7 +20642,7 @@ function _fmAutoSync_(){
   var d=since?new Date(since):new Date(Date.now()-86400000); d=new Date(d.getTime()-86400000);   // 念のため 1 日戻す
   var fmd=('0'+(d.getMonth()+1)).slice(-2)+'/'+('0'+d.getDate()).slice(-2)+'/'+d.getFullYear();
   var startKey=since?_fmDateToKey_(('0'+(new Date(since).getMonth()+1)).slice(-2)+'/'+('0'+new Date(since).getDate()).slice(-2)+'/'+new Date(since).getFullYear()):'99999999';
-  return FM.呼ぶ('写し_差分',[fmd]).then(function(r){
+  return Promise.resolve(typeof _hubQuotesLoad_==='function'?_hubQuotesLoad_():null).then(function(){ return FM.呼ぶ('写し_差分',[fmd]); }).then(function(r){   // HUBMITSU-1: 先に見積の索引
     var 列=r.列||[], rows=(r.行||[]).map(function(a){ var o={}; 列.forEach(function(c,i){ o[c]=a[i]; }); return o; });
     if(!rows.length) return;
     var byNo={}; (DB.projects||[]).forEach(function(p){ if(p&&p.fm&&p.fm['fm-denpyo']) byNo[String(p.fm['fm-denpyo'])]=p; });
@@ -20674,6 +20677,7 @@ function _fmAutoSync_(){
           fm:{ 'fm-denpyo':no, 'fm-no':no, 'fm-anken':String(f['案件ID']||''), 'fm-prev':String(f['前回伝票番号']||''), 'fm-custcd':String(f['得意先コード']||''), 'fm-tantocd':String(f['担当者コード']||'') }, fmSyncedAt:new Date().toISOString(), fromFm:true };
         // GROUP-2: リピート元のカードがあれば、その案件ID（master_no）を引き継ぐ＝同じ案件の来年分
         try{ var _pv2=_projByFmNo_(f['前回伝票番号']); if(_pv2 && _pv2.master_no) proj.master_no=_pv2.master_no; }catch(e){}
+        try{ var _hq=window._hubQuotes_&&window._hubQuotes_.byDenpyo[no]; if(_hq){ proj.master_no=_hubQuoteP_(_hq); proj.fromQuote=_hq.no; if(_hq['問い合わせID']) proj.fromInquiryId=String(_hq['問い合わせID']); if(_hq['案件名']&&!proj.ankenName) proj.ankenName=String(_hq['案件名']); } }catch(e){}   // HUBMITSU-1: 受注化した伝票は見積の P番号（案件フォルダも同じ）
         if(!DB.projects) DB.projects=[]; DB.projects.push(proj); byNo[no]=proj; made++;
       }
     });
@@ -24398,7 +24402,88 @@ function _applyHistoryPricing_(est){
 // ─────────────────────────────────────────────────────
 // 📋 見積管理 (見積一覧 - 案件化されていないもの)
 // ─────────────────────────────────────────────────────
+// ================================================================ HUBMITSU-1（本多さん 9/29）: 予算見積・見積は Hub の保管庫（中継のシート「見積」）、FileMaker は受注だけ
+//   番号 P0042-YM01／P0042-M01（P番号＝案件番号＝案件フォルダ）。受注したら見積入力の「受注化」で FileMaker に受注伝票。ここでは一覧と問い合わせからの起こし
+window._hubQuotes_ = null;
+function _hubFmOn_(){ return !!(window.FM && typeof FM.名乗っている==='function' && FM.名乗っている()); }
+function _hubQuotesLoad_(force){
+  if(!_hubFmOn_()) return Promise.resolve(null);
+  var c=window._hubQuotes_; if(!force && c && Date.now()-c.at<3*60*1000) return Promise.resolve(c);
+  if(window._hubQuotesBusy_) return window._hubQuotesBusy_;
+  window._hubQuotesBusy_ = FM.呼ぶ('見積_索引',[]).then(function(r){
+    var 列=r.列||[];
+    var rows=(r.行||[]).map(function(a){ var o={}; 列.forEach(function(x,i){ o[x]=a[i]; }); o.P=String(parseInt(String(o['P番号']||'').replace(/^P/i,''),10)||''); o.no=String(o['見積番号']||''); return o; });
+    var byP={}, byNo={}, byDenpyo={}, byInq={}, max=0;
+    rows.forEach(function(o){ (byP[o.P]=byP[o.P]||[]).push(o); byNo[o.no]=o; if(o['受注伝票番号']) byDenpyo[String(o['受注伝票番号'])]=o; if(o['問い合わせID']) byInq[String(o['問い合わせID'])]=o; var n=Number(o.P)||0; if(n>max) max=n; });
+    window._hubQuotes_={ rows:rows, byP:byP, byNo:byNo, byDenpyo:byDenpyo, byInq:byInq, max:max, at:Date.now() };
+    try{ if(!DB.conf) DB.conf={}; if(max>Number(DB.conf._masterNoCounter||0)) DB.conf._masterNoCounter=max; }catch(e){}
+    return window._hubQuotes_;
+  }).catch(function(e){ console.warn('[Hub見積]',e); return window._hubQuotes_; }).then(function(x){ window._hubQuotesBusy_=null; return x; });
+  return window._hubQuotesBusy_;
+}
+function _hubQuoteP_(o){ return String((o&&o.P)||'').padStart(4,'0'); }
+function _hubQuotesByMn_(mn){ var c=window._hubQuotes_; if(!c) return []; return c.byP[String(parseInt(String(mn||'').replace(/^P/i,''),10)||'')]||[]; }
+// 受注入力／見積入力（iframe）を番号付きで開く。extra は &new=見積 など
+function _fmOpenNo_(id, no, extra){ var f=document.getElementById('fm-frame-'+id); if(!f) return; var u=f.getAttribute('data-src')+(no?'&no='+encodeURIComponent(no):'')+(extra||''); f.setAttribute('src',u); if(typeof swPage==='function') swPage(id, document.querySelector('.tb-btn[data-page='+id+']')); }
+var _HUBQ_COLOR_={ '見積中':'#b45309', '提出済':'#1d4ed8', '採用':'#166534', '失注':'#991b1b', '保留':'#475569' };
+function _hubQuotesRender_(){
+  var box=document.getElementById('hub-quotes-box'); if(!box) return;
+  var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  var yen=function(v){ var n=Number(String(v==null?'':v).replace(/[^\d.-]/g,'')); return n?'¥'+Math.round(n).toLocaleString():''; };
+  var open=function(no){ return "_fmOpenNo_('fmmitsu','"+String(no).replace(/[^\w-]/g,'')+"')"; };
+  var head0='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:13px;color:#1e40af">🗂 見積（Hub 保管庫・予算見積と見積）</b><span style="font-size:11px;color:#64748b">FileMaker には受注だけ。受注したら見積入力の「受注化」</span><span style="margin-left:auto"></span>'
+    +'<button class="btn" style="background:#fffbeb;border-color:#b45309;color:#92400e;font-weight:700" onclick="_fmOpenNo_(\'fmmitsu\',\'\',\'&new=予算見積\')">＋予算見積</button><button class="btn" style="background:#eff6ff;border-color:#1d4ed8;color:#1e3a8a;font-weight:700" onclick="_fmOpenNo_(\'fmmitsu\',\'\',\'&new=見積\')">＋見積</button><button class="btn" title="読み直す" onclick="_hubQuotesLoad_(true).then(_hubQuotesRender_)">🔄</button></div>';
+  if(!_hubFmOn_()){ box.innerHTML=head0+'<div style="font-size:12px;color:#64748b">受注入力（FileMaker）に一度サインインすると、ここに見積が並びます</div>'; return; }
+  var st=window._hubQuoteSt_||'生きている';
+  box.innerHTML=head0+'<div style="font-size:12px;color:#64748b">読んでいます…</div>';
+  _hubQuotesLoad_().then(function(c){
+    var rows=(c&&c.rows)||[]; var q=String((document.getElementById('est-q')||{}).value||'').trim().toLowerCase();
+    var alive=function(o){ var s=String(o['状態']||'見積中'); return s!=='失注'&&s!=='採用'; };
+    var f=rows.filter(function(o){ var s=String(o['状態']||'見積中'); if(st==='生きている'){ if(!alive(o)) return false; } else if(st!=='すべて' && s!==st) return false;
+      if(q){ var hay=[o.no,'P'+_hubQuoteP_(o),o['得意先コード'],(typeof _custNameOf_==='function'?_custNameOf_(o['得意先コード']):''),o['製品名'],o['ユーザー名'],o['案件名'],o['受注伝票番号']].join(' ').toLowerCase(); if(typeof _qMatch_==='function'?!_qMatch_(hay,q):hay.indexOf(q)<0) return false; } return true; });
+    f.sort(function(a,b){ return String(b.at||'').localeCompare(String(a.at||'')); });
+    var counts={}; rows.forEach(function(o){ var s=String(o['状態']||'見積中'); counts[s]=(counts[s]||0)+1; });
+    var tabs=['生きている','見積中','提出済','保留','採用','失注','すべて'].map(function(t){ var n=t==='生きている'?rows.filter(alive).length:t==='すべて'?rows.length:(counts[t]||0); return '<button class="btn" onclick="window._hubQuoteSt_=\''+t+'\';_hubQuotesRender_()" style="font-size:12px;padding:3px 10px;'+(st===t?'background:#1e40af;color:#fff;border-color:#1e40af':'')+'">'+t+' '+n+'</button>'; }).join('');
+    var tbl=f.length?'<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff"><thead><tr style="background:#f1f5f9;text-align:left"><th style="padding:4px 6px">番号</th><th style="padding:4px 6px">P番号</th><th style="padding:4px 6px">種別</th><th style="padding:4px 6px">状態</th><th style="padding:4px 6px">起票</th><th style="padding:4px 6px">得意先</th><th style="padding:4px 6px">製品名</th><th style="padding:4px 6px;text-align:right">数量</th><th style="padding:4px 6px;text-align:right">売価</th><th style="padding:4px 6px">担当</th></tr></thead><tbody>'
+      +f.slice(0,300).map(function(o){ var s=String(o['状態']||'見積中'); return '<tr style="border-top:1px solid #e5e7eb;cursor:pointer" onclick="'+open(o.no)+'" title="見積入力で開く"><td style="padding:4px 6px"><b>'+esc(o.no)+'</b></td><td style="padding:4px 6px">P'+esc(_hubQuoteP_(o))+'</td><td style="padding:4px 6px">'+esc(o['案件区分'])+'</td><td style="padding:4px 6px"><span style="padding:0 6px;border-radius:3px;color:#fff;background:'+(_HUBQ_COLOR_[s]||'#475569')+'">'+esc(s)+(o['受注伝票番号']?' '+esc(o['受注伝票番号']):'')+'</span></td><td style="padding:4px 6px;white-space:nowrap">'+esc((typeof _fmDate_==='function'?_fmDate_(o['起票日']):o['起票日'])||'')+'</td><td style="padding:4px 6px">'+esc((typeof _custNameOf_==='function'?_custNameOf_(o['得意先コード']):'')||o['得意先コード']||'')+'</td><td style="padding:4px 6px">'+esc(o['製品名'])+(o['案件名']&&o['案件名']!==o['製品名']?' <span style="color:#64748b">'+esc(o['案件名'])+'</span>':'')+'</td><td style="padding:4px 6px;text-align:right">'+esc(o['ロット契約単位']||o['合計数1']||'')+'</td><td style="padding:4px 6px;text-align:right">'+yen(o['売価金額'])+'</td><td style="padding:4px 6px">'+esc(o['担当者コード'])+'</td></tr>'; }).join('')
+      +'</tbody></table></div>'+(f.length>300?'<div style="font-size:11px;color:#64748b">先頭 300 件だけ出しています。検索で絞ってください</div>':'')
+      :'<div style="padding:8px 0;color:#64748b;font-size:12px">'+(rows.length?'この絞りには見積がありません':'まだ見積がありません。「＋見積」か、問い合わせの「見積にする」から起こします')+'</div>';
+    box.innerHTML=head0+'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">'+tabs+'</div>'+tbl;
+  });
+}
+// 問い合わせ → Hub の見積（予算見積／見積）を起こして、添付を P番号の案件フォルダ 01_問い合わせ へ。見積入力で開く。FileMaker 未サインインなら false（今までの道）
+function _inqToHubQuote_(inqId, 種別){
+  var inq=(DB.inquiries||[]).find(function(i){ return i && i.id===inqId; }); if(!inq || !_hubFmOn_()) return Promise.resolve(false);
+  種別=種別||'見積';
+  var prev=(window._hubQuotes_&&window._hubQuotes_.byInq[String(inq.id)])||null; var lq=String(inq.linked_quote_id||'');
+  if(prev || /^P\d{3,}-(YM|M)\d+/i.test(lq)){ var no0=prev?prev.no:lq; if(confirm('この問い合わせからは見積 '+no0+' を起こしてあります。見積入力で開きますか？')) _fmOpenNo_('fmmitsu', no0); return Promise.resolve(true); }
+  var d={}; try{ d=(typeof _inqExtractData_==='function')?_inqExtractData_(inq):{}; }catch(e){} var ex=inq.extracted_data||{};
+  var item=String(ex.item||d.item||''); var qty=parseInt(ex.qty||d.qty,10)||''; var unit=String(ex.unit||d.unit||''); var due=String(ex.dueDate||'');
+  var m=/^(\d{4})-(\d\d)-(\d\d)/.exec(due); var fmdue=m?(m[2]+'/'+m[3]+'/'+m[1]):'';
+  var cust=String(ex.cust||inq.from_company||inq.custName||''); var code=''; try{ code=(typeof _custCodeOf_==='function')?String(_custCodeOf_(cust)||''):''; }catch(e){}
+  var 初期値={ '製品名':item, 'ロット契約単位':qty, '単位':unit, '納期':fmdue, '得意先コード':code, 'ユーザー名':(code?'':cust), '問い合わせID':inq.id, '案件名':item||String(inq.subject||'').replace(/^(re|fw|fwd)[:：]\s*/i,'').slice(0,30) };
+  Object.keys(初期値).forEach(function(k){ if(初期値[k]===''||初期値[k]==null) delete 初期値[k]; });
+  try{ var mx=0; ['inquiries','estimates','history','projects','proofings'].forEach(function(k){ (DB[k]||[]).forEach(function(e){ var n=parseInt(e&&e.master_no,10); if(n>mx) mx=n; }); }); var c0=Number((DB.conf||{})._masterNoCounter||0); if(c0>mx) mx=c0; if(mx) 初期値['P番号ヒント']='P'+String(mx).padStart(4,'0'); }catch(e){}
+  if(inq.master_no) 初期値['P番号']='P'+String(inq.master_no).padStart(4,'0');
+  if(typeof _toastMsg==='function') _toastMsg('🗂 '+種別+' を起こしています…');
+  return FM.呼ぶ('画面_新規案件',[種別, 初期値]).then(function(r){
+    var no=String((r.record&&r.record.fields&&r.record.fields['見積番号'])||''); var Pn=String(parseInt(String(r.案件ID||'').replace(/^P/i,''),10)||''); var P=Pn?Pn.padStart(4,'0'):'';
+    inq.linked_quote_id=no; if(P) inq.master_no=P; inq.quote_kind=種別; inq.updatedAt=new Date().toISOString();
+    if(!inq.timeline) inq.timeline=[]; inq.timeline.push({ at:inq.updatedAt, by:(currentAuth&&currentAuth.userName)||'', type:'quote', text:種別+' '+no+' を起こしました（P'+P+'）' });
+    try{ saveDB(); }catch(e){}
+    try{ callCloudAPI('linkCommunication',{},{ id:inq.id, links:{ quote_id:no } }); }catch(e){}
+    try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ linked_quote_id:no, master_no:P, quote_kind:種別 } }); }catch(e){}
+    try{ var ids=(inq.attachments||[]).filter(function(a){ return a&&a.driveFileId&&!a.movedToCase; }).map(function(a){ return a.driveFileId; });
+      callCloudAPI('ensureCaseFolder',{},{ pno:P, ankenName:初期値['案件名']||'', orgCode:code, org:cust, denpyos:[no] }).then(function(cf){ if(!cf||!cf.success||!ids.length) return; var sub=cf.subFolders&&cf.subFolders['01_問い合わせ']; if(!sub||!sub.id) return; return callCloudAPI('moveFilesToFolder',{},{ fileIds:ids, folderId:sub.id }).then(function(x){ if(x&&x.success){ (inq.attachments||[]).forEach(function(a){ if(a&&ids.indexOf(a.driveFileId)>=0) a.movedToCase=true; }); try{ saveDB(); }catch(e){} } }); }).catch(function(e){ console.warn('[案件フォルダ]',e); }); }catch(e){}
+    _hubQuotesLoad_(true);
+    if(typeof _toastMsg==='function') _toastMsg('🗂 '+種別+' '+no+' を起こしました（P'+P+'）。添付は案件フォルダへ');
+    _fmOpenNo_('fmmitsu', no); return true;
+  }).catch(function(e){ alert('見積を起こせませんでした: '+String(e.message||e)); return true; });
+}
+function _inqQuoteKind_(inq){ try{ if(typeof _inqBin_==='function' && _inqBin_(inq)==='予算見積') return '予算見積'; }catch(e){} return '見積'; }
+setTimeout(function(){ try{ _hubQuotesLoad_(); }catch(e){} }, 7000); setInterval(function(){ try{ _hubQuotesLoad_(); }catch(e){} }, 5*60*1000);
 function renderEstimates(){
+  try{ _hubQuotesRender_(); }catch(e){ console.warn('[Hub見積]',e); }   // HUBMITSU-1
   var container = document.getElementById('estimates-list-container');
   if(!container) return;
   if(!Array.isArray(DB.estimates)) DB.estimates = [];
@@ -24893,6 +24978,7 @@ function _parseInquiryFields_(inq){
 async function createEstimateFromInquiry(inqId){
   var inq = (DB.inquiries || []).find(function(i){ return i.id === inqId; });
   if(!inq){ alert('問い合わせが見つかりません'); return; }
+  if(typeof _inqToHubQuote_==='function' && _hubFmOn_()){ _inqToHubQuote_(inqId, _inqQuoteKind_(inq)); return; }   // HUBMITSU-1
   var ex = inq.extracted_data || {};
   var pf = _parseInquiryFields_(inq); // ローカル解析（AI抽出が無い/欠けている項目を補完）
   // クロス会社（グループ会社見積依頼）の取込みマッピング：得意先=依頼元会社／エンドユーザー=依頼元の得意先／納品先・梱包=依頼元会社
@@ -43404,6 +43490,7 @@ function _inqExtractData_(inq){
 function _inqTransferToEstimate_(inqId){
   var inq = (DB.inquiries||[]).find(function(i){return i.id===inqId;});
   if(!inq){ alert('問い合わせが見つかりません'); return; }
+  if(typeof _inqToHubQuote_==='function' && _hubFmOn_()){ _inqToHubQuote_(inqId, _inqQuoteKind_(inq)); return; }   // HUBMITSU-1: Hub の保管庫に起こす
   var d = _inqExtractData_(inq);
   // 見積タブを開いてフォームに流し込む
   var btn = document.querySelector('.tb-btn[data-page="est"]');
@@ -43598,9 +43685,11 @@ function _nextMasterNo_(){
       }
     });
   });
+  try{ if(window._hubQuotes_ && window._hubQuotes_.max>maxFromData) maxFromData=window._hubQuotes_.max; }catch(e){}   // HUBMITSU-1: 見積が使った P番号
   var counter = (DB.conf._masterNoCounter || 0);
   var next = Math.max(maxFromData, counter) + 1;
   DB.conf._masterNoCounter = next;
+  try{ if(_hubFmOn_()) FM.呼ぶ('見積_P番号を揃える',['P'+String(next).padStart(4,'0')]).catch(function(){}); }catch(e){}   // HUBMITSU-1: 中継の採番と揃える
   return String(next).padStart(4, '0');
 }
 
@@ -46330,6 +46419,7 @@ function _ankenHistoryHTML_(r){
   var items=[];
   (DB.projects||[]).forEach(function(p){ if(p && p.master_no===mn) items.push({ kind:'受注', y:String(p.orderDate||p.createdAt||'').slice(0,4), d:String(p.orderDate||p.createdAt||'').slice(0,10), no:(typeof _projFmNo_==='function'&&_projFmNo_(p))||p.id, id:p.id, qty:p.qty, unit:p.unit, amt:p.exTax||p.grand, st:p.status||'', now:p===r, cur:_projIsMoving_(p), open:"jumpToProject('"+String(p.id).replace(/'/g,'')+"')" }); });
   (DB.estimates||[]).forEach(function(e){ if(e && String(e.master_no||'')===String(mn) && !e.linkedProjectId) items.push({ kind:(e.kind==='予算見積'||/予算/.test(e.status||''))?'予算見積':'見積', y:String(e.date||e.createdAt||'').slice(0,4), d:String(e.date||e.createdAt||'').slice(0,10), no:e.id, id:e.id, qty:e.qty, unit:e.unit, amt:e.exTax||e.grand||e.total, st:e.status||'', lost:e.status==='失注', open:(typeof jumpToEstimate==='function')?"jumpToEstimate('"+String(e.id).replace(/'/g,'')+"')":'' }); });
+  try{ _hubQuotesByMn_(mn).forEach(function(o){ var s0=String(o['状態']||'見積中'); var dd=(typeof _fmDate_==='function'?_fmDate_(o['起票日']):'')||''; items.push({ kind:String(o['案件区分']||'見積'), y:dd.slice(0,4), d:dd, no:o.no, id:o.no, qty:o['ロット契約単位']||o['合計数1'], unit:o['単位'], amt:o['売価金額'], st:s0+(o['受注伝票番号']?' → '+o['受注伝票番号']:''), lost:s0==='失注', open:"_fmOpenNo_('fmmitsu','"+String(o.no).replace(/[^\w-]/g,'')+"')" }); }); }catch(e){}   // HUBMITSU-1
   if(items.length<2) return _fmBox;
   items.sort(function(a,b){ return String(b.d).localeCompare(String(a.d)); });
   var years={}; var order=[]; items.forEach(function(x){ var y=x.y||'（年不明）'; if(!years[y]){ years[y]=[]; order.push(y); } years[y].push(x); });
@@ -53686,6 +53776,7 @@ function _inqAutoOutcomes_(list){
     var k='', why='';
     if(inq.linked_proofing_id && (DB.proofings||[]).some(function(p){ return p && p.id===inq.linked_proofing_id; })){ k='proofing'; why='校正BOXにカード'; }
     else if(inq.linked_project_id && !/^→/.test(String(inq.linked_project_id))){ var pj=(DB.projects||[]).find(function(p){ return p && p.id===inq.linked_project_id; }); if(pj && typeof _projFmNo_==='function' && _projFmNo_(pj)){ k='ordered'; why='受注入力で伝票 '+_projFmNo_(pj); } }
+    else if(inq.linked_quote_id && window._hubQuotes_ && window._hubQuotes_.byNo[String(inq.linked_quote_id)]){ var hq=window._hubQuotes_.byNo[String(inq.linked_quote_id)]; var hs=String(hq['状態']||''); if(hs==='採用'){ k='ordered'; why='受注化 '+hq['受注伝票番号']; } else if(hs==='提出済'){ k='quote_sent'; why='見積 '+hq.no+' が提出済'; } }   // HUBMITSU-1
     else if(inq.linked_quote_id){ var es=(DB.estimates||[]).find(function(e){ return e && e.id===inq.linked_quote_id; }); if(es && (es.status==='提出済'||es.status==='submitted'||es.submittedAt)){ k='quote_sent'; why='見積が提出済'; } }
     if(!k) return;
     inq.outcome=k; inq.outcomeAt=new Date().toISOString(); inq.outcomeBy=who+'（自動：'+why+'）'; if(inq.status==='new'||inq.status==='progress') inq.status='waiting';
