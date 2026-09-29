@@ -109,6 +109,9 @@ STYLE = r"""
   #fmguide .k{ color:#166534; } #fmguide .warn{ color:#b45309; }
   #fmguide input.n{ width:56px; font-size:11px; text-align:right; padding:1px 3px; border:1px solid #cbd5e1; border-radius:3px; }
   #fmhaiso{ display:none; background:#eef6ff; border-bottom:2px solid #1d4ed8; padding:6px 14px; font-size:12px; }
+  #fmhaiso.up{ border:1px solid #93c5fd; border-left:5px solid #1d4ed8; margin:4px 0 6px; padding:5px 10px; }
+  body.fm-mode-mitsu #fmhaiso{ display:none !important; }   /* 見積入力では配送予定・DTP は要らない（本多さん 9/30） */
+  #han-hist{ font-size:10.5px; color:#92400e; margin-left:4px; white-space:nowrap; }
   #fmhaiso label{ margin-left:10px; } #fmhaiso input{ font-size:12px; padding:2px 4px; border:1px solid #cbd5e1; border-radius:3px; } #fmhaiso button{ font-size:12px; padding:3px 12px; margin-left:8px; background:#1d4ed8; color:#fff; border:0; border-radius:3px; cursor:pointer; }
   #fmgaichu{ display:none; background:#fdf6e3; border-bottom:2px solid #b45309; padding:6px 14px; font-size:12px; }
   #fmgaichu table{ border-collapse:collapse; }
@@ -193,13 +196,29 @@ STYLE = r"""
   #fmrireki td{ padding:2px 6px; border-bottom:1px solid #fde68a; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis; }
   #fmrireki .chk{ display:inline-flex; align-items:center; gap:4px; margin-right:12px; padding:2px 8px; border:1px solid #fdba74; border-radius:12px; background:#fff; cursor:pointer; }
   #fmrireki .chk.done{ background:#dcfce7; border-color:#86efac; color:#166534; }
+  /* YOMI-1（本多さん 9/30）: 文字を大きく・行を高く・横は伸ばしすぎない。
+     広い画面では枠が横いっぱいに伸びて読みにくいので、紙（入力の面）に上限を付け、名前の欄も伸びすぎないようにする。大きさは画面の幅に合わせて段階的に */
+  .sheet .in{ font-size:13px; height:24px; }
+  .sheet .lb{ font-size:11.5px; }
+  .sheet table.g td input, .sheet table.g td select{ height:23px; font-size:12.5px; }
+  .sheet table.g th{ font-size:11px; padding-top:3px; padding-bottom:3px; }
+  .sheet .row{ margin:3px 0; }
+  .sheet > .main, .sheet > .btm{ max-width:1480px; }
+  .sheet .hdr-l #f-cust, .sheet .hdr-l #f-user, .sheet .hdr-l #f-item{ max-width:520px; }
+  .sheet .hdr-l #f-pextra, .sheet .hdr-l #f-ctanto, .sheet .hdr-l #f-dept, .sheet .hdr-l #f-keiyu{ flex:0 1 300px; max-width:300px; }
+  .sheet .hdr-l .row.fill > .in:last-child{ max-width:420px; }
+  .sheet .hdr-l #f-note{ max-width:760px; }
+  /* TITLE-1（本多さん 9/30）: 黒い帯は一番上の 1 本だけ。2 本目（TOKIWA HUB 受注入力）と緑の線は出さない */
+  .hubbar, .hubbar + div{ display:none !important; }
+  @media (min-width:1300px){ .sheet{ zoom:1.1; } }
+  @media (min-width:1600px){ .sheet{ zoom:1.2; } }
 </style>
 """
 
 BAR = r"""
 <div id="fmbar">
   __BACK__
-  <b>FileMaker</b>
+  <b id="fm-title" style="font-size:15px;letter-spacing:.04em;white-space:nowrap">TOKIWA <span style="color:#a3e635">HUB</span>　<span id="fm-title-name" style="padding:1px 8px">受注入力</span></b>
   <input id="fm-no" placeholder="伝票番号・見積番号" autocomplete="off">
   <button class="go" id="fm-load">読み込む</button>
   <button id="fm-find" style="display:none">探す</button>
@@ -345,7 +364,7 @@ BAR = r"""
 <div id="fmmitei">
   <b>⚠ 仕様未確定</b> <span class="sum" id="mt-sum"></span>
   <span style="margin-left:10px">理由:</span>
-  <label><input type="checkbox" class="mt-k" value="用紙"> 用紙未確定</label><label><input type="checkbox" class="mt-k" value="印刷色"> 印刷色未確定</label><label><input type="checkbox" class="mt-k" value="数量"> 数量未確定</label><label><input type="checkbox" class="mt-k" value="納期"> 納期未確定</label><label><input type="checkbox" class="mt-k" value="外注先"> 外注先未確定</label><label><input type="checkbox" class="mt-k" value="デザイン"> デザイン未確定</label><label><input type="checkbox" class="mt-k" value="その他"> その他</label>
+  <label><input type="checkbox" class="mt-k" value="用紙"> 用紙未確定</label><label><input type="checkbox" class="mt-k" value="印刷色"> 印刷色未確定</label><label><input type="checkbox" class="mt-k" value="数量"> 数量未確定</label><label><input type="checkbox" class="mt-k" value="納期"> 納期未確定</label><label><input type="checkbox" class="mt-k" value="外注先"> 外注先未確定</label><label><input type="checkbox" class="mt-k" value="版下"> 版下変更未定</label><label><input type="checkbox" class="mt-k" value="仕様"> 仕様変更未定</label><label><input type="checkbox" class="mt-k" value="デザイン"> デザイン未確定</label><label><input type="checkbox" class="mt-k" value="その他"> その他</label>
   <input id="mt-memo" style="width:260px" placeholder="待っている内容（例: 用紙色を客先確認中）">
   <span style="color:#7f1d1d;margin-left:8px">決まったらチェックを外してください。案件管理表に「仕様未確定」として残ります</span>
 </div>
@@ -649,6 +668,7 @@ LOGIC = r"""
   function 日付欄か(el) { return el && el.tagName === 'INPUT' && el.type === 'date'; }
   // KUBUN-1: 文字の欄だが日付のもの（前回起票日）。画面は年から（YYYY/MM/DD）、FileMaker へは MM/DD/YYYY
   var 年から欄 = { 'f-prevdate': 1 };
+  var 未定欄 = { 'f-platechg': '版下', 'f-specchg': '仕様' };   // MITEI-2: 欄 → 仕様未確定の理由
   function 年からへ(v) { var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(v || '').trim()); return m ? (m[3] + '/' + ('0' + m[1]).slice(-2) + '/' + ('0' + m[2]).slice(-2)) : String(v || ''); }
   function 年からを戻す(v) { var m = /^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/.exec(String(v || '').trim()); return m ? (('0' + m[2]).slice(-2) + '/' + ('0' + m[3]).slice(-2) + '/' + m[1]) : String(v || ''); }
 
@@ -1395,7 +1415,7 @@ LOGIC = r"""
              : 呼ぶ('画面_新規案件', [種別, 初期値]); });
       p.then(function (r) {
         var no = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
-        受け取る(r, (r.受注化 ? '受注化しました  ' : 種別 + ' を起こしました  ') + no + (r.流用元 ? '（' + r.流用元 + ' から流用・別の案件）' : '') + (r.hub ? '　保管: Hub' : ''), Date.now() - t0);
+        受け取る(r, (r.受注化 ? '受注化しました  ' : 作成した文(種別)) + no + (r.流用元 ? '（' + r.流用元 + ' から流用・別の案件）' : '') + (r.hub ? '　保管: Hub' : ''), Date.now() - t0);
         if (受注化のあと(r)) return;
         try { var 元no = (r.種 && r.種.番号) || r.流用元 || ''; if (元no) 手配を写して読む(String(元no), String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}   // SPEC-1
         if (起こした後) { var f = 起こした後; 起こした後 = null; try { f(); } catch (e) {} }
@@ -1428,6 +1448,7 @@ LOGIC = r"""
     Object.keys(TO_FM).forEach(function (id) {
       var el = document.getElementById(id); if (!el) return;
       var now = String(el.value == null ? '' : el.value).trim();
+      if (未定欄[id] && now === '未定') now = 読込時[id] || '';   // MITEI-2: 未定は Hub だけの値（仕様未確定に残る）。FileMaker の欄は読み込んだときのまま
       if (now === (読込時[id] || '')) return;
       var col = TO_FM[id];
       if (書ける && 書ける.indexOf(col) < 0) return;
@@ -1496,7 +1517,8 @@ LOGIC = r"""
         return;
       }
       流し込む({ recordId: r.recordId, modId: r.modId, fields: r.fields });
-      状態(r.saved.length + ' 項目を保存しました（金額は再計算済み）' + (r.合流 ? '　※別の人の変更の上に重ねました' : ''), 'ok');
+      状態(r.saved.length + ' 項目を保存しました' + (現在はHub() ? '（Hub の見積）' : '（金額は再計算済み）') + (r.合流 ? '　※別の人の変更の上に重ねました' : ''), 'ok');
+      try { 先方担当を覚える(); } catch (e) {}   // TANTO-1
       待機(false);
     }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }
@@ -1911,6 +1933,7 @@ LOGIC = r"""
   if (モード) {
     var 見出し = (モード === 'mitsu' ? '見積入力' : モード === 'ichiran' ? '案件管理表（FileMaker）' : '受注入力');
     var 名札 = document.querySelector('.hdrow .ttl'); if (名札) 名札.textContent = 見出し;
+    try { if ($('fm-title-name')) $('fm-title-name').textContent = 見出し; } catch (e) {}
     try { Array.prototype.forEach.call(document.querySelectorAll('.tname, .ttl'), function (el) { if (String(el.textContent).trim() === '受注入力') el.textContent = 見出し; }); } catch (e) {}   // 黒い帯・見出しも同じ名前に
     document.title = 見出し + ' | Tokiwa Hub';
   }
@@ -1932,11 +1955,11 @@ LOGIC = r"""
     m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:flex;align-items:center;justify-content:center';
     var 案件 = 現在 && 現在.fields['案件ID'] ? ('案件 ' + 現在.fields['案件ID'] + ' の続きとして') : 'まっさらな案件として';
     m.innerHTML = '<div style="background:#fff;border-radius:10px;padding:16px 18px;width:min(460px,94vw);font-size:13px">'
-      + '<div style="font-weight:700;font-size:14px;margin-bottom:6px">何を起こしますか？</div>'
-      + '<div style="color:#475569;margin-bottom:12px">' + 案件 + '起こします。番号は Hub で付きます（P番号-YM01／P番号-M01）。受注するまで FileMaker には入りません。</div>'
+      + '<div style="font-weight:700;font-size:14px;margin-bottom:6px">どちらを作成しますか？</div>'
+      + '<div style="color:#475569;margin-bottom:12px">' + 案件 + '作成します。番号は Hub で付きます（P番号-YM01／P番号-M01）。受注するまで FileMaker には入りません。</div>'
       + '<div style="display:flex;gap:10px;flex-wrap:wrap">'
-      + '<button data-kind="予算見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #b45309;background:#fffbeb;color:#92400e;border-radius:8px;cursor:pointer">予算見積<br><span style="font-weight:400;font-size:11px">番号 PNNNN-YM01（概算・予算どり）</span></button>'
-      + '<button data-kind="見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #1d4ed8;background:#eff6ff;color:#1e3a8a;border-radius:8px;cursor:pointer">見積書<br><span style="font-weight:400;font-size:11px">番号 PNNNN-M01（提出する見積）</span></button>'
+      + '<button data-kind="予算見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #b45309;background:#fffbeb;color:#92400e;border-radius:8px;cursor:pointer">予算見積書作成<br><span style="font-weight:400;font-size:11px">番号 PNNNN-YM01（概算・予算どり）</span></button>'
+      + '<button data-kind="見積" style="flex:1;padding:12px;font:inherit;font-weight:700;border:2px solid #1d4ed8;background:#eff6ff;color:#1e3a8a;border-radius:8px;cursor:pointer">見積書作成<br><span style="font-weight:400;font-size:11px">番号 PNNNN-M01（提出する見積）</span></button>'
       + '</div><div style="text-align:right;margin-top:10px"><button id="fm-kind-x" style="font:inherit;padding:5px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer">やめる</button></div></div>';
     document.body.appendChild(m);
     m.querySelector('#fm-kind-x').onclick = function () { m.remove(); 起こした後 = null; };
@@ -1957,7 +1980,7 @@ LOGIC = r"""
     if (n) n.click();
     // GRP-2: 関連会社のアカウントなら、得意先は自社（自社が発注元）にしておく。金額欄のロックも掛け直す
     setTimeout(function () { try { var k = 権限(); if (k.partner && $('f-custcd') && !$('f-custcd').value) { $('f-custcd').value = 自社の得意先コード(); 得意先名を入れる(); } 金額の権限を適用(); } catch (e) {} }, 250);
-  }, モード === 'mitsu' ? '予算見積か見積書かを選んで、FileMaker に新しく起こします（番号は自動）' : 'FileMaker に新しい' + 起こす種別 + 'を起こします（黒帯の「' + 起こす種別 + '」と同じ）');
+  }, モード === 'mitsu' ? '予算見積書作成か見積書作成かを選びます（Hub に保存。番号は自動）' : 'FileMaker に新しい' + 起こす種別 + 'を起こします（黒帯の「' + 起こす種別 + '」と同じ）');
   帯に付ける('検索モード', function () { 検索モードに入る(); }, 'FileMaker と同じ検索モード。入力欄に条件を入れて Enter');
   (function () { var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('仕様未確定')) return; var b = document.createElement('button'); b.className = 'fb'; b.style.background = '#fee2e2'; b.style.color = '#b91c1c'; b.textContent = '仕様未確定'; b.title = '用紙・印刷色・数量などが決まっていないときに理由を付けます（案件管理表に残ります）'; b.onclick = function () { document.body.classList.add('fm-mitei'); var c = document.querySelector('#fmmitei .mt-k'); if (c) c.focus(); }; lay.parentNode.insertBefore(b, lay); })();
   帯に付ける('全体表示', function () {
@@ -1978,6 +2001,9 @@ LOGIC = r"""
   function Hub番号か(no) { return /^P\d{3,}-(YM|M)\d{2,}$/i.test(String(no || '').trim()); }
   function 現在の番号() { return 現在 ? String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || '') : ''; }
   function 現在はHub() { return !!(現在 && /^hub:/.test(String(現在.recordId || ''))); }
+  // WORD-1（本多さん 9/30）: 見積は「起こす」ではなく「見積書作成」「予算見積書作成」
+  function 作成した文(種別) { return 種別 === '見積' ? '見積書を作成しました  ' : 種別 === '予算見積' ? '予算見積書を作成しました  ' : 種別 + ' を起こしました  '; }
+  function 作成中の文(種別) { return 種別 === '見積' ? '見積書作成中… ' : 種別 === '予算見積' ? '予算見積書作成中… ' : 種別 + ' を起こしています… '; }
   window.FM今 = function () { return { 現在: 現在, hub: 現在はHub(), 番号: 現在の番号() }; };   // 動作確認用（読むだけ）
   function Hub本体DB() {
     return new Promise(function (res) {
@@ -2137,7 +2163,7 @@ LOGIC = r"""
       + '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#e2e8f0"><th></th><th style="text-align:left;padding:3px 6px">番号</th><th style="padding:3px 6px">段階</th><th style="padding:3px 6px">起票日</th><th style="padding:3px 6px;text-align:right">数量</th><th style="padding:3px 6px;text-align:right">売価</th><th style="padding:3px 6px">案件ID</th></tr></thead><tbody>'
       + list.map(function (o, i) { return '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:3px 6px"><input type="radio" name="rp-src" value="' + i + '"' + (i === 0 ? ' checked' : '') + '></td><td style="padding:3px 6px"><b>' + esc(o.no) + '</b>' + (o.今 ? ' <span style="color:#64748b">（表示中）</span>' : '') + '</td><td style="padding:3px 6px;text-align:center">' + esc(o.区分) + '</td><td style="padding:3px 6px;text-align:center">' + esc(日付(o.起票日)) + '</td><td style="padding:3px 6px;text-align:right">' + esc(o.数量) + '</td><td style="padding:3px 6px;text-align:right">' + esc(円(o.売価)) + '</td><td style="padding:3px 6px;text-align:center">' + esc(o.案件ID) + '</td></tr>'; }).join('')
       + '</tbody></table>'
-      + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="rp-x" style="padding:5px 14px">やめる</button><button id="rp-go" style="padding:5px 16px;background:#1a1a1a;color:#fff;border:0;border-radius:6px;font-weight:700">この伝票を元に起こす</button></div></div>';
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="rp-x" style="padding:5px 14px">やめる</button><button id="rp-go" style="padding:5px 16px;background:#1a1a1a;color:#fff;border:0;border-radius:6px;font-weight:700">この伝票を元に作成</button></div></div>';
     document.body.appendChild(m);
     $('rp-x').onclick = function () { m.remove(); };
     $('rp-go').onclick = function () {
@@ -2145,13 +2171,51 @@ LOGIC = r"""
       var k = モード === 'mitsu' ? ((m.querySelector('input[name="rp-k"]:checked') || {}).value || '予算見積') : '受注';
       if (!src.recordId) { alert('この伝票の recordId が索引にありません。先にその番号を読み込んでから Repeat してください'); return; }
       if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて起こしますか？')) return;
-      m.remove(); 待機(true); 失敗(''); diff.style.display = 'none'; 状態(k + ' を起こしています… 元 ' + src.no); var t0 = Date.now();
+      m.remove(); 待機(true); 失敗(''); diff.style.display = 'none'; 状態(作成中の文(k) + '元 ' + src.no); var t0 = Date.now();
       var p = k === '受注' ? 呼ぶ('画面_Repeat登録', [src.recordId]) : Hub初期値(src.no).then(function (初期値) { return 呼ぶ('画面_流用新規', [src.recordId, k, true, 初期値]); });   // HUBMITSU-1
-      p.then(function (r) { var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || ''); 受け取る(r, (r.受注化 ? '受注化しました  ' : k + ' を起こしました  ') + n2 + '（元 ' + src.no + '）', Date.now() - t0); if (受注化のあと(r)) return; try { 手配を写して読む(src.no, n2); } catch (e) {} })
+      p.then(function (r) { var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || ''); 受け取る(r, (r.受注化 ? '受注化しました  ' : 作成した文(k)) + n2 + '（元 ' + src.no + '）', Date.now() - t0); if (受注化のあと(r)) return; try { 手配を写して読む(src.no, n2); } catch (e) {} })
        .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
     };
   }
   帯に付ける('Repeat登録', function () { 読んでから(function () { リピートを選ぶ(モード === 'mitsu' ? '' : '受注'); }); }, '同じ案件の一番新しい伝票（予算見積・見積・受注、全年）を元に、新しく起こします。元は選べます');
+  // MITEI-2: 版下変更・仕様変更を変えた記録（手配に残す）。途中で「無→有」になったときも、いつ誰が変えたかが残る
+  function 変更を記録(項目, 前, 後) {
+    if (!現在 || String(前 || '') === String(後 || '')) return; 手配 = 手配 || {}; 手配.変更履歴 = 手配.変更履歴 || [];
+    手配.変更履歴.push({ 項目: 項目, 前: String(前 || '（空）'), 後: String(後 || '（空）'), at: new Date().toISOString(), by: String((window.FM名乗っている ? FM名乗っている() : '') || '') });
+    変更履歴を出す(手配.変更履歴);
+  }
+  function 変更履歴を出す(list) {
+    var el = $('han-hist'); if (!el) return; list = (list || []).slice(-3);
+    el.innerHTML = list.length ? '変更: ' + list.map(function (h) { var d = new Date(h.at); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + esc(h.項目) + ' ' + esc(h.前) + '→<b>' + esc(h.後) + '</b>（' + esc(String(h.by || '').split('@')[0]) + '）'; }).join('　') : '';
+    el.title = (list || []).map(function (h) { return new Date(h.at).toLocaleString('ja-JP') + ' ' + h.項目 + ' ' + h.前 + ' → ' + h.後 + ' ' + (h.by || ''); }).join('\n');
+  }
+  // TANTO-1（本多さん 9/30）: 先方の担当。Hub マスタ「先方担当」（得意先コード・ユーザー名・部・課・係・氏名…）から候補を出し、氏名を選ぶと部署も入る。保存したとき、無い人は自動で覚える
+  function 部署を分ける(t) {
+    var o = { 部: '', 課: '', 係: '' }; t = String(t || '').replace(/[\s　]+/g, ''); if (!t) return o;
+    var cut = Math.max.apply(null, ['役所', '役場', '会社', '法人', '組合', '大学', '学校', '病院', '協会', '公社', '機構', '庁'].map(function (w) { var i = t.lastIndexOf(w); return i < 0 ? -1 : i + w.length; })); if (cut > 0 && cut < t.length) t = t.slice(cut);
+    (t.match(/.+?(?:部|課|係|室|グループ|チーム|センター)/g) || []).forEach(function (x) { if (/部$/.test(x) && !o.部) o.部 = x; else if (/(課|室|センター)$/.test(x) && !o.課) o.課 = x; else if (/(係|グループ|チーム)$/.test(x) && !o.係) o.係 = x; });
+    return o;
+  }
+  var 先方担当表 = [];
+  function 先方担当の候補() {
+    var c = $('f-ctanto'), d = $('f-dept'); if (!c) return; var code = String(($('f-custcd') || {}).value || '').trim();
+    var dl = $('dl-ctanto'); if (!dl) { dl = document.createElement('datalist'); dl.id = 'dl-ctanto'; document.body.appendChild(dl); c.setAttribute('list', 'dl-ctanto'); var dl2 = document.createElement('datalist'); dl2.id = 'dl-cdept'; document.body.appendChild(dl2); if (d) d.setAttribute('list', 'dl-cdept');
+      c.addEventListener('change', function () { var v = c.value.trim(), cd = String(($('f-custcd') || {}).value || '').trim(); var hit = 先方担当表.filter(function (r) { return String(r['氏名'] || '') === v && (!cd || String(r['得意先コード'] || '') === cd); })[0]; if (!hit) return;
+        var dept = [hit['係'] || hit['課'] || hit['部']].filter(Boolean).join(''); if (d && dept && !d.value.trim()) d.value = dept; var u = $('f-user'); if (u && !u.value.trim() && hit['ユーザー名']) { u.value = hit['ユーザー名']; u.dispatchEvent(new Event('input', { bubbles: true })); u.dispatchEvent(new Event('change', { bubbles: true })); } }); }
+    Hubマスタを用意('先方担当').then(function (rows) { 先方担当表 = rows || []; var mine = 先方担当表.filter(function (r) { return !code || String(r['得意先コード'] || '') === code; });
+      dl.innerHTML = mine.map(function (r) { return '<option value="' + esc(r['氏名'] || '') + '">' + esc([r['ユーザー名'], r['部'], r['課'], r['係']].filter(Boolean).join(' ')) + '</option>'; }).join('');
+      var seen = {}; $('dl-cdept').innerHTML = mine.map(function (r) { return r['係'] || r['課'] || r['部'] || ''; }).filter(function (x) { if (!x || seen[x]) return false; seen[x] = 1; return true; }).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('');
+    }).catch(function () {});
+  }
+  function 先方担当を覚える() {
+    try { var nm = String(($('f-ctanto') || {}).value || '').trim(), code = String(($('f-custcd') || {}).value || '').trim(); if (!nm || !code) return;
+      if (先方担当表.some(function (r) { return String(r['氏名'] || '') === nm && String(r['得意先コード'] || '') === code; })) return;
+      var user = String(($('f-user') || {}).value || '').trim(), dept = String(($('f-dept') || {}).value || '').trim(); var b = 部署を分ける(user + dept);
+      var row = { '得意先コード': code, '得意先名': String(($('f-cust') || {}).value || '').trim(), 'ユーザー名': user, '部': b.部, '課': b.課, '係': b.係 || (/(部|課|室)$/.test(dept) ? '' : dept), '氏名': nm, '敬称': '様', 'メール': '', '電話': '', '備考': '伝票 ' + 現在の番号() + ' から自動' };
+      先方担当表.push(row); 呼ぶ('Hubマスタ_書く', ['先方担当', row]).then(function () { try { localStorage.removeItem('fm_hubmaster_先方担当'); } catch (e) {} }).catch(function (e) { console.warn('[先方担当]', e); });
+    } catch (e) {}
+  }
+  setTimeout(先方担当の候補, 3000); window.addEventListener('fm-signin', function () { setTimeout(先方担当の候補, 2000); }); if ($('f-custcd')) $('f-custcd').addEventListener('change', 先方担当の候補);
   // KUBUN-1（本多さん 9/30）: 区分はノート用タイトル（コピー）の行の下にラジオで出す。元の欄（選ぶ形）は隠して、値の入れ物として残す
   //   受注入力: 「受注」だけ・チェック済み（ほかの 3 つは出さない）。見積入力: 予算見積／見積／受注（受注処理する）／失注
   (function () {
@@ -2159,9 +2223,24 @@ LOGIC = r"""
     var row = document.createElement('div'); row.className = 'row'; row.id = 'kubun-row'; row.style.cssText = 'align-items:center;gap:4px';
     var 種 = (モード === 'mitsu') ? [['予算見積', '予算見積'], ['見積', '見積'], ['受注', '受注（受注処理する）'], ['失注', '失注']] : (モード === 'ichiran' ? [['予算見積', '予算見積'], ['見積', '見積'], ['受注', '受注'], ['失注', '失注']] : [['受注', '受注']]);
     row.innerHTML = '<span class="lb" style="min-width:70px" title="案件区分">区分</span>' + 種.map(function (p) { return '<label class="lb" style="display:inline-flex;align-items:center;gap:3px;margin-right:10px;cursor:pointer"><input type="radio" name="kubun-r" value="' + p[0] + '"> ' + p[1] + '</label>'; }).join('');
+    // SEIZO-KUBUN（本多さん 9/30）: 製造区分（Hub の見積作成タブの「発注形態」と同じ 4 つ）。手配に保存
+    row.insertAdjacentHTML('beforeend', '<span class="lb" style="margin-left:18px" title="社内で作るか、外に出すか。完全外製＝全部を外注、部分外製＝工程の一部を外注、分離外製＝工程ごとに別々の先へ発注">製造区分</span><select id="f-seizo" class="in w8"><option value="">（未選択）</option><option>完全内製</option><option>完全外製</option><option>部分外製</option><option>分離外製</option></select><span id="han-hist"></span>');
     row0.parentNode.insertBefore(row, row0.nextSibling);
+    try { document.body.classList.add('fm-mode-' + (モード || 'juchu')); var hs0 = $('fmhaiso'); if (hs0 && モード !== 'mitsu') { hs0.classList.add('up'); row.parentNode.insertBefore(hs0, row.nextSibling); } } catch (e) {}   // 配送予定・DTP 有無は上へ（見積入力では出さない）
+    setTimeout(function () { try { $('f-seizo').addEventListener('change', function () { 手配が変わった.call($('f-seizo')); });
+      Object.keys(未定欄).forEach(function (id) { var el = $(id); if (!el) return; if (!el.querySelector('option[value="未定"]')) { var o1 = document.createElement('option'); o1.value = '未定'; o1.textContent = '未定'; el.appendChild(o1); }
+        el.addEventListener('change', function () { var key = 未定欄[id]; var c = document.querySelector('#fmmitei .mt-k[value="' + key + '"]'); var 未 = el.value === '未定'; if (c) c.checked = 未; 未確定の印();
+          var 前 = el.getAttribute('data-prev'); if (前 === null) 前 = 読込時[id] || ''; 変更を記録(id === 'f-platechg' ? '版下変更' : '仕様変更', 前, el.value); el.setAttribute('data-prev', el.value); 手配が変わった.call(el); }); });
+      Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.addEventListener('change', function () { Object.keys(未定欄).forEach(function (id) { if (未定欄[id] !== c.value) return; var el = $(id); if (!el) return; var 前 = el.value; el.value = c.checked ? '未定' : (読込時[id] || ''); if (前 !== el.value) 変更を記録(id === 'f-platechg' ? '版下変更' : '仕様変更', 前, el.value); }); }); });
+      ['f-dept', 'f-ctanto'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('change', function () { 手配が変わった.call(el); }); });
+    } catch (e) { console.warn('[MITEI-2]', e); } }, 0);
     k.style.display = 'none'; var lb0 = k.previousElementSibling; if (lb0 && lb0.classList.contains('lb')) lb0.style.display = 'none';
     var 合わせる = function () { var v = String(k.value || ''); if (モード !== 'mitsu' && モード !== 'ichiran') v = '受注'; else if (!v) v = (現在 && !現在はHub()) ? '受注' : ''; Array.prototype.forEach.call(row.querySelectorAll('input[name="kubun-r"]'), function (r) { r.checked = (r.value === v); }); };
+    // TITLE-1: 見積入力と予算見積入力は同じ画面。いま扱っているのがどちらかを題名で確かめられるように
+    var 題名を出す = function () { var nm = モード === 'mitsu' ? '見積入力・予算見積入力' : モード === 'ichiran' ? '案件管理表（FileMaker）' : '受注入力'; var bg = '', fg = '';
+      if (モード === 'mitsu' && 現在) { var kb = String(現在.fields['案件区分'] || ''); if (kb === '予算見積') { nm = '予算見積入力'; bg = '#fde68a'; fg = '#78350f'; } else if (kb === '見積') { nm = '見積入力'; bg = '#bfdbfe'; fg = '#1e3a8a'; } else if (kb === '失注') { nm = '見積入力（失注）'; bg = '#fecaca'; fg = '#7f1d1d'; } else { nm = '見積入力（元の伝票: ' + (kb || '受注') + '）'; } }
+      var t = $('fm-title-name'); if (t) { t.textContent = nm; t.style.background = bg; t.style.color = fg; } var l = document.querySelector('.hdrow .ttl'); if (l) l.textContent = nm.replace(/（.*$/, ''); try { document.title = nm + ' | Tokiwa Hub'; } catch (e) {} };
+    var 合わせる元 = 合わせる; 合わせる = function () { 合わせる元(); try { 題名を出す(); } catch (e) {} };
     window.FM区分を合わせる = 合わせる; 合わせる();
     Array.prototype.forEach.call(row.querySelectorAll('input[name="kubun-r"]'), function (r) { r.addEventListener('change', function () {
       if (!r.checked) return; var v = r.value;
@@ -2170,7 +2249,7 @@ LOGIC = r"""
         var 今 = String(現在.fields['案件区分'] || '');
         if (v === '受注') { 合わせる(); 受注化する(); return; }
         if (v === '失注') { 合わせる(); 見積の状態を変える('失注'); return; }
-        if (v !== 今) { alert('予算見積と見積は、起こすときに決まります（番号が ' + (v === '見積' ? '-M01' : '-YM01') + ' の形になるため）。\n「新規作成」か「Repeat登録」で ' + v + ' を起こしてください'); 合わせる(); return; }
+        if (v !== 今) { alert('予算見積書と見積書は、作成するときに決まります（番号が ' + (v === '見積' ? '-M01' : '-YM01') + ' の形になるため）。\n「新規作成」か「Repeat登録」で ' + (v === '見積' ? '見積書作成' : '予算見積書作成') + ' をしてください'); 合わせる(); return; }
         return; }
       k.value = v; k.dispatchEvent(new Event('change', { bubbles: true })); k.dispatchEvent(new Event('input', { bubbles: true })); setTimeout(合わせる, 50);
     }); });
@@ -2344,6 +2423,7 @@ LOGIC = r"""
     if (配) 行.push('配送: ' + 配 + (hs.how && hs.how.indexOf('直送') >= 0 && !hs.who ? '（直送先を確認）' : ''));
     if (jz.梱包) 行.push('梱包: ' + jz.梱包);
     var hako = (手配 || {}).箱 || {}; if (hako.perbox) 行.push('箱: ' + hako.perbox + ' 入 × ' + (hako.boxes || '?') + ' 箱');
+    try { var sz = String(($('f-seizo') || {}).value || ''); if (sz) 行.push('製造区分: ' + sz); var ct = String(($('f-ctanto') || {}).value || '').trim(), dp = String(($('f-dept') || {}).value || '').trim(); if (ct || dp) 行.push('先方: ' + [dp, ct ? ct + ' 様' : ''].filter(Boolean).join(' ')); } catch (e) {}
     var mt = (手配 || {}).未確定 || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); if (ks.length) 行.push('⚠ 仕様未確定: ' + ks.join('・') + (mt.memo ? '（' + mt.memo + '）' : ''));
     try { 行.push('Hub: ' + location.origin + location.pathname + '?no=' + encodeURIComponent(no)); } catch (e) {}
     return 行.join('\n');
@@ -2489,6 +2569,9 @@ LOGIC = r"""
       o.案件 = { 伝票番号: String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''), 得意先コード: gv('f-custcd'), 得意先: gv('f-cust'), ユーザー: gv('f-user'), 製品名: gv('f-item'), 納期: gv('f-due'), 数量: gv('f-lotunit') || gv('f-lotset'), 単位: gv('f-unit') }; }
     var gq = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { var v = Number(i.value); if (v) gq[i.getAttribute('data-n')] = v; }); if (Object.keys(gq).length) o.外注見積 = gq;
     if (昨年比確認) o.昨年比確認 = 昨年比確認;
+    if ($('f-seizo') && $('f-seizo').value) o.製造区分 = $('f-seizo').value;   // SEIZO-KUBUN
+    var sp = { 部署: String(($('f-dept') || {}).value || '').trim(), 担当者: String(($('f-ctanto') || {}).value || '').trim() }; if (sp.部署 || sp.担当者) o.先方 = sp;   // TANTO-1
+    if (手配 && 手配.変更履歴 && 手配.変更履歴.length) o.変更履歴 = 手配.変更履歴.slice(-30);   // MITEI-2
     var jz = {}; if (手配 && 手配.事前 && 手配.事前.予算上乗せ !== undefined) jz.予算上乗せ = 手配.事前.予算上乗せ; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo'], ['pg-han', '版']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
     // GAICHU-2: 外注は 発注済 だけでなく 写し（外注先・発注内容・区分・数量・単価）も持つ → Hub の外注発注「発注待ち」に出る
     o.外注 = {}; Array.prototype.forEach.call(document.querySelectorAll('#gc-rows tr'), function (tr) {
@@ -2515,6 +2598,10 @@ LOGIC = r"""
     });
     Array.prototype.forEach.call(document.querySelectorAll('#gc-rows .gc-ord'), function (b) { 発注ボタンを描く(b, ((o.外注 || {})[b.getAttribute('data-i')] || {}).ord); });
     var mt = o.未確定 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.checked = !!mt[c.value]; }); if ($('mt-memo')) $('mt-memo').value = mt.memo || ''; 未確定の印();
+    try { Object.keys(未定欄).forEach(function (id) { var el = $(id); if (!el) return; if (mt[未定欄[id]]) el.value = '未定'; else if (el.value === '未定') el.value = 読込時[id] || ''; }); } catch (e) {}   // MITEI-2
+    if ($('f-seizo')) $('f-seizo').value = o.製造区分 || '';
+    try { var sp0 = o.先方 || {}; if ($('f-dept')) $('f-dept').value = sp0.部署 || ''; if ($('f-ctanto')) $('f-ctanto').value = sp0.担当者 || ''; } catch (e) {}
+    try { 変更履歴を出す(o.変更履歴 || []); } catch (e) {}
     var gq = o.外注見積 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { i.value = gq[i.getAttribute('data-n')] || ''; });
     if (o.表紙) { try { 表紙を決める(o); } catch (e) {} }
     昨年比確認 = o.昨年比確認 || null; 昨年比の見た目();
@@ -2908,9 +2995,9 @@ LOGIC = r"""
   function 元伝票の帯(f, 種別) {
     var old = $('fm-from-hub'); if (old) old.remove(); var no = String(f['伝票番号'] || f['見積番号'] || ''); var kb = String(f['案件区分'] || '受注');
     var d = document.createElement('div'); d.id = 'fm-from-hub'; d.style.cssText = 'background:#fffbeb;border:2px solid #f59e0b;padding:8px 12px;margin:6px 8px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
-    d.innerHTML = '<b style="color:#92400e">いま開いているのは元にする伝票 ' + esc(no) + '（' + esc(kb) + '）です。まだ見積は起きていません。</b><span style="color:#475569">内容を確かめてから、下のどちらかを押すと、この内容を写した見積が Hub に起きます' + (問い合わせ予約 ? '（問い合わせに紐づきます）' : '') + '</span>'
-      + '<button type="button" data-k="見積" style="font:inherit;font-weight:700;padding:5px 14px;border:2px solid #1d4ed8;background:#1d4ed8;color:#fff;cursor:pointer">この内容で 見積 を起こす</button>'
-      + '<button type="button" data-k="予算見積" style="font:inherit;font-weight:700;padding:5px 14px;border:2px solid #b45309;background:#fff;color:#92400e;cursor:pointer">予算見積 を起こす</button>'
+    d.innerHTML = '<b style="color:#92400e">いま開いているのは元にする伝票 ' + esc(no) + '（' + esc(kb) + '）です。まだ見積書は作成していません。</b><span style="color:#475569">内容を確かめてから、下のどちらかを押すと、この内容を写した見積書を作成します' + (問い合わせ予約 ? '（問い合わせに紐づきます）' : '') + '</span>'
+      + '<button type="button" data-k="見積" style="font:inherit;font-weight:700;padding:5px 14px;border:2px solid #1d4ed8;background:#1d4ed8;color:#fff;cursor:pointer">見積書作成</button>'
+      + '<button type="button" data-k="予算見積" style="font:inherit;font-weight:700;padding:5px 14px;border:2px solid #b45309;background:#fff;color:#92400e;cursor:pointer">予算見積書作成</button>'
       + '<button type="button" data-k="" style="font:inherit;padding:5px 10px;border:1px solid #cbd5e1;background:#fff;cursor:pointer">閉じる</button>';
     var host = document.querySelector('.hdrow') || document.body.firstChild; if (host && host.parentNode) host.parentNode.insertBefore(d, host.nextSibling); else document.body.insertBefore(d, document.body.firstChild);
     Array.prototype.forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function () { var k = b.getAttribute('data-k'); if (!k) { d.remove(); return; } リピートを選ぶ(k); }; });

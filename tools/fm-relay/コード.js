@@ -869,7 +869,7 @@ function 手配_一覧() {
     var 用紙 = []; Object.keys(o.用紙 || {}).forEach(function (n) { var x = o.用紙[n]; if (!x || x.k === '在庫' || !x.紙) return; 用紙.push({ n: n, k: x.k, who: x.who || '', 紙: x.紙, ord: x.ord || null }); });
     // GAICHU-2: 外注の行（写しがあるもの）を Hub の外注発注へ
     var 外注 = []; Object.keys(o.外注 || {}).forEach(function (i2) { var x = o.外注[i2]; if (!x || !x.写し || !(x.写し.会社名 || x.写し.発注内容)) return; 外注.push({ i: i2, 写し: x.写し, ord: x.ord || null }); });
-    if (ks.length || nb || (mt.memo && String(mt.memo).trim()) || jz.依頼ID || 用紙.length || 外注.length) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb, 依頼ID: jz.依頼ID || '', 用紙: 用紙, 外注: 外注, 案件: o.案件 || null, at: (v[i][2] instanceof Date) ? v[i][2].toISOString() : String(v[i][2] || '') };
+    if (ks.length || nb || (mt.memo && String(mt.memo).trim()) || jz.依頼ID || 用紙.length || 外注.length || o.製造区分) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb, 依頼ID: jz.依頼ID || '', 用紙: 用紙, 外注: 外注, 案件: o.案件 || null, 製造区分: o.製造区分 || '', 先方: o.先方 || null, at: (v[i][2] instanceof Date) ? v[i][2].toISOString() : String(v[i][2] || '') };
   }
   return { ok: true, user: who.email, 一覧: out };
 }
@@ -914,7 +914,7 @@ function マスタ_作る(layout, 項目) {
   return { ok: true, user: who.email, recordId: r.response.recordId };
 }
 // Hub だけのマスタ（封筒・ユーザー名・基本原価・用紙単価履歴）。保管庫「Hubマスタ_<名>」に 1 行＝1 件（id, json, at, by）
-var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目', '用紙在庫'];   // ZAIKO-1: 用紙在庫（主要用紙のおおまかな在庫）   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
+var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目', '用紙在庫', '先方担当'];   // TANTO-1: 先方担当（得意先→ユーザー名→部・課・係→氏名）   // ZAIKO-1: 用紙在庫（主要用紙のおおまかな在庫）   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
 var Hubマスタ列 = ['id', 'json', 'at', 'by', '消'];
 function Hubマスタ_帳簿_(名) { if (Hubマスタ名.indexOf(名) < 0) throw new Error('知らないマスタです: ' + 名); return 写し_帳簿_('Hubマスタ_' + 名, Hubマスタ列).getSheets()[0]; }
 function Hubマスタ_一覧(名) {
