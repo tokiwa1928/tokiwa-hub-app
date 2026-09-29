@@ -52,6 +52,7 @@
   <input type="text" id="q" placeholder="🔍 絞る（空白=AND、OR も可）">
   <button id="add">＋ 行を足す</button>
   <button id="seed" style="display:none">本多さんの案を入れる</button>
+  <button id="jisseki" style="display:none" title="中継の写し（受注_<年>）から、項目×色（カラー／単色）×数量帯ごとに金額の中央値を出して行の案にします。保存するまで書きません">実績から作る（過去 3 年の受注）</button>
   <button id="reload">読み直す</button>
   <button id="apply" class="go">FileMaker に反映（変更した行だけ）</button>
   <button id="save" class="go" style="display:none">Hub に保存</button>
@@ -91,7 +92,7 @@ var 定義 = {
 var 今 = '用紙', 行 = [], 列 = [], 元 = {}, 新規n = 0;
 function 読む() {
   var d = 定義[今]; $('out').textContent = '読んでいます…'; $('cnt').textContent = ''; 行 = []; 元 = {}; 新規n = 0;
-  $('apply').style.display = d.FM ? '' : 'none'; $('save').style.display = d.Hub && !d.読むだけ ? '' : 'none'; $('add').style.display = d.読むだけ ? 'none' : ''; $('seed').style.display = d.見本 ? '' : 'none';
+  $('apply').style.display = d.FM ? '' : 'none'; $('save').style.display = d.Hub && !d.読むだけ ? '' : 'none'; $('add').style.display = d.読むだけ ? 'none' : ''; $('seed').style.display = d.見本 ? '' : 'none'; $('jisseki').style.display = d.Hub === '原価テーブル' ? '' : 'none';
   $('note').textContent = d.説明 ? d.説明 : d.FM ? '黄色＝直した欄。「FileMaker に反映」で変更した行だけ書き込みます（誰が・何を・いつ を記録します）' : d.読むだけ ? '用紙の単価を直したときに自動で残る履歴です' : '「Hub に保存」で中継の保管庫に残ります。受注入力の候補に出ます';
   var p = d.FM ? FM.呼ぶ('マスタ_配る', [d.FM]).then(function (j) { 列 = []; (j.行 || []).forEach(function (r) { Object.keys(r).forEach(function (k) { if (k !== '_recordId' && 列.indexOf(k) < 0) 列.push(k); }); }); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r._recordId); return o; }); })
                   : FM.呼ぶ('Hubマスタ_一覧', [d.Hub]).then(function (j) { 列 = d.列.slice(); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r.id); return o; }); });
@@ -135,6 +136,39 @@ function Hubに保存() {
   next();
 }
 function CSV() { var s = '﻿' + 列.join(',') + '\n' + 行.map(function (r) { return 列.map(function (c) { return '"' + String(r[c] == null ? '' : r[c]).replace(/"/g, '""') + '"'; }).join(','); }).join('\n'); var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([s], { type: 'text/csv' })); a.download = 'マスタ_' + 今 + '_' + new Date().toISOString().slice(0, 10) + '.csv'; a.click(); }
+// KAKAKU-7（本多さん 9/29）: 原価テーブルの行を過去の実績から作る。中継 単価_集計（受注_<年> の写し・3 年分）を項目×色×数量帯で束ね、金額の中央値を「固定」に。
+//   版代・単色の印刷代は 1 台あたり（色数1＋色MAX1 で割る、台数掛け＝有）。版代は数量に依らないので帯をまとめて 1 行。カラー（4 色以上）は条件「カラー」で別の行。
+//   案は黄色の新しい行として上に並ぶだけで、「Hub に保存」を押すまで中継には書かない
+var 実績帯 = [500, 1000, 2000, 3000, 5000, 10000, 0];   // 0 ＝ それ以上
+function 実績から作る() {
+  var d = 定義[今]; if (d.Hub !== '原価テーブル') return;
+  $('st').textContent = '過去 3 年の受注を読んでいます（10〜30 秒）…';
+  FM.呼ぶ('単価_集計', [3]).then(function (j) {
+    var P = {}; (j.列 || []).forEach(function (c, i) { P[c] = i; });
+    var N = function (v) { var n = Number(String(v == null ? '' : v).replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; };
+    var med = function (a) { if (!a.length) return 0; a = a.slice().sort(function (x, y) { return x - y; }); var m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+    var 帯 = function (q) { for (var i = 0; i < 実績帯.length; i++) if (!実績帯[i] || q <= 実績帯[i]) return 実績帯[i]; return 0; };
+    var 項目 = [['版代', true], ['印刷代', true], ['加工賃', false], ['梱包代', false], ['配送代', false]];
+    var 束 = {};
+    (j.行 || []).forEach(function (r) {
+      var q = N(r[P['合計数1']]); if (!(q > 0)) return;
+      var c1 = N(r[P['色数1']]), c2 = N(r[P['色MAX1']]); var col = Math.max(c1, c2) >= 4; var 台 = col ? 1 : Math.max(1, c1 + c2); var b = 帯(q);
+      項目.forEach(function (it) { var v = N(r[P[it[0]]]); if (!(v > 0)) return; var 条件 = col ? 'カラー' : ''; var 掛け = it[1] && !col; var key = it[0] + '|' + 条件 + '|' + b;
+        (束[key] = 束[key] || { 項目: it[0], 条件: 条件, 帯: b, 台数掛け: 掛け, vals: [] }).vals.push(掛け ? v / 台 : v); });
+    });
+    var rows = Object.keys(束).map(function (k) { return 束[k]; }).filter(function (x) { return x.vals.length >= 3; });
+    var out = [], 版 = {};
+    rows.forEach(function (x) { if (x.項目 === '版代') { var k = x.条件; if (!版[k]) 版[k] = { 項目: '版代', 条件: x.条件, 帯: 0, 台数掛け: x.台数掛け, vals: [] }; 版[k].vals = 版[k].vals.concat(x.vals); } else out.push(x); });
+    Object.keys(版).forEach(function (k) { out.push(版[k]); });
+    out.sort(function (a, b) { return a.項目.localeCompare(b.項目) || a.条件.localeCompare(b.条件) || ((a.帯 || 1e9) - (b.帯 || 1e9)); });
+    if (!out.length) { $('st').textContent = '実績が足りません（項目×色×数量帯で 3 件以上のものが無い）'; return; }
+    if (行.some(function (r) { return !r._new; }) && !confirm('もう行があります。実績からの案 ' + out.length + ' 行を上に足しますか？（「Hub に保存」を押すまで中継には書きません）')) return;
+    out.slice().reverse().forEach(function (x) { var o = { _id: 'new' + (++新規n), _new: true }; 列.forEach(function (c) { o[c] = ''; });
+      o.項目 = x.項目; o.条件 = x.条件; o.数量上限 = x.帯 ? String(x.帯) : ''; o.固定 = String(Math.round(med(x.vals))); o.台数掛け = x.台数掛け ? '有' : '';
+      o.備考 = '実績 ' + x.vals.length + ' 件の中央値（' + (j.年 || 3) + ' 年分' + (x.台数掛け ? '・1 台あたり' : '') + (x.帯 ? '・〜' + x.帯.toLocaleString() : (x.項目 === '版代' ? '' : '・それ以上')) + '）'; 行.unshift(o); });
+    描く(); $('st').textContent = '実績から ' + out.length + ' 行の案を足しました（上の新しい行）。数字を見て直し、要らない行は ✕ で消してから「Hub に保存」';
+  }).catch(function (e) { $('st').textContent = String(e.message || e); });
+}
 (function () {
   FM.サインインのボタンを置く($('fm-signin'));
   function 名() { var m = FM.名乗っている(); $('fm-who').textContent = m ? ('FileMaker: ' + m) : ''; }
@@ -145,6 +179,7 @@ function CSV() { var s = '﻿' + 列.join(',') + '\n' + 行.map(function (r) { r
   $('seed').onclick = function () { var d = 定義[今]; if (!d.見本) return; if (行.some(function (r) { return !r._new; })) { if (!confirm('もう行があります。見本の ' + d.見本.length + ' 行を上に足しますか？')) return; }
     d.見本.slice().reverse().forEach(function (m) { var o = { _id: 'new' + (++新規n), _new: true }; 列.forEach(function (c) { o[c] = m[c] === undefined ? '' : String(m[c]); }); 行.unshift(o); }); 描く(); $('st').textContent = '見本を ' + d.見本.length + ' 行足しました。数字を直して「Hub に保存」を押してください'; };
   $('add').onclick = function () { var o = { _id: 'new' + (++新規n), _new: true }; 列.forEach(function (c) { o[c] = ''; }); 行.unshift(o); 描く(); };
+  $('jisseki').onclick = 実績から作る;   // KAKAKU-7
   var q = new URLSearchParams(location.search); var t = q.get('t'); if (t && 定義[t]) { 今 = t; Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (x) { x.classList.toggle('on', x.getAttribute('data-t') === t); }); }
   if (FM.名乗っている()) 読む(); else $('out').textContent = 'ログインしてください';
 })();
