@@ -588,7 +588,8 @@ LOGIC = r"""
 (function () {
   'use strict';
 
-  var 呼ぶ = window.FM呼ぶ;
+  // ERR-NAME（9/30）: 失敗したら、どの操作で起きたかを頭に付ける（「リクエストされたドキュメントに…」だけでは原因が分からない）
+  var 呼ぶ = function (name, args) { return window.FM呼ぶ(name, args).catch(function (e) { var m = String((e && e.message) || e); if (m.indexOf('［') !== 0) m = '［' + name + '］' + m; throw new Error(m); }); };
 
   // 画面の項目id → FileMaker の列名（FMUSE から。列が無いものは除く）
   var TO_FM = {}, FROM_FM = {};
@@ -1905,6 +1906,7 @@ LOGIC = r"""
   if (モード) {
     var 見出し = (モード === 'mitsu' ? '見積入力' : モード === 'ichiran' ? '案件管理表（FileMaker）' : '受注入力');
     var 名札 = document.querySelector('.hdrow .ttl'); if (名札) 名札.textContent = 見出し;
+    try { Array.prototype.forEach.call(document.querySelectorAll('.tname, .ttl'), function (el) { if (String(el.textContent).trim() === '受注入力') el.textContent = 見出し; }); } catch (e) {}   // 黒い帯・見出しも同じ名前に
     document.title = 見出し + ' | Tokiwa Hub';
   }
   // 案件管理表モード: 開いたら探す窓を出して、直近 3 か月・200 件を新しい順に（索引が来たら自動で）
@@ -2060,6 +2062,7 @@ LOGIC = r"""
   function Hub見積の帯(r) {
     var el = $('hub-mitsu-st'); if (!el) { el = document.createElement('span'); el.id = 'hub-mitsu-st'; el.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-left:8px;font-size:11px;vertical-align:middle'; 段階札.parentNode.insertBefore(el, 段階札.nextSibling); }
     if (!現在はHub()) { el.innerHTML = ''; return; }
+    try { var fb = $('fm-from-hub'); if (fb) fb.remove(); } catch (e) {}   // 見積が起きたら「元の伝票です」の帯は消す
     if (r && r.hub) setTimeout(見積索引を重ねる, 150);   // 起こした・読んだ直後に索引へ（検索・Repeat・案件の段階に出る）
     var f = 現在.fields; var st = String(f['状態'] || '見積中'); var 採用 = !!f['受注伝票番号'];
     var color = { '見積中': '#b45309', '提出済': '#1d4ed8', '採用': '#166534', '失注': '#991b1b', '保留': '#475569' }[st] || '#475569';
@@ -2873,12 +2876,23 @@ LOGIC = r"""
   };
   function 一番新しい() { var list = 送り一覧(); return list.length ? list[list.length - 1] : ''; }
   // 読み込んだあと: 手配を読む・送り位置を出す
+  // FROM-HUB（9/30 本多さん「これ見積書入力画面？」）: Hub の問い合わせから来たときは、元の伝票を開いているだけだと分かるように帯を出す
+  function 元伝票の帯(f, 種別) {
+    var old = $('fm-from-hub'); if (old) old.remove(); var no = String(f['伝票番号'] || f['見積番号'] || ''); var kb = String(f['案件区分'] || '受注');
+    var d = document.createElement('div'); d.id = 'fm-from-hub'; d.style.cssText = 'background:#fffbeb;border:2px solid #f59e0b;padding:8px 12px;margin:6px 8px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+    d.innerHTML = '<b style="color:#92400e">いま開いているのは元にする伝票 ' + esc(no) + '（' + esc(kb) + '）です。まだ見積は起きていません。</b><span style="color:#475569">内容を確かめてから、下のどちらかを押すと、この内容を写した見積が Hub に起きます' + (問い合わせ予約 ? '（問い合わせに紐づきます）' : '') + '</span>'
+      + '<button type="button" data-k="見積" style="font:inherit;font-weight:700;padding:5px 14px;border:2px solid #1d4ed8;background:#1d4ed8;color:#fff;cursor:pointer">この内容で 見積 を起こす</button>'
+      + '<button type="button" data-k="予算見積" style="font:inherit;font-weight:700;padding:5px 14px;border:2px solid #b45309;background:#fff;color:#92400e;cursor:pointer">予算見積 を起こす</button>'
+      + '<button type="button" data-k="" style="font:inherit;padding:5px 10px;border:1px solid #cbd5e1;background:#fff;cursor:pointer">閉じる</button>';
+    var host = document.querySelector('.hdrow') || document.body.firstChild; if (host && host.parentNode) host.parentNode.insertBefore(d, host.nextSibling); else document.body.insertBefore(d, document.body.firstChild);
+    Array.prototype.forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function () { var k = b.getAttribute('data-k'); if (!k) { d.remove(); return; } リピートを選ぶ(k); }; });
+  }
   var 受け取る元 = 受け取る;
   受け取る = function (r, msg, ms) {
     受け取る元(r, msg, ms);
     if (r && r.record) { 手配を読む(String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); 送り位置を出す(); try { 金額を出す(); } catch (e) {}
       try { 段階の注意(r.record.fields); } catch (e) {}
-      if (リピート予約) { var s1 = リピート予約; リピート予約 = ''; setTimeout(function () { リピートを選ぶ(s1); }, 600); } }
+      if (リピート予約) { var s1 = リピート予約; リピート予約 = ''; try { 元伝票の帯(r.record.fields, s1); } catch (e) {} setTimeout(function () { リピートを選ぶ(s1); }, 600); } }
     else { try { 金額を出す(); } catch (e) {} }
   };
 
