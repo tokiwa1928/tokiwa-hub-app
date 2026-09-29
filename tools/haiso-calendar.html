@@ -57,6 +57,14 @@
   .ev.done{ opacity:.55; } .ev.done .tx{ text-decoration:line-through; } .ev.done .dn{ background:#166534; color:#fff; border-color:#166534; }
   #cal .day .ev .cl{ font-size:12px; padding:1px 8px; } #cal .day .ev .tn{ font-size:13px; } #cal .day .ev .dn{ font-size:13px; padding:2px 12px; }
   @media print{ .ev .dn{ display:none; } }
+  /* HAISO-3: 方面 */
+  .ev .ar{ flex:none; font-size:10px; font-weight:700; color:#0f172a; background:#fde68a; padding:0 5px; line-height:1.6; white-space:nowrap; }
+  .homen{ font-size:10.5px; line-height:1.5; padding:2px 4px; background:#fffbeb; border-bottom:1px solid #fde68a; color:#78350f; }
+  .homen b{ color:#0f172a; } .homen .who{ font-weight:700; color:#1e40af; margin-right:2px; }
+  #cal .day .homen{ font-size:14px; padding:6px 10px; margin-bottom:6px; border:1px solid #fde68a; }
+  #cal .day .ev .ar{ font-size:12px; padding:1px 8px; }
+  #e-same{ font-size:12px; margin:4px 0; } #e-same button{ font-size:12px; padding:2px 8px; margin:2px 4px 2px 0; border:1px solid #f59e0b; background:#fffbeb; cursor:pointer; }
+  body.embed #bar > a:first-child{ display:none; }
   @media print{ body{ background:#fff; } #bar,#edit,.add{ display:none !important; } #cal{ margin:0; border:0; } td{ height:auto; min-height:34mm; } @page{ size:A4 landscape; margin:8mm; } }
 </style>
 
@@ -84,11 +92,13 @@
   <div class="row"><b id="e-title">予定</b><span style="margin-left:auto;color:#64748b" id="e-kp"></span></div>
   <div class="row"><label>日付 <input type="date" id="e-date"></label><label>時刻 <input type="time" id="e-time"></label></div>
   <div class="grid">
-    <label>分類</label><select id="e-class"><option>自社便</option><option>宅配</option><option>郵送</option><option>直送</option><option>引取</option><option>休み</option><option>その他</option></select>
+    <label>分類</label><select id="e-class"><option>自社便</option><option value="受取">受取（サンプル・原稿などを受け取りに行く）</option><option>宅配</option><option>郵送</option><option>直送</option><option value="引取">引取（お客様が取りに来る）</option><option>休み</option><option>その他</option></select>
     <label>ジョブNo</label><input id="e-job" placeholder="a107363（伝票番号）" autocomplete="off">
     <label>案件名</label><input id="e-name" placeholder="得意先 品名" autocomplete="off">
     <label>担当</label><input id="e-tanto" list="e-tanto-dl" placeholder="倫子" autocomplete="off">
+    <label>住所</label><input id="e-addr" placeholder="行き先の住所（市区町村まででも可）。ジョブNo を入れると得意先の住所が入ります" autocomplete="off">
   </div>
+  <div id="e-same"></div>
   <datalist id="e-tanto-dl"></datalist>
   <label style="color:#475569;font-size:12px;font-weight:700">詳細</label>
   <textarea id="e-text" placeholder="納品先・冊数・時間など"></textarea>
@@ -108,8 +118,36 @@ function FMfromISO(iso) { var p = String(iso || '').split('-'); return p.length 
 
 // HAISO-2: FileMaker の予定は 1 つの文（1 行目: 伝票番号 得意先 品名 担当、2 行目から詳細）。画面では 分類・ジョブNo・案件名・担当・詳細・完了 に分けて扱い、
 //   保存するときは今までと同じ形の文に組み立てる（FileMaker の配送カレンダーでもそのまま読める）。完了は頭に【済 9/30】
-var 分類一覧 = ['自社便', '宅配', '郵送', '直送', '引取', '休み', 'その他'];
-var 分類色 = { '自社便': '#1d4ed8', '宅配': '#7c3aed', '郵送': '#0f766e', '直送': '#b45309', '引取': '#be185d', '休み': '#b91c1c', 'その他': '#64748b' };
+var 分類一覧 = ['自社便', '受取', '宅配', '郵送', '直送', '引取', '休み', 'その他'];
+var 分類色 = { '自社便': '#1d4ed8', '受取': '#c2410c', '宅配': '#7c3aed', '郵送': '#0f766e', '直送': '#b45309', '引取': '#be185d', '休み': '#b91c1c', 'その他': '#64748b' };
+// HAISO-3: 方面＝住所の市区町村。①予定の文にある住所（📍 や「静岡市葵区…」）②ジョブNo → 索引の得意先コード → 得意先マスタの住所 ③案件名にある得意先名 → マスタの住所
+var 索引表 = null, 得意先表 = null, 得意先名順 = [];
+function 方面を取る(t) {
+  t = String(t || '').normalize('NFKC'); if (!t) return '';
+  // 区切り（行頭・空白・記号・数字・都道府県）のあとに続く「…市」「…市…区」。市場・市民・市販などは住所ではないので飛ばす
+  var 試す = function (re) { var m; while ((m = re.exec(t))) { var c = m[1].replace(/^.*?(都|道|府|県)(?=.+市$)/, ''); var after = t.charAt(m.index + m[0].length - (m[2] ? m[2].length : 0)); if (!m[2] && /[場民販内外況街]/.test(after)) continue; if (/^(都|朝|闇|魚|見本)市$/.test(c)) continue; if (c.length < 2) continue; return c + (m[2] || ''); } return ''; };
+  var a = 試す(/(?<=^|[\s、,，（(〒\d\-－:：📍]|[都道府県])([一-龥ぁ-んァ-ヶ]{1,6}?市)([一-龥ぁ-んァ-ヶ]{1,4}?区)?/g) || 試す(/([一-龥ぁ-んァ-ヶ]{1,4}?市)([一-龥ぁ-んァ-ヶ]{1,4}?区)?/g);
+  if (a) return a;
+  var g = /([一-龥]{1,5}?郡)([一-龥ぁ-んァ-ヶ]{1,6}?[町村])/.exec(t); if (g) return g[2];
+  var k = /(?:東京都)([一-龥]{1,4}?区)/.exec(t); if (k) return k[1];
+  return '';
+}
+function 住所の列(r) { return Object.keys(r || {}).filter(function (c) { return /住所/.test(c) && !/カナ|ｶﾅ|フリガナ/.test(c); }).map(function (c) { return String(r[c] || '').trim(); }).filter(Boolean).join(' '); }
+function 得意先の住所(code) { if (!得意先表 || !code) return ''; var r = 得意先表[String(code)]; return r ? 住所の列(r) : ''; }
+function 予定の方面(p) {
+  var o = p._o || (p._o = 分ける(p.タイトル)); if (o.方面 !== undefined) return o.方面;
+  var a = 方面を取る(o.詳細) || 方面を取る(o.案件名); var src = a ? '文' : '';
+  if (!a && o.ジョブ && 索引表) { var code = 索引表[o.ジョブ.replace(/-.*$/, '')] || 索引表[o.ジョブ]; if (code) { a = 方面を取る(得意先の住所(code)); if (a) src = '得意先'; } }
+  if (!a && 得意先名順.length && o.案件名) { var nm = o.案件名.replace(/\s/g, ''); for (var i = 0; i < 得意先名順.length; i++) { var x = 得意先名順[i]; if (x.名.length >= 3 && nm.indexOf(x.名) >= 0) { a = 方面を取る(x.住所); if (a) { src = '得意先'; break; } } } }
+  o.方面 = a; o.方面元 = src; return a;
+}
+function 下地を読む() {
+  // 得意先マスタ（受注入力が 24 時間持っている控え）と、受注の索引（IndexedDB）。どちらも無ければ方面は予定の文からだけ
+  try { var c = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); if (c && c.行) { 得意先表 = {}; 得意先名順 = []; c.行.forEach(function (r) { var cd = String(r['得意先コード'] || ''); if (cd) 得意先表[cd] = r; var n = String(r['得意先名'] || '').replace(/株式会社|有限会社|\(株\)|\(有\)|\s/g, ''); var ad = 住所の列(r); if (n && ad) 得意先名順.push({ 名: n, 住所: ad }); }); 得意先名順.sort(function (a, b) { return b.名.length - a.名.length; }); } } catch (e) {}
+  var p1 = 得意先表 ? Promise.resolve() : (FM.名乗っている() ? FM.呼ぶ('マスタ_配る', ['得意先マスタ']).then(function (j) { j.取った = new Date().toISOString(); try { localStorage.setItem('fm_master_得意先マスタ', JSON.stringify(j)); } catch (e) {} return 下地を読む(); }).catch(function () {}) : Promise.resolve());
+  var p2 = new Promise(function (res) { try { var q = indexedDB.open('tokiwa_fm_index', 1); q.onupgradeneeded = function () { try { q.result.createObjectStore('idx'); } catch (e) {} }; q.onsuccess = function () { try { var g = q.result.transaction('idx').objectStore('idx').get('juchu'); g.onsuccess = function () { var j = g.result; if (j && j.列 && j.行) { var a = j.列.indexOf('伝票番号'), b = j.列.indexOf('得意先コード'); if (a >= 0 && b >= 0) { 索引表 = {}; j.行.forEach(function (r) { if (r[a]) 索引表[String(r[a])] = String(r[b] || ''); }); } } res(); }; g.onerror = function () { res(); }; } catch (e) { res(); } }; q.onerror = function () { res(); }; } catch (e) { res(); } });
+  return Promise.all([p1, p2]).then(function () { 予定.forEach(function (p) { if (p._o) delete p._o.方面; }); });
+}
 function 担当候補() { var base = ['倫子']; try { var a = JSON.parse(localStorage.getItem('haiso_tanto') || '[]'); a.forEach(function (x) { if (x && base.indexOf(x) < 0) base.push(x); }); } catch (e) {} return base; }
 function 担当を覚える(nm) { nm = String(nm || '').trim(); if (!nm || 分類一覧.indexOf(nm) >= 0) return; var a = 担当候補(); if (a.indexOf(nm) < 0) { a.push(nm); try { localStorage.setItem('haiso_tanto', JSON.stringify(a.slice(0, 40))); } catch (e) {} } }
 function 分ける(題) {
@@ -161,7 +199,8 @@ function 読む() {
   Array.prototype.forEach.call(document.querySelectorAll('#bar .vw button'), function (b) { b.classList.toggle('on', b.getAttribute('data-v') === 表示); });
   $('st').textContent = '読んでいます…';
   return FM.呼ぶ('予定_一覧', [FM日付(r.start), FM日付(r.end)]).then(function (res) {
-    予定 = res.行 || []; 描く(); $('st').textContent = 予定.length + ' 件';
+    予定 = res.行 || []; 先の予定 = null; 描く(); $('st').textContent = 予定.length + ' 件';
+    if (!得意先表 || !索引表) 下地を読む().then(function () { if (得意先表 || 索引表) 描く(); });
     try { history.replaceState(null, '', '?v=' + encodeURIComponent(表示) + '&d=' + ISO(基準)); } catch (e) {}
   }).catch(function (e) { $('st').textContent = String(e.message || e); });
 }
@@ -173,6 +212,7 @@ function 描く() {
     var o = p._o || (p._o = 分ける(p.タイトル)); var off = o.分類 === '休み';
     return '<div class="ev' + (off ? ' off' : '') + (o.完了 ? ' done' : '') + '" data-id="' + esc(p.recordId) + '">'
       + '<span class="cl" style="background:' + (分類色[o.分類] || '#64748b') + '">' + esc(o.分類) + '</span>'
+      + (予定の方面(p) ? '<span class="ar" title="方面（' + (o.方面元 === '文' ? '予定の文の住所' : '得意先マスタの住所') + 'から）">' + esc(o.方面) + '</span>' : '')
       + '<span class="tx">' + (p.時刻 ? '<b>' + esc(String(p.時刻).slice(0, 5)) + '</b> ' : '') + (o.ジョブ ? '<span class="jb">' + esc(o.ジョブ) + '</span> ' : '') + esc(o.案件名) + (o.担当 ? '<span class="tn">' + esc(o.担当) + '</span>' : '') + (o.詳細 ? ' <span class="dt">' + esc(big ? o.詳細 : o.詳細.replace(/\n/g, ' ').slice(0, 60) + (o.詳細.length > 60 ? '…' : '')) + '</span>' : '') + (o.完了 ? ' <span class="dt">（済 ' + esc(o.完了) + '）</span>' : '') + '</span>'
       + '<button type="button" class="dn" data-done="' + esc(p.recordId) + '" title="' + (o.完了 ? '完了を取り消す' : '完了にする（今日の日付）') + '">' + (o.完了 ? '済' : '完了') + '</button></div>';
   }
@@ -189,10 +229,16 @@ function 描く() {
       return x._i - y._i; });
     by[k] = a; });
   try { var names = {}; 予定.forEach(function (p) { var o = p._o || 分ける(p.タイトル); names[o.担当 || '（担当なし）'] = 1; }); var fs = $('ftanto'); var cur = fs.value; fs.innerHTML = '<option value="">全員</option>' + Object.keys(names).sort().map(function (n) { return '<option>' + esc(n) + '</option>'; }).join(''); fs.value = cur; } catch (e) {}
+  // HAISO-3: その日、誰がどの方面へ行くか（完了・休みは数えない。宅配・郵送・直送は人が行かないので別）
+  function 方面のまとめ(list) {
+    var who = {}; (list || []).forEach(function (p) { var o = p._o || 分ける(p.タイトル); if (o.完了 || o.分類 === '休み') return; var a = 予定の方面(p); if (!a) return; var w = (o.分類 === '自社便' || o.分類 === '受取') ? (o.担当 || '担当未定') : o.分類; var m = who[w] = who[w] || {}; m[a] = (m[a] || 0) + 1; });
+    var ks = Object.keys(who); if (!ks.length) return '';
+    return '<div class="homen" title="住所から出した方面。同じ方面へ行く日に、受け取りなどの予定を足せます">🧭 ' + ks.map(function (w) { return '<span class="who">' + esc(w) + '</span>' + Object.keys(who[w]).sort(function (x, y) { return who[w][y] - who[w][x]; }).map(function (a) { return '<b>' + esc(a) + '</b>' + (who[w][a] > 1 ? who[w][a] : ''); }).join('・'); }).join('　') + '</div>';
+  }
   var h;
   if (表示 === '日') {
     var k0 = ISO(基準); var list = by[k0] || [];
-    h = '<div class="day"><div style="font-size:18px;font-weight:700;margin-bottom:6px">' + esc(見出し()) + '</div>'
+    h = '<div class="day"><div style="font-size:18px;font-weight:700;margin-bottom:6px">' + esc(見出し()) + '</div>' + 方面のまとめ(list)
       + (list.length ? list.map(function (p) { return 予定HTML(p, true); }).join('') : '<div class="none">この日の予定はありません</div>')
       + '<span class="add" data-d="' + k0 + '">＋ この日に予定を足す</span></div>';
   } else {
@@ -204,6 +250,7 @@ function 描く() {
         var day = new Date(d); day.setDate(d.getDate() + i);
         var k = ISO(day), other = 表示 === '月' && day.getMonth() !== 基準.getMonth();
         h += '<td class="' + (other ? 'other ' : '') + (k === 今日 ? 'today' : '') + '" data-d="' + k + '"><div class="d">' + (表示 === '週' ? (day.getMonth() + 1) + '/' : '') + day.getDate() + '<span class="add" title="この日に予定を足す" data-d="' + k + '">＋</span></div>';
+        h += 方面のまとめ(by[k]);
         (by[k] || []).forEach(function (p) { h += 予定HTML(p); });
         h += '</td>';
       }
@@ -224,7 +271,9 @@ function 開く(p) {
   $('e-kp').textContent = p.kp ? '#' + p.kp : '';
   $('e-date').value = ISOfromFM(p.日付); $('e-time').value = p.時刻 ? String(p.時刻).slice(0, 5) : '';
   var o = 分ける(p.タイトル); if (!p.recordId && !p.タイトル) o.分類 = '自社便';
+  var am = /^📍\s*(.*)$/m.exec(o.詳細 || ''); $('e-addr').value = am ? am[1].trim() : (p._addr || ''); if (am) o.詳細 = o.詳細.replace(/^📍.*\n?/m, '').trim();
   $('e-class').value = o.分類; $('e-job').value = o.ジョブ; $('e-name').value = o.案件名; $('e-tanto').value = o.担当; $('e-text').value = o.詳細;
+  setTimeout(同じ方面を出す, 50);
   $('e-done').checked = !!o.完了; $('e-donedate').value = ''; $('e-donedate').setAttribute('data-was', o.完了 || '');
   $('e-tanto-dl').innerHTML = 担当候補().map(function (n) { return '<option>' + esc(n) + '</option>'; }).join('');
   $('e-del').style.display = p.recordId ? '' : 'none'; $('e-complete').style.display = o.完了 ? 'none' : '';
@@ -232,8 +281,26 @@ function 開く(p) {
 }
 function 窓から() {
   var o = { 分類: $('e-class').value, ジョブ: $('e-job').value.trim(), 案件名: $('e-name').value.trim(), 担当: $('e-tanto').value.trim(), 詳細: $('e-text').value.trim(), 完了: '' };
+  var ad = $('e-addr').value.trim(); if (ad) o.詳細 = '📍' + ad + (o.詳細 ? '\n' + o.詳細 : '');   // 住所は詳細の 1 行目に（FileMaker でも読める）
   if ($('e-done').checked) { var dd = $('e-donedate').value; o.完了 = dd ? 月日(new Date(dd + 'T00:00:00')) : ($('e-donedate').getAttribute('data-was') || 月日(new Date())); }
   return o;
+}
+// ジョブNo を入れたら、得意先の名前と住所を入れる（空の欄だけ）
+function ジョブから入れる() {
+  var no = $('e-job').value.trim(); if (!no || !索引表) return; var code = 索引表[no] || 索引表[no.replace(/-.*$/, '')]; if (!code || !得意先表 || !得意先表[code]) return; var r = 得意先表[code];
+  if (!$('e-name').value.trim()) $('e-name').value = String(r['得意先名'] || ''); if (!$('e-addr').value.trim()) $('e-addr').value = 住所の列(r); 同じ方面を出す();
+}
+// 同じ方面へ行く予定がある日（今日から 14 日）。押すとその日・その担当が入る
+var 先の予定 = null;
+function 同じ方面を出す() {
+  var box = $('e-same'); if (!box) return; var a = 方面を取る($('e-addr').value) || 方面を取る($('e-name').value) || 方面を取る($('e-text').value); if (!a) { box.innerHTML = ''; return; }
+  var 市 = (/^.*?市/.exec(a) || [a])[0];   // 区までは見ない（同じ市なら同じ方面） var t0 = new Date(); t0.setHours(0, 0, 0, 0); var t1 = new Date(t0); t1.setDate(t1.getDate() + 14);
+  var 出す = function (rows) { var by = {}; rows.forEach(function (p) { var o = 分ける(p.タイトル); p._o = o; if (o.完了 || (o.分類 !== '自社便' && o.分類 !== '受取')) return; var x = 予定の方面(p); if (!x || x.indexOf(市) !== 0) return; var k = ISOfromFM(p.日付) + '|' + (o.担当 || ''); by[k] = by[k] || { d: ISOfromFM(p.日付), 担当: o.担当 || '', 方面: {}, n: 0 }; by[k].方面[x] = 1; by[k].n++; });
+    var ks = Object.keys(by).sort(); box.innerHTML = '<b style="color:#92400e">🧭 ' + esc(a) + ' 方面へ行く予定</b>　' + (ks.length ? ks.slice(0, 10).map(function (k) { var v = by[k]; var d = new Date(v.d + 'T00:00:00'); return '<button type="button" data-d="' + v.d + '" data-t="' + esc(v.担当) + '">' + (d.getMonth() + 1) + '/' + d.getDate() + '（' + 曜名[d.getDay()] + '） ' + esc(v.担当 || '担当未定') + '　' + esc(Object.keys(v.方面).join('・')) + ' ' + v.n + ' 件</button>'; }).join('') : '<span style="color:#64748b">今日から 2 週間には見つかりません</span>');
+    Array.prototype.forEach.call(box.querySelectorAll('button'), function (b) { b.onclick = function () { $('e-date').value = b.getAttribute('data-d'); if (b.getAttribute('data-t')) $('e-tanto').value = b.getAttribute('data-t'); }; }); };
+  if (先の予定 && Date.now() - 先の予定.at < 120000) { 出す(先の予定.行); return; }
+  box.innerHTML = '<span style="color:#64748b">同じ方面へ行く日を探しています…</span>';
+  FM.呼ぶ('予定_一覧', [FM日付(t0), FM日付(t1)]).then(function (res) { 先の予定 = { at: Date.now(), 行: res.行 || [] }; 出す(先の予定.行); }).catch(function () { box.innerHTML = ''; });
 }
 function 完了を切り替える(p) {
   var o = 分ける(p.タイトル); o.完了 = o.完了 ? '' : 月日(new Date()); $('st').textContent = o.完了 ? '完了にしています…' : '完了を取り消しています…';
@@ -272,6 +339,10 @@ function 削除() {
   $('e-complete').onclick = function () { $('e-done').checked = true; if (!$('e-donedate').value) $('e-donedate').value = ISO(new Date()); 保存(); };
   $('e-done').onchange = function () { if ($('e-done').checked && !$('e-donedate').value && !$('e-donedate').getAttribute('data-was')) $('e-donedate').value = ISO(new Date()); };
   $('addnew').onclick = function () { 開く({ 日付: FM日付(new Date()), タイトル: '', 時刻: '' }); };   // 基本は今日の日付
+  $('e-job').addEventListener('change', ジョブから入れる); ['e-addr', 'e-name'].forEach(function (id) { $(id).addEventListener('change', 同じ方面を出す); });
+  // HAISO-3: Hub の配送ページ・問い合わせから。?embed=1 で「← 受注入力」を隠す。?add=1&class=受取&job=&name=&addr=&memo=&date= で足す窓を開く
+  try { var q0 = new URLSearchParams(location.search); if (q0.get('embed')) document.body.classList.add('embed');
+    if (q0.get('add')) setTimeout(function () { 下地を読む().then(function () { var d0 = q0.get('date'); 開く({ 日付: d0 && /^\d{4}-\d\d-\d\d$/.test(d0) ? FMfromISO(d0) : FM日付(new Date()), タイトル: 組み立てる({ 分類: q0.get('class') || '受取', ジョブ: q0.get('job') || '', 案件名: q0.get('name') || '', 担当: '', 詳細: q0.get('memo') || '', 完了: '' }), 時刻: '', _addr: q0.get('addr') || '' }); if (q0.get('class')) $('e-class').value = q0.get('class'); ジョブから入れる(); }); }, 900); } catch (e) {}
   ['sort', 'ftanto', 'hidedone'].forEach(function (id) { $(id).onchange = function () { try { localStorage.setItem('haiso_' + id, id === 'hidedone' ? ($(id).checked ? '1' : '') : $(id).value); } catch (e) {} 描く(); }; });
   try { $('sort').value = localStorage.getItem('haiso_sort') || ''; $('hidedone').checked = localStorage.getItem('haiso_hidedone') === '1'; } catch (e) {}
   $('edit').addEventListener('click', function (e) { if (e.target === $('edit')) 閉じる(); });

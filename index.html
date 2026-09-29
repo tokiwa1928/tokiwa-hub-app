@@ -2350,11 +2350,16 @@ setTimeout(_removeBootLoader_, 5000);
 <div class="page" id="page-delivery">
   <!-- 🚚 / 📅 サブタブナビゲーション -->
   <div style="display:flex;gap:6px;align-items:center;border-bottom:2px solid #e5e7eb;margin-bottom:12px;padding-bottom:6px;flex-wrap:wrap">
+    <button id="dlv-subtab-btn-fmcal" class="btn" style="background:#fff;color:#0e7490;border-color:#67e8f9" onclick="swDeliverySubtab('fmcal')" title="FileMaker の配送カレンダー（予定）。分類・担当・方面・完了">🗓 配送カレンダー</button>
     <button id="dlv-subtab-btn-shipping" class="btn" style="background:#0e7490;color:#fff;border-color:#0e7490;font-weight:700" onclick="swDeliverySubtab('shipping')">🚚 配送予定</button>
     <button id="dlv-subtab-btn-calendar" class="btn" style="background:#fff;color:#0e7490;border-color:#67e8f9" onclick="swDeliverySubtab('calendar')">📅 納品カレンダー</button>
     <span style="margin-left:auto;font-size:11px;color:#888">配送と納品が1つのタブに統合されました</span>
   </div>
 
+  <!-- ===== HAISO-3: 配送カレンダー（FileMaker の予定）を配送ページに組み込む ===== -->
+  <div id="dlv-subtab-fmcal" style="display:none">
+    <iframe id="dlv-fmcal-frame" data-src="tools/haiso-calendar.html?embed=1" style="width:100%;height:calc(100vh - 150px);min-height:520px;border:1px solid #cbd5e1;background:#fff" title="配送カレンダー"></iframe>
+  </div>
   <!-- ===== サブタブ1: 配送予定 ===== -->
   <div id="dlv-subtab-shipping">
   <!-- 📦 出荷・在庫 (QRスキャン) -->
@@ -41335,41 +41340,42 @@ function initDeliveryPage(){
   if(typeof renderQRShip === 'function') try{ renderQRShip(); }catch(e){}
   // サブタブ状態の復元 (デフォルトは shipping)
   try {
-    var saved = localStorage.getItem('dlv_subtab') || 'shipping';
+    var saved = localStorage.getItem('dlv_subtab') || 'fmcal';   // HAISO-3: 既定は配送カレンダー
     swDeliverySubtab(saved, true);
-  } catch(e){ swDeliverySubtab('shipping', true); }
+  } catch(e){ swDeliverySubtab('fmcal', true); }
 }
 
 // ───────────────────────────────────────────────
 // 配送/納品 サブタブ切替
 // ───────────────────────────────────────────────
-function swDeliverySubtab(name, skipPersist){
-  var sShip = document.getElementById('dlv-subtab-shipping');
-  var sCal  = document.getElementById('dlv-subtab-calendar');
-  var bShip = document.getElementById('dlv-subtab-btn-shipping');
-  var bCal  = document.getElementById('dlv-subtab-btn-calendar');
-  if(!sShip || !sCal) return;
-  var isCal = (name === 'calendar');
-  sShip.style.display = isCal ? 'none' : '';
-  sCal.style.display  = isCal ? '' : 'none';
-  // ボタンスタイル
-  if(bShip && bCal){
-    if(isCal){
-      bShip.style.background = '#fff'; bShip.style.color = '#0e7490'; bShip.style.borderColor = '#67e8f9'; bShip.style.fontWeight = '400';
-      bCal.style.background  = '#0e7490'; bCal.style.color = '#fff'; bCal.style.borderColor = '#0e7490'; bCal.style.fontWeight = '700';
-    } else {
-      bShip.style.background = '#0e7490'; bShip.style.color = '#fff'; bShip.style.borderColor = '#0e7490'; bShip.style.fontWeight = '700';
-      bCal.style.background  = '#fff'; bCal.style.color = '#0e7490'; bCal.style.borderColor = '#67e8f9'; bCal.style.fontWeight = '400';
-    }
-  }
-  // 状態保存
-  if(!skipPersist){
-    try { localStorage.setItem('dlv_subtab', name); } catch(e){}
-  }
-  // カレンダーは表示時に必ず描画
-  if(isCal){
-    try { renderCalendar(); } catch(e){ console.error('renderCalendar failed:', e); }
-  }
+function swDeliverySubtab(name, skipPersist, fmUrl){
+  // HAISO-3: 配送カレンダー（FileMaker の予定）／配送予定／納品カレンダー の 3 つ
+  var ids = ['fmcal', 'shipping', 'calendar']; if(ids.indexOf(name) < 0) name = 'fmcal';
+  if(!document.getElementById('dlv-subtab-shipping')) return;
+  ids.forEach(function(k){
+    var sec = document.getElementById('dlv-subtab-' + k), btn = document.getElementById('dlv-subtab-btn-' + k); var on = (k === name);
+    if(sec) sec.style.display = on ? '' : 'none';
+    if(btn){ btn.style.background = on ? '#0e7490' : '#fff'; btn.style.color = on ? '#fff' : '#0e7490'; btn.style.borderColor = on ? '#0e7490' : '#67e8f9'; btn.style.fontWeight = on ? '700' : '400'; }
+  });
+  if(!skipPersist){ try { localStorage.setItem('dlv_subtab', name); } catch(e){} }
+  if(name === 'calendar'){ try { renderCalendar(); } catch(e){ console.error('renderCalendar failed:', e); } }
+  if(name === 'fmcal'){ var f = document.getElementById('dlv-fmcal-frame'); if(f){ if(fmUrl) f.setAttribute('src', fmUrl); else if(!f.getAttribute('src')) f.setAttribute('src', f.getAttribute('data-src')); } }
+}
+// 配送カレンダーを「予定を足す窓」付きで開く（問い合わせ・案件から）。o = { class, job, name, addr, memo, date }
+function _haisoAdd_(o){
+  o = o || {}; var q = ['embed=1', 'add=1']; ['class', 'job', 'name', 'addr', 'memo', 'date'].forEach(function(k){ if(o[k]) q.push(k + '=' + encodeURIComponent(String(o[k]).slice(0, 300))); }); q.push('t=' + Date.now());
+  if(typeof swPage === 'function') swPage('delivery', document.querySelector('.tb-btn[data-page=delivery]'));
+  setTimeout(function(){ swDeliverySubtab('fmcal', false, 'tools/haiso-calendar.html?' + q.join('&')); }, 150);
+}
+// 問い合わせから: サンプル・原稿の受け取りや届けを配送に頼む。住所は得意先マスタ（Hub）か本文から
+function _inqToHaiso_(id){
+  var inq = (DB.inquiries || []).find(function(x){ return x && x.id === id; }); if(!inq) return;
+  var co = String(inq.from_company || inq.custName || inq.from_name || ''); var addr = '';
+  try { var key = co.replace(/株式会社|有限会社|\s/g, ''); var hit = (DB.master && DB.master.cust || []).find(function(r){ var org = String((r && r.org) || '').replace(/株式会社|有限会社|\s/g, ''); return org && key && (org === key || org.indexOf(key) >= 0 || key.indexOf(org) >= 0); }); if(hit) addr = String(hit.addr || hit.address || hit.orgAddr || ''); } catch(e){}
+  if(!addr){ var m = /(〒?\s*\d{3}-?\d{4}\s*)?((?:北海道|東京都|(?:京都|大阪)府|[一-龥]{2,3}県)[^\s\n]{2,40})/.exec(String(inq.body || '')); if(m) addr = m[2]; }
+  var subj = String(inq.subject || '').replace(/^(re|fw|fwd)[:：]\s*/i, '').slice(0, 60);
+  _haisoAdd_({ class: '受取', name: co, addr: addr, memo: '問い合わせ: ' + subj + (inq.from_name && inq.from_name !== co ? '（' + inq.from_name + ' 様）' : '') });
+  try { if(!inq.timeline) inq.timeline = []; inq.timeline.push({ at: new Date().toISOString(), by: (currentAuth && currentAuth.userName) || '', type: 'haiso', text: '配送カレンダーに受け取りの予定を足す窓を開きました' }); } catch(e){}
 }
 
 // ドライバー一覧を描画
@@ -54002,7 +54008,7 @@ function _inqSlackRender_(container, items, totalCount){
       +'<div style="font-weight:700;font-size:13.5px">'+esc(q.subject||'(件名なし)')+'</div>'
       +'<div style="font-size:12.5px;color:#334155;line-height:1.5;background:#f8fafc;border-left:3px solid #cbd5e1;padding:4px 10px">'+esc(_inqSummary_(q))+'</div>'+_inqAttachThumbs_(q,140,90)+olderHtml
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+_inqDlChip_(q)+chips.map(function(c){ return '<span style="font-size:11px;padding:1px 7px;background:'+(c.red?'#fee2e2;color:#991b1b;font-weight:700':'#f1f5f9;color:#334155')+';border:1px solid #e2e8f0">'+esc(c.t)+'</span>'; }).join('')+(linked?'<span style="font-size:11px;padding:1px 7px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe">📁 '+esc(linked.master_no?'P'+linked.master_no:linked.id)+'</span>':'')+(att?'<span style="font-size:11px;padding:1px 7px;background:#f1f5f9;border:1px solid #e2e8f0">📎 '+att+'</span>':'')+'<span onclick="event.stopPropagation();_inqSlackSelect_(\''+esc(q.id)+'\')" title="右にやり取りを開く" style="font-size:11px;padding:1px 7px;border:1px solid #0f766e;color:#0f766e;cursor:pointer;font-weight:700">🧵 '+(th.all.length>1?th.all.length+' 通のやり取り':'スレッド')+(olderUnread?' <span style="color:#dc2626">●'+olderUnread+'</span>':'')+'</span>'+'</div>'
-      +'<div style="display:flex;gap:6px;align-items:center;margin-top:2px;flex-wrap:wrap"><button class="btn" style="font-size:11px;font-weight:700;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e" onclick="event.stopPropagation();'+na.js+'">'+esc(na.label)+'</button><button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();showEmailReplyModal(\''+esc(q.id)+'\')">返信</button>'+_inqOutcomeSelect_(q,false)+_inqWaitSelect_(q,false)+(sn?'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();_inqUnsnooze_(\''+esc(q.id)+'\')">後でを解除</button>':'')+'<span style="margin-left:auto;font-size:11px;color:#94a3b8">担当 '+esc(q.assignee||'—')+'</span></div>'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-top:2px;flex-wrap:wrap"><button class="btn" style="font-size:11px;font-weight:700;padding:3px 10px;background:#0f766e;color:#fff;border-color:#0f766e" onclick="event.stopPropagation();'+na.js+'">'+esc(na.label)+'</button><button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();showEmailReplyModal(\''+esc(q.id)+'\')">返信</button><button class="btn" style="font-size:11px;padding:3px 8px" title="サンプル・原稿の受け取りや届けを、配送カレンダーに予定として入れます。同じ方面へ行く日が出ます" onclick="event.stopPropagation();_inqToHaiso_(\''+esc(q.id)+'\')">🚚 配送に頼む</button>'+_inqOutcomeSelect_(q,false)+_inqWaitSelect_(q,false)+(sn?'<button class="btn" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation();_inqUnsnooze_(\''+esc(q.id)+'\')">後でを解除</button>':'')+'<span style="margin-left:auto;font-size:11px;color:#94a3b8">担当 '+esc(q.assignee||'—')+'</span></div>'
       +'</div></div>';
   }).join('');
   var more = totalCount>items.length ? '<div style="text-align:center;padding:8px;font-size:12px;color:#64748b">'+threads.length+' スレッド（'+items.length+' / '+totalCount+' 通）を表示　<button class="btn" style="font-size:11px" onclick="_expandShowCount_(\'inq-list\', PAGE_LIMITS.inquiry); renderInquiryList()">さらに表示</button></div>' : '';
