@@ -2316,6 +2316,7 @@ setTimeout(_removeBootLoader_, 5000);
           <input id="proof-q" placeholder="案件・得意先で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderProofingList()">
           <button class="btn" style="background:#fef2f2;border-color:#fca5a5;color:#b91c1c;font-weight:700;position:relative" onclick="showAttentionPanel()" title="N日動いていない校正・案件 / 納期が近い案件をまとめてチェック">🚨 要注意・停滞 <span class="attention-badge" style="display:none;background:#dc2626;color:#fff;border-radius:9px;padding:0 6px;font-size:10px;margin-left:2px"></span></button>
           <button class="btn btn-p" onclick="createProofing()">＋ 新規校正</button>
+          <button class="btn" style="font-size:11px" onclick="_hubSampleCreate_()" title="初校 PDF つきの校正カードと、添付つきの問い合わせを 1 件ずつ作ります（Drive に本物のファイルを置きます）">🧪 サンプルを入れる</button>
         </div>
       </div>
       <div id="proofing-list" style="margin-top:.5rem"></div>
@@ -2621,6 +2622,8 @@ setTimeout(_removeBootLoader_, 5000);
         <label style="font-size:11px;color:#0f766e;font-weight:700;display:flex;align-items:center;gap:4px;padding:0 8px;cursor:pointer" title="1 通 1 枚の流れで見る。上に「今日やること」、各行に次の一手">
           <input type="checkbox" id="inq-view-slack" onchange="_inqSlackToggle_(this.checked)"> 💬 Slack 風
         </label>
+        <button class="btn" style="font-size:11px;padding:2px 8px" onclick="_hubSampleCreate_()" title="添付（PDF・画像）つきの問い合わせと、初校 PDF つきの校正カードを 1 件ずつ作ります。ファイルは Drive に本物として置くので、埋め込みプレビューが見られます">🧪 サンプルを入れる</button>
+        <button class="btn" style="font-size:11px;padding:2px 8px" onclick="_hubSampleRemove_()" title="🧪 で作ったサンプルを片付けます">🧪 消す</button>
         <!-- PPPPPP-12: 受信アドレス一覧/宛先マスタ/メール設定 は「⚙設定」へ移動 -->
         <!-- ⚙ その他設定ドロップダウン -->
         <div class="tb-dropdown-wrap" style="position:relative">
@@ -53721,6 +53724,69 @@ function _inqPickCase_(id, kind){
 // ALWAYS-PREVIEW: 添付の PDF／画像を Drive の埋め込みで最初から出す（最大 2 件）。ほかはサムネイル
 function _drivePreviewFrame_(id, name, h){ var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }; return '<div style="border:1px solid #e2e8f0;background:#fff;margin-bottom:8px"><div style="display:flex;align-items:center;gap:8px;padding:4px 8px;font-size:11.5px;background:#f8fafc;border-bottom:1px solid #e2e8f0"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(name)+'</b><a href="https://drive.google.com/file/d/'+esc(id)+'/view" target="_blank" style="margin-left:auto;color:#0369a1;white-space:nowrap">Drive で開く</a></div><iframe src="https://drive.google.com/file/d/'+esc(id)+'/preview" loading="lazy" style="display:block;width:100%;height:'+(h||520)+'px;border:0" allow="autoplay"></iframe></div>'; }
 function _inqAlwaysPreview_(inq){ var atts=(typeof _inqAttachLite_==='function')?_inqAttachLite_(inq):[]; if(!atts.length) return ''; var big=atts.filter(function(a){ return a.driveFileId && (/^image\//.test(a.mimeType||'') || /pdf/i.test(a.mimeType||'') || /\.(pdf|jpe?g|png|gif|webp)$/i.test(a.name||'')); }).slice(0,2); var h=big.map(function(a){ return _drivePreviewFrame_(a.driveFileId, a.name, 520); }).join(''); var rest=atts.filter(function(a){ return big.indexOf(a)<0; }); if(rest.length){ var tmp={ id:inq.id, attachments:rest.map(function(a){ return { name:a.name, url:a.url, driveFileId:a.driveFileId, mimeType:a.mimeType }; }) }; h+=_inqAttachThumbs_(tmp, 200, 140); } return h; }
+// ═══════════ SAMPLE-1: 実際の Hub で触れるサンプル ═══════════
+function _sampleB64_(str){ return btoa(unescape(encodeURIComponent(str))); }
+// 文字だけの小さな PDF（Drive のプレビューで開ける形。xref も正しく作る）
+function _samplePdfBase64_(lines){
+  var content = 'BT /F1 26 Tf 60 770 Td (' + lines[0] + ') Tj ET\n' + lines.slice(1).map(function(l, i){ return 'BT /F1 14 Tf 60 ' + (730 - i*22) + ' Td (' + l.replace(/[()\\]/g,' ') + ') Tj ET'; }).join('\n') + '\nq 0.9 0.2 0.2 RG 3 w 60 560 m 420 560 l S Q\n';
+  var objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    '<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+  ];
+  var out = '%PDF-1.4\n'; var offs = [];
+  objs.forEach(function(o, i){ offs.push(out.length); out += (i+1) + ' 0 obj\n' + o + '\nendobj\n'; });
+  var xref = out.length;
+  out += 'xref\n0 ' + (objs.length+1) + '\n0000000000 65535 f \n' + offs.map(function(o){ return ('0000000000' + o).slice(-10) + ' 00000 n \n'; }).join('') + 'trailer\n<< /Size ' + (objs.length+1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n';
+  return btoa(out);
+}
+// 画像（キャンバスで描く。日本語も入る）
+function _samplePngBase64_(title, sub){ var c=document.createElement('canvas'); c.width=800; c.height=500; var g=c.getContext('2d'); g.fillStyle='#fffbeb'; g.fillRect(0,0,800,500); g.strokeStyle='#1e293b'; g.lineWidth=6; g.strokeRect(20,20,760,460); g.fillStyle='#1e293b'; g.font='bold 44px sans-serif'; g.fillText(title,60,120); g.font='24px sans-serif'; g.fillStyle='#334155'; g.fillText(sub,60,180); g.strokeStyle='#dc2626'; g.lineWidth=4; g.beginPath(); g.moveTo(60,260); g.lineTo(520,260); g.stroke(); g.fillStyle='#dc2626'; g.font='bold 26px sans-serif'; g.fillText('赤字: ここを直してください',60,300); g.fillStyle='#64748b'; g.font='18px sans-serif'; g.fillText('Tokiwa Hub サンプル画像（消してよい）',60,450); return c.toDataURL('image/png').split(',')[1]; }
+async function _hubSampleCreate_(){
+  if(typeof callCloudAPI!=='function'){ alert('クラウドの設定がありません'); return; }
+  if(!confirm('サンプルを作ります。\n・問い合わせ 1 件（添付: 初校の赤字 PDF と 画像）\n・校正BOX 1 件（初校 PDF）\nファイルは Drive の「問い合わせ添付」と校正の保存先に本物として入ります。あとで「🧪 消す」で片付けられます。よいですか？')) return;
+  if(typeof _toastMsg==='function') _toastMsg('🧪 サンプルを作っています（Drive にファイルを置きます）…');
+  var stamp = Date.now(); var who=(currentAuth&&currentAuth.userName)||'';
+  try {
+    // 1) 問い合わせ
+    var inqId = 'SAMPLE-INQ-' + stamp;
+    var pdf1 = await callCloudAPI('uploadInquiryFile', {}, { inquiryId: inqId, name: 'サンプル_カレンダー_初校_赤字.pdf', mime: 'application/pdf', base64: _samplePdfBase64_(['TOKIWA HUB SAMPLE', 'Calendar 2027 - Proof 1 with corrections', 'Please fix: February holiday, logo position +5mm', 'This file was made by the Hub as a sample. Safe to delete.']) });
+    var png1 = await callCloudAPI('uploadInquiryFile', {}, { inquiryId: inqId, name: 'サンプル_ロゴ位置.png', mime: 'image/png', base64: _samplePngBase64_('カレンダー 初校の赤字', '2 月の祝日 と ロゴの位置（5mm 上へ）') });
+    var atts = [];
+    if(pdf1 && pdf1.success) atts.push({ name: pdf1.name || 'サンプル_カレンダー_初校_赤字.pdf', url: pdf1.url, driveFileId: pdf1.fileId, mimeType: 'application/pdf', size: pdf1.size||0 });
+    if(png1 && png1.success) atts.push({ name: png1.name || 'サンプル_ロゴ位置.png', url: png1.url, driveFileId: png1.fileId, mimeType: 'image/png', size: png1.size||0 });
+    var now = new Date().toISOString();
+    var newInq = { id: inqId, subject: '【サンプル】カレンダー 初校の赤字（再校は 10 月 3 日まで）', body: 'お世話になっております。伊藤商店の伊藤です。\n\n初校を確認しました。赤字を PDF に入れましたのでご確認ください。\n・2 月の祝日が違います\n・ロゴの位置を 5mm 上に\n\n再校は 10 月 3 日までにお願いします。\n\n（これは Tokiwa Hub が作ったサンプルです。「🧪 消す」で片付けられます）', from_name: '伊藤 光恵', from_company: '伊藤商店', from_email: 'sample-ito@example.jp', channel_company: (currentAuth && currentAuth.companyName) || '', source_type: 'manual', status: 'new', priority: 'normal', received_at: now, createdAt: now, attachments: atts, isSample: true };
+    if(!DB.inquiries) DB.inquiries = []; DB.inquiries.push(newInq);
+    try { var ar = await callCloudAPI('addCommunication', {}, newInq); if(ar && ar.id && ar.id !== inqId){ newInq.id = ar.id; } } catch(e){}
+    // 2) 校正BOX
+    var prfId = 'SAMPLE-PRF-' + stamp; var st0 = (typeof _proofStatuses_==='function' && _proofStatuses_()[0]) ? _proofStatuses_()[0].key : 'waiting';
+    var proofing = { id: prfId, custName: '【サンプル】伊藤商店', prodName: 'カレンダー 2027', projectId: null, status: st0, versions: [], companyCode: (typeof getCurrentCompanyCode==='function') ? getCurrentCompanyCode() : '', sharedWithCompanies: [], notifyOnUpdate: false, createdAt: now, isSample: true, fromInquiryId: newInq.id };
+    if(!DB.proofings) DB.proofings = []; DB.proofings.push(proofing);
+    newInq.linked_proofing_id = prfId;
+    try {
+      await ensureProofDriveFolder(prfId, true);
+      var p2 = (DB.proofings||[]).find(function(x){ return x.id===prfId; });
+      if(p2 && p2.driveSubFolders){ var ss = _proofStageSet_(p2); var out = ss.list.filter(function(x){ return x.kind==='proof'; })[0]; var sub = out && p2.driveSubFolders[out.name];
+        if(sub && sub.id){ var up = await callCloudAPI('uploadProofFile', {}, { folderId: sub.id, name: 'サンプル_初校.pdf', mime: 'application/pdf', base64: _samplePdfBase64_(['TOKIWA HUB SAMPLE - PROOF 1', 'Calendar 2027 / Ito shoten', 'Proof PDF made by the Hub. Safe to delete.']) });
+          if(up && up.success){ p2.versions.push({ id: 'v' + stamp, kind: 'proof', round: 1, driveFileId: up.fileId, driveUrl: up.url, fileName: up.name || 'サンプル_初校.pdf', uploadedAt: now, uploadedBy: who }); } } }
+    } catch(e){ console.warn('[サンプル 校正]', e); }
+    if(typeof saveDB==='function') saveDB();
+    try { renderInquiryList(); } catch(e){} try { renderProofingList(); } catch(e){}
+    alert('🧪 サンプルを作りました。\n・問い合わせ「【サンプル】カレンダー 初校の赤字」（添付 ' + atts.length + ' 件）\n・校正BOX「【サンプル】伊藤商店 カレンダー 2027」\n開くと、添付や初校 PDF が最初から見えています。');
+  } catch(e){ alert('サンプルを作れませんでした: ' + String(e.message||e)); }
+}
+function _hubSampleRemove_(){
+  var inqs=(DB.inquiries||[]).filter(function(q){ return q && (q.isSample || /^SAMPLE-INQ-/.test(String(q.id))); }); var prfs=(DB.proofings||[]).filter(function(p){ return p && (p.isSample || /^SAMPLE-PRF-/.test(String(p.id))); });
+  if(!inqs.length && !prfs.length){ alert('サンプルはありません'); return; }
+  if(!confirm('サンプルを片付けます（問い合わせ ' + inqs.length + ' 件・校正 ' + prfs.length + ' 件）。Drive に置いたファイルはそのまま残ります（名前に「サンプル」が付いています）。よいですか？')) return;
+  inqs.forEach(function(q){ try { if(typeof callCloudAPI==='function') callCloudAPI('updateCommunication', {}, { id: q.id, patch: { status: 'done', outcome: 'junk', subject: '【削除済サンプル】' + (q.subject||'') } }); } catch(e){} });
+  DB.inquiries=(DB.inquiries||[]).filter(function(q){ return inqs.indexOf(q)<0; }); DB.proofings=(DB.proofings||[]).filter(function(p){ return prfs.indexOf(p)<0; });
+  if(typeof saveDB==='function') saveDB(); try { renderInquiryList(); } catch(e){} try { renderProofingList(); } catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('🧪 サンプルを片付けました');
+}
 function _inqSlackRank_(inq){ var order={ '受注':0, '見積':1, '予算見積':1, '校正':2, '質問':3, '経営':4, 'その他':5, 'ジャンク':9 }; var r=order[_inqBin_(inq)]; return r===undefined?5:r; }
 function _inqSlackRender_(container, items, totalCount){
   var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
