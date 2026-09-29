@@ -647,6 +647,10 @@ LOGIC = r"""
     return m ? (m[2] + '/' + m[3] + '/' + m[1]) : String(v || '');
   }
   function 日付欄か(el) { return el && el.tagName === 'INPUT' && el.type === 'date'; }
+  // KUBUN-1: 文字の欄だが日付のもの（前回起票日）。画面は年から（YYYY/MM/DD）、FileMaker へは MM/DD/YYYY
+  var 年から欄 = { 'f-prevdate': 1 };
+  function 年からへ(v) { var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(v || '').trim()); return m ? (m[3] + '/' + ('0' + m[1]).slice(-2) + '/' + ('0' + m[2]).slice(-2)) : String(v || ''); }
+  function 年からを戻す(v) { var m = /^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/.exec(String(v || '').trim()); return m ? (('0' + m[2]).slice(-2) + '/' + ('0' + m[3]).slice(-2) + '/' + m[1]) : String(v || ''); }
 
   function 流し込む(rec) {
     現在 = rec; 読込時 = {};
@@ -654,7 +658,7 @@ LOGIC = r"""
       var el = document.getElementById(id); if (!el) return;
       var v = rec.fields[TO_FM[id]];
       v = (v === undefined || v === null) ? '' : String(v);
-      if (日付欄か(el)) v = 画面の日付へ(v);
+      if (日付欄か(el)) v = 画面の日付へ(v); else if (年から欄[id]) v = 年からへ(v);
       s(id, v); 読込時[id] = v; el.classList.remove('fm-dirty');
     });
     札を出す(rec);
@@ -793,6 +797,7 @@ LOGIC = r"""
     流し込む(r.record);
     得意先名を入れる();
     try { Hub見積の帯(r); } catch (e) { console.warn('[Hub見積]', e); }   // HUBMITSU-1
+    try { if (window.FM区分を合わせる) FM区分を合わせる(); } catch (e) {}   // KUBUN-1
     try { sessionStorage.setItem('fm_last_no', String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); } catch (e) {}
     履歴を出す(r['履歴']);
     番号欄.value = r.record.fields['見積番号'] || r.record.fields['伝票番号'] || '';
@@ -1426,7 +1431,7 @@ LOGIC = r"""
       if (now === (読込時[id] || '')) return;
       var col = TO_FM[id];
       if (書ける && 書ける.indexOf(col) < 0) return;
-      out[col] = 日付欄か(el) ? FMの日付へ(now) : now;
+      out[col] = 日付欄か(el) ? FMの日付へ(now) : (年から欄[id] ? 年からを戻す(now) : now);
     });
     return out;
   }
@@ -2147,6 +2152,29 @@ LOGIC = r"""
     };
   }
   帯に付ける('Repeat登録', function () { 読んでから(function () { リピートを選ぶ(モード === 'mitsu' ? '' : '受注'); }); }, '同じ案件の一番新しい伝票（予算見積・見積・受注、全年）を元に、新しく起こします。元は選べます');
+  // KUBUN-1（本多さん 9/30）: 区分はノート用タイトル（コピー）の行の下にラジオで出す。元の欄（選ぶ形）は隠して、値の入れ物として残す
+  //   受注入力: 「受注」だけ・チェック済み（ほかの 3 つは出さない）。見積入力: 予算見積／見積／受注（受注処理する）／失注
+  (function () {
+    var k = $('f-kubun'), note = $('f-note'); if (!k || !note) return; var row0 = note.closest ? note.closest('.row') : null; if (!row0 || $('kubun-row')) return;
+    var row = document.createElement('div'); row.className = 'row'; row.id = 'kubun-row'; row.style.cssText = 'align-items:center;gap:4px';
+    var 種 = (モード === 'mitsu') ? [['予算見積', '予算見積'], ['見積', '見積'], ['受注', '受注（受注処理する）'], ['失注', '失注']] : (モード === 'ichiran' ? [['予算見積', '予算見積'], ['見積', '見積'], ['受注', '受注'], ['失注', '失注']] : [['受注', '受注']]);
+    row.innerHTML = '<span class="lb" style="min-width:70px" title="案件区分">区分</span>' + 種.map(function (p) { return '<label class="lb" style="display:inline-flex;align-items:center;gap:3px;margin-right:10px;cursor:pointer"><input type="radio" name="kubun-r" value="' + p[0] + '"> ' + p[1] + '</label>'; }).join('');
+    row0.parentNode.insertBefore(row, row0.nextSibling);
+    k.style.display = 'none'; var lb0 = k.previousElementSibling; if (lb0 && lb0.classList.contains('lb')) lb0.style.display = 'none';
+    var 合わせる = function () { var v = String(k.value || ''); if (モード !== 'mitsu' && モード !== 'ichiran') v = '受注'; else if (!v) v = (現在 && !現在はHub()) ? '受注' : ''; Array.prototype.forEach.call(row.querySelectorAll('input[name="kubun-r"]'), function (r) { r.checked = (r.value === v); }); };
+    window.FM区分を合わせる = 合わせる; 合わせる();
+    Array.prototype.forEach.call(row.querySelectorAll('input[name="kubun-r"]'), function (r) { r.addEventListener('change', function () {
+      if (!r.checked) return; var v = r.value;
+      if (モード !== 'mitsu' && モード !== 'ichiran') { 合わせる(); return; }
+      if (現在 && 現在はHub()) {   // Hub の見積: 種別は番号で決まる。受注は受注化、失注は状態
+        var 今 = String(現在.fields['案件区分'] || '');
+        if (v === '受注') { 合わせる(); 受注化する(); return; }
+        if (v === '失注') { 合わせる(); 見積の状態を変える('失注'); return; }
+        if (v !== 今) { alert('予算見積と見積は、起こすときに決まります（番号が ' + (v === '見積' ? '-M01' : '-YM01') + ' の形になるため）。\n「新規作成」か「Repeat登録」で ' + v + ' を起こしてください'); 合わせる(); return; }
+        return; }
+      k.value = v; k.dispatchEvent(new Event('change', { bubbles: true })); k.dispatchEvent(new Event('input', { bubbles: true })); setTimeout(合わせる, 50);
+    }); });
+  })();
   // 区分の選択: 受注入力では隠す（受注しか出ないため）。見積入力で「受注」にしたら受注処理（この案件の続きとして受注を起こす。見積は残る）
   (function () {
     var k = $('f-kubun'); if (!k) return;
