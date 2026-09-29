@@ -52698,6 +52698,9 @@ function _showAttachmentListHoverPreview_(ev, attachments, inqId){
 }
 
 function _showAttachmentHoverPreview_(ev, url, isImage, name, kind){
+  // ATTACH-2: マウスの小窓はやめた（張り付いて邪魔）。プレビューは添付の枠に常に出ている
+  try { var old = document.getElementById('att-hover-preview'); if(old) old.remove(); } catch(e){}
+  return;
   var existing = document.getElementById('att-hover-preview');
   if(existing) existing.remove();
   var div = document.createElement('div');
@@ -53787,6 +53790,14 @@ function _hubSampleRemove_(){
   if(typeof saveDB==='function') saveDB(); try { renderInquiryList(); } catch(e){} try { renderProofingList(); } catch(e){}
   if(typeof _toastMsg==='function') _toastMsg('🧪 サンプルを片付けました');
 }
+// ATTACH-2: 詳細を開いたら zip を自動で展開（1 回だけ試す）。展開後は詳細が描き直され、中身が枠に出る
+function _inqAutoUnzip_(inq){
+  if(!inq || !inq.attachments || typeof _inqUnzipAttachment_!=='function') return;
+  var idx = -1; inq.attachments.some(function(a, i){ var nm = String((a && (a.name||a.filename)) || ''); if(a && !a.expanded && !a._unzipTried && !a._unzipNeedPw && /\.zip$/i.test(nm)){ idx = i; return true; } return false; });
+  if(idx < 0) return; var att = inq.attachments[idx]; att._unzipTried = true;
+  window._inqUnzipAuto_ = true;
+  Promise.resolve().then(function(){ return _inqUnzipAttachment_(inq.id, idx); }).catch(function(e){ console.warn('[zip 自動展開]', e); }).then(function(){ window._inqUnzipAuto_ = false; });
+}
 function _inqSlackRank_(inq){ var order={ '受注':0, '見積':1, '予算見積':1, '校正':2, '質問':3, '経営':4, 'その他':5, 'ジャンク':9 }; var r=order[_inqBin_(inq)]; return r===undefined?5:r; }
 function _inqSlackRender_(container, items, totalCount){
   var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
@@ -54653,6 +54664,8 @@ function openInquiryDetail(id) {
 
   panel.classList.add('show');
   overlay.style.display = 'block';
+  try { var _oldHover = document.getElementById('att-hover-preview'); if(_oldHover) _oldHover.remove(); } catch(e){}
+  try { _inqAutoUnzip_(inq); } catch(e){ console.warn('[zip 自動展開]', e); }   // ATTACH-2
 
   // 🆕 NNNN-2: 添付ファイルを自動で AI 要約 (バックグラウンド)
   if(inq.attachments && inq.attachments.length > 0){
@@ -55220,7 +55233,8 @@ async function _inqUnzipAttachment_(inqId, attIdx){
     if(r && r.success){ files = r.files || []; }
     else if(r && r.encrypted){
       var pw = _findZipPassword_(inq);
-      pw = prompt('パスワード付きの zip です。' + (pw ? 'メール本文に見つかったパスワードを入れました。' : 'パスワードを入れてください（メール本文には見つかりませんでした）。') , pw || '');
+      if(window._inqUnzipAuto_ && !pw){ att._unzipNeedPw = true; st('🔐 パスワード付きの zip です。本文にパスワードが無いので、添付の「展開して Drive へ」を押して入れてください'); return; }
+      if(!(window._inqUnzipAuto_ && pw)) pw = prompt('パスワード付きの zip です。' + (pw ? 'メール本文に見つかったパスワードを入れました。' : 'パスワードを入れてください（メール本文には見つかりませんでした）。') , pw || '');
       if(!pw) { st('やめました'); return; }
       st('🔑 パスワードを解除して展開しています…');
       var b64 = att.data || '';
