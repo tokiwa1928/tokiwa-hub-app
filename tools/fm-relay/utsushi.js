@@ -33,9 +33,18 @@ var 写し = {
 
 // ------------------------------------------------------------ 置き場所
 
+// MOVE-1（9/30）: 保管庫を共有ドライブへ移しても見つかるように、フォルダは ID で覚える（スクリプトプロパティ 写し_フォルダID）。
+//   info@ のマイドライブはメールと同じ 1 人 2TB の枠なので、満杯になると Hub が止まる。共有ドライブに置けばその枠を使わない
+var 写しフォルダ控え_ = null;
 function 写し_フォルダ_() {
-  var it = DriveApp.getFoldersByName(写し.フォルダ);
-  return it.hasNext() ? it.next() : DriveApp.createFolder(写し.フォルダ);
+  if (写しフォルダ控え_) return 写しフォルダ控え_;
+  var props = PropertiesService.getScriptProperties(); var id = props.getProperty('写し_フォルダID');
+  if (id) { try { var f0 = DriveApp.getFolderById(id); if (!f0.isTrashed()) { 写しフォルダ控え_ = f0; return f0; } } catch (e) {} }
+  var f = null; var it = DriveApp.getFoldersByName(写し.フォルダ); while (it.hasNext()) { var x = it.next(); if (!x.isTrashed()) { f = x; break; } }
+  if (!f) { try { var r = Drive.Files.list({ q: "name = '" + 写し.フォルダ + "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false", corpora: 'allDrives', includeItemsFromAllDrives: true, supportsAllDrives: true, pageSize: 5, fields: 'files(id,name)' }); var hit = (r.files || [])[0]; if (hit) f = DriveApp.getFolderById(hit.id); } catch (e) {} }
+  if (!f) f = DriveApp.createFolder(写し.フォルダ);
+  try { props.setProperty('写し_フォルダID', f.getId()); } catch (e) {}
+  写しフォルダ控え_ = f; return f;
 }
 
 function 写し_帳簿_(名, 見出し) {
