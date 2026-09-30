@@ -300,7 +300,7 @@
               <label class="chk" id="spineOpt"><input type="checkbox" id="mSpine" checked>背丁マーク</label>
               <label class="chk"><input type="checkbox" id="mInfo" checked>版面情報</label>
               <label class="chk" title="紙の上端に入る長い墨ベタ（高さ 2mm）。どちらが天か分かるようにする印。名刺や台紙への刷り込みでは外します"><input type="checkbox" id="mTen" checked>天の印（墨ベタ）</label>
-              <label class="chk" title="名刺カッター（きりっ子）が読む 6×6mm の黒ベタ。版の左右中央に、上の辺を 1 段目の上の断ち位置に合わせて入れます（センタードブが 6mm 以上ならドブの中。無ければ 1 段目のすぐ上）。きりっ子で断つときはトンボを外してください"><input type="checkbox" id="mKuro">黒マーク（きりっ子用 6×6mm）</label>
+              <label class="chk" title="名刺カッター（きりっ子）が読む 6×6mm の黒ベタ。版の左右中央に、上の辺を 1 段目の上の断ち位置に合わせて入れます（センタードブが 6mm 以上ならドブの中。無ければ 1 段目のすぐ上）。段の間にドブがあるときは、センタードブの下の方に縦書きで「ドブあり3ミリ」のように入ります。きりっ子で断つときはトンボを外してください"><input type="checkbox" id="mKuro">黒マーク（きりっ子用 6×6mm）</label>
             </div>
             <p class="note">版面情報は用紙の左下に半角英数で入ります（ジョブ名の日本語は省かれます）。</p>
           </fieldset>
@@ -757,6 +757,11 @@
           sheet.drawRectangle({ x: kr.x, y: kr.top, width: kr.w, height: Math.max(0, lay.sheetH - kr.top), color: rgb(1, 1, 1) });
           sheet.drawRectangle({ x: kr.x, y: kr.top - kr.h, width: kr.w, height: kr.h, color });
           if (kr.lineTo != null) sheet.drawLine({ start: { x: kr.x + kr.w / 2, y: kr.top - kr.h }, end: { x: kr.x + kr.w / 2, y: kr.lineTo }, thickness: 0.3, color });
+          // KURO-2: 段の間にドブがあるときは、センタードブの下の方に縦書きで「ドブあり3ミリ」（テンプレートの「ドブ3ミリ」と同じ場所）
+          if (kr.label) {
+            const img = await tateImage(out, kr.label);
+            if (img) { const cw = 2.6 * MM, h = cw * img.height / img.width; sheet.drawImage(img, { x: kr.x + kr.w / 2 - cw / 2, y: lay.blockBottom + 1 * MM, width: cw, height: h }); }
+          }
         }
         // 背丁マーク
         if (cfg.marks.spineMark && !scheme.plain) drawSpineMarks(sheet, lay, cfg, s, nSig, color, scheme[side]);
@@ -795,7 +800,9 @@
     const K = 6 * MM, xc = lay.blockLeft + lay.blockW / 2;
     const mid = (cfg.cols % 2 === 0) ? (lay.cg[cfg.cols / 2 - 1] || 0) : 0, inGap = mid >= K - 0.01;
     const top = inGap ? lay.blockTop : Math.min(lay.sheetH, lay.blockTop + K);
-    return { x: xc - K / 2, w: K, h: K, top, inGap, lineTo: inGap ? Math.min(top - K - 13 * MM, lay.sheetH - 30 * MM) : null };
+    const dobu = (cfg.rowGaps || []).find(v => v > 0);   // 段の間のドブ（mm）。無ければ書かない
+    return { x: xc - K / 2, w: K, h: K, top, inGap, lineTo: inGap ? Math.min(top - K - 13 * MM, lay.sheetH - 30 * MM) : null,
+      label: (inGap && dobu) ? 'ドブあり' + (Math.round(dobu * 10) / 10) + 'ミリ' : '' };
   }
 
   /* フッターの文字をブラウザの字で描いて画像に（日本語が出せる・フォント埋め込みが要らない） */
@@ -811,6 +818,21 @@
       const w = Math.ceil(cx.measureText(text).width) + fs; cv.width = w; cv.height = Math.ceil(fs * 1.4);
       cx.font = `bold ${fs}px "Meiryo", "Yu Gothic", "Noto Sans JP", sans-serif`; cx.fillStyle = '#000'; cx.textBaseline = 'middle';
       cx.fillText(text, fs * 0.5, cv.height / 2);
+      const png = await new Promise(res => cv.toBlob(b => res(b), 'image/png'));
+      const img = await doc.embedPng(await png.arrayBuffer());
+      _footerCache.set(key, img); return img;
+    } catch (e) { return null; }
+  }
+
+  /* KURO-2: 縦書きの短い文字を画像に（1 字ずつ上から下へ。幅＝1 字ぶん） */
+  async function tateImage(doc, text) {
+    try {
+      if (typeof document === 'undefined') return null;
+      const key = 'tate|' + text; if (_footerCache.has(key)) return _footerCache.get(key);
+      const fs = 64, n = text.length, pitch = fs * 1.06;
+      const cv = document.createElement('canvas'); cv.width = Math.ceil(fs * 1.1); cv.height = Math.ceil(pitch * n);
+      const cx = cv.getContext('2d'); cx.font = `bold ${fs}px "Meiryo", "Yu Gothic", "Noto Sans JP", sans-serif`; cx.fillStyle = '#000'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+      for (let i = 0; i < n; i++) cx.fillText(text.charAt(i), cv.width / 2, pitch * (i + 0.5));
       const png = await new Promise(res => cv.toBlob(b => res(b), 'image/png'));
       const img = await doc.embedPng(await png.arrayBuffer());
       _footerCache.set(key, img); return img;
@@ -1089,6 +1111,8 @@
       svg.appendChild(el('rect', { x: kx, y: ky, width: kw, height: kw, fill: '#111' }));
       if (kr.lineTo != null) svg.appendChild(el('line', { x1: kx + kw / 2, y1: ky + kw, x2: kx + kw / 2, y2: cfg.sheetH - px(kr.lineTo), stroke: '#111', 'stroke-width': hair }));
       const tk = el('text', { x: kx + kw * 1.3, y: ky + kw * 0.8, fill: 'var(--ink)', 'font-size': pad * 0.4, 'font-family': 'var(--mono)' }); tk.textContent = '黒マーク'; svg.appendChild(tk);
+      if (kr.label) { const n = kr.label.length, cw = 2.6, x0 = kx + kw / 2, yb = cfg.sheetH - px(lay.blockBottom) - 1;
+        for (let i = 0; i < n; i++) { const tc = el('text', { x: x0, y: yb - cw * 1.06 * (n - i - 0.5), fill: '#111', 'font-size': cw, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-weight': '700' }); tc.textContent = kr.label.charAt(i); svg.appendChild(tc); } }
     }
     // 寸法注記
     const lab = (tx, ty, s, anchor) => {
