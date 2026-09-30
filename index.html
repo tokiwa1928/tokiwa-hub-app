@@ -21365,8 +21365,29 @@ function _proofAddComment_(id){
   if(typeof _toastMsg==='function') _toastMsg('💬 修正指示を追加しました');
 }
 // メール/LINEの連絡を選んでこの校正に修正指示として取り込む
+// KOSEI-MAIL-2: メールから付けた修正指示のカード（制作がそのまま読める: 差出人・日時・件名・本文全文・添付）
+function _proofMailCardHtml_(v){
+  var inq = (DB.inquiries||[]).find(function(i){ return i && i.id===v.inqId; }); var m = v.mailMeta || {};
+  var from = inq ? ((inq.from_name||'') + (inq.from_company ? '（' + inq.from_company + '）' : '')) : ((m.from||'') + (m.company ? '（' + m.company + '）' : ''));
+  var at = inq ? (inq.received_at||inq.createdAt||'') : (m.at||''); var when = at ? new Date(at).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+  var subj = inq ? (inq.subject||'') : (m.subject||''); var body = inq ? String(inq.body||'') : String(v.feedback||'');
+  var atts = inq ? (inq.attachments||[]) : [];
+  var esc = function(t){ return _escDiff(String(t==null?'':t)); };
+  var long = body.length > 600; var head = long ? body.slice(0, 600) : body;
+  return '<div style="margin-top:6px;border:1px solid #fcd34d;border-left:5px solid #f59e0b;background:#fffbeb;border-radius:4px;font-size:11.5px;overflow:hidden">'
+    + '<div style="padding:6px 8px;background:#fef3c7;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline"><b style="color:#92400e">📧 お客様のメール（そのまま）</b><span>' + esc(from) + '</span><span style="color:#64748b">' + esc(when) + '</span>'
+    + (inq ? '<button class="btn" style="font-size:10.5px;padding:1px 8px;margin-left:auto" onclick="event.stopPropagation();if(typeof openInquiryDetail===\'function\')openInquiryDetail(\'' + esc(inq.id) + '\')">元のメールを開く</button>' : '') + '</div>'
+    + (subj ? '<div style="padding:4px 8px;font-weight:700;border-bottom:1px dashed #fde68a">件名: ' + esc(subj) + '</div>' : '')
+    + '<div style="padding:6px 8px;white-space:pre-wrap;line-height:1.6;max-height:320px;overflow:auto">' + esc(head) + (long ? '<details style="margin-top:4px"><summary style="cursor:pointer;color:#1e40af">…続きを読む（全文）</summary><div style="white-space:pre-wrap">' + esc(body.slice(600)) + '</div></details>' : '') + '</div>'
+    + (atts.length ? '<div style="padding:4px 8px 6px;border-top:1px dashed #fde68a;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span style="color:#92400e;font-weight:700">📎 添付 ' + atts.length + '</span>' + atts.map(function(a){ var u = a.driveUrl||a.url||a.shareLink||a.link||''; var n = esc(a.name||a.fileName||'ファイル'); return u ? '<a href="' + esc(u) + '" target="_blank" rel="noopener" style="color:#1e40af">' + n + '</a>' : '<span>' + n + '</span>'; }).join('') + '</div>' : '')
+    + '</div>';
+}
 function _proofForwardPick_(proofId){
-  var inqs=(DB.inquiries||[]).filter(function(i){ return !i.isSpam; }).sort(function(a,b){ return new Date(b.received_at||b.createdAt||0)-new Date(a.received_at||a.createdAt||0); }).slice(0,50);
+  var _all=(DB.inquiries||[]).filter(function(i){ return !i.isSpam; }).sort(function(a,b){ return new Date(b.received_at||b.createdAt||0)-new Date(a.received_at||a.createdAt||0); });
+  // KOSEI-MAIL-2: この校正の得意先のメールを先に出す（会社名の一部一致）
+  var _pp=(DB.proofings||[]).find(function(x){ return x.id===proofId; })||{}; var _key=String(_pp.custName||'').replace(/株式会社|有限会社|\s/g,'');
+  var _mine=_key?_all.filter(function(i){ var c=String((i.from_company||'')+(i.custName||'')).replace(/株式会社|有限会社|\s/g,''); return c && (c.indexOf(_key)>=0||_key.indexOf(c)>=0); }):[];
+  var inqs=_mine.slice(0,30).concat(_all.filter(function(i){ return _mine.indexOf(i)<0; }).slice(0,30));
   var rows=inqs.map(function(i){
     var when=i.received_at||i.createdAt; var ws=when?new Date(when).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
     var att=(i.attachments||[]).length;
@@ -21794,9 +21815,9 @@ function showProofingDetail(proofingId){
         ${v.driveFileId ? `<button onclick="ocrProofVersion('${proofingId}','${v.id}')" style="font-size:11px;padding:2px 8px;border:1px solid #818cf8;border-radius:4px;cursor:pointer;background:#e0e7ff;color:#3730a3" title="PDF からテキストを抽出 (データ修正時のコピペ用)">📋 テキスト抽出</button>` : ''}
         ${annoCount > 0 ? `<span style="font-size:10px;color:#92400e">📝 注釈 ${annoCount}件</span>` : ''}
       </div>
-      ${v.feedback ? `<div style="margin-top:6px;padding:6px;background:#fef3c7;border-radius:4px;font-size:11px">
+      ${(v.inqId && typeof _proofMailCardHtml_==='function' && _proofMailCardHtml_(v)) || (v.feedback ? `<div style="margin-top:6px;padding:6px;background:#fef3c7;border-radius:4px;font-size:11px">
         <strong>お客様コメント:</strong><br>${(typeof _proofCommentHtml_==='function')?_proofCommentHtml_(v.feedback, v.id):v.feedback}
-      </div>` : ''}
+      </div>` : '')}
     </div>`;
   });
 
@@ -21885,24 +21906,19 @@ function showProofingDetail(proofingId){
       ${versionsHtml || '<div style="color:#888;font-size:11px">まだ校正がありません</div>'}
     </div>
     <div style="margin-bottom:.75rem;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px">
-      <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">💬 コメント・修正指示を追加</div>
-      <textarea id="proof-cmt-input" rows="3" placeholder="例: P2の電話番号を修正／表紙の色を前回見本に合わせる など" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #fcd34d;border-radius:6px;resize:vertical;box-sizing:border-box"></textarea>
-      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-        <button class="btn btn-p" style="font-size:12px" onclick="_proofAddComment_('${p.id}')">💬 修正指示として追加</button>
-        <button class="btn" style="font-size:11px;background:#eff6ff;border-color:#93c5fd;color:#1e40af" onclick="_proofForwardPick_('${p.id}')" title="メール/LINEの連絡を選んでこの校正に修正指示として取り込む（添付ごと）">📧 メール/LINEから取込</button>
+      <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">✏️ 修正指示（制作へ）</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-p" style="font-size:12.5px;padding:7px 14px" onclick="_proofForwardPick_('${p.id}')" title="お客様からのメール／LINE を選ぶと、本文と添付がそのまま校正履歴に付き、制作がそのまま読めます">📧 お客様のメールをそのまま付ける（本文・添付ごと）</button>
+        <span style="font-size:11px;color:#a16207">営業はメールを選ぶだけ。制作には差出人・日時・件名・本文の全文・添付がそのまま見えます。</span>
       </div>
-      <div style="font-size:10px;color:#a16207;margin-top:4px">※ 追加すると「修正指示」として校正履歴に記録され、状態が「修正依頼あり」になります。</div>
+      <details style="margin-top:6px"><summary style="cursor:pointer;font-size:11.5px;color:#92400e">自分で書く（短い指示・社内メモ）</summary>
+        <textarea id="proof-cmt-input" rows="3" placeholder="例: P2の電話番号を修正／表紙の色を前回見本に合わせる など" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #fcd34d;border-radius:6px;resize:vertical;box-sizing:border-box;margin-top:4px"></textarea>
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn" style="font-size:12px;background:#fff7ed;border-color:#fdba74;color:#9a3412" onclick="_proofAddComment_('${p.id}')">💬 この文を修正指示として追加</button></div>
+      </details>
+      <div style="font-size:10px;color:#a16207;margin-top:4px">※ 付けると校正履歴に「戻り（指示）」として残り、状態が「修正依頼あり」になります。</div>
     </div>
     ${_proofTimelineHtml_(p)}
-    <div style="margin-bottom:.75rem;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px">
-      <div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px">📨 やり取り通知（外注先⇄DTP 直接）</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn" style="font-size:11px;padding:4px 10px;background:#dcfce7;border-color:#86efac;color:#166534" onclick="_proofHandoff_('${p.id}','received')">📥 受領通知</button>
-        <button class="btn" style="font-size:11px;padding:4px 10px;background:#dcfce7;border-color:#86efac;color:#166534" onclick="_proofHandoff_('${p.id}','ack')">🤝 受取通知</button>
-        <button class="btn" style="font-size:11px;padding:4px 10px;background:#fef9c3;border-color:#fde047;color:#854d0e" onclick="_proofHandoff_('${p.id}','fixed')">✏️ 修正完了</button>
-        <button class="btn" style="font-size:11px;padding:4px 10px;background:#dbeafe;border-color:#93c5fd;color:#1e40af" onclick="_proofHandoff_('${p.id}','reupload')">🔁 再アップ通知</button>
-      </div>
-    </div>
+    <!-- KOSEI-MAIL-2: やり取り通知（受領・受取・修正完了・再アップ）の枠は外した（分かりにくい。履歴と状態で足りる） -->
     ${_proofSentLogHtml_(p)}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-p" onclick="uploadProofVersion('${p.id}')">📤 校正アップロード</button>
@@ -22982,7 +22998,14 @@ function _inqInsertWithSlot_(inqId, proofId, kind){
   var sel = document.getElementById('inq-slot-round'); var round = sel ? (parseInt(sel.value,10)||1) : 1;
   _doInsertInquiryToProofing_(inqId, proofId, { kind: kind, round: round });
 }
+// KOSEI-MAIL-2: 取り込んだ版に問い合わせ id を残す（校正履歴でメールの全文・添付をそのまま見せるため）
 function _doInsertInquiryToProofing_(inqId, proofId, slot){
+  var p0 = (DB.proofings||[]).find(function(x){ return x.id===proofId; }); var before = p0 && p0.versions ? p0.versions.length : 0;
+  var r = _doInsertInquiryToProofing0_(inqId, proofId, slot);
+  try { var inq0 = (DB.inquiries||[]).find(function(i){ return i.id===inqId; }); if(p0 && p0.versions){ p0.versions.slice(before).forEach(function(v){ v.inqId = inqId; if(inq0) v.mailMeta = { from:(inq0.from_name||''), company:(inq0.from_company||''), subject:(inq0.subject||''), at:(inq0.received_at||inq0.createdAt||'') }; }); if(p0.versions.length > before){ if(typeof saveDB==='function') saveDB(); } } } catch(e){}
+  return r;
+}
+function _doInsertInquiryToProofing0_(inqId, proofId, slot){
   var inq = (DB.inquiries||[]).find(function(i){ return i.id===inqId; });
   var p = (DB.proofings||[]).find(function(x){ return x.id===proofId; });
   if(!inq || !p){ alert('対象が見つかりません'); return; }
