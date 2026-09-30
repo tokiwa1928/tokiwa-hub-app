@@ -14,6 +14,10 @@
   var 中継 = 'https://script.google.com/macros/s/' + 'AKfycby3DCpR4kCCQMBZ0a8sdsBArM1z_J3JJKcIMYNOHLlhzB1LNrYPqw_NM-dxo_JirSyK4g/exec';
   var 券の置き場 = 'mz_ken', 前回の置き場 = 'mz_last', 猶予 = 7 * 86400000;
   var 状態 = null, 設定 = {}, 幕 = null;
+  // LOGIN-LATER（本多さん 9/30）: 正式運用までは、ログイン画面を出さずにそのまま使える（内蔵パターンだけ・登録は不可）。
+  //   正式運用にするときは true にする（開いたときにログイン画面が出るようになる）。公開設定の画面はいつでもログイン必須
+  var 正式運用 = false;
+  function ログインなしの状態() { return { ゲスト: true, 利用者: { 会社: '', 会社名: '', 名前: '', 管理者: false, ゲスト: true }, 設定: { 全体を見る: true, 登録できる: false }, パターン: [] }; }
   function 読む(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
   function 置く(k, v) { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) {} }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -32,6 +36,7 @@
   function 呼ぶ(action, body) {
     var b = { action: action }; Object.keys(body || {}).forEach(function (k) { b[k] = body[k]; });
     var 券 = 読む(券の置き場);
+    if (状態 && 状態.ゲスト) return Promise.reject(new Error('ログインしてください（右上の「ログイン」）'));   // ログインなしのときは、勝手に Google の窓を出さない
     if (券 && !(状態 && 状態.利用者 && 状態.利用者.Google)) { b['券'] = 券; return 送る(b); }
     if (!global.FM) return Promise.reject(new Error('ログインしてください'));
     return global.FM.トークンをもらう().then(function (t) { b.idToken = t; return 送る(b); });
@@ -68,13 +73,16 @@
     var el = 幕を作る(); document.documentElement.classList.add('mz-wait'); el.style.display = 'flex';
     el.innerHTML = 枠(設定.題 || '折丁面付台', 設定.管理者だけ ? '公開設定（トキワ印刷 本多・福永）' : 'トキワ印刷グループ 面付ツール',
       '<div id="mz-msg" class="msg" role="alert"></div>'
-      + '<div><h2>GOOGLE アカウントでログイン</h2><div id="mz-g" style="margin-top:8px"></div><p class="ft">登録してあるメールアドレスの Google アカウントを選んでください。</p></div>'
+      + '<div><h2>GOOGLE アカウントでログイン</h2><div id="mz-g" style="margin-top:8px"></div><p class="ft">登録してあるメールアドレスの Google アカウントを選んでください。<br><button class="lk" id="mz-gwin" type="button">ボタンが出ないときは、別の窓でログイン</button></p></div>'
       + (設定.管理者だけ ? '' : '<div class="or">または</div><form id="mz-f" autocomplete="on"><h2>ログインID とパスワード</h2>'
         + '<div><label for="mz-id">ログインID</label><input id="mz-id" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>'
         + '<div><label for="mz-pw">パスワード</label><input id="mz-pw" name="password" type="password" autocomplete="current-password" required></div>'
         + '<button class="go" id="mz-go" type="submit">ログイン</button></form>')
-      + '<p class="ft">使えるのは登録のある方だけです。登録・パスワードの出し直しは、トキワ印刷の本多・福永まで。</p>');
+      + '<p class="ft">使えるのは登録のある方だけです。登録・パスワードの出し直しは、トキワ印刷の本多・福永まで。</p>'
+      + ((状態 && 状態.ゲスト) ? '<button class="lk" id="mz-skip" type="button">ログインせずに使う（内蔵のパターンだけ）</button>' : ''));
     知らせ(文 || '');
+    var gw = document.getElementById('mz-gwin'); if (gw) gw.onclick = function () { try { global.FM.ログイン窓を開く(); 知らせ('別の窓でログインしてください。済むと、この画面は自動で進みます。', true); } catch (e) {} };
+    var sk = document.getElementById('mz-skip'); if (sk) sk.onclick = function () { 幕を下ろす(); };
     if (global.FM) { try { global.FM.サインインのボタンを置く(document.getElementById('mz-g')); var g = document.getElementById('mz-g'); g.style.display = 'block'; } catch (e) {} }
     var f = document.getElementById('mz-f');
     if (f) f.addEventListener('submit', function (ev) {
@@ -86,7 +94,8 @@
   }
   function Googleで入る(静かに) {
     return global.FM.トークンをもらう().then(function (t) { return 送る({ action: '面付_入る', idToken: t }); }).then(function (r) { 置く(券の置き場, ''); 入った(r, false); })
-      .catch(function (e) { if (通信の失敗か(e) && 前回で入る()) return; ログイン画面(静かに && /ログインが切れました|サインイン/.test(String(e.message)) ? '' : (通信の失敗か(e) ? '通信できませんでした。少し待ってからやり直してください' : String(e.message || e))); });
+      .catch(function (e) { if (通信の失敗か(e) && 前回で入る()) return; if (静かに && 状態 && 状態.ゲスト) return;   // LOGIN-LATER: 裏で試しただけのときは、だめでもログイン画面を出さない
+        ログイン画面(静かに && /ログインが切れました|サインイン/.test(String(e.message)) ? '' : (通信の失敗か(e) ? '通信できませんでした。少し待ってからやり直してください' : String(e.message || e))); });
   }
   function 前回で入る() {   // 通信できないときだけ。ログインを断られたときには使わない
     try { var o = JSON.parse(読む(前回の置き場) || 'null'); if (!o || !o.at || Date.now() - o.at > 猶予 || !o.r || 設定.管理者だけ) return false; o.r.通信なし = true; 入った(o.r, true); return true; } catch (e) { return false; }
@@ -114,7 +123,7 @@
   function 入った(r, 前回) {
     if (設定.管理者だけ && !(r.利用者 && r.利用者.管理者 && r.利用者.Google)) { 状態 = null; ログイン画面('設定は トキワ印刷の本多・福永 だけです。Google アカウントでログインしてください'); return; }
     if (r.利用者 && r.利用者.要変更 && !前回) { 状態 = r; パスワードを決める画面(r); return; }
-    状態 = r; if (!前回) 置く(前回の置き場, JSON.stringify({ at: Date.now(), r: r }));
+    状態 = r; if (!前回 && !r.ゲスト) 置く(前回の置き場, JSON.stringify({ at: Date.now(), r: r }));
     幕を下ろす(); 札を描く();
     if (typeof 設定.入った === 'function') { try { 設定.入った(r); } catch (e) { console.error('[面付ログイン]', e); } }
   }
@@ -124,6 +133,9 @@
   }
   function 札を描く() {
     var el = document.getElementById('mz-chip'); if (!el) { var host = 設定.札の場所 && document.querySelector(設定.札の場所); if (!host) return; el = document.createElement('div'); el.id = 'mz-chip'; host.appendChild(el); }
+    if (状態 && 状態.ゲスト) {   // LOGIN-LATER: ログインなしで使っているとき
+      el.innerHTML = '<span title="正式運用までは、ログインなしで使えます。ログインすると、各社のパターンと登録が使えます">ログインなし</span><button type="button" id="mz-in">ログイン</button>';
+      document.getElementById('mz-in').onclick = function () { ログイン画面(''); }; return; }
     var u = (状態 && 状態.利用者) || {}; var base = ''; try { var sc = document.querySelector('script[src*="menzuke-auth.js"]'); base = sc ? String(sc.getAttribute('src')).replace(/menzuke-auth\.js.*$/, '') : ''; } catch (e) {}
     el.innerHTML = '<span><b>' + esc(u.会社名 || '') + '</b>　' + esc(u.名前 || u.ログイン || '') + '</span>' + (状態.通信なし ? '<span class="off" title="中継と通信できないため、前回のログインで続けています。パターンは前回のものです">通信なし</span>' : '')
       + (u.管理者 && !設定.管理者だけ ? '<a href="' + base + 'menzuke-settei.html" target="_blank" rel="noopener">公開設定</a>' : '')
@@ -135,7 +147,14 @@
   function 始める(o) {
     設定 = o || {}; 幕を作る(); document.documentElement.classList.add('mz-wait');
     幕.innerHTML = 枠(設定.題 || '折丁面付台', 'ログインを確かめています…', '<p class="ft">少しお待ちください。</p>');
-    global.addEventListener('fm-signin', function (ev) { if (状態 || !(ev.detail && ev.detail.email)) return; Googleで入る(false); });   // Google のボタンでログインできたとき
+    global.addEventListener('fm-signin', function (ev) { if ((状態 && !状態.ゲスト) || !(ev.detail && ev.detail.email)) return; Googleで入る(!!(状態 && 状態.ゲスト && !(幕 && 幕.innerHTML))); });   // Google のボタンでログインできたとき
+    if (!正式運用 && !設定.管理者だけ) {   // LOGIN-LATER: まずログインなしで開き、前のログインが残っていれば裏で入り直す
+      入った(ログインなしの状態(), true);
+      var 券0 = 読む(券の置き場);
+      if (券0) 送る({ action: '面付_入る', '券': 券0 }).then(function (r) { 入った(r, false); }).catch(function (e) { if (!通信の失敗か(e)) 置く(券の置き場, ''); });
+      else if (global.FM && global.FM.名乗っている()) Googleで入る(true);
+      return;
+    }
     var 券 = 読む(券の置き場);
     if (券 && !設定.管理者だけ) { 送る({ action: '面付_入る', '券': 券 }).then(function (r) { 入った(r, false); }).catch(function (e) { if (通信の失敗か(e) && 前回で入る()) return; if (!通信の失敗か(e)) { 置く(券の置き場, ''); if (global.FM && global.FM.名乗っている()) { Googleで入る(true); return; } }   // 券が切れていても、Google でログイン済みならそちらで入る
       ログイン画面(通信の失敗か(e) ? '通信できませんでした。少し待ってからやり直してください' : String(e.message || e)); }); return; }
