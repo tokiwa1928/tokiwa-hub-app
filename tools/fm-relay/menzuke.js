@@ -72,9 +72,7 @@ function 面付_券の持ち主_(券) {
 
 // ------------------------------------------------------------- 誰なのか
 function 面付_Googleの人_(idToken) {   // authorize_ と同じ確かめ方。ただしドメインではなく、登録してあるかで決める
-  var res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken), { muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) throw new Error('Google のログインを確認できませんでした。もう一度ログインしてください');
-  var info = JSON.parse(res.getContentText()); var email = String(info.email || '').toLowerCase();
+  var info = トークンの中身_(idToken, 'Google のログインを確認できませんでした。もう一度ログインしてください'); var email = String(info.email || '').toLowerCase();
   if (info.email_verified !== true && info.email_verified !== 'true') throw new Error('メールアドレスが確認されていません');
   var web = PropertiesService.getScriptProperties().getProperty('WEB_CLIENT_ID');
   if (web && String(info.aud || '') !== web) throw new Error('この画面あてのログインではありません');

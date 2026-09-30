@@ -1267,12 +1267,7 @@ function authorize_(req) {
 
   if (!req.idToken) throw new Error('サインインが必要です');
 
-  var res = UrlFetchApp.fetch(
-    'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(req.idToken),
-    { muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) throw new Error('サインインを確認できませんでした');
-
-  var info  = JSON.parse(res.getContentText());
+  var info  = トークンの中身_(req.idToken, 'サインインを確認できませんでした');
   var email = String(info.email || '').toLowerCase();
   if (info.email_verified !== true && info.email_verified !== 'true') {
     throw new Error('メールアドレスが確認されていません');
@@ -1290,6 +1285,19 @@ function authorize_(req) {
   return { email: email };
 }
 
+
+/** QUOTA-1: Google の ID トークンを tokeninfo で確かめる。同じトークンは期限まで覚えて、urlfetch を減らす（1 日 2 万回を全員で分け合っている） */
+function トークンの中身_(idToken, 失敗の文) {
+  var cache = CacheService.getScriptCache(); var key = '';
+  try { var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(idToken), Utilities.Charset.UTF_8); key = 'tv_' + d.map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join(''); } catch (e) {}
+  if (key) { var hit = cache.get(key); if (hit) { try { return JSON.parse(hit); } catch (e) {} } }
+  var res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken), { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error(失敗の文);
+  var info = JSON.parse(res.getContentText());
+  var 残り = Math.floor(Number(info.exp || 0) - Date.now() / 1000);
+  if (key && 残り > 30) { try { cache.put(key, JSON.stringify({ email: info.email, email_verified: info.email_verified, aud: info.aud, name: info.name || '', exp: info.exp }), Math.min(残り, 3600)); } catch (e) {} }
+  return info;
+}
 
 // ------------------------------------------------------ FileMaker 接続
 
