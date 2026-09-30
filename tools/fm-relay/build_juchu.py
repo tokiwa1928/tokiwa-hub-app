@@ -110,6 +110,17 @@ STYLE = r"""
   #fmguide input.n{ width:56px; font-size:11px; text-align:right; padding:1px 3px; border:1px solid #cbd5e1; border-radius:3px; }
   #fmhaiso{ display:none; background:#eef6ff; border-bottom:2px solid #1d4ed8; padding:6px 14px; font-size:12px; }
   #fmhaiso.up{ border:1px solid #93c5fd; border-left:5px solid #1d4ed8; margin:4px 0 6px; padding:5px 10px; }
+  /* YOTEI-1: この伝票の予定・記録と、予定を入れる窓 */
+  #fmyotei{ display:none; border:1px solid #c7d2fe; border-left:5px solid #4338ca; background:#eef2ff; margin:4px 0 6px; padding:5px 10px; font-size:12px; }
+  #fmyotei .it{ display:inline-flex; gap:4px; align-items:center; margin:2px 10px 2px 0; white-space:nowrap; }
+  #fmyotei .it .c{ color:#fff; font-weight:700; font-size:10.5px; padding:0 5px; }
+  #fmyotei .it.done{ opacity:.55; text-decoration:line-through; }
+  #fmyotei button, #yotei-box button{ font:inherit; font-size:12px; padding:3px 10px; cursor:pointer; }
+  #yotei-box{ position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; display:none; align-items:center; justify-content:center; }
+  #yotei-box .bx{ background:#fff; width:min(560px,94vw); padding:16px 18px; font-size:13px; box-shadow:0 10px 40px rgba(0,0,0,.3); }
+  #yotei-box .g{ display:grid; grid-template-columns:90px 1fr; gap:6px 8px; align-items:center; margin:8px 0; }
+  #yotei-box .g label{ color:#475569; font-weight:700; font-size:12px; }
+  #yotei-box .g input, #yotei-box .g select, #yotei-box textarea{ font:inherit; font-size:14px; padding:4px 6px; border:1px solid #94a3b8; width:100%; box-sizing:border-box; }
   /* SEIZO-2（本多さん 9/30）: 製造区分で出るものを変える。外注の欄は上へ。完全内製・完全外製では工程ごとの 社内／部分外注 の選択は出さない */
   #fmgaichu.up{ border:1px solid #fcd34d; border-left:5px solid #b45309; margin:4px 0 6px; padding:6px 10px; }
   body[data-seizo="完全内製"] table.t-k td.tehai > *, body[data-seizo="完全内製"] table.t-w td.tehai > *,
@@ -216,8 +227,26 @@ STYLE = r"""
   .sheet .hdr-l #f-note{ max-width:760px; }
   /* TITLE-1（本多さん 9/30）: 黒い帯は一番上の 1 本だけ。2 本目（TOKIWA HUB 受注入力）と緑の線は出さない */
   .hubbar, .hubbar + div{ display:none !important; }
-  @media (min-width:1300px){ .sheet{ zoom:1.1; } }
+  /* LAYOUT-2（本多さん 9/30「くずれている」）: 上のボタンの列が折り返さず、作成者・修正者の枠が画面の外へ押し出されて横に伸びていた。ボタンは折り返し、枠は右端に置く */
+  .sheet .hdrow{ flex-wrap:nowrap; }
+  .sheet .hdrow .btns{ flex:1 1 0; min-width:0; }
+  .sheet .hdrow .brow{ flex-wrap:wrap; align-items:center; }
+  .sheet .hdrow .stampbox{ margin-left:auto; }
+  /* 大きさは画面の幅から決める（紙の大きさを合わせる）。下は JS が動く前の控え。紙の最小幅 1300px が入る幅からだけ大きくする */
+  @media (min-width:1470px){ .sheet{ zoom:1.1; } }
   @media (min-width:1600px){ .sheet{ zoom:1.2; } }
+  /* 配送予定・DTP: 見出し＋行にそろえる */
+  #fmhaiso .hs-r{ display:flex; align-items:center; gap:10px; padding:2px 0; }
+  #fmhaiso .hs-r + .hs-r{ margin-top:2px; }
+  #fmhaiso .hs-r:last-child{ border-top:1px dashed #bfdbfe; margin-top:5px; padding-top:6px; }
+  #fmhaiso .hs-h{ flex:0 0 66px; color:#1e3a8a; white-space:nowrap; }
+  #fmhaiso .hs-f{ flex:1 1 0; min-width:0; display:flex; flex-wrap:wrap; align-items:center; gap:5px 14px; }
+  #fmhaiso .hs-f label{ margin-left:0; display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+  #fmhaiso .hs-f button{ margin-left:0; }
+  #fmhaiso .hs-f .grow{ flex:1 1 220px; max-width:560px; }
+  #fmhaiso .hs-f .grow input{ flex:1 1 0; min-width:0; }
+  #fmhaiso select, #fmhaiso input{ height:24px; box-sizing:border-box; } #fmhaiso input[type=checkbox], #fmhaiso input[type=radio]{ height:auto; }
+  #fmyotei{ line-height:26px; } #fmyotei > b{ margin-right:4px; }
 </style>
 """
 
@@ -308,23 +337,41 @@ BAR = r"""
   <div id="rk-check" style="margin-top:4px"></div>
   <div id="rk-list" style="display:none;margin-top:4px;max-height:220px;overflow:auto"></div>
 </div>
+<div id="fmyotei"><b style="color:#3730a3">🗓 この伝票の予定・記録</b> <span id="yt-list" style="margin-left:6px"></span><button type="button" id="yt-add" style="margin-left:8px;border:1px solid #4338ca;background:#4338ca;color:#fff;font-weight:700">＋ 予定を入れる</button> <span id="yt-msg" style="color:#3730a3"></span></div>
+<div id="yotei-box"><div class="bx">
+  <div style="font-size:15px;font-weight:700">予定を入れる <span id="yb-no" style="color:#1e40af"></span></div>
+  <div style="color:#64748b;font-size:12px">配送カレンダーに入り、この伝票の記録として残ります</div>
+  <div class="g">
+    <label>種類</label><select id="yb-kind"><option value="受取">受取（サンプル・原稿などを受け取りに行く）</option><option value="持込">持込（途中の製品を加工会社などへ持っていく）</option><option value="見積提出">見積提出（見積書を持っていく）</option><option value="自社便">納品（自社便）</option><option value="その他">その他</option></select>
+    <label>日付</label><input type="date" id="yb-date">
+    <label>担当</label><input id="yb-tanto" list="hs-tanto-dl" placeholder="倫子">
+    <label>行き先の住所</label><input id="yb-addr" placeholder="空なら得意先の住所から方面を出します。加工会社へ持ち込むときはその住所">
+    <label>持っていく</label><span><label style="color:#166534;font-weight:700;margin-right:12px"><input type="checkbox" id="yb-ryo" style="width:auto"> 領収書●</label><label style="color:#be123c;font-weight:700"><input type="checkbox" id="yb-sei" style="width:auto"> 請求書★</label></span>
+    <label>メモ</label><textarea id="yb-memo" style="height:60px" placeholder="何を・誰に・何時ごろ"></textarea>
+  </div>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" id="yb-x">キャンセル</button><button type="button" id="yb-ok" style="border:0;background:#4338ca;color:#fff;font-weight:700;padding:5px 18px">予定に入れる</button></div>
+</div></div>
 <div id="fmhaiso">
-  <b>配送予定（FileMaker の配送カレンダーに登録）</b>
-  <label>発送 <select id="hs-how"><option value="">（未定）</option><option>自社便</option><option>宅配</option><option>郵送</option><option>直送</option><option>引取</option><option>外注先から直送</option></select></label>
-  <input id="hs-how-who" list="dl-tehai-vendor" style="width:120px" placeholder="便名・外注先など">
-  <label>担当 <input id="hs-tanto" list="hs-tanto-dl" style="width:80px" placeholder="倫子"><datalist id="hs-tanto-dl"><option>倫子</option><option>郵送</option><option>直送</option><option>引取</option><option>宅配</option></datalist></label>
-  <label>配送予定日 <input id="hs-date" type="date"></label>
-  <label>メモ <input id="hs-memo" style="width:260px" placeholder="納品先・時間など（2 行目に入ります）"></label>
-  <button id="hs-go">配送</button>
-  <a href="haiso-calendar.html" target="_blank" style="margin-left:6px">📅 配送カレンダーを開く</a>
-  <span id="hs-msg" style="color:#1d4ed8"></span><span id="th-msg"></span>
-  <datalist id="dl-tehai-vendor"></datalist>
-  <span style="display:inline-block;width:100%;height:4px"></span>
-  <b>DTP</b>
-  <span style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap">DTP有無 <label style="cursor:pointer"><input type="radio" name="dtp-yn-r" value="" checked> 無</label><label style="cursor:pointer;font-weight:700;color:#5b21b6"><input type="radio" name="dtp-yn-r" value="有"> 有</label></span><input type="hidden" id="dtp-yn" value="">
-  <label>校正の内容 <input id="dtp-note" style="width:320px" placeholder="何を校正に出すか（空なら校正BOXに下書きで入ります）"></label>
-  <button id="dtp-go" style="background:#7c3aed">校正BOXへ</button>
-  <span id="dtp-msg" style="color:#6d28d9"></span>
+  <div class="hs-r"><b class="hs-h" title="FileMaker の配送カレンダーに登録します">配送予定</b><div class="hs-f">
+    <label>発送 <select id="hs-how"><option value="">（未定）</option><option>自社便</option><option>宅配</option><option>郵送</option><option>直送</option><option>引取</option><option>外注先から直送</option></select></label>
+    <input id="hs-how-who" list="dl-tehai-vendor" style="width:120px" placeholder="便名・外注先など">
+    <label>担当 <input id="hs-tanto" list="hs-tanto-dl" style="width:80px" placeholder="倫子"><datalist id="hs-tanto-dl"><option>倫子</option><option>郵送</option><option>直送</option><option>引取</option><option>宅配</option></datalist></label>
+    <label>配送予定日 <input id="hs-date" type="date"></label>
+    <label class="grow">メモ <input id="hs-memo" placeholder="納品先・時間など（2 行目に入ります）"></label>
+  </div></div>
+  <div class="hs-r"><b class="hs-h"></b><div class="hs-f">
+    <span style="display:inline-flex;gap:8px;align-items:center;padding:1px 8px;border:1px solid #cbd5e1;background:#fff" title="納品のときに持っていく書類。得意先の既定（マスタ 持参書類）から入ります。振込になったときなど、この伝票だけ変えられます">持っていく <label style="margin:0;color:#166534;font-weight:700"><input type="checkbox" id="hs-ryo"> 領収書●</label><label style="margin:0;color:#be123c;font-weight:700"><input type="checkbox" id="hs-sei"> 請求書★</label><span id="hs-jisan-src" style="color:#64748b;font-size:11px"></span><a id="hs-jisan-def" href="#" style="display:none;font-size:11px">この得意先の既定にする</a></span>
+    <button id="hs-go" title="FileMaker の配送カレンダーに登録します">配送カレンダーに登録</button>
+    <a href="haiso-calendar.html" target="_blank">📅 配送カレンダーを開く</a>
+    <span id="hs-msg" style="color:#1d4ed8"></span><span id="th-msg"></span>
+    <datalist id="dl-tehai-vendor"></datalist>
+  </div></div>
+  <div class="hs-r"><b class="hs-h" style="color:#5b21b6">DTP</b><div class="hs-f">
+    <span style="display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><label style="cursor:pointer"><input type="radio" name="dtp-yn-r" value="" checked> 無</label><label style="cursor:pointer;font-weight:700;color:#5b21b6"><input type="radio" name="dtp-yn-r" value="有"> 有</label></span><input type="hidden" id="dtp-yn" value="">
+    <label class="grow">校正の内容 <input id="dtp-note" placeholder="何を校正に出すか（空なら校正BOXに下書きで入ります）"></label>
+    <button id="dtp-go" style="background:#7c3aed">校正BOXへ</button>
+    <span id="dtp-msg" style="color:#6d28d9"></span>
+  </div></div>
 </div>
 <div id="fmjizen">
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1238,10 +1285,12 @@ LOGIC = r"""
     var 担当 = $('hs-tanto').value.trim(), d = $('hs-date').value, メモ = $('hs-memo').value.trim();
     if (!d) { $('hs-msg').textContent = '配送予定日を入れてください'; return; }
     var fm = d.split('-'); var 日付 = fm[1] + '/' + fm[2] + '/' + fm[0];
-    if (!confirm(日付 + ' の配送カレンダーに登録します。\n\n' + String(現在.fields['伝票番号'] || '') + ' ' + String(現在.fields['製品名'] || '') + ' ' + 担当 + (メモ ? '\n' + メモ : ''))) return;
+    var 印 = 持参の印(); var 分類 = String(($('hs-how') || {}).value || ''); if (分類 === '外注先から直送') 分類 = '直送';   // YOTEI-1
+    if (!confirm(日付 + ' の配送カレンダーに登録します。\n\n' + String(現在.fields['伝票番号'] || '') + ' ' + String(現在.fields['製品名'] || '') + ' ' + 担当 + 印 + (印 ? '（' + [印.indexOf('●') >= 0 ? '領収書' : '', 印.indexOf('★') >= 0 ? '請求書' : ''].filter(Boolean).join('・') + 'を持っていく）' : '') + (メモ ? '\n' + メモ : ''))) return;
     $('hs-msg').textContent = '登録しています…';
-    呼ぶ('画面_配送登録', [現在.recordId, 担当, 日付, メモ]).then(function (r) {
-      $('hs-msg').textContent = '登録しました: ' + (r.予定 ? r.予定.タイトル.split(/\r?\n/)[0] : '') + (r.受注側 ? '' : '（受注側の配送予定日は入りませんでした）');
+    呼ぶ('画面_配送登録', [現在.recordId, 担当, 日付, メモ, 印, 分類]).then(function (r) {
+      $('hs-msg').textContent = '登録しました: ' + (r.予定 ? r.予定.タイトル.split(/\r\n|\r|\n/)[0] : '') + (r.受注側 ? '' : '（受注側の配送予定日は入りませんでした）');
+      try { 持参を覚える(); 予定一覧を出す(); } catch (e) {}
     }).catch(function (e) { $('hs-msg').textContent = String(e.message || e); });
   };
 
@@ -2184,6 +2233,77 @@ LOGIC = r"""
     };
   }
   帯に付ける('Repeat登録', function () { 読んでから(function () { リピートを選ぶ(モード === 'mitsu' ? '' : '受注'); }); }, '同じ案件の一番新しい伝票（予算見積・見積・受注、全年）を元に、新しく起こします。元は選べます');
+  // ================================================================ YOTEI-1（本多さん 9/30）
+  // 持っていく書類: ●＝領収書、★＝請求書。得意先の既定（Hub マスタ「持参書類」。無ければ FileMaker の得意先マスタの 領収・集金 の欄）から入り、この伝票だけ変えられる
+  var 持参手 = null, 持参表 = [], 持参既定 = null;
+  function 持参の印() { return (($('hs-ryo') || {}).checked ? '●' : '') + (($('hs-sei') || {}).checked ? '★' : ''); }
+  function 持参を読む(v) { v = String(v || ''); return { 領収書: /領収|両方|●/.test(v), 請求書: /請求|両方|★/.test(v) }; }
+  function 持参の既定() {
+    var code = String(($('f-custcd') || {}).value || '').trim(), user = String(($('f-user') || {}).value || '').trim(); if (!code) return null;
+    var rows = 持参表.filter(function (r) { return String(r['得意先コード'] || '') === code; }); var hit = rows.filter(function (r) { return String(r['ユーザー名'] || '').trim() && String(r['ユーザー名']).trim() === user; })[0] || rows.filter(function (r) { return !String(r['ユーザー名'] || '').trim(); })[0];
+    if (hit) { var o = 持参を読む(hit['持参']); o.元 = 'マスタの既定'; return o; }
+    try { var m = 得意先マスタ; var r0 = m && m.行 && m.行.filter(function (r) { return String(r['得意先コード']) === code; })[0]; if (r0) { var ry = false, se = false, 見た = false; Object.keys(r0).forEach(function (c) { var v = String(r0[c] || '').trim(); if (/領収|集金/.test(c)) { 見た = true; if (v && !/^(無|なし|0|不要|振込)$/.test(v)) ry = true; } if (/請求書/.test(c) && /持参|手渡|有/.test(v)) se = true; if (/支払|入金/.test(c) && /集金|現金/.test(v)) { 見た = true; ry = true; } }); if (見た) return { 領収書: ry, 請求書: se, 元: 'FileMaker の得意先マスタ' }; } } catch (e) {}
+    return null;
+  }
+  function 持参を決める() {
+    持参既定 = 持参の既定(); var v = 持参手 || 持参既定 || { 領収書: false, 請求書: false };
+    if ($('hs-ryo')) $('hs-ryo').checked = !!v.領収書; if ($('hs-sei')) $('hs-sei').checked = !!v.請求書;
+    var 違う = 持参手 && 持参既定 && (!!持参手.領収書 !== !!持参既定.領収書 || !!持参手.請求書 !== !!持参既定.請求書);
+    if ($('hs-jisan-src')) $('hs-jisan-src').textContent = 持参手 ? (違う ? 'この伝票だけ（既定と違う）' : 'この伝票で決めた') : 持参既定 ? '（' + 持参既定.元 + '）' : '（既定なし。決めると覚えます）';
+    if ($('hs-jisan-def')) $('hs-jisan-def').style.display = 違う ? '' : 'none';
+  }
+  function 持参を覚える(強制) {   // マスタに無い得意先は、決めたものを既定として足す。強制＝既定を書き換える
+    try { var code = String(($('f-custcd') || {}).value || '').trim(); if (!code) return; var rows = 持参表.filter(function (r) { return String(r['得意先コード'] || '') === code && !String(r['ユーザー名'] || '').trim(); });
+      if (rows.length && !強制) return; var ry = !!($('hs-ryo') || {}).checked, se = !!($('hs-sei') || {}).checked; var 持参 = ry && se ? '両方' : ry ? '領収書' : se ? '請求書' : 'なし';
+      var row = rows[0] ? { id: rows[0].id, '得意先コード': code, '得意先名': rows[0]['得意先名'] || String(($('f-cust') || {}).value || ''), 'ユーザー名': '', '持参': 持参, '備考': (rows[0]['備考'] || '') } : { '得意先コード': code, '得意先名': String(($('f-cust') || {}).value || '').trim(), 'ユーザー名': '', '持参': 持参, '備考': '伝票 ' + 現在の番号() + ' から自動' };
+      if (rows[0]) rows[0]['持参'] = 持参; else 持参表.push(row);
+      呼ぶ('Hubマスタ_書く', ['持参書類', row]).then(function () { try { localStorage.removeItem('fm_hubmaster_持参書類'); } catch (e) {} 持参を決める(); }).catch(function (e) { console.warn('[持参書類]', e); });
+    } catch (e) {}
+  }
+  function 持参表を用意() { return Hubマスタを用意('持参書類').then(function (rows) { 持参表 = rows || []; 持参を決める(); }).catch(function () {}); }
+  setTimeout(持参表を用意, 3200); window.addEventListener('fm-signin', function () { setTimeout(持参表を用意, 2200); });
+  setTimeout(function () { try {
+    ['hs-ryo', 'hs-sei'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('change', function () { 持参手 = { 領収書: $('hs-ryo').checked, 請求書: $('hs-sei').checked }; 持参を決める(); 手配が変わった.call(el); if (!持参既定) 持参を覚える(); }); });
+    if ($('hs-jisan-def')) $('hs-jisan-def').onclick = function (e) { e.preventDefault(); if (confirm('この得意先の既定（マスタ 持参書類）を、いまの選択に書き換えます。よいですか？')) 持参を覚える(true); };
+    if ($('f-custcd')) $('f-custcd').addEventListener('change', function () { 持参を決める(); });
+    // 予定の一覧の置き場を区分の行の下へ（配送予定があればその下）
+    紙の大きさを合わせる(); try { window.addEventListener('resize', 紙の大きさを合わせる); } catch (e) {}
+    var yt = $('fmyotei'), kr = $('kubun-row'); if (yt && kr) { var an = ($('fmhaiso') && $('fmhaiso').classList.contains('up')) ? $('fmhaiso') : kr; an.parentNode.insertBefore(yt, an.nextSibling); }
+    if ($('yt-add')) $('yt-add').onclick = function () { 予定の窓を開く(モード === 'mitsu' ? '見積提出' : '受取'); };
+    if ($('yb-x')) $('yb-x').onclick = function () { $('yotei-box').style.display = 'none'; };
+    if ($('yb-ok')) $('yb-ok').onclick = 予定を入れる;
+  } catch (e) { console.warn('[YOTEI-1]', e); } }, 0);
+  // この伝票の予定・記録（配送カレンダーから伝票番号で探す）
+  var 予定色 = { '自社便': '#1d4ed8', '受取': '#c2410c', '持込': '#a16207', '見積提出': '#4338ca', '宅配': '#7c3aed', '郵送': '#0f766e', '直送': '#b45309', '引取': '#be185d' };
+  // LAYOUT-2: 紙（入力の面）は最小幅 1300px。横にはみ出さない範囲でいちばん大きく（0.9〜1.25 倍）
+  function 紙の大きさを合わせる() {
+    try { var sh = document.querySelector('.sheet'); if (!sh) return; var w = document.documentElement.clientWidth || window.innerWidth; if (!w) return;
+      var z = Math.floor(((w - 30) / 1300) * 100) / 100; z = Math.max(0.9, Math.min(1.25, z)); sh.style.zoom = String(z); } catch (e) {}
+  }
+  function 予定一覧を出す() {
+    var box = $('fmyotei'); if (!box) return; var no = 現在の番号(); if (!現在 || !no) { box.style.display = 'none'; return; } box.style.display = 'block'; $('yt-list').textContent = '読んでいます…';
+    呼ぶ('予定_探す', [no]).then(function (r) { if (現在の番号() !== no) return; var rows = (r.行 || []).slice().sort(function (a, b) { return 日を数に(a.日付) - 日を数に(b.日付); });
+      $('yt-list').innerHTML = rows.length ? rows.map(function (x) { var t = String(x.タイトル || ''); var done = /^【済/.test(t); var l1 = t.replace(/^【済[^】]*】\s*/, '').split(/\r\n|\r|\n/)[0]; var k = (/(受取|持込|見積提出|宅配|郵送|直送|引取)(?=\s|$)/.exec(l1) || ['', '自社便'])[1]; var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(x.日付 || '')); var d = m ? (Number(m[1]) + '/' + Number(m[2])) : ''; var iso = m ? (m[3] + '-' + m[1] + '-' + m[2]) : '';
+        var 誰 = (/\s([^\s●★]{1,6})[●★]*\s*(?:受取|持込|見積提出|宅配|郵送|直送|引取)?\s*$/.exec(l1) || ['', ''])[1];
+        return '<a class="it' + (done ? ' done' : '') + '" href="haiso-calendar.html?v=' + encodeURIComponent('日') + '&d=' + iso + '" target="_blank" title="' + esc(t.replace(/\r/g, '\n')) + '" style="color:#111;text-decoration:none"><b>' + esc(d) + '</b><span class="c" style="background:' + (予定色[k] || '#64748b') + '">' + esc(k === '自社便' ? '納品' : k) + '</span>' + (/●/.test(l1) ? '<span style="color:#166534;font-weight:700">領収書</span>' : '') + (/★/.test(l1) ? '<span style="color:#be123c;font-weight:700">請求書</span>' : '') + esc(誰) + (done ? '（済）' : '') + '</a>'; }).join('') : '<span style="color:#64748b">まだありません</span>';
+    }).catch(function (e) { $('yt-list').textContent = ''; $('yt-msg').textContent = String(e.message || e).slice(0, 60); });
+  }
+  function 予定の窓を開く(種類) {
+    if (!現在) { alert('先に伝票（見積）を読み込んでください'); return; }
+    $('yb-no').textContent = 現在の番号(); $('yb-kind').value = 種類 || '受取'; var t = new Date(); $('yb-date').value = t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);   // 基本は今日
+    $('yb-tanto').value = String(($('hs-tanto') || {}).value || ''); $('yb-addr').value = ''; $('yb-memo').value = ''; $('yb-ryo').checked = false; $('yb-sei').checked = false;
+    $('yotei-box').style.display = 'flex';
+  }
+  function 予定を入れる() {
+    var d = $('yb-date').value; if (!d) { alert('日付を入れてください'); return; } var p = d.split('-'); var 日付 = p[1] + '/' + p[2] + '/' + p[0];
+    var k = $('yb-kind').value, 担当 = $('yb-tanto').value.trim(), 印 = ($('yb-ryo').checked ? '●' : '') + ($('yb-sei').checked ? '★' : '');
+    var 得 = 得意先名(String(($('f-custcd') || {}).value || '')) || String(($('f-cust') || {}).value || '').trim();
+    var l1 = [現在の番号(), 得, String(($('f-item') || {}).value || '').trim(), 担当 + 印, (k === '自社便' || k === 'その他') ? '' : k].filter(Boolean).join(' ');
+    var 題 = l1 + ($('yb-addr').value.trim() ? '\r📍' + $('yb-addr').value.trim() : '') + ($('yb-memo').value.trim() ? '\r' + $('yb-memo').value.trim().replace(/\n/g, '\r') : '');
+    $('yb-ok').disabled = true; $('yt-msg').textContent = '予定に入れています…';
+    呼ぶ('予定_作る', [日付, 題, '']).then(function () { $('yotei-box').style.display = 'none'; $('yb-ok').disabled = false; $('yt-msg').textContent = Number(p[1]) + '/' + Number(p[2]) + ' の予定に入れました'; 予定一覧を出す(); })
+      .catch(function (e) { $('yb-ok').disabled = false; $('yt-msg').textContent = ''; alert('予定に入れられません: ' + String(e.message || e)); });
+  }
   // MITEI-2: 版下変更・仕様変更を変えた記録（手配に残す）。途中で「無→有」になったときも、いつ誰が変えたかが残る
   function 変更を記録(項目, 前, 後) {
     if (!現在 || String(前 || '') === String(後 || '')) return; 手配 = 手配 || {}; 手配.変更履歴 = 手配.変更履歴 || [];
@@ -2584,6 +2704,7 @@ LOGIC = r"""
     var gq = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { var v = Number(i.value); if (v) gq[i.getAttribute('data-n')] = v; }); if (Object.keys(gq).length) o.外注見積 = gq;
     if (昨年比確認) o.昨年比確認 = 昨年比確認;
     if ($('f-seizo') && $('f-seizo').value) o.製造区分 = $('f-seizo').value;   // SEIZO-KUBUN
+    if (持参手 !== null) o.持参 = { 領収書: !!($('hs-ryo') || {}).checked, 請求書: !!($('hs-sei') || {}).checked };   // YOTEI-1: この伝票で決めた分だけ残す（既定のままなら持たない）
     var sp = { 部署: String(($('f-dept') || {}).value || '').trim(), 担当者: String(($('f-ctanto') || {}).value || '').trim() }; if (sp.部署 || sp.担当者) o.先方 = sp;   // TANTO-1
     if (手配 && 手配.変更履歴 && 手配.変更履歴.length) o.変更履歴 = 手配.変更履歴.slice(-30);   // MITEI-2
     var jz = {}; if (手配 && 手配.事前 && 手配.事前.予算上乗せ !== undefined) jz.予算上乗せ = 手配.事前.予算上乗せ; [['jz-order', '発注予定日'], ['jz-nyuko', '入稿予定日'], ['jz-due', '希望納期'], ['jz-haiso', '配送'], ['jz-konpo', '梱包'], ['jz-group', '依頼ID'], ['jz-memo', 'memo'], ['pg-han', '版']].forEach(function (p) { var v = ($(p[0]) || {}).value || ''; if (String(v).trim()) jz[p[1]] = String(v).trim(); }); if (Object.keys(jz).length) o.事前 = jz; if (手配 && 手配.写し元) o.写し元 = 手配.写し元;
@@ -2614,6 +2735,7 @@ LOGIC = r"""
     var mt = o.未確定 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.checked = !!mt[c.value]; }); if ($('mt-memo')) $('mt-memo').value = mt.memo || ''; 未確定の印();
     try { Object.keys(未定欄).forEach(function (id) { var el = $(id); if (!el) return; if (mt[未定欄[id]]) el.value = '未定'; else if (el.value === '未定') el.value = 読込時[id] || ''; }); } catch (e) {}   // MITEI-2
     if ($('f-seizo')) $('f-seizo').value = o.製造区分 || ''; try { if (window.FM製造区分を反映) FM製造区分を反映(); } catch (e) {}
+    try { 持参手 = o.持参 ? { 領収書: !!o.持参.領収書, 請求書: !!o.持参.請求書 } : null; 持参を決める(); 予定一覧を出す(); } catch (e) {}
     try { var sp0 = o.先方 || {}; if ($('f-dept')) $('f-dept').value = sp0.部署 || ''; if ($('f-ctanto')) $('f-ctanto').value = sp0.担当者 || ''; } catch (e) {}
     try { 変更履歴を出す(o.変更履歴 || []); } catch (e) {}
     var gq = o.外注見積 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { i.value = gq[i.getAttribute('data-n')] || ''; });

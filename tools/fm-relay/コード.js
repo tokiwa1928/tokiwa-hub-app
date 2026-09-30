@@ -743,14 +743,22 @@ function 予定_削除(recordId) {
  * 受注入力の「配送」ボタン。予定を作り（1 行目: 伝票番号 得意先 品名 担当、2 行目以降: メモ）、
  * 受注の 配送予定日・配送担当者・配送有無 も入れる（これらは複製用レイアウトにしか無い）。
  */
-function 画面_配送登録(recordId, 担当, 日付, メモ) {
+/** YOTEI-1: 伝票番号（見積番号）で予定を探す。伝票の側に「この伝票の予定・記録」を並べるため（読むだけ） */
+function 予定_探す(キーワード) {
+  var who = 画面_利用者_(); var k = String(キーワード || '').trim(); if (k.length < 4) throw new Error('探す言葉（伝票番号など）が短すぎます');
+  var r = find_(予定LAYOUT, [{ '予定タイトル': k }], 200, 1, [{ fieldName: '日付', sortOrder: 'descend' }]);
+  var rows = r.records.map(予定_行_).filter(function (x) { return String(x.タイトル || '').indexOf(k) >= 0; });
+  return { ok: true, user: who.email, 行: rows };
+}
+function 画面_配送登録(recordId, 担当, 日付, メモ, 印, 分類) {
   var who = 画面_利用者_();
   if (!recordId) throw new Error('recordId がありません');
   if (!日付) throw new Error('配送予定日を入れてください');
   var all = getByDenpyo_複製用_({ recordId: recordId });
   var 得意先 = '';
   try { var g = find_('得意先マスタ', [{ '得意先コード': '==' + String(all['得意先コード'] || '') }], 1, 1, null); if (g.records.length) 得意先 = g.records[0].fields['得意先名'] || ''; } catch (e) {}
-  var 題 = [String(all['伝票番号'] || ''), 得意先, String(all['製品名'] || ''), String(担当 || '')].filter(function (x) { return x; }).join(' ');
+  var 印0 = String(印 || '').replace(/[^●★]/g, ''); var 分類0 = String(分類 || '').trim(); if (分類0 === '自社便' || 分類0 === '納品') 分類0 = '';   // YOTEI-1: ●＝領収書、★＝請求書 を持っていく印は担当のあとに
+  var 題 = [String(all['伝票番号'] || ''), 得意先, String(all['製品名'] || ''), String(担当 || '') + 印0, 分類0].filter(function (x) { return x; }).join(' ');
   if (メモ) 題 += '\r' + String(メモ);
   var made = 予定_作る(日付, 題, '');
   var upd = { '配送予定日': 日付, '配送担当者': String(担当 || ''), '配送有無': '有' };
@@ -914,7 +922,7 @@ function マスタ_作る(layout, 項目) {
   return { ok: true, user: who.email, recordId: r.response.recordId };
 }
 // Hub だけのマスタ（封筒・ユーザー名・基本原価・用紙単価履歴）。保管庫「Hubマスタ_<名>」に 1 行＝1 件（id, json, at, by）
-var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目', '用紙在庫', '先方担当'];   // TANTO-1: 先方担当（得意先→ユーザー名→部・課・係→氏名）   // ZAIKO-1: 用紙在庫（主要用紙のおおまかな在庫）   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
+var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目', '用紙在庫', '先方担当', '持参書類'];   // TANTO-1: 先方担当（得意先→ユーザー名→部・課・係→氏名）   // ZAIKO-1: 用紙在庫（主要用紙のおおまかな在庫）   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
 var Hubマスタ列 = ['id', 'json', 'at', 'by', '消'];
 function Hubマスタ_帳簿_(名) { if (Hubマスタ名.indexOf(名) < 0) throw new Error('知らないマスタです: ' + 名); return 写し_帳簿_('Hubマスタ_' + 名, Hubマスタ列).getSheets()[0]; }
 function Hubマスタ_一覧(名) {
@@ -1173,7 +1181,8 @@ function handle_(action, req, who) {
     case '予定_作る':         return 予定_作る(req['日付'], req['タイトル'], req['時刻']);
     case '予定_保存':         return 予定_保存(req.recordId, req.modId, req.fields);
     case '予定_削除':         return 予定_削除(req.recordId);
-    case '画面_配送登録':     return 画面_配送登録(req.recordId, req['担当'], req['日付'], req['メモ']);
+    case '画面_配送登録':     return 画面_配送登録(req.recordId, req['担当'], req['日付'], req['メモ'], req['印'], req['分類']);
+    case '予定_探す':         return 予定_探す(req['キーワード']);   // YOTEI-1
     case '用紙注文_一覧':     return 用紙注文_一覧(req['件数']);
     case '用紙注文_読む':     return 用紙注文_読む(req['発注番号']);
     case '用紙注文_作る':     return 用紙注文_作る(req.fields);

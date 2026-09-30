@@ -46486,6 +46486,40 @@ function _ankenHistoryHTML_(r){
       years[y].map(function(x){ var tag=x.kind==='受注'?'<span style="background:#dbeafe;color:#1e3a8a;padding:0 6px;border-radius:3px;font-weight:700">受注</span>':'<span style="background:'+(x.lost?'#f1f5f9':'#ede9fe')+';color:'+(x.lost?'#94a3b8':'#5b21b6')+';padding:0 6px;border-radius:3px">'+esc(x.kind)+'</span>';
         return '<div style="display:flex;gap:8px;align-items:center;padding:2px 0;'+(x.lost?'color:#94a3b8;':'')+(x.open?'cursor:pointer':'')+'" '+(x.open?'onclick="event.stopPropagation();'+x.open+'"':'')+'>'+tag+'<span style="font-family:monospace">'+esc(x.no)+'</span><span>'+(x.qty?Number(x.qty).toLocaleString()+(x.unit||''):'')+'</span><span>'+yen(x.amt)+'</span><span style="color:#64748b">'+esc(x.st)+'</span>'+(x.now?'<span style="color:#1e40af;font-weight:700">← いま</span>':(x.cur&&x.kind==='受注'?'<span style="color:#15803d">動いている</span>':''))+'</div>'; }).join('')+'</div></div>'; }).join('')+'</div>';
 }
+// YOTEI-1: この伝票の予定・記録（配送カレンダーの予定を伝票番号で探す）。サンプルの受け取り・加工会社への持ち込み・見積書の提出 など
+var _YOTEI_COL_ = { '自社便':'#1d4ed8', '受取':'#c2410c', '持込':'#a16207', '見積提出':'#4338ca', '宅配':'#0f766e', '郵送':'#0f766e', '直送':'#7c3aed', '引取':'#475569' };
+function _ankenYoteiHTML_(r){
+  var no=(typeof _projFmNo_==='function')?_projFmNo_(r):''; if(!no || String(no).length<4) return '';
+  var id='anken-yotei-'+String(no).replace(/[^\w-]/g,'_'); var q=String(no).replace(/[^\w-]/g,'');
+  setTimeout(function(){ try{ _ankenYoteiLoad_(no,id); }catch(e){ console.warn('[予定]',e); } },80);
+  var btn=function(k,label){ return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="event.stopPropagation();_ankenYoteiAdd_(\''+q+'\',\''+k+'\')">'+label+'</button>'; };
+  return '<div style="margin:0 0 10px;padding:6px 10px;background:#eef2ff;border:1px solid #c7d2fe;border-left:4px solid #4338ca;border-radius:6px;font-size:11.5px">'
+    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:#3730a3">🗓 この伝票の予定・記録</b><span style="margin-left:auto"></span>'+btn('受取','＋ 受取')+btn('持込','＋ 持込')+btn('見積提出','＋ 見積提出')+btn('自社便','＋ 納品')+'</div>'
+    +'<div id="'+id+'" style="margin-top:4px;color:#64748b">'+(_hubFmOn_()?'読んでいます…':'FileMaker（中継）にログインすると出ます')+'</div></div>';
+}
+function _ankenYoteiLoad_(no,id){
+  var el=document.getElementById(id); if(!el || !_hubFmOn_()) return;
+  var esc=function(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+  FM.呼ぶ('予定_探す',[no]).then(function(res){
+    var el2=document.getElementById(id); if(!el2) return; var rows=(res&&res.行)||[];
+    var key=function(x){ var m=/^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(x.日付||'')); return m?(m[3]+m[1]+m[2]):''; };
+    rows=rows.slice().sort(function(a,b){ return key(a).localeCompare(key(b)); });
+    if(!rows.length){ el2.innerHTML='まだありません'; return; }
+    el2.innerHTML=rows.map(function(x){ var t=String(x.タイトル||''); var done=/^【済/.test(t); var ls=t.replace(/^【済[^】]*】\s*/,'').split(/\r\n|\r|\n/); var l1=ls[0]||'';
+      var k=(/(受取|持込|見積提出|宅配|郵送|直送|引取)(?=\s|$)/.exec(l1)||['','自社便'])[1]; var who=(/\s([^\s●★]{1,6})[●★]*\s*(?:受取|持込|見積提出|宅配|郵送|直送|引取)?\s*$/.exec(l1)||['',''])[1];
+      var m=/^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(x.日付||'')); var d=m?(m[3]+'/'+Number(m[1])+'/'+Number(m[2])):String(x.日付||'');
+      var rest=ls.slice(1).join(' ／ ');
+      return '<div style="display:flex;gap:8px;align-items:center;padding:2px 0;border-top:1px dotted #c7d2fe;color:#111'+(done?';opacity:.6':'')+'"><span style="white-space:nowrap;font-weight:700">'+esc(d)+'</span><span style="background:'+(_YOTEI_COL_[k]||'#64748b')+';color:#fff;font-weight:700;font-size:10.5px;padding:0 6px;white-space:nowrap">'+esc(k==='自社便'?'納品':k)+'</span>'
+        +(/●/.test(l1)?'<span style="color:#166534;font-weight:700;white-space:nowrap">●領収書</span>':'')+(/★/.test(l1)?'<span style="color:#be123c;font-weight:700;white-space:nowrap">★請求書</span>':'')
+        +'<span style="white-space:nowrap">'+esc(who)+'</span><span style="color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(rest)+'">'+esc(rest)+'</span>'+(done?'<span style="color:#166534;white-space:nowrap">済</span>':'')+'</div>'; }).join('');
+  }).catch(function(e){ var el3=document.getElementById(id); if(el3) el3.textContent='読めませんでした: '+String((e&&e.message)||e).slice(0,80); });
+}
+function _ankenYoteiAdd_(no,kind){
+  var r=(typeof _projByFmNo_==='function'&&_projByFmNo_(no))||(DB.projects||[]).find(function(p){ return p&&String(p.id)===String(no); })||{};
+  var co=String(r.custName||r.customer||r.cust||''); var addr='';
+  try{ var key=co.replace(/株式会社|有限会社|\s/g,''); var hit=(DB.master&&DB.master.cust||[]).find(function(c){ var org=String((c&&c.org)||'').replace(/株式会社|有限会社|\s/g,''); return org&&key&&(org===key||org.indexOf(key)>=0||key.indexOf(org)>=0); }); if(hit && (kind==='自社便'||kind==='見積提出'||kind==='受取')) addr=String(hit.addr||hit.address||hit.orgAddr||''); }catch(e){}
+  _haisoAdd_({ class:kind, job:no, name:[co,String(r.item||r.name||'')].filter(Boolean).join(' '), addr:addr, memo:'' });
+}
 function _projByFmNo_(no){ no=String(no||''); if(!no) return null; return (DB.projects||[]).find(function(p){ return p && _projFmNo_(p)===no; })||null; }
 window._projGrpOpen_ = window._projGrpOpen_ || {};
 function _projGrpToggle_(key){ window._projGrpOpen_[key]=!window._projGrpOpen_[key]; renderProjects(); }
@@ -47013,6 +47047,7 @@ function renderProjects(){
           <!-- 基本タブ -->
           <div id="proj-tab-basic-${oi}" class="proj-tab-content" style="padding:14px">
             ${(typeof _ankenHistoryHTML_==='function') ? _ankenHistoryHTML_(r) : ''}
+            ${(typeof _ankenYoteiHTML_==='function') ? _ankenYoteiHTML_(r) : ''}
             ${(typeof _caseFolderBlockHTML_==='function') ? _caseFolderBlockHTML_(r) : ''}
             ${(typeof _attachListHTML_==='function') ? _attachListHTML_(_projAttachments_(r), '📎 添付（問い合わせから引き継ぎ）') : ''}
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-bottom:10px">
