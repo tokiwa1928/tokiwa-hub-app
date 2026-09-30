@@ -147,7 +147,8 @@ function 画面_利用者_() {
 var 一覧の列 = [
   '伝票番号', '見積番号', '案件区分', '案件ID', '起票日', '納品日', '納品書番号',
   '得意先コード', 'ユーザー名', '担当者コード', '製品名', '品種',
-  '合計数1', '単位', '売価単価', '売価金額', '合計金額', '注残数', '注文書No', 'ロット契約単位'   // LOT-1: 数量＝ロット契約単位
+  '合計数1', '単位', '売価単価', '売価金額', '合計金額', '注残数', '注文書No', 'ロット契約単位',   // LOT-1: 数量＝ロット契約単位
+  '納期'   // NOUKI-KUBUN: 案件管理表に納期の列を出す
 ];
 
 /** FileMaker の日付は MM/DD/YYYY で渡す */
@@ -879,7 +880,7 @@ function 手配_一覧() {
     var 用紙 = []; Object.keys(o.用紙 || {}).forEach(function (n) { var x = o.用紙[n]; if (!x || x.k === '在庫' || !x.紙) return; 用紙.push({ n: n, k: x.k, who: x.who || '', 紙: x.紙, ord: x.ord || null }); });
     // GAICHU-2: 外注の行（写しがあるもの）を Hub の外注発注へ
     var 外注 = []; Object.keys(o.外注 || {}).forEach(function (i2) { var x = o.外注[i2]; if (!x || !x.写し || !(x.写し.会社名 || x.写し.発注内容)) return; 外注.push({ i: i2, 写し: x.写し, ord: x.ord || null }); });
-    if (ks.length || nb || (mt.memo && String(mt.memo).trim()) || jz.依頼ID || 用紙.length || 外注.length || o.製造区分) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb, 依頼ID: jz.依頼ID || '', 用紙: 用紙, 外注: 外注, 案件: o.案件 || null, 製造区分: o.製造区分 || '', 先方: o.先方 || null, at: (v[i][2] instanceof Date) ? v[i][2].toISOString() : String(v[i][2] || '') };
+    if (ks.length || nb || (mt.memo && String(mt.memo).trim()) || jz.依頼ID || 用紙.length || 外注.length || o.製造区分 || o.納期区分) out[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb, 依頼ID: jz.依頼ID || '', 用紙: 用紙, 外注: 外注, 案件: o.案件 || null, 製造区分: o.製造区分 || '', 納期区分: o.納期区分 || '', 先方: o.先方 || null, at: (v[i][2] instanceof Date) ? v[i][2].toISOString() : String(v[i][2] || '') };
   }
   return { ok: true, user: who.email, 一覧: out };
 }

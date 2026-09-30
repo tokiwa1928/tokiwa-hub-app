@@ -1249,6 +1249,10 @@ LOGIC = r"""
     });
   }
   function 製造指示書状態(no) { return 製造記録[String(no || '')] || null; }
+  // NOUKI-KUBUN: 納期区分の札。必須＝赤、仕様書＝濃い黄、希望＝青、希望なし＝灰
+  var 納期区分の色表 = { '必須納期': ['#b91c1c', '#fff'], '仕様書納期': ['#fef3c7', '#92400e'], '希望納期': ['#dbeafe', '#1d4ed8'], '希望なし': ['#f1f5f9', '#64748b'] };
+  function 納期区分の札(k) { var c = 納期区分の色表[k]; if (!c) return ''; return '<span style="font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:' + c[0] + ';color:' + c[1] + '">' + esc(String(k).replace(/納期$/, '')) + '</span>'; }
+  window.FM納期区分の色 = function () { var el = $('f-duekind'); if (!el) return; var c = 納期区分の色表[el.value]; el.style.background = c ? c[0] : ''; el.style.color = c ? c[1] : ''; el.style.fontWeight = c ? '700' : ''; };
   // MITEI-1: 保管庫「手配」の一覧（未確定の理由・未発注の数）。サインインしてから取り、5 分ごとに取り直す
   var 手配一覧 = {};
   function 手配一覧を読む() {
@@ -1593,6 +1597,7 @@ LOGIC = r"""
     { c:'売価金額',   h:'売価', money:true, tokiwaPrice:true },
     { c:'_senpo',     h:'各社の売価', senpo:true },   // GRP-2: 関連会社売価（Hub 側）
     { c:'合計金額',   h:'原価', money:true },
+    { c:'納期',       h:'納期', due:true },          // NOUKI-KUBUN: 納期と、その種類（希望なし／仕様書／希望／必須）
     { c:'納品日',     h:'納品日', date:true },
     { c:'注残数',     h:'注残', num:true },
     { c:'_dtp',       h:'DTP', dtp:true },   // KOSEI-DTP-1: 有にすると校正BOXへ
@@ -1663,6 +1668,7 @@ LOGIC = r"""
         if (k.dtp) { var st = window.DTP状態 ? DTP状態(row['伝票番号']) : ''; var on = !!st;
           t += '<td onclick="event.stopPropagation()" style="white-space:nowrap"><select class="dtp-sel" data-no="' + esc(row['伝票番号'] || '') + '" title="有にすると校正BOXにカードができます" style="font:inherit;font-size:11px;padding:1px 2px;' + (on ? 'background:#ede9fe;color:#5b21b6;font-weight:700' : '') + '"><option value=""' + (on ? '' : ' selected') + '>無</option><option value="有"' + (on ? ' selected' : '') + '>有</option></select>'
              + (st === 'card' ? '<span title="校正BOXにカードがあります" style="font-size:11px;margin-left:3px">📸</span>' : st ? '<span title="送信済み（本体を開くとカードになります）" style="font-size:11px;margin-left:3px;color:#a78bfa">⏳</span>' : '') + '</td>'; return; }
+        if (k.due) { var dk = (手配一覧[String(row['伝票番号'] || row['見積番号'] || '')] || {}).納期区分 || ''; t += '<td style="white-space:nowrap">' + esc(日付(v)) + (dk ? ' ' + 納期区分の札(dk) : '') + '</td>'; return; }
         if (k.badge) { var cls = STAGE_CLASS[v] || ''; t += '<td>' + (v ? '<span class="badge ' + cls + '">' + esc(v) + '</span>' : '') + '</td>'; }
         else if (k.date) { t += '<td>' + esc(日付(v)) + '</td>'; }
         else if (k.money || k.num) { t += '<td class="num">' + esc(円(v)) + '</td>'; }
@@ -2559,8 +2565,9 @@ LOGIC = r"""
     var 曜 = ['日', '月', '火', '水', '木', '金', '土'];
     var 日付文 = function (d) { return d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate() + '（' + 曜[d.getDay()] + '）'; };
     var 納 = null; try { var m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(v('f-due')); if (m) 納 = new Date(+m[1], +m[2] - 1, +m[3]); } catch (e) {}
-    if (納) { 行.push('最終納期: ' + 日付文(納)); var g = new Date(納.getTime() - 86400000); var 前 = g.getDay() === 0 ? new Date(g.getTime() - 86400000) : null; 行.push('外注納期: ' + 日付文(g) + ' まで（最終納期の 1 日前。これより遅くしない' + (前 ? '。日曜なので実際は ' + 日付文(前) + ' 着' : '') + '）'); }
-    else if (v('f-due')) 行.push('最終納期: ' + v('f-due'));
+    var 納種 = String(($('f-duekind') || {}).value || ''); 納種 = 納種 ? '【' + 納種 + '】' : '';   // NOUKI-KUBUN
+    if (納) { 行.push('最終納期: ' + 日付文(納) + 納種); var g = new Date(納.getTime() - 86400000); var 前 = g.getDay() === 0 ? new Date(g.getTime() - 86400000) : null; 行.push('外注納期: ' + 日付文(g) + ' まで（最終納期の 1 日前。これより遅くしない' + (前 ? '。日曜なので実際は ' + 日付文(前) + ' 着' : '') + '）'); }
+    else if (v('f-due')) 行.push('最終納期: ' + v('f-due') + 納種);
     var hs = (手配 || {}).発送 || {}; var jz = (手配 || {}).事前 || {};
     var 配 = [hs.how, hs.who].filter(Boolean).join(' ') || jz.配送 || '';
     if (配) 行.push('配送: ' + 配 + (hs.how && hs.how.indexOf('直送') >= 0 && !hs.who ? '（直送先を確認）' : ''));
@@ -2713,6 +2720,7 @@ LOGIC = r"""
     var gq = {}; Array.prototype.forEach.call(document.querySelectorAll('#fmkin .kn-qa'), function (i) { var v = Number(i.value); if (v) gq[i.getAttribute('data-n')] = v; }); if (Object.keys(gq).length) o.外注見積 = gq;
     if (昨年比確認) o.昨年比確認 = 昨年比確認;
     if ($('f-seizo') && $('f-seizo').value) o.製造区分 = $('f-seizo').value;   // SEIZO-KUBUN
+    if ($('f-duekind') && $('f-duekind').value) o.納期区分 = $('f-duekind').value;   // NOUKI-KUBUN
     if (持参手 !== null) o.持参 = { 領収書: !!($('hs-ryo') || {}).checked, 請求書: !!($('hs-sei') || {}).checked };   // YOTEI-1: この伝票で決めた分だけ残す（既定のままなら持たない）
     var sp = { 部署: String(($('f-dept') || {}).value || '').trim(), 担当者: String(($('f-ctanto') || {}).value || '').trim() }; if (sp.部署 || sp.担当者) o.先方 = sp;   // TANTO-1
     if (手配 && 手配.変更履歴 && 手配.変更履歴.length) o.変更履歴 = 手配.変更履歴.slice(-30);   // MITEI-2
@@ -2744,6 +2752,7 @@ LOGIC = r"""
     var mt = o.未確定 || {}; Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.checked = !!mt[c.value]; }); if ($('mt-memo')) $('mt-memo').value = mt.memo || ''; 未確定の印();
     try { Object.keys(未定欄).forEach(function (id) { var el = $(id); if (!el) return; if (mt[未定欄[id]]) el.value = '未定'; else if (el.value === '未定') el.value = 読込時[id] || ''; }); } catch (e) {}   // MITEI-2
     if ($('f-seizo')) $('f-seizo').value = o.製造区分 || ''; try { if (window.FM製造区分を反映) FM製造区分を反映(); } catch (e) {}
+    if ($('f-duekind')) { $('f-duekind').value = o.納期区分 || ''; try { FM納期区分の色(); } catch (e) {} }   // NOUKI-KUBUN
     try { 持参手 = o.持参 ? { 領収書: !!o.持参.領収書, 請求書: !!o.持参.請求書 } : null; 持参を決める(); 予定一覧を出す(); } catch (e) {}
     try { var sp0 = o.先方 || {}; if ($('f-dept')) $('f-dept').value = sp0.部署 || ''; if ($('f-ctanto')) $('f-ctanto').value = sp0.担当者 || ''; } catch (e) {}
     try { 変更履歴を出す(o.変更履歴 || []); } catch (e) {}
@@ -2959,6 +2968,12 @@ LOGIC = r"""
     var thK = 表.k && Array.prototype.filter.call(表.k.querySelectorAll('th'), function (x) { return x.textContent.trim().indexOf('インキ') === 0; })[0]; 付ける(thK, '印刷色', '印刷色（インキ・用紙色）');
     var lot = $('f-lotunit'); if (lot && lot.previousElementSibling) 付ける(lot.previousElementSibling, '数量', '数量');
     var due = $('f-due'); if (due && due.previousElementSibling && due.previousElementSibling.classList && due.previousElementSibling.classList.contains('lb')) 付ける(due.previousElementSibling, '納期', '納期');
+    // NOUKI-KUBUN（本多さん 9/30）: 納期の種類。FileMaker に列は無いので 手配 に持つ（製造区分と同じ）
+    try { if (due && !$('f-duekind') && due.closest) { var dr = due.closest('.row'); var nr = document.createElement('div'); nr.className = 'row';
+      nr.innerHTML = '<span class="lb" style="min-width:44px" title="この納期がどういう納期か。希望なし＝お客様の指定は無く、こちらで決めた目安／仕様書納期＝仕様書・契約で決まっている／希望納期＝お客様の希望（相談できる）／必須納期＝動かせない">納期区分</span>'
+        + '<select id="f-duekind" class="in" style="width:112px"><option value="">（未選択）</option><option>希望なし</option><option>仕様書納期</option><option>希望納期</option><option>必須納期</option></select>';
+      dr.parentNode.insertBefore(nr, dr.nextSibling);
+      $('f-duekind').addEventListener('change', function () { FM納期区分の色(); 手配が変わった.call($('f-duekind')); }); } } catch (e) {}
     var gh = document.querySelector('#fmgaichu b'); 付ける(gh, '外注先', '外注先');
     Array.prototype.forEach.call(document.querySelectorAll('#fmmitei .mt-k'), function (c) { c.addEventListener('change', function () { 未確定の印(); 手配が変わった(); }); });
     if ($('mt-memo')) $('mt-memo').addEventListener('change', 手配が変わった);
@@ -2984,7 +2999,7 @@ LOGIC = r"""
       var no = 手配の伝票, o = 手配を集める();
       呼ぶ('手配_書く', [no, o]).then(function () { 手配 = o; if ($('th-msg')) $('th-msg').textContent = '手配を保存しました ' + new Date().toTimeString().slice(0, 5);
         var mt = o.未確定 || {}; var ks = Object.keys(mt).filter(function (x) { return x !== 'memo' && mt[x]; }); var nb = 0; ['用紙', '印刷', '加工'].forEach(function (g) { Object.keys(o[g] || {}).forEach(function (n) { var x = o[g][n]; if (x && ((g === '用紙' && x.k !== '在庫') || x.k === '外注') && !(x.ord && x.ord.done)) nb++; }); });
-        手配一覧[no] = { 未確定: ks, memo: mt.memo || '', 未発注: nb }; }).catch(function (e) { if ($('th-msg')) $('th-msg').textContent = '手配を保存できません: ' + String(e.message || e); });
+        手配一覧[no] = Object.assign({}, 手配一覧[no] || {}, { 未確定: ks, memo: mt.memo || '', 未発注: nb, 納期区分: o.納期区分 || '', 製造区分: o.製造区分 || '' }); }).catch(function (e) { if ($('th-msg')) $('th-msg').textContent = '手配を保存できません: ' + String(e.message || e); });
     }, 1200);
   }
   if ($('hs-how')) { $('hs-how').addEventListener('change', 手配が変わった); $('hs-how-who').addEventListener('change', 手配が変わった); }

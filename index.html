@@ -30399,7 +30399,7 @@ function _tehaiOrderSync_(force){
   if(!force && Date.now()-window._tehaiOrderSyncAt_<5*60*1000) return Promise.resolve(0);
   window._tehaiOrderSyncAt_=Date.now();
   return FM.呼ぶ('手配_一覧',[]).then(function(r){
-    var L=(r&&r.一覧)||{}; var n=0;
+    var L=(r&&r.一覧)||{}; var n=0; window._tehaiList_=L; window._tehaiListAt_=Date.now();   // NOUKI-KUBUN: 案件管理の納期の札にも使う
     if(!Array.isArray(DB.purchaseOrders)) DB.purchaseOrders=[]; if(!Array.isArray(DB.outsourceOrders)) DB.outsourceOrders=[];
     var byP={}; DB.purchaseOrders.forEach(function(o){ if(o.id) byP[o.id]=o; }); var byO={}; DB.outsourceOrders.forEach(function(o){ if(o.id) byO[o.id]=o; });
     Object.keys(L).forEach(function(no){ var e=L[no]; var a=e.案件||{}; var repeat=/リピート/.test(String(a.ロット区分||''));
@@ -46881,11 +46881,25 @@ function _projLeadInfo_(r){
 // 日付を「2026年6月29日」表記に（本多さん指示）
 function _ymdJP_(d){ d=String(d||''); var m=d.match(/^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})/); return m?(m[1]+'年'+(+m[2])+'月'+(+m[3])+'日'):d; }
 function _ymdJP2_(d){ d=String(d||''); var m=d.match(/^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})/); return m?(m[1]+'年<br>'+(+m[2])+'月'+(+m[3])+'日'):d; } // 2行表示(列幅を取らない)
+// NOUKI-KUBUN（本多さん 9/30）: 納期の種類（希望なし／仕様書納期／希望納期／必須納期）。受注入力で入れたものを 手配_一覧 から読む。5 分に 1 回・サインイン済みのときだけ
+var _DUE_KIND_COL_={ '必須納期':['#b91c1c','#fff'], '仕様書納期':['#fef3c7','#92400e'], '希望納期':['#dbeafe','#1d4ed8'], '希望なし':['#f1f5f9','#64748b'] };
+function _dueKindOf_(r){ try{ var no=r&&r.fm&&r.fm['fm-denpyo']; var e=no&&window._tehaiList_&&window._tehaiList_[String(no)]; return (e&&e.納期区分)||''; }catch(e){ return ''; } }
+function _dueKindBadge_(k){ var c=_DUE_KIND_COL_[k]; if(!c) return ''; var tip={ '必須納期':'動かせない納期', '仕様書納期':'仕様書・契約で決まっている納期', '希望納期':'お客様の希望（相談できる）', '希望なし':'お客様の指定は無く、こちらで決めた目安' }[k]; return '<span title="'+tip+'" style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:'+c[0]+';color:'+c[1]+'">'+String(k).replace(/納期$/,'')+'</span>'; }
+function _dueKindLoad_(){
+  try{
+    if(!window.FM||typeof FM.名乗っている!=='function'||!FM.名乗っている()) return;
+    if(window._tehaiListAt_ && Date.now()-window._tehaiListAt_<5*60*1000) return; window._tehaiListAt_=Date.now();
+    FM.呼ぶ('手配_一覧',[]).then(function(r){ window._tehaiList_=(r&&r.一覧)||{}; var pg=document.getElementById('page-project'); if(pg&&pg.classList.contains('act')&&typeof renderProjects==='function'&&!document.querySelector('#page-project input:focus, #page-project textarea:focus, #page-project select:focus')) renderProjects(); }).catch(function(){});
+  }catch(e){}
+}
+try{ setTimeout(_dueKindLoad_, 9000); setInterval(_dueKindLoad_, 60000); }catch(e){}
 function _projDueCellHtml_(r){
-  if(!r.dueDate) return '-';
+  var dkb=_dueKindBadge_(_dueKindOf_(r));
+  if(!r.dueDate) return dkb||'-';
   var info=_projLeadInfo_(r);
   // 1行でコンパクトに: 日付 と バッジ類を横並び（インライン）
   var html='<span style="white-space:nowrap">'+_ymdJP2_(r.dueDate).replace('<br>','')+'</span>';
+  if(dkb) html+=' '+dkb;
   if(info && !info.done){
     var d=info.calDays;
     var rem = d<0 ? ('<span style="background:#dc2626;color:#fff;font-size:9.5px;padding:1px 6px;border-radius:8px;font-weight:700">'+(-d)+'日超過</span>')
