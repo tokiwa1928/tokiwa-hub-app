@@ -435,6 +435,8 @@ textarea{resize:vertical;font-size:12px;line-height:1.5}
 #proj-table th{border-bottom:2px solid #8d8778}
 /* techC: 案件一覧ヘッダーを黒帯に統一 (再デザインの .page:not():not() .m-tbl th !important に勝つよう3ID指定) */
 #proj-list-view #proj-table #proj-thead th{background:#211f1c !important;color:#cfcabd !important;border-color:#33302b !important;font-weight:600;letter-spacing:.02em}
+/* 9/30 本多さん「ココも他のページと合わせて」: 工程管理の表の頭も案件一覧と同じ黒帯に */
+html body #page-schedule #process-board table thead th, html body.new-shell #page-schedule #process-board table thead th{background:#211f1c !important;color:#cfcabd !important;border-color:#33302b !important;font-weight:600;letter-spacing:.02em}
 /* 校正BOX: 狭い画面では左右分割を縦積みに */
 @media (max-width:860px){#proof-split{flex-direction:column}#proof-left{width:auto !important;min-width:0 !important}#proof-divider{display:none !important}}
 details.proof-status-picker summary{list-style:none}
@@ -24498,21 +24500,32 @@ function _applyHistoryPricing_(est){
 //   番号 P0042-YM01／P0042-M01（P番号＝案件番号＝案件フォルダ）。受注したら見積入力の「受注化」で FileMaker に受注伝票。ここでは一覧と問い合わせからの起こし
 window._hubQuotes_ = null;
 function _hubFmOn_(){ return !!(window.FM && typeof FM.名乗っている==='function' && FM.名乗っている()); }
+// QUOTES-CACHE: 索引を組み立てる（rows → byP/byNo/…）。控え（localStorage）からも同じ形で作る
+function _hubQuotesBuild_(rows, stale){
+  var byP={}, byNo={}, byDenpyo={}, byInq={}, max=0;
+  rows.forEach(function(o){ (byP[o.P]=byP[o.P]||[]).push(o); byNo[o.no]=o; if(o['受注伝票番号']) byDenpyo[String(o['受注伝票番号'])]=o; if(o['問い合わせID']) byInq[String(o['問い合わせID'])]=o; var n=Number(o.P)||0; if(n>max) max=n; });
+  window._hubQuotes_={ rows:rows, byP:byP, byNo:byNo, byDenpyo:byDenpyo, byInq:byInq, max:max, at:Date.now(), stale:!!stale };
+  return window._hubQuotes_;
+}
+function _hubQuotesFromCache_(){
+  if(window._hubQuotes_) return window._hubQuotes_;
+  try{ var j=JSON.parse(localStorage.getItem('hub_quotes_cache')||'null'); if(j && Array.isArray(j.rows)){ var c=_hubQuotesBuild_(j.rows, true); c.cachedAt=j.at; return c; } }catch(e){}
+  return null;
+}
 function _hubQuotesLoad_(force){
-  if(!_hubFmOn_()) return Promise.resolve(null);
-  var c=window._hubQuotes_; if(!force && c && Date.now()-c.at<3*60*1000) return Promise.resolve(c);
+  if(!_hubFmOn_()) return Promise.resolve(_hubQuotesFromCache_());   // QUOTES-CACHE: ログインが切れていても控えを出す
+  var c=window._hubQuotes_; if(!force && c && !c.stale && Date.now()-c.at<3*60*1000) return Promise.resolve(c);
   if(window._hubQuotesBusy_) return window._hubQuotesBusy_;
   window._hubQuotesBusy_ = FM.呼ぶ('見積_索引',[]).then(function(r){
     var 列=r.列||[];
     var rows=(r.行||[]).map(function(a){ var o={}; 列.forEach(function(x,i){ o[x]=a[i]; }); o.P=String(parseInt(String(o['P番号']||'').replace(/^P/i,''),10)||''); o.no=String(o['見積番号']||''); return o; });
-    var byP={}, byNo={}, byDenpyo={}, byInq={}, max=0;
-    rows.forEach(function(o){ (byP[o.P]=byP[o.P]||[]).push(o); byNo[o.no]=o; if(o['受注伝票番号']) byDenpyo[String(o['受注伝票番号'])]=o; if(o['問い合わせID']) byInq[String(o['問い合わせID'])]=o; var n=Number(o.P)||0; if(n>max) max=n; });
-    window._hubQuotes_={ rows:rows, byP:byP, byNo:byNo, byDenpyo:byDenpyo, byInq:byInq, max:max, at:Date.now() };
+    _hubQuotesBuild_(rows, false); var byInq=window._hubQuotes_.byInq, max=window._hubQuotes_.max;
+    try{ localStorage.setItem('hub_quotes_cache', JSON.stringify({ at:Date.now(), rows:rows })); }catch(e){}
     // PICK-2: 見積入力（?inq=）で起こした見積を、問い合わせに紐づける
     try{ var _n=0; Object.keys(byInq).forEach(function(iid){ var o=byInq[iid]; var inq=(DB.inquiries||[]).find(function(x){ return x&&x.id===iid; }); if(!inq||inq.linked_quote_id) return; inq.linked_quote_id=o.no; if(o.P) inq.master_no=String(o.P).padStart(4,'0'); inq.quote_kind=String(o['案件区分']||'見積'); inq.updatedAt=new Date().toISOString(); if(!inq.timeline) inq.timeline=[]; inq.timeline.push({ at:inq.updatedAt, by:'', type:'quote', text:inq.quote_kind+' '+o.no+' に紐づけました（見積入力で起こしたもの）' }); try{ callCloudAPI('linkCommunication',{},{ id:inq.id, links:{ quote_id:o.no } }); callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ linked_quote_id:o.no, master_no:inq.master_no||'', quote_kind:inq.quote_kind } }); }catch(e){} _n++; }); if(_n){ try{ saveDB(); }catch(e){} try{ if(typeof renderInquiryList==='function'&&document.getElementById('page-inquiry')&&document.getElementById('page-inquiry').classList.contains('active')) renderInquiryList(); }catch(e){} } }catch(e){ console.warn('[見積の紐づけ]',e); }
     try{ if(!DB.conf) DB.conf={}; if(max>Number(DB.conf._masterNoCounter||0)) DB.conf._masterNoCounter=max; }catch(e){}
     return window._hubQuotes_;
-  }).catch(function(e){ console.warn('[Hub見積]',e); return window._hubQuotes_; }).then(function(x){ window._hubQuotesBusy_=null; return x; });
+  }).catch(function(e){ console.warn('[Hub見積]',e); return window._hubQuotes_ || _hubQuotesFromCache_(); }).then(function(x){ window._hubQuotesBusy_=null; return x; });
   return window._hubQuotesBusy_;
 }
 function _hubQuoteP_(o){ return String((o&&o.P)||'').padStart(4,'0'); }
@@ -24527,7 +24540,7 @@ function _hubQuotesRender_(){
   var open=function(no){ return "_fmOpenNo_('fmmitsu','"+String(no).replace(/[^\w-]/g,'')+"')"; };
   var head0='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:13px;color:#1e40af">🗂 見積（Hub 保管庫・予算見積と見積）</b><span style="font-size:11px;color:#64748b">FileMaker には受注だけ。受注したら見積入力の「受注化」</span><span style="margin-left:auto"></span>'
     +'<button class="btn" style="background:#fffbeb;border-color:#b45309;color:#92400e;font-weight:700" onclick="_fmOpenNo_(\'fmmitsu\',\'\',\'&new=予算見積\')">予算見積書作成</button><button class="btn" style="background:#eff6ff;border-color:#1d4ed8;color:#1e3a8a;font-weight:700" onclick="_fmOpenNo_(\'fmmitsu\',\'\',\'&new=見積\')">見積書作成</button><button class="btn" title="読み直す" onclick="_hubQuotesLoad_(true).then(_hubQuotesRender_)">🔄</button></div>';
-  if(!_hubFmOn_()){ box.innerHTML=head0+'<div style="font-size:12px;color:#64748b">受注入力（FileMaker）に一度サインインすると、ここに見積が並びます</div>'; return; }
+  if(!_hubFmOn_() && !_hubQuotesFromCache_()){ box.innerHTML=head0+'<div style="font-size:12px;color:#64748b">受注入力（FileMaker）に一度サインインすると、ここに見積が並びます</div>'; return; }
   var st=window._hubQuoteSt_||'生きている';
   box.innerHTML=head0+'<div style="font-size:12px;color:#64748b">読んでいます…</div>';
   _hubQuotesLoad_().then(function(c){
@@ -24537,12 +24550,13 @@ function _hubQuotesRender_(){
       if(q){ var hay=[o.no,'P'+_hubQuoteP_(o),o['得意先コード'],(typeof _custNameOf_==='function'?_custNameOf_(o['得意先コード']):''),o['製品名'],o['ユーザー名'],o['案件名'],o['受注伝票番号']].join(' ').toLowerCase(); if(typeof _qMatch_==='function'?!_qMatch_(hay,q):hay.indexOf(q)<0) return false; } return true; });
     f.sort(function(a,b){ return String(b.at||'').localeCompare(String(a.at||'')); });
     var counts={}; rows.forEach(function(o){ var s=String(o['状態']||'見積中'); counts[s]=(counts[s]||0)+1; });
+    var staleNote=(c&&c.stale)?'<div style="font-size:11.5px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;padding:4px 8px;margin-bottom:6px">⚠ 中継（FileMaker）に届かないため、このブラウザに残っていた控え（'+(c.cachedAt?new Date(c.cachedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'')+' 時点）を出しています。新しい登録・変更は反映されていません</div>':'';
     var tabs=['生きている','見積中','提出済','保留','採用','失注','すべて'].map(function(t){ var n=t==='生きている'?rows.filter(alive).length:t==='すべて'?rows.length:(counts[t]||0); return '<button class="btn" onclick="window._hubQuoteSt_=\''+t+'\';_hubQuotesRender_()" style="font-size:12px;padding:3px 10px;'+(st===t?'background:#1e40af;color:#fff;border-color:#1e40af':'')+'">'+t+' '+n+'</button>'; }).join('');
     var tbl=f.length?'<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff"><thead><tr style="background:#f1f5f9;text-align:left"><th style="padding:4px 6px">番号</th><th style="padding:4px 6px">P番号</th><th style="padding:4px 6px">種別</th><th style="padding:4px 6px">状態</th><th style="padding:4px 6px">起票</th><th style="padding:4px 6px">得意先</th><th style="padding:4px 6px">製品名</th><th style="padding:4px 6px;text-align:right">数量</th><th style="padding:4px 6px;text-align:right">売価</th><th style="padding:4px 6px">担当</th></tr></thead><tbody>'
       +f.slice(0,300).map(function(o){ var s=String(o['状態']||'見積中'); return '<tr style="border-top:1px solid #e5e7eb;cursor:pointer" onclick="'+open(o.no)+'" title="見積入力で開く"><td style="padding:4px 6px"><b>'+esc(o.no)+'</b></td><td style="padding:4px 6px">P'+esc(_hubQuoteP_(o))+'</td><td style="padding:4px 6px">'+esc(o['案件区分'])+'</td><td style="padding:4px 6px"><span style="padding:0 6px;border-radius:3px;color:#fff;background:'+(_HUBQ_COLOR_[s]||'#475569')+'">'+esc(s)+(o['受注伝票番号']?' '+esc(o['受注伝票番号']):'')+'</span></td><td style="padding:4px 6px;white-space:nowrap">'+esc((typeof _fmDate_==='function'?_fmDate_(o['起票日']):o['起票日'])||'')+'</td><td style="padding:4px 6px">'+esc((typeof _custNameOf_==='function'?_custNameOf_(o['得意先コード']):'')||o['得意先コード']||'')+'</td><td style="padding:4px 6px">'+esc(o['製品名'])+(o['案件名']&&o['案件名']!==o['製品名']?' <span style="color:#64748b">'+esc(o['案件名'])+'</span>':'')+'</td><td style="padding:4px 6px;text-align:right">'+esc(o['ロット契約単位']||o['合計数1']||'')+'</td><td style="padding:4px 6px;text-align:right">'+yen(o['売価金額'])+'</td><td style="padding:4px 6px">'+esc(o['担当者コード'])+'</td></tr>'; }).join('')
       +'</tbody></table></div>'+(f.length>300?'<div style="font-size:11px;color:#64748b">先頭 300 件だけ出しています。検索で絞ってください</div>':'')
       :'<div style="padding:8px 0;color:#64748b;font-size:12px">'+(rows.length?'この絞りには見積がありません':'まだ見積がありません。「見積書作成」か、問い合わせの「見積書作成」から作ります')+'</div>';
-    box.innerHTML=head0+'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">'+tabs+'</div>'+tbl;
+    box.innerHTML=head0+staleNote+'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">'+tabs+'</div>'+tbl;
   });
 }
 // 問い合わせ → Hub の見積（予算見積／見積）を起こして、添付を P番号の案件フォルダ 01_問い合わせ へ。見積入力で開く。FileMaker 未サインインなら false（今までの道）
@@ -58624,6 +58638,14 @@ body.new-shell [style*="color:#999"], body.new-shell [style*="color:#aaa"]{ colo
     // トップバー側のアクティブ変化に追従
     try{
       new MutationObserver(function(){ syncActive(); syncAccent(); }).observe(scroll,{subtree:true,attributes:true,attributeFilter:['class']});
+      // SIDEBAR-SYNC（本多さん 9/30「見積作成と受注登録のサイドバー」）: 公開設定や会社別表示で元のボタンの表示/非表示が後から変わったら、サイドバーを作り直す
+      //   （読み込みが速くなって、クラウドの設定が届く前にサイドバーができるようになったため）
+      var _sbTid=0;
+      new MutationObserver(function(){ clearTimeout(_sbTid); _sbTid=setTimeout(function(){ try{
+        var now=[]; Array.prototype.forEach.call(scroll.querySelectorAll('.tb-btn'), function(b){ if(getComputedStyle(b).display!=='none' && b.getAttribute('aria-hidden')!=='true') now.push((b.dataset.page||'')+'|'+(b.dataset.rel||'')); });
+        var cur=Array.prototype.map.call(sb.querySelectorAll('.hs-item'), function(x){ return x.dataset.ref; });
+        if(now.join(',')!==cur.join(',')){ sb.remove(); buildSidebar(); }
+      }catch(e){} }, 200); }).observe(scroll,{subtree:true,attributes:true,attributeFilter:['style','aria-hidden']});
     }catch(e){}
     // 会社名の追従
     try{
@@ -58918,6 +58940,8 @@ function hubRefreshNow(){
 <style id="square-tables">/* 表組は全て角あり（本多さん指定）。ボタンは丸くてよい。後から読まれる角丸の !important に負けないよう :not(#_) で優先度を上げ、文書の末尾に置く */
 html body :is(table,thead,tbody,tr,th,td,caption):not(#_):not(#_):not(#_):not(#_),
 html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),:has(> :not(table) > table),:has(> * > :not(table) > table)):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}
+/* 9/30 本多さん「表組角にしてね」: 表を包む枠が深くても（5 段まで）角にする。表の頭の丸みも消す */
+html body :is(div,section,article,aside,form,fieldset,details,main,nav):is(:has(> * > * > * > table),:has(> * > * > * > * > table)):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}
 /* 作業BOX の箱も角あり（9/26）。ボタン・入力欄は丸くてよい */
 html body #page-workbox :not(button):not(.btn):not(input):not(select):not(textarea):not(.tb-btn):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}</style>
 </body>
