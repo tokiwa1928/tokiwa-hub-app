@@ -24568,7 +24568,7 @@ function _inqToHubQuote_(inqId, 種別){
   var prev0=(window._hubQuotes_&&window._hubQuotes_.byInq[String(inq.id)])||null; var lq0=String(inq.linked_quote_id||'');
   // DEL-FIX: 紐づいていた見積が消されていたら（索引に無い）、紐づけを外して作り直せるようにする
   try{ var hq=window._hubQuotes_; if(!prev0 && lq0 && hq && !hq.stale && hq.rows && !hq.byNo[lq0]){ inq.linked_quote_id=''; lq0=''; if(typeof saveDB==='function') saveDB(); try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ linked_quote_id:'' } }); }catch(e){} } }catch(e){}
-  if(prev0 || /^P\d{3,}-(YM|M)\d+/i.test(lq0)){ var no00=prev0?prev0.no:lq0; if(confirm('この問い合わせからは見積 '+no00+' を作成してあります。見積入力で開きますか？')) _fmOpenNo_('fmmitsu', no00); return Promise.resolve(true); }
+  if(prev0 || /^P\d{3,}-(YM|M)\d+/i.test(lq0)){ _inqQuoteChoice_(inq, 種別); return Promise.resolve(true); }   // MULTI-QUOTE
   _inqPickCase_(inqId, 種別==='受注'?'受注':'見積'); return Promise.resolve(true);
   var prev=(window._hubQuotes_&&window._hubQuotes_.byInq[String(inq.id)])||null; var lq=String(inq.linked_quote_id||'');
   if(prev || /^P\d{3,}-(YM|M)\d+/i.test(lq)){ var no0=prev?prev.no:lq; if(confirm('この問い合わせからは見積 '+no0+' を作成してあります。見積入力で開きますか？')) _fmOpenNo_('fmmitsu', no0); return Promise.resolve(true); }
@@ -24594,6 +24594,32 @@ function _inqToHubQuote_(inqId, 種別){
     if(typeof _toastMsg==='function') _toastMsg('🗂 '+(種別==='予算見積'?'予算見積書':'見積書')+' '+no+' を作成しました（P'+P+'）。添付は案件フォルダへ');
     _fmOpenNo_('fmmitsu', no); return true;
   }).catch(function(e){ alert('見積書を作成できませんでした: '+String(e.message||e)); return true; });
+}
+// MULTI-QUOTE: この問い合わせから作った見積の一覧と、「もう 1 件」の入口（1 つの PDF に複数の見積・案件が入っているとき）
+function _inqQuotesOf_(inq){ var c=window._hubQuotes_; var rows=(c&&c.rows)||[]; return rows.filter(function(o){ return String(o['問い合わせID']||'')===String(inq.id); }).sort(function(a,b){ return String(a.no).localeCompare(String(b.no)); }); }
+function _inqQuoteChoice_(inq, 種別){
+  var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  var qs=_inqQuotesOf_(inq); if(!qs.length && inq.linked_quote_id){ var o0=(window._hubQuotes_&&window._hubQuotes_.byNo[String(inq.linked_quote_id)]); qs=o0?[o0]:[{ no:String(inq.linked_quote_id), P:String(parseInt(inq.master_no,10)||'') }]; }
+  var P=''; try{ P=qs[0]&&qs[0].P?('P'+_hubQuoteP_(qs[0])):(inq.master_no?'P'+String(inq.master_no).padStart(4,'0'):''); }catch(e){}
+  var q=_inqSearchWords_(inq); var old=document.getElementById('inq-quote-choice'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='inq-quote-choice'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px';
+  var close="document.getElementById('inq-quote-choice').remove();";
+  m.innerHTML='<div style="background:#fff;width:min(600px,96vw);max-height:90vh;overflow:auto;padding:16px 18px;font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:15px;font-weight:900">この問い合わせの見積（'+qs.length+' 件）</div>'
+    +'<div style="color:#64748b;margin:4px 0 8px">1 つのメール・PDF に複数の見積が入っているときは、ここから何件でも作れます。どれもこの問い合わせに紐づきます。</div>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:10px"><tbody>'+qs.map(function(o){ return '<tr style="border-top:1px solid #e2e8f0"><td style="padding:5px 6px;white-space:nowrap"><b>'+esc(o.no)+'</b></td><td style="padding:5px 6px">'+esc(o['製品名']||'')+'</td><td style="padding:5px 6px;color:#64748b;white-space:nowrap">'+esc(o['状態']||'')+'</td><td style="padding:5px 6px;text-align:right"><button class="btn" style="font-size:11.5px;padding:2px 10px" onclick="'+close+'_fmOpenNo_(\'fmmitsu\',\''+esc(String(o.no).replace(/[^\w-]/g,''))+'\')">開く</button></td></tr>'; }).join('')+'</tbody></table>'
+    +'<div style="display:flex;flex-direction:column;gap:8px">'
+    +(P?'<button class="btn" style="text-align:left;padding:9px 12px;border-color:#1d4ed8;background:#eff6ff" onclick="'+close+'_inqQuoteMore_(\''+esc(inq.id)+'\',\''+esc(P)+'\')"><b>＋ 同じ案件（'+esc(P)+'）でもう 1 件作る</b><div style="font-size:11.5px;color:#64748b;font-weight:400">同じ案件の中の別の品目・別の数量のとき。番号は '+esc(P)+'-M02、-M03… と並び、PDF は '+esc(P)+' の案件フォルダを共用します</div></button>':'')
+    +'<button class="btn" style="text-align:left;padding:9px 12px" onclick="'+close+'_inqQuoteMore_(\''+esc(inq.id)+'\',\'\')"><b>＋ 別の案件として作る（新しい P番号）</b><div style="font-size:11.5px;color:#64748b;font-weight:400">まったく別の仕事が同じメールに入っているとき。案件フォルダも別になります（PDF は元の問い合わせから見られます）</div></button>'
+    +'</div><div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="'+close+'">閉じる</button></div></div>';
+  m.addEventListener('click', function(ev){ if(ev.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+function _inqQuoteMore_(inqId, P){
+  var inq=(DB.inquiries||[]).find(function(i){ return i && i.id===inqId; }); if(!inq) return;
+  var q=_inqSearchWords_(inq);
+  _fmOpenNo_('fmmitsu', '', '&q='+encodeURIComponent(q)+'&inq='+encodeURIComponent(inq.id)+(P?'&p='+encodeURIComponent(P):'')+'&t='+Date.now());
+  if(typeof _toastMsg==='function') _toastMsg(P?('見積入力を開きました。'+P+' の続きとして 予算見積／見積 を起こしてください'):'見積入力を開きました。新しい案件として 予算見積／見積 を起こしてください');
 }
 function _inqQuoteKind_(inq){ try{ if(typeof _inqBin_==='function' && _inqBin_(inq)==='予算見積') return '予算見積'; }catch(e){} return '見積'; }
 setTimeout(function(){ try{ _hubQuotesLoad_(); }catch(e){} }, 7000); setInterval(function(){ if(document.hidden) return; try{ _hubQuotesLoad_(); }catch(e){} }, 5*60*1000);   // QUOTA-1
