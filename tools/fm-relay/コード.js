@@ -1128,6 +1128,7 @@ function 番号と段階を入れる_(lay, rec, 案件ID, 種別, who) {
 }
 
 function handle_(action, req, who) {
+  if (/^やること_/.test(String(action || ''))) return やること_入口_(action, req, who);   // YARUKOTO-1: 定期のやること・来たらやること・案件（yarukoto.js。FileMaker にはさわらない）
   switch (action) {
     case 'ping':   return { db: FM_DB, screens: Object.keys(LAYOUTS) };
     case 'fields': return fieldInfo_(layoutOf_(req.screen));
