@@ -36209,6 +36209,20 @@ function _saveMailSettings_(s){
   try { localStorage.setItem('tokiwa_mail_settings_v1', JSON.stringify(s)); } catch(e){}
 }
 
+// SIG-DEFAULT: 会社マスタから署名を組み立てる（会社ページで署名を登録していない会社用）
+function _companyDefaultSignature_(co, cp){
+  co = co || {}; cp = cp || {};
+  var tel = String(cp.tel || co.tel || '').trim(), fax = String(cp.fax || co.fax || '').trim();
+  if(tel && !/TEL/i.test(tel)) tel = 'TEL ' + tel; if(fax && !/FAX/i.test(fax)) fax = 'FAX ' + fax;
+  var mail = String(cp.replyEmail || cp.email || co.email || '').trim();
+  var lines = ['──────────────', String(cp.name || co.name || '').trim()];
+  if(cp.dept) lines.push(String(cp.dept).trim());
+  var addr = ((co.zip ? '〒' + String(co.zip).trim() + ' ' : '') + String(cp.addr || co.addr || '').trim()).trim(); if(addr) lines.push(addr);
+  if(tel || fax) lines.push([tel, fax].filter(Boolean).join(' / '));
+  if(mail) lines.push('MAIL: ' + mail);
+  return '\n' + lines.filter(function(x){ return x; }).join('\n');
+}
+function _signatureNeedsDefault_(sig){ var t = String(sig || '').trim(); return !t || t === '--' || /署名を登録してください/.test(t); }
 // UUU-1: 状況に応じて適切な署名プロファイルを選ぶ
 //   channel: 'email' | 'lw' | undefined (auto-detect)
 function _pickSignatureProfile_(inq, channel){
@@ -36252,13 +36266,15 @@ function _pickSignatureProfile_(inq, channel){
     try {
       var rc = _inqRecipient_(inq); var list = (DB && DB.companies && DB.companies.length) ? DB.companies : (typeof COMPANY_INIT !== 'undefined' ? COMPANY_INIT : []);
       var co = rc && rc.key ? list.find(function(c){ return c && c.name && c.name.indexOf(rc.key) >= 0; }) : null;
-      if(co){ var cp = _companyProfile_(co.id) || {}; if(cp.signature || cp.replyEmail) return { id:'company:'+co.id, name:cp.replyName||co.name, receivingEmails:[cp.email||cp.replyEmail||''], replyEmail:cp.replyEmail||cp.email||'', signature:cp.signature||'', lwSignature:'', company:co.id }; }
+      if(co){ var cp = _companyProfile_(co.id) || {}; return { id:'company:'+co.id, name:cp.replyName||co.name, receivingEmails:[cp.email||cp.replyEmail||''], replyEmail:cp.replyEmail||cp.email||'', signature:(_signatureNeedsDefault_(cp.signature) ? _companyDefaultSignature_(co, cp) : cp.signature), lwSignature:'', company:co.id }; }   // SIG-DEFAULT: 署名が無くても会社マスタから作る
     } catch(e){}
   }
   // 3. デフォルト or 最初
   if(hits.length === 0){
-    var def = sigs.find(function(x){ return x.isDefault; });
-    return def || sigs[0];
+    var def = sigs.find(function(x){ return x.isDefault; }) || sigs[0];
+    // SIG-DEFAULT: 「署名を登録してください」のままなら、ログイン中の会社のマスタから作った署名にする
+    try { if(def && _signatureNeedsDefault_(def.signature) && currentAuth && currentAuth.companyId){ var list3 = (DB && DB.companies && DB.companies.length) ? DB.companies : (typeof COMPANY_INIT !== 'undefined' ? COMPANY_INIT : []); var co3 = list3.find(function(c){ return c && c.id === currentAuth.companyId; }); if(co3){ var cp3 = _companyProfile_(co3.id) || {}; def = Object.assign({}, def, { signature: _companyDefaultSignature_(co3, cp3), replyEmail: def.replyEmail || cp3.replyEmail || cp3.email || co3.email || '' }); } } } catch(e){}
+    return def;
   }
   return hits[0];
 }
@@ -54934,10 +54950,6 @@ function openInquiryDetail(id) {
       <div style="flex:1;min-width:300px;display:flex;flex-direction:column;gap:8px">
         <div style="font-size:13px;font-weight:700;color:#1e40af;display:flex;align-items:center;gap:6px;justify-content:space-between;flex-wrap:wrap">
           <span>📝 返信下書き <span id="inq-draft-status" style="font-size:10px;color:#7c3aed;font-weight:400">🤖 AI 生成中…</span></span>
-          <div style="display:flex;gap:4px">
-            <button class="pill sel" id="inq-reply-type-reply" onclick="setInqReplyType('reply')" style="font-size:11px;padding:2px 10px">💬 返信</button>
-            <button class="pill" id="inq-reply-type-note" onclick="setInqReplyType('note')" style="font-size:11px;padding:2px 10px">📝 社内メモ</button>
-          </div>
         </div>
         ${_renderReplySignatureSelector_(inq)}
         <textarea id="inq-reply-text" placeholder="返信内容を入力... (AI が下書き生成中…)" style="font-size:14px;min-height:380px;max-height:600px;line-height:1.7;padding:14px;font-family:inherit;width:100%;box-sizing:border-box;resize:vertical;border:1px solid #93c5fd;border-radius:10px;background:#eff6ff;flex:1"></textarea>
