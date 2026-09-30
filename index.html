@@ -24522,12 +24522,37 @@ function _hubQuotesLoad_(force){
     var rows=(r.行||[]).map(function(a){ var o={}; 列.forEach(function(x,i){ o[x]=a[i]; }); o.P=String(parseInt(String(o['P番号']||'').replace(/^P/i,''),10)||''); o.no=String(o['見積番号']||''); return o; });
     _hubQuotesBuild_(rows, false); var byInq=window._hubQuotes_.byInq, max=window._hubQuotes_.max;
     try{ localStorage.setItem('hub_quotes_cache', JSON.stringify({ at:Date.now(), rows:rows })); }catch(e){}
+    try{ setTimeout(_inqCaseFilesSync_, 1500); }catch(e){}   // ATTACH-ALL
     // PICK-2: 見積入力（?inq=）で起こした見積を、問い合わせに紐づける
     try{ var _n=0; Object.keys(byInq).forEach(function(iid){ var o=byInq[iid]; var inq=(DB.inquiries||[]).find(function(x){ return x&&x.id===iid; }); if(!inq||inq.linked_quote_id) return; inq.linked_quote_id=o.no; if(o.P) inq.master_no=String(o.P).padStart(4,'0'); inq.quote_kind=String(o['案件区分']||'見積'); inq.updatedAt=new Date().toISOString(); if(!inq.timeline) inq.timeline=[]; inq.timeline.push({ at:inq.updatedAt, by:'', type:'quote', text:inq.quote_kind+' '+o.no+' に紐づけました（見積入力で起こしたもの）' }); try{ callCloudAPI('linkCommunication',{},{ id:inq.id, links:{ quote_id:o.no } }); callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ linked_quote_id:o.no, master_no:inq.master_no||'', quote_kind:inq.quote_kind } }); }catch(e){} _n++; }); if(_n){ try{ saveDB(); }catch(e){} try{ if(typeof renderInquiryList==='function'&&document.getElementById('page-inquiry')&&document.getElementById('page-inquiry').classList.contains('active')) renderInquiryList(); }catch(e){} } }catch(e){ console.warn('[見積の紐づけ]',e); }
     try{ if(!DB.conf) DB.conf={}; if(max>Number(DB.conf._masterNoCounter||0)) DB.conf._masterNoCounter=max; }catch(e){}
     return window._hubQuotes_;
   }).catch(function(e){ console.warn('[Hub見積]',e); return window._hubQuotes_ || _hubQuotesFromCache_(); }).then(function(x){ window._hubQuotesBusy_=null; return x; });
   return window._hubQuotesBusy_;
+}
+// ATTACH-ALL: 問い合わせの添付は分けない。その問い合わせから作った案件（P番号）の「01_問い合わせ」に、どれにも丸ごと置く
+//   1 件目＝原本を移す／2 件目以降＝全部の写し。印は inq.caseFiles[P番号]（'done'）。1 回に 3 案件まで
+function _inqCaseFilesSync_(){
+  var c=window._hubQuotes_; if(!c || c.stale || !c.rows || !(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn)) return;
+  var jobs=[]; var seen={};
+  c.rows.forEach(function(o){ var iid=String(o['問い合わせID']||''); var P=_hubQuoteP_(o); if(!iid || !Number(P)) return; var k=iid+'|'+P; if(seen[k]) return; seen[k]=1;
+    var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===iid; }); if(!inq) return;
+    var ids=(inq.attachments||[]).filter(function(a){ return a && a.driveFileId; }).map(function(a){ return a.driveFileId; }); if(!ids.length) return;
+    inq.caseFiles=inq.caseFiles||{}; if(inq.caseFiles[P]) return;
+    jobs.push({ inq:inq, P:P, o:o, ids:ids }); });
+  jobs.slice(0,3).forEach(function(j){
+    var inq=j.inq, o=j.o; inq.caseFiles[j.P]='pending';
+    var firstCase=!Object.keys(inq.caseFiles).some(function(k){ return k!==j.P && inq.caseFiles[k]; }) && !(inq.attachments||[]).some(function(a){ return a && a.movedToCase; });
+    var cust=''; try{ cust=(typeof _custNameOf_==='function')?String(_custNameOf_(o['得意先コード'])||''):''; }catch(e){} if(!cust) cust=String(o['ユーザー名']||inq.from_company||inq.custName||'');
+    callCloudAPI('ensureCaseFolder',{},{ pno:j.P, ankenName:String(o['案件名']||o['製品名']||''), orgCode:String(o['得意先コード']||''), org:cust, denpyos:[o.no] }).then(function(cf){
+      var sub=cf&&cf.success&&cf.subFolders&&cf.subFolders['01_問い合わせ']; if(!sub||!sub.id) throw new Error((cf&&cf.error)||'案件フォルダがありません');
+      return callCloudAPI(firstCase?'moveFilesToFolder':'copyFilesToFolder',{},{ fileIds:j.ids, folderId:sub.id });
+    }).then(function(x){ if(!x||!x.success) throw new Error((x&&x.error)||'置けませんでした');
+      inq.caseFiles[j.P]='done'; if(firstCase) (inq.attachments||[]).forEach(function(a){ if(a && j.ids.indexOf(a.driveFileId)>=0) a.movedToCase=true; });
+      if(!inq.timeline) inq.timeline=[]; inq.timeline.push({ at:new Date().toISOString(), by:(currentAuth&&currentAuth.userName)||'', type:'note', text:'📎 添付 '+j.ids.length+' 件を案件 P'+j.P+' のフォルダ（01_問い合わせ）に'+(firstCase?'移しました':'丸ごと写しました（分割しません）') });
+      try{ saveDB(); }catch(e){}
+    }).catch(function(e){ try{ delete inq.caseFiles[j.P]; }catch(_){} console.warn('[ATTACH-ALL]', e); });
+  });
 }
 function _hubQuoteP_(o){ return String((o&&o.P)||'').padStart(4,'0'); }
 function _hubQuotesByMn_(mn){ var c=window._hubQuotes_; if(!c) return []; return c.byP[String(parseInt(String(mn||'').replace(/^P/i,''),10)||'')]||[]; }
