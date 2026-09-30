@@ -97,18 +97,27 @@ self.addEventListener('fetch', (event) => {
     url.pathname.endsWith('/tokiwa-hub-app/') ||
     url.pathname === '/' || url.pathname.endsWith('/');
   if (isAppShell) {
-    // cache:'reload' でブラウザのHTTPキャッシュを必ずバイパスし、サーバの最新を取得
-    //   (これをしないと GitHub Pages の max-age により旧版が出続けることがある)
+    // SPEED-2: 控えがあれば先に出し、裏でサーバの最新を取り直す（開くのが速い）。
+    //   取り直した中身が違っていたら控えを入れ替え、画面に知らせる（Hub は更新バナーを出す）。
+    //   cache:'reload' でブラウザの HTTP キャッシュは通さない（GitHub Pages の max-age で旧版が出続けないように）
+    const refresh = () => fetch(req, { cache: 'reload' }).then(async (res) => {
+      if (res && res.status === 200) {
+        const cache = await caches.open(CACHE_VERSION);
+        const old = await cache.match(req, { ignoreSearch: true });
+        const clone = res.clone();
+        let changed = true;
+        if (old) { try { const [a, b] = await Promise.all([old.clone().text(), res.clone().text()]); changed = a !== b; } catch (e) { changed = true; } }
+        try { await cache.delete(req, { ignoreSearch: true }); } catch (e) {}   // 検索文字列違いの古い控えを残さない（ignoreSearch で古い方が先に当たる）
+        await cache.put(req, clone);
+        if (changed && old) { try { const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true }); cs.forEach((c) => c.postMessage({ type: 'SHELL_UPDATED', url: url.pathname })); } catch (e) {} }
+      }
+      return res;
+    });
     event.respondWith(
-      fetch(req, { cache: 'reload' })
-        .then((res) => {
-          if (res && res.status === 200) {
-            const clone = res.clone();
-            // 各ページを自分のURLキーで保存 (旧実装はツールページで index.html を上書きしていた)
-            caches.open(CACHE_VERSION).then((cache) => cache.put(req, clone));
-          }
-          return res;
-        })
+      caches.match(req, { ignoreSearch: true }).then((cached) => {
+        if (cached) { event.waitUntil(refresh().catch(() => {})); return cached; }
+        return refresh();
+      })
         // SW-IFRAME-1（本多さん 9/30「サイドバーがだぶる」）: 通信に失敗したとき、組み込みの画面（iframe の tools/…）に index.html を返すと
         //   Hub の中に Hub がもう一つ出てしまう。検索文字列（?mode=…&t=…）を無視して同じ画面の控えを探し、無ければ短い案内を返す
         .catch(() => caches.match(req, { ignoreSearch: true }).then((c) => c || (isEmbedded(req, url) ? offlinePage() : caches.match('./index.html'))))

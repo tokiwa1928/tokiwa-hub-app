@@ -4560,11 +4560,14 @@ setTimeout(_storageWatch_, 20000); setInterval(_storageWatch_, 6*3600*1000);
 async function loadFromCloud() {
   if (!currentAuth.loggedIn) return false;
   
-  const result = await callCloudAPI('syncAll', { companyId: currentAuth.companyId });
+  const result = await callCloudAPI('syncAll', { companyId: currentAuth.companyId, ifVersion: window._cloudDataVersion_ || '' });   // SPEED-2
   if (!result || result.error) {
     console.error('Cloud sync failed:', result?.error);
     return false;
   }
+  if (result.unchanged) { window._cloudHydrated_ = true; window._cloudSyncedAt_ = Date.now(); return true; }   // SPEED-2: 前回と同じ中身。DB に触らない
+  if (!result.data) return false;
+  window._cloudDataVersion_ = result.dataVersion || ''; window._cloudSyncedAt_ = Date.now();
   
   // マスターデータをマージ
   if (result.data.master) {
@@ -4939,7 +4942,7 @@ function hubMainAutoSync(){
   }catch(e){ _hubMainAutoBusy=false; }
 }
 setInterval(hubMainAutoSync, 60000);
-window.addEventListener('focus', hubMainAutoSync);
+window.addEventListener('focus', function(){ if(Date.now() - (window._cloudSyncedAt_ || 0) > 20000) hubMainAutoSync(); });   // SPEED-2: 戻るたびではなく、20 秒以上たっていたら
 
 
 // ─────────────────────────────────────────────────────
@@ -58883,6 +58886,8 @@ function hubRefreshNow(){
   fetchVer().then(function(v){ curVer=v; _setVerBadge_(v); });
   setInterval(check, 180000);   // 3分ごとに版を確認
   window.addEventListener('focus', check);
+  // SPEED-2: Service Worker が裏で新しい本体を取ってきたら（控えを先に出しているため）、更新バナーを出す
+  try { navigator.serviceWorker.addEventListener('message', function(ev){ var d = ev.data || {}; if(d.type === 'SHELL_UPDATED' && /index\.html$|\/tokiwa-hub-app\/?$|\/$/.test(String(d.url || ''))){ if(document.hidden) hubDoUpdate(); else showBanner(); } }); } catch(e){}
   try{ if(sessionStorage.getItem('hubJustUpdated')){ sessionStorage.removeItem('hubJustUpdated'); } }catch(e){}
 })();
 </script>
