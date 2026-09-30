@@ -137,7 +137,8 @@
     幕.innerHTML = 枠(設定.題 || '折丁面付台', 'ログインを確かめています…', '<p class="ft">少しお待ちください。</p>');
     global.addEventListener('fm-signin', function (ev) { if (状態 || !(ev.detail && ev.detail.email)) return; Googleで入る(false); });   // Google のボタンでログインできたとき
     var 券 = 読む(券の置き場);
-    if (券 && !設定.管理者だけ) { 送る({ action: '面付_入る', '券': 券 }).then(function (r) { 入った(r, false); }).catch(function (e) { if (通信の失敗か(e) && 前回で入る()) return; if (!通信の失敗か(e)) 置く(券の置き場, ''); ログイン画面(通信の失敗か(e) ? '通信できませんでした。少し待ってからやり直してください' : String(e.message || e)); }); return; }
+    if (券 && !設定.管理者だけ) { 送る({ action: '面付_入る', '券': 券 }).then(function (r) { 入った(r, false); }).catch(function (e) { if (通信の失敗か(e) && 前回で入る()) return; if (!通信の失敗か(e)) { 置く(券の置き場, ''); if (global.FM && global.FM.名乗っている()) { Googleで入る(true); return; } }   // 券が切れていても、Google でログイン済みならそちらで入る
+      ログイン画面(通信の失敗か(e) ? '通信できませんでした。少し待ってからやり直してください' : String(e.message || e)); }); return; }
     if (global.FM && global.FM.名乗っている()) { Googleで入る(true); return; }
     ログイン画面('');
   }

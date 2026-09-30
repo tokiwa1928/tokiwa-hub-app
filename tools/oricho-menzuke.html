@@ -186,9 +186,11 @@
             </select></div>
             <div class="row"><label for="plainCols">面付（列×段）</label><div class="pair"><input type="number" id="plainCols" min="1" max="20" step="1" value="4"><span class="x">×</span><input type="number" id="plainRows" min="1" max="20" step="1" value="2"><span class="unit">面</span></div></div>
             <div class="row"><label for="plainRot">向き</label><label class="chk" style="margin:0"><input type="checkbox" id="plainRot"> 仕上がりを 90° 回して置く</label></div>
+            <div class="row"><label for="plainGapX">ドブ（面の間）</label><div class="pair"><input type="text" id="plainGapX" inputmode="decimal" placeholder="自動" title="横（列の間）。空＝塗り足し×2。0＝ドブ無し（1 刃で断つ）。3 なら 3mm。間ごとに違うときは 3,3.5 のようにカンマで"><span class="x">×</span><input type="text" id="plainGapY" inputmode="decimal" placeholder="自動" title="縦（段の間）。空＝塗り足し×2。0＝ドブ無し。間ごとに違うときは 3.8,3.6,3.7 のようにカンマで"><span class="unit">mm</span></div></div>
+            <div class="row"><label for="plainOffX">位置（左・上）</label><div class="pair"><input type="text" id="plainOffX" inputmode="decimal" placeholder="中央" title="用紙の左端から、最初の面の仕上がり線まで。空＝左右中央"><span class="x">×</span><input type="text" id="plainOffY" inputmode="decimal" placeholder="中央" title="用紙の上端から、最初の面の仕上がり線まで。空＝天地中央"><span class="unit">mm</span></div></div>
             <div class="row"><label>用紙を比べる</label><div><button type="button" id="plainCompare" style="font:inherit;font-size:12px;padding:5px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);cursor:pointer;font-weight:700">📊 どの用紙に何面入るか</button><span style="font-size:11px;color:var(--muted);margin-left:8px">今の仕上がり＋塗り足しで、各用紙の面数と紙の使用率を出します。行を押すとその用紙・面付になります</span></div></div>
             <div id="plainCmp" style="display:none;overflow-x:auto"></div>
-            <p class="note">面と面の間はすべて「塗り足し×2」のドブ。ノド削りと背丁は使いません。表面だけを書き出します（裏は同じ手順でもう一度）。</p>
+            <p class="note">ドブを空にすると、面と面の間は「塗り足し×2」。0 にするとドブ無し（面どうしが付き、間は 1 刃で断つ。間に塗り足しは入りません）。位置を空にすると用紙の中央に置きます。ノド削りと背丁は使いません。両面のものは、表裏 2 ページの PDF を入れると 1 枚目＝表・2 枚目＝裏で出ます。</p>
           </fieldset>
         </div>
       </section>
@@ -233,6 +235,7 @@
               <label class="chk"><input type="checkbox" id="mFaceCenter">各面センタートンボ</label>
               <label class="chk" id="spineOpt"><input type="checkbox" id="mSpine" checked>背丁マーク</label>
               <label class="chk"><input type="checkbox" id="mInfo" checked>版面情報</label>
+              <label class="chk" title="紙の上端に入る長い墨ベタ（高さ 2mm）。どちらが天か分かるようにする印。名刺や台紙への刷り込みでは外します"><input type="checkbox" id="mTen" checked>天の印（墨ベタ）</label>
             </div>
             <p class="note">版面情報は用紙の左下に半角英数で入ります（ジョブ名の日本語は省かれます）。</p>
           </fieldset>
@@ -495,7 +498,12 @@
     if (blockW + 2 * bl > sheetW + 0.5 || blockH + 2 * bl > sheetH + 0.5) {
       throw new Error(`塗り足し込み ${((blockW + 2 * bl) / MM).toFixed(1)}×${((blockH + 2 * bl) / MM).toFixed(1)}mm が用紙 ${cfg.sheetW}×${cfg.sheetH}mm に入りません`);
     }
-    const ox = (sheetW - blockW) / 2, oyTop = (sheetH - blockH) / 2;
+    // TAMEN-1: 位置（用紙の左・上から最初の面まで）の指定があればそこから。無ければ中央
+    const hasX = cfg.offX != null && isFinite(cfg.offX), hasY = cfg.offY != null && isFinite(cfg.offY);
+    const ox = hasX ? cfg.offX * MM : (sheetW - blockW) / 2, oyTop = hasY ? cfg.offY * MM : (sheetH - blockH) / 2;
+    if (ox + blockW > sheetW + 0.5 || oyTop + blockH > sheetH + 0.5) {
+      throw new Error(`位置（左 ${(ox / MM).toFixed(2)}・上 ${(oyTop / MM).toFixed(2)}mm）から並べると、用紙 ${cfg.sheetW}×${cfg.sheetH}mm をはみ出します`);
+    }
     const colX = []; let x = ox;
     for (let c = 0; c < cfg.cols; c++) { colX.push(x); x += pw + (cg[c] || 0); }
     const rowY = []; let y = oyTop;
@@ -505,7 +513,7 @@
       sheetW, sheetH, pw, ph, cg, rg, blockW, blockH,
       blockLeft: ox, blockRight: ox + blockW,
       blockBottom: sheetH - oyTop - blockH, blockTop: sheetH - oyTop,
-      marginX: ox, marginY: sheetH - oyTop - blockH, cell, colX, rowY
+      marginX: Math.max(0, Math.min(ox, sheetW - ox - blockW)), marginY: Math.max(0, Math.min(oyTop, sheetH - oyTop - blockH)), cell, colX, rowY
     };
   }
 
@@ -726,7 +734,7 @@
         // 帯のために余白は取らない（トンボの長さはそのまま。狭い用紙ではトンボの先が帯に重なるだけ）。欄外の文字はフッターの 1 行だけ
         try {
           const y = lay.sheetH - 0.2 * MM - TEN_H;                            // 紙の上端 0.2mm 内側に
-          sheet.drawRectangle({ x: lay.blockLeft, y, width: lay.blockW, height: TEN_H, color });
+          if (!cfg.marks || cfg.marks.ten !== false) sheet.drawRectangle({ x: lay.blockLeft, y, width: lay.blockW, height: TEN_H, color });   // TAMEN-1: 天の印は外せる
           rec.plate = sides.length === 2 ? s * 2 + (side === 'front' ? 1 : 2) : s + 1;
         } catch (e) { /* 印が描けなくても面付は出す */ }
         report.push(rec);
@@ -840,13 +848,14 @@
     ['四六2切 ヨコ', 788, 545.5], ['四六全判 タテ', 788, 1091],
     ['B判2切 ヨコ', 765, 542.5], ['B判全紙 タテ', 765, 1085],
     ['A3ノビ', 483, 329], ['A3', 420, 297],
+    ['A判4切 ヨコ（実寸 438×312）', 438, 312], ['A4 タテ', 210, 297],
     ['カスタム', 0, 0]
   ];
   const PAGES = [
     ['A5 タテ', 148, 210], ['A4 タテ', 210, 297], ['A6 タテ', 105, 148],
     ['B5 タテ', 182, 257], ['B6 タテ', 128, 182],
     ['A5 ヨコ', 210, 148], ['A4 ヨコ', 297, 210],
-    ['はがき', 100, 148], ['カスタム', 0, 0]
+    ['はがき', 100, 148], ['名刺 ヨコ', 91, 55], ['名刺 タテ', 55, 91], ['カスタム', 0, 0]
   ];
   const GRIDS = [[4, 2], [2, 2], [2, 1], [2, 4], [4, 4], [8, 2], [4, 8], [8, 4]];
 
@@ -855,10 +864,10 @@
   PAGES.forEach(([n, w, h], i) => $('pagePreset').add(new Option(n === 'カスタム' ? n : `${n}　${w}×${h}`, i)));
   GRIDS.forEach(([c, r], i) => $('grid').add(new Option(`${c}列 × ${r}段　＝ ${c * r * 2}ページ折り（${c * r}面付）`, i)));
 
-  const FIELDS = ['mode', 'plainKind', 'plainCols', 'plainRows', 'plainRot', 'job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
+  const FIELDS = ['mode', 'plainKind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY', 'job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
     'foldFirst', 'foldV', 'foldH', 'flipMode', 'bleed', 'nodo', 'markLen', 'markWeight',
     'spineW', 'spineL', 'spineStart', 'spineStep', 'fit',
-    'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo', 'pdfx'];
+    'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo', 'mTen', 'pdfx'];
   const KEY = 'menzuke-dai-v1';
   /* ---- 出力条件の ICC（このブラウザの IndexedDB に覚える） ---- */
   let iccData = null;   // { name, bytes }
@@ -882,6 +891,7 @@
       const o = JSON.parse(localStorage.getItem(KEY) || 'null');
       if (!o) return;
       FIELDS.forEach(f => { if (!(f in o)) return; const el = $(f); if (el.type === 'checkbox') el.checked = !!o[f]; else el.value = o[f]; });
+      try { const pick = (list, w, h) => { const i = list.findIndex(x => x[1] && Math.abs(x[1] - w) < 0.01 && Math.abs(x[2] - h) < 0.01); return String(i >= 0 ? i : list.length - 1); }; $('sheetPreset').value = pick(SHEETS, +$('sheetW').value, +$('sheetH').value); $('pagePreset').value = pick(PAGES, +$('pageW').value, +$('pageH').value); } catch (e) {}
     } catch (e) { /* 既定値のまま */ }
   }
 
@@ -902,17 +912,20 @@
       const cols = Math.max(1, Math.min(20, parseInt($('plainCols').value, 10) || 1)), rows = Math.max(1, Math.min(20, parseInt($('plainRows').value, 10) || 1));
       const rot = $('plainRot').checked; const pw0 = num('pageW', 148), ph0 = num('pageH', 210);
       const scheme = plainScheme(cols, rows, $('plainKind').value || 'same');
+      // TAMEN-1: ドブ（空＝塗り足し×2／1 つ＝全部その値／カンマ区切り＝間ごと。足りない分は最後の値）と、位置（空＝中央）
+      const gapList = (id, n) => { const t = String($(id).value || '').trim(); const vs = t ? t.split(/[,、\s]+/).map(Number).filter(v => isFinite(v) && v >= 0) : []; return new Array(Math.max(0, n)).fill(0).map((_, i) => vs.length ? vs[Math.min(i, vs.length - 1)] : bleed * 2); };
+      const offOf = (id) => { const t = String($(id).value || '').trim(); const v = Number(t); return (t !== '' && isFinite(v) && v >= 0) ? v : null; };
       return {
         jobName: $('job').value, sheetW: num('sheetW', 625), sheetH: num('sheetH', 440),
         pageW: rot ? ph0 : pw0, pageH: rot ? pw0 : ph0, cols, rows, folds: [],
-        flipMode: 'LR', bleed, nodo: 0,
-        colGaps: new Array(Math.max(0, cols - 1)).fill(bleed * 2), rowGaps: new Array(Math.max(0, rows - 1)).fill(bleed * 2), _colSpine: new Array(Math.max(0, cols - 1)).fill(false), _rowSpine: new Array(Math.max(0, rows - 1)).fill(false),
+        flipMode: 'LR', bleed, nodo: 0, offX: offOf('plainOffX'), offY: offOf('plainOffY'),
+        colGaps: gapList('plainGapX', cols - 1), rowGaps: gapList('plainGapY', rows - 1), _colSpine: new Array(Math.max(0, cols - 1)).fill(false), _rowSpine: new Array(Math.max(0, rows - 1)).fill(false),
         fit: $('fit').value, markLen: num('markLen', 10), markWeight: num('markWeight', .15),
         spineBarW: 0, spineBarL: 0, spineBarStart: 0, spineBarStep: 0,
         stamp: new Date().toISOString().slice(0, 10),
         fileName: srcName ? srcName + '.pdf' : '',
         pdfx: { on: $('pdfx').checked, icc: iccData },
-        marks: { faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked, blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked, spineMark: false, info: $('mInfo').checked }, scheme
+        marks: { faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked, blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked, spineMark: false, info: $('mInfo').checked, ten: $('mTen').checked }, scheme
       };
     }
     const [cols, rows] = GRIDS[+$('grid').value];
@@ -933,7 +946,7 @@
       marks: {
         faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked,
         blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked,
-        spineMark: $('mSpine').checked, info: $('mInfo').checked
+        spineMark: $('mSpine').checked, info: $('mInfo').checked, ten: $('mTen').checked
       }, scheme
     };
   }
@@ -1472,6 +1485,10 @@
   /* ---------- パターン（設定の保存・呼び出し。このブラウザに残る） ---------- */
   const PAT_KEY = 'menzuke-dai-patterns-v1';
   // ORICHO-BUNSEN-1: 内蔵パターン（どの PC でも呼び出せる。消せない）
+  // その他（多面付け）の内蔵パターンの土台。プリセットの番号は呼び出すときに寸法から選び直す
+  const PLAIN0 = { mode: 'plain', plainKind: 'same', plainRot: false, plainGapX: '', plainGapY: '', plainOffX: '', plainOffY: '', sheetPreset: String(SHEETS.length - 1), pagePreset: String(PAGES.length - 1),
+    grid: '0', foldFirst: 'V', foldV: 'L', foldH: 'T', flipMode: 'LR', nodo: 1, markLen: 10, markWeight: 0.15, spineW: 1.2, spineL: 8, spineStart: 12, spineStep: 10, fit: 'actual',
+    mFaceCorner: true, mFaceCenter: false, mBlockCorner: true, mBlockCenter: false, mSpine: false, mInfo: false, mTen: false, pdfx: false };
   const PAT_BUILTIN = [
     { name: '渋谷文泉閣 A5タテ16p 左綴（A判2裁 625×440）', v: {
       mode: 'booklet', job: 'A5T-16P-L',
@@ -1479,7 +1496,13 @@
       pagePreset: String(PAGES.findIndex(x => x[0] === 'A5 タテ')), pageW: 148, pageH: 210,
       grid: '0', foldFirst: 'V', foldV: 'L', foldH: 'T', flipMode: 'LR',
       bleed: 3, nodo: 1, markLen: 10, markWeight: 0.15, spineW: 1.2, spineL: 8, spineStart: 12, spineStep: 10, fit: 'actual',
-      mFaceCorner: true, mFaceCenter: false, mBlockCorner: true, mBlockCenter: true, mSpine: true, mInfo: true, pdfx: true } }
+      mFaceCorner: true, mFaceCenter: false, mBlockCorner: true, mBlockCenter: true, mSpine: true, mInfo: true, pdfx: true } },
+    // TAMEN-1: 面付ソフトテスト用素材（50_メディア/00_版下データ/一般/面付ソフトテスト用素材）の 6 つ。寸法は .ai から読んだもの
+    { name: '名刺10面 ドブ無し（A4・91×55・2×5／片面・両面）', v: Object.assign({}, PLAIN0, { job: 'MEISHI10', sheetW: 210, sheetH: 297, pageW: 91, pageH: 55, plainCols: 2, plainRows: 5, plainGapX: '0', plainGapY: '0', bleed: 3 }) },
+    { name: '名刺10面 ドブ有り 3mm（A4・91×55・2×5／両面）', v: Object.assign({}, PLAIN0, { job: 'MEISHI10D', sheetW: 210, sheetH: 297, pageW: 91, pageH: 55, plainCols: 2, plainRows: 5, plainGapX: '3', plainGapY: '3', bleed: 3 }) },
+    { name: 'A判4切 1刃（438×312・A4×2・ドブ無し）', v: Object.assign({}, PLAIN0, { job: 'A4x2-1HA', sheetW: 438, sheetH: 312, pageW: 210, pageH: 297, plainCols: 2, plainRows: 1, plainGapX: '0', plainGapY: '0', bleed: 3, mBlockCenter: true }) },
+    { name: 'A判4切 2刃（438×312・A4×2・ドブ 3mm）', v: Object.assign({}, PLAIN0, { job: 'A4x2-2HA', sheetW: 438, sheetH: 312, pageW: 210, pageH: 297, plainCols: 2, plainRows: 1, plainGapX: '3', plainGapY: '3', bleed: 2, mBlockCenter: true }) },
+    { name: '名刺8面 ファナックサーボ用（台紙 196×272.7・2×4）', v: Object.assign({}, PLAIN0, { job: 'FANUC8', sheetW: 196, sheetH: 272.7, pageW: 91, pageH: 55, plainCols: 2, plainRows: 4, plainGapX: '3', plainGapY: '3.8,3.6,3.7', plainOffX: '3', plainOffY: '18.94', bleed: 3, mFaceCenter: true }) }
   ];
   function patList() { try { return JSON.parse(localStorage.getItem(PAT_KEY) || '[]') || []; } catch (e) { return []; } }
   function patStore(list) { try { localStorage.setItem(PAT_KEY, JSON.stringify(list)); } catch (e) {} }
@@ -1491,7 +1514,7 @@
   // 中身だけの指紋（名前・ジョブ名・プリセットの番号は除く。使わないモードの項目も除く）。同じ面付が別の名前で乱立しないように
   function patKey(o) {
     const plain = String(o.mode || 'booklet') === 'plain';
-    const skip = ['job', 'sheetPreset', 'pagePreset'].concat(plain ? ['grid', 'foldFirst', 'foldV', 'foldH', 'flipMode', 'nodo', 'spineW', 'spineL', 'spineStart', 'spineStep', 'mSpine'] : ['plainKind', 'plainCols', 'plainRows', 'plainRot']);
+    const skip = ['job', 'sheetPreset', 'pagePreset'].concat(plain ? ['grid', 'foldFirst', 'foldV', 'foldH', 'flipMode', 'nodo', 'spineW', 'spineL', 'spineStart', 'spineStep', 'mSpine'] : ['plainKind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY']);
     return JSON.stringify(FIELDS.filter(f => skip.indexOf(f) < 0 && (f in o)).sort().map(f => { let x = o[f]; if (typeof x === 'boolean') x = x ? 1 : 0; else if (x !== '' && x !== null && !isNaN(Number(x))) x = Number(x); else x = String(x == null ? '' : x); return [f, x]; }));
   }
   function patRender() { const sel = $('patSel'); const cur = sel.value; const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -1506,7 +1529,12 @@
     $('patNote').textContent = (st && st.通信なし) ? '通信できないため、パターンは前回のものを出しています。登録・削除はできません。' : !can ? 'この会社はパターンを登録できない設定です。' : (loc.length ? 'このブラウザだけの古い保存は、呼び出してから名前を付けて登録し直すと、会社のどの PC からも使えます。' : '');
   }
   function patSnapshot() { const o = {}; FIELDS.forEach(f => { const el = $(f); if (!el) return; o[f] = el.type === 'checkbox' ? el.checked : el.value; }); return o; }
-  function patApply(o) { FIELDS.forEach(f => { if (!(f in o)) return; const el = $(f); if (!el) return; if (el.type === 'checkbox') el.checked = !!o[f]; else el.value = o[f]; }); if ($('pdfxBox')) $('pdfxBox').style.display = $('pdfx').checked ? 'block' : 'none'; refresh(); }
+  function presetSync() {   // TAMEN-1: プリセットの並びが増えても、寸法から選び直す（合うものが無ければ カスタム）
+    const pick = (list, w, h) => { const i = list.findIndex(x => x[1] && Math.abs(x[1] - w) < 0.01 && Math.abs(x[2] - h) < 0.01); return String(i >= 0 ? i : list.length - 1); };
+    $('sheetPreset').value = pick(SHEETS, num('sheetW', 0), num('sheetH', 0)); $('pagePreset').value = pick(PAGES, num('pageW', 0), num('pageH', 0));
+  }
+  function patApply(o) { ['plainGapX', 'plainGapY', 'plainOffX', 'plainOffY'].forEach(f => { if (!(f in o) && $(f)) $(f).value = ''; }); if (!('mTen' in o)) $('mTen').checked = true;   // 古いパターンには無い項目は空（＝自動・中央）に戻す
+    FIELDS.forEach(f => { if (!(f in o)) return; const el = $(f); if (!el) return; if (el.type === 'checkbox') el.checked = !!o[f]; else el.value = o[f]; }); presetSync(); try { if (typeof applyModeUI === 'function') applyModeUI(); } catch (e) {} if ($('pdfxBox')) $('pdfxBox').style.display = $('pdfx').checked ? 'block' : 'none'; refresh(); }
   async function patReload(selectId) { const r = await MZ.呼ぶ('面付_パターン一覧', {}); MZ.パターンを入れ替える(r.パターン || []); patRender(); if (selectId) $('patSel').value = 's' + selectId; }
   let patBusy = false;
   $('patSave').addEventListener('click', async () => {
