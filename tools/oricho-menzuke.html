@@ -247,6 +247,11 @@
             <div class="row"><label for="plainKind">種類</label><select id="plainKind">
               <option value="same">同一データ多面付け（各ページを 1 枚ずつ全面に並べる）</option>
               <option value="multi">他面付け（ページを順に並べる。1 枚に 列×段 ページ）</option>
+              <option value="4p">4ページ折りを並べる（2 面で 1 丁・表裏あり。下の段は天地逆）</option>
+            </select></div>
+            <div class="row" id="plainBindRow" style="display:none"><label for="plainBind">綴じ</label><select id="plainBind" title="4 ページ（1 回折り）で 1 丁。丁は 右綴じなら右の組の上から、左綴じなら左の組の上から順に入ります。裏は左右が入れ替わります">
+              <option value="R">右綴じ（表の面が 1｜4、中が 3｜2）</option>
+              <option value="L">左綴じ（表の面が 4｜1、中が 2｜3）</option>
             </select></div>
             <div class="row"><label for="plainCols">面付（列×段）</label><div class="pair"><input type="number" id="plainCols" min="1" max="20" step="1" value="4"><span class="x">×</span><input type="number" id="plainRows" min="1" max="20" step="1" value="2"><span class="unit">面</span></div></div>
             <div class="row"><label for="plainRot">向き</label><label class="chk" style="margin:0"><input type="checkbox" id="plainRot"> 仕上がりを 90° 回して置く</label></div>
@@ -583,17 +588,18 @@
       }
       return out;
     }
+    const outs = Array.isArray(outer) ? outer : (outer ? [outer] : []);   // ROLAND-1: 版が複数に分かれることがある
     return {
       h(Y, a, b) {
         let segs = [[Math.min(a, b), Math.max(a, b)]];
         for (const c of cells) if (Y > c.y + EPS && Y < c.y + c.h - EPS) segs = subtract(segs, c.x + EPS, c.x + c.w - EPS);
-        if (outer && Y > outer.y + EPS && Y < outer.y + outer.h - EPS) segs = subtract(segs, outer.x + EPS, outer.x + outer.w - EPS);
+        for (const o of outs) if (Y > o.y + EPS && Y < o.y + o.h - EPS) segs = subtract(segs, o.x + EPS, o.x + o.w - EPS);
         return segs;
       },
       v(X, a, b) {
         let segs = [[Math.min(a, b), Math.max(a, b)]];
         for (const c of cells) if (X > c.x + EPS && X < c.x + c.w - EPS) segs = subtract(segs, c.y + EPS, c.y + c.h - EPS);
-        if (outer && X > outer.x + EPS && X < outer.x + outer.w - EPS) segs = subtract(segs, outer.y + EPS, outer.y + outer.h - EPS);
+        for (const o of outs) if (X > o.x + EPS && X < o.x + o.w - EPS) segs = subtract(segs, o.y + EPS, o.y + o.h - EPS);
         return segs;
       }
     };
@@ -669,14 +675,19 @@
 
     const cellRects = [];
     for (let r = 0; r < cfg.rows; r++) for (let c = 0; c < cfg.cols; c++) { const cr = lay.cell(c, r); cr.col = c; cr.row = r; cellRects.push(cr); }
-    const clip = makeClipper(cellRects, { x: lay.blockLeft - bleed, y: lay.blockBottom - bleed, w: lay.blockW + 2 * bleed, h: lay.blockH + 2 * bleed });
+    // ROLAND-1: 広いドブ（塗り足し×2＋20mm 以上）は版の切れ目として扱い、その中にはトンボを出す（断ってから使うため）。それ以外は今までどおり版の外側だけ
+    const WIDE = 2 * bleed + 20 * MM;
+    const kumi = (n, gaps) => { const out = []; let s0 = 0; for (let i = 0; i < n; i++) { if (i === n - 1 || (gaps[i] || 0) >= WIDE) { out.push([s0, i]); s0 = i + 1; } } return out; };
+    const outers = []; kumi(cfg.cols, lay.cg).forEach(([c0, c1]) => kumi(cfg.rows, lay.rg).forEach(([r0, r1]) => { const a = lay.cell(c0, r1), b = lay.cell(c1, r0); outers.push({ x: a.x - bleed, y: a.y - bleed, w: b.x + b.w - a.x + 2 * bleed, h: b.y + b.h - a.y + 2 * bleed }); }));
+    const clip = makeClipper(cellRects, outers);
 
     // 面ごとの塗り足し量（用紙座標）
+    // ROLAND-1: ドブが広くても、塗り足しは「塗り足し」の設定まで（ドブの半分と小さいほう）
     const edgeBleed = (col, row) => ({
-      left: col === 0 ? bleed : lay.cg[col - 1] / 2,
-      right: col === cfg.cols - 1 ? bleed : lay.cg[col] / 2,
-      top: row === 0 ? bleed : lay.rg[row - 1] / 2,
-      bottom: row === cfg.rows - 1 ? bleed : lay.rg[row] / 2
+      left: col === 0 ? bleed : Math.min(bleed, lay.cg[col - 1] / 2),
+      right: col === cfg.cols - 1 ? bleed : Math.min(bleed, lay.cg[col] / 2),
+      top: row === 0 ? bleed : Math.min(bleed, lay.rg[row - 1] / 2),
+      bottom: row === cfg.rows - 1 ? bleed : Math.min(bleed, lay.rg[row] / 2)
     });
 
     /* --- 配置プランを作り、必要な埋め込みをまとめて生成 --- */
@@ -922,14 +933,14 @@
     ['B判2切 ヨコ', 765, 542.5], ['B判全紙 タテ', 765, 1085],
     ['A3ノビ', 483, 329], ['A3', 420, 297],
     ['A判4切 ヨコ（実寸 438×312）', 438, 312], ['A4 タテ', 210, 297],
-    ['菊8切 タテ', 234, 312], ['四六8切 タテ', 272, 393], ['A3 タテ', 297, 420],
+    ['菊8切 タテ', 234, 312], ['四六8切 タテ', 272, 393], ['A3 タテ', 297, 420], ['ローランド版 740×605', 740, 605],
     ['カスタム', 0, 0]
   ];
   const PAGES = [
     ['A5 タテ', 148, 210], ['A4 タテ', 210, 297], ['A6 タテ', 105, 148],
     ['B5 タテ', 182, 257], ['B6 タテ', 128, 182],
     ['A5 ヨコ', 210, 148], ['A4 ヨコ', 297, 210],
-    ['はがき', 100, 148], ['名刺 ヨコ', 91, 55], ['名刺 タテ', 55, 91], ['A3 ヨコ', 420, 297], ['カスタム', 0, 0]
+    ['はがき', 100, 148], ['名刺 ヨコ', 91, 55], ['名刺 タテ', 55, 91], ['A3 ヨコ', 420, 297], ['四六判 タテ', 128, 188], ['カスタム', 0, 0]
   ];
   const GRIDS = [[4, 2], [2, 2], [2, 1], [2, 4], [4, 4], [8, 2], [4, 8], [8, 4]];
 
@@ -938,7 +949,7 @@
   PAGES.forEach(([n, w, h], i) => $('pagePreset').add(new Option(n === 'カスタム' ? n : `${n}　${w}×${h}`, i)));
   GRIDS.forEach(([c, r], i) => $('grid').add(new Option(`${c}列 × ${r}段　＝ ${c * r * 2}ページ折り（${c * r}面付）`, i)));
 
-  const FIELDS = ['mode', 'plainKind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY', 'job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
+  const FIELDS = ['mode', 'plainKind', 'plainBind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY', 'job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
     'foldFirst', 'foldV', 'foldH', 'flipMode', 'bleed', 'nodo', 'markLen', 'markWeight',
     'spineW', 'spineL', 'spineStart', 'spineStep', 'fit',
     'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo', 'mTen', 'mKuro', 'pdfx'];
@@ -976,7 +987,20 @@
   }
 
   function isPlain() { return $('mode').value === 'plain'; }
-  function plainScheme(cols, rows, kind) {
+  function plainScheme(cols, rows, kind, bind) {
+    if (kind === '4p') {
+      // ROLAND-1: 4 ページ折り（2 面で 1 丁）を並べる。1 枚に (列÷2)×段 丁。丁の順は 右綴じ＝右の組から（左綴じ＝左の組から）、組の中は上の段から。
+      //   表: 右綴じは 左＝1 ページ目・右＝4 ページ目（左綴じは逆）。裏は左右の組が入れ替わり、右綴じは 左＝3・右＝2（左綴じは 左＝2・右＝3）。奇数段（下の段）は天地逆＝左右も入れ替わる
+      const nb = Math.floor(cols / 2), f4 = [], b4 = []; let k = 0;
+      for (let j = 0; j < nb; j++) { const blk = bind === 'L' ? j : nb - 1 - j, back = nb - 1 - blk;
+        for (let r = 0; r < rows; r++, k++) { const rot = (r % 2 === 1) ? 180 : 0, p = 4 * k;
+          let fl = bind === 'L' ? 4 : 1, fr = bind === 'L' ? 1 : 4, bl = bind === 'L' ? 2 : 3, br = bind === 'L' ? 3 : 2;
+          if (rot) { [fl, fr] = [fr, fl]; [bl, br] = [br, bl]; }
+          f4.push({ col: blk * 2, row: r, page: p + fl, rot }, { col: blk * 2 + 1, row: r, page: p + fr, rot });
+          b4.push({ col: back * 2, row: r, page: p + bl, rot }, { col: back * 2 + 1, row: r, page: p + br, rot }); } }
+      const ord = (a, b) => a.row - b.row || a.col - b.col;
+      return { front: f4.sort(ord), back: b4.sort(ord), perSheet: Math.max(1, nb * rows * 4), plain: '4p' };
+    }
     const front = []; for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) front.push({ col: c, row: r, page: kind === 'same' ? 1 : r * cols + c + 1, rot: 0 });
     return { front, back: [], perSheet: kind === 'same' ? 1 : cols * rows, plain: kind };
   }
@@ -985,7 +1009,7 @@
     if (isPlain()) {
       const cols = Math.max(1, Math.min(20, parseInt($('plainCols').value, 10) || 1)), rows = Math.max(1, Math.min(20, parseInt($('plainRows').value, 10) || 1));
       const rot = $('plainRot').checked; const pw0 = num('pageW', 148), ph0 = num('pageH', 210);
-      const scheme = plainScheme(cols, rows, $('plainKind').value || 'same');
+      const scheme = plainScheme(cols, rows, $('plainKind').value || 'same', $('plainBind').value || 'R');
       // TAMEN-1: ドブ（空＝塗り足し×2／1 つ＝全部その値／カンマ区切り＝間ごと。足りない分は最後の値）と、位置（空＝中央）
       const gapList = (id, n) => { const t = String($(id).value || '').trim(); const vs = t ? t.split(/[,、\s]+/).map(Number).filter(v => isFinite(v) && v >= 0) : []; return new Array(Math.max(0, n)).fill(0).map((_, i) => vs.length ? vs[Math.min(i, vs.length - 1)] : bleed * 2); };
       const offOf = (id) => { const t = String($(id).value || '').trim(); const v = Number(t); return (t !== '' && isFinite(v) && v >= 0) ? v : null; };
@@ -1167,11 +1191,13 @@
     const plain = isPlain();
     $('plainPanel').style.display = plain ? '' : 'none'; $('bookletPanel').style.display = plain ? 'none' : '';
     $('nodoRow').style.display = plain ? 'none' : ''; $('spineOpt').style.display = plain ? 'none' : ''; $('gapNote').style.display = plain ? 'none' : '';
-    $('tabBack').style.display = plain ? 'none' : '';
+    const p4 = plain && $('plainKind').value === '4p';   // ROLAND-1: 4 ページ折りは その他モードでも表裏がある
+    $('plainBindRow').style.display = p4 ? '' : 'none';
+    $('tabBack').style.display = (plain && !p4) ? 'none' : '';
     $('tblPanel').style.display = (plain && $('plainKind').value === 'same') ? 'none' : '';   // MIYASUKU-1
-    if (plain && side === 'back') { side = 'front'; $('tabFront').setAttribute('aria-pressed', 'true'); $('tabBack').setAttribute('aria-pressed', 'false'); }
+    if (plain && !p4 && side === 'back') { side = 'front'; $('tabFront').setAttribute('aria-pressed', 'true'); $('tabBack').setAttribute('aria-pressed', 'false'); }
     document.querySelectorAll('.modeTab').forEach(b => { const on = b.getAttribute('data-mode') === (plain ? 'plain' : 'booklet'); b.style.background = on ? 'var(--accent)' : 'var(--surface)'; b.style.color = on ? '#fff' : 'var(--ink)'; b.style.borderColor = on ? 'var(--accent)' : 'var(--rule-strong)'; });
-    $('dropSub').textContent = plain ? ($('plainKind').value === 'same' ? '各ページを 1 枚ずつ全面に並べます' : 'ページを順に並べます') : 'ページ順に並んだ単ページPDF';
+    $('dropSub').textContent = p4 ? 'ページ順の単ページPDF（4 ページで 1 丁）' : plain ? ($('plainKind').value === 'same' ? '各ページを 1 枚ずつ全面に並べます' : 'ページを順に並べます') : 'ページ順に並んだ単ページPDF';
   }
   function plainCompare() {
     const W = num('pageW', 148), H = num('pageH', 210), b = num('bleed', 3);
@@ -1212,7 +1238,8 @@
     const Ly = Math.max(1.5, Math.min(cfg.markLen, marginY - cfg.bleed - 0.5));
 
     const dl = $('specs'); dl.innerHTML = '';
-    if (cfg.scheme.plain) spec(dl, '種類', cfg.scheme.plain === 'same' ? '同一データ' : '他面付け', cfg.scheme.plain === 'same' ? '各ページを 1 枚ずつ' : `${cfg.scheme.perSheet}ページ／1枚`);
+    if (cfg.scheme.plain === '4p') spec(dl, '種類', '4ページ折り', `${cfg.scheme.perSheet / 4}丁（${cfg.scheme.perSheet}ページ）／1枚・表裏`);
+    else if (cfg.scheme.plain) spec(dl, '種類', cfg.scheme.plain === 'same' ? '同一データ' : '他面付け', cfg.scheme.plain === 'same' ? '各ページを 1 枚ずつ' : `${cfg.scheme.perSheet}ページ／1枚`);
     else spec(dl, '折り丁', `${cfg.scheme.perSheet}`, 'ページ／1折');
     spec(dl, '面付', `${cfg.cols} × ${cfg.rows}`, `${cfg.cols * cfg.rows}面/面`);
     spec(dl, '版面（仕上がり）', `${fmt(px(lay.blockW))} × ${fmt(px(lay.blockH))}`, 'mm');
@@ -1222,7 +1249,8 @@
     if (srcBytes) {
       const n = lastPageCount, sigs = Math.max(1, Math.ceil(n / cfg.scheme.perSheet));
       spec(dl, '原稿', `${n}`, 'ページ');
-      spec(dl, '書き出し', `${sigs * (cfg.scheme.plain ? 1 : 2)}`, cfg.scheme.plain ? '枚（表のみ）' : `面（${sigs}折丁 × 表裏）`);
+      const ura = cfg.scheme.back && cfg.scheme.back.length;
+      spec(dl, '書き出し', `${sigs * (ura ? 2 : 1)}`, !ura ? '枚（表のみ）' : cfg.scheme.plain ? `面（${sigs}枚 × 表裏）` : `面（${sigs}折丁 × 表裏）`);
     }
 
     const add = (cls, txt) => { const d = document.createElement('div'); d.className = 'alert ' + cls; d.textContent = txt; alerts.appendChild(d); };
@@ -1600,7 +1628,9 @@
     { name: '1面 トンボ付き 90.34×132.13（A3 タテ・外注データ用）', v: Object.assign({}, PLAIN0, { job: 'RYOSHU1', sheetW: 297, sheetH: 420, pageW: 90.34, pageH: 132.13, plainCols: 1, plainRows: 1, plainOffX: '162', plainOffY: '149.47', bleed: 3, mFaceCorner: false, mBlockCorner: true, mBlockCenter: true }) },
     // TAMEN-3: 冊子の印刷用データ（本文・表紙）から。本文＝同じページを 2 面（2 丁付け）、表紙＝表4｜背｜表1
     { name: 'A判4切 A4 2丁付け（438×312・ドブ 6mm）冊子本文', v: Object.assign({}, PLAIN0, { job: 'A4x2-6', sheetW: 438, sheetH: 312, pageW: 210, pageH: 297, plainCols: 2, plainRows: 1, plainGapX: '6', plainGapY: '6', bleed: 3, mBlockCenter: true }) },
-    { name: 'A判4切 表紙 A4＋背 2mm＋A4（438×312・背幅はドブに入れる）', v: Object.assign({}, PLAIN0, { job: 'HYOSHI', plainKind: 'multi', sheetW: 438, sheetH: 312, pageW: 210, pageH: 297, plainCols: 2, plainRows: 1, plainGapX: '2', plainGapY: '0', bleed: 3 }) }
+    { name: 'A判4切 表紙 A4＋背 2mm＋A4（438×312・背幅はドブに入れる）', v: Object.assign({}, PLAIN0, { job: 'HYOSHI', plainKind: 'multi', sheetW: 438, sheetH: 312, pageW: 210, pageH: 297, plainCols: 2, plainRows: 1, plainGapX: '2', plainGapY: '0', bleed: 3 }) },
+    // ROLAND-1: ローランド版 740×605 に 四六判 128×188 の 4 ページ折りを 4 丁（右綴じ）。紙 625×440 は版下 42.5mm から。半分に断ってそれぞれ紙の中央に来る位置。下の段は天地逆、段の間 6mm
+    { name: 'ローランド版 740×605 四六判 4ページ折り×4丁（右綴じ・紙 625×440・くわえ 42.5）', v: Object.assign({}, PLAIN0, { job: 'ROLAND-4P', plainKind: '4p', plainBind: 'R', sheetW: 740, sheetH: 605, pageW: 128, pageH: 188, plainCols: 4, plainRows: 2, plainGapX: '0,56.5,0', plainGapY: '6', plainOffX: '85.75', plainOffY: '152', bleed: 3, mFaceCorner: true, mBlockCorner: false, mBlockCenter: true }) }
   ];
   function patList() { try { return JSON.parse(localStorage.getItem(PAT_KEY) || '[]') || []; } catch (e) { return []; } }
   function patStore(list) { try { localStorage.setItem(PAT_KEY, JSON.stringify(list)); } catch (e) {} }
@@ -1612,8 +1642,8 @@
   // 中身だけの指紋（名前・ジョブ名・プリセットの番号は除く。使わないモードの項目も除く）。同じ面付が別の名前で乱立しないように
   function patKey(o) {
     const plain = String(o.mode || 'booklet') === 'plain';
-    const skip = ['job', 'sheetPreset', 'pagePreset'].concat(plain ? ['grid', 'foldFirst', 'foldV', 'foldH', 'flipMode', 'nodo', 'spineW', 'spineL', 'spineStart', 'spineStep', 'mSpine'] : ['plainKind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY']);
-    return JSON.stringify(FIELDS.filter(f => skip.indexOf(f) < 0 && (f in o) && !(f === 'mKuro' && !o[f])).sort().map(f => { let x = o[f]; if (typeof x === 'boolean') x = x ? 1 : 0; else if (x !== '' && x !== null && !isNaN(Number(x))) x = Number(x); else x = String(x == null ? '' : x); return [f, x]; }));
+    const skip = ['job', 'sheetPreset', 'pagePreset'].concat(plain ? ['grid', 'foldFirst', 'foldV', 'foldH', 'flipMode', 'nodo', 'spineW', 'spineL', 'spineStart', 'spineStep', 'mSpine'] : ['plainKind', 'plainBind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY']);
+    return JSON.stringify(FIELDS.filter(f => skip.indexOf(f) < 0 && (f in o) && !(f === 'mKuro' && !o[f]) && !(f === 'plainBind' && String(o.plainKind) !== '4p')).sort().map(f => { let x = o[f]; if (typeof x === 'boolean') x = x ? 1 : 0; else if (x !== '' && x !== null && !isNaN(Number(x))) x = Number(x); else x = String(x == null ? '' : x); return [f, x]; }));
   }
   function patRender() { const sel = $('patSel'); const cur = sel.value; const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
     const st = mzState(); const u = (st && st.利用者) || {}; const conf = (st && st.設定) || {}; const sv = patServer(); const all = sv.filter(p => p.範囲 === '全体'), own = sv.filter(p => p.範囲 !== '全体'); const loc = patList();
@@ -1631,7 +1661,7 @@
     const pick = (list, w, h) => { const i = list.findIndex(x => x[1] && Math.abs(x[1] - w) < 0.01 && Math.abs(x[2] - h) < 0.01); return String(i >= 0 ? i : list.length - 1); };
     $('sheetPreset').value = pick(SHEETS, num('sheetW', 0), num('sheetH', 0)); $('pagePreset').value = pick(PAGES, num('pageW', 0), num('pageH', 0));
   }
-  function patApply(o) { ['plainGapX', 'plainGapY', 'plainOffX', 'plainOffY'].forEach(f => { if (!(f in o) && $(f)) $(f).value = ''; }); if (!('mTen' in o)) $('mTen').checked = true; if (!('mKuro' in o)) $('mKuro').checked = false;   // 古いパターンには無い項目は空（＝自動・中央）に戻す
+  function patApply(o) { ['plainGapX', 'plainGapY', 'plainOffX', 'plainOffY'].forEach(f => { if (!(f in o) && $(f)) $(f).value = ''; }); if (!('mTen' in o)) $('mTen').checked = true; if (!('mKuro' in o)) $('mKuro').checked = false; if (!('plainBind' in o)) $('plainBind').value = 'R';   // 古いパターンには無い項目は空（＝自動・中央）に戻す
     FIELDS.forEach(f => { if (!(f in o)) return; const el = $(f); if (!el) return; if (el.type === 'checkbox') el.checked = !!o[f]; else el.value = o[f]; }); presetSync(); try { if (typeof applyModeUI === 'function') applyModeUI(); } catch (e) {} if ($('pdfxBox')) $('pdfxBox').style.display = $('pdfx').checked ? 'block' : 'none'; refresh(); }
   async function patReload(selectId) { const r = await MZ.呼ぶ('面付_パターン一覧', {}); MZ.パターンを入れ替える(r.パターン || []); patRender(); if (selectId) $('patSel').value = 's' + selectId; }
   let patBusy = false;
