@@ -29,6 +29,9 @@ function 見積_探す_(no) {
   no = String(no || '').trim().toUpperCase(); if (!no) return null;
   var sh = 見積_帳簿_(); var v = sh.getDataRange().getValues();
   for (var i = 1; i < v.length; i++) if (String(v[i][0]).toUpperCase() === no) return 見積_行_(v, i);
+  // KUBUN-CHANGE: 種別を変えて番号が付け替わったものは、前の番号でも開ける
+  var jc = 見積列.indexOf('json');
+  for (var k = 1; k < v.length; k++) { var js = String(v[k][jc] || ''); if (js.indexOf('"旧番号"') < 0) continue; try { var old = String(JSON.parse(js)['旧番号'] || '').toUpperCase().split(','); if (old.indexOf(no) >= 0) return 見積_行_(v, k); } catch (e) {} }
   return null;
 }
 function 見積_P番号の一番新しい_(P番号) {
@@ -229,6 +232,25 @@ function 見積_受注化(番号) {
   log_(who, 'Hub見積', 'hub:' + o['番号'], { '受注化': 伝票 }, {});
   r.見積番号 = o['番号']; r.P番号 = o['P番号']; r.受注化 = true;
   return r;
+}
+/** KUBUN-CHANGE: 予算見積 ⇔ 見積 を切り替える。番号は種別で形が違うので付け替える（P0042-M01 → P0042-YM01）。前の番号は json の 旧番号 に残す */
+function 見積_種別変更(番号, 種別) {
+  var who = 画面_利用者_(); 種別 = String(種別 || '');
+  if (['予算見積', '見積'].indexOf(種別) < 0) throw new Error('切り替えられるのは 予算見積 と 見積 です（受注は受注化、失注は状態で）');
+  var lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    var o = 見積_探す_(番号); if (!o) throw new Error(番号 + ' が見積の保管庫にありません');
+    if (String(o['状態']) === '削除') throw new Error(番号 + ' は消した見積です');
+    if (o['受注伝票番号']) throw new Error('受注になった見積の種別は変えられません（' + o['受注伝票番号'] + '）');
+    if (String(o['種別']) === 種別) return 見積_返す_(o, who);
+    var 前 = { '番号': String(o['番号']), '種別': String(o['種別']) };
+    var 新 = 見積_次の番号_(見積_P正規_(o['P番号']), 種別);
+    var j = 見積_json_(o); j['旧番号'] = (j['旧番号'] ? String(j['旧番号']) + ',' : '') + 前['番号']; o.json = JSON.stringify(j);
+    o['番号'] = 新; o['種別'] = 種別; o['修正日'] = 見積_今日_(); o.by = who.email; o.at = new Date().toISOString(); 見積_書く_(o);
+    try { 手配_写す(前['番号'], 新); } catch (e) {}
+    log_(who, 'Hub見積', 'hub:' + 新, { '種別変更': 前['種別'] + ' → ' + 種別, '番号': 前['番号'] + ' → ' + 新 }, 前);
+    var r = 見積_返す_(o, who); r.前の番号 = 前['番号']; r.番号 = 新; r.種別 = 種別; return r;
+  } finally { lock.releaseLock(); }
 }
 /** 状態: 見積中／提出済／失注／保留。失注だけ を返す（同じ P番号に受注・見積中が無ければ true → 案件フォルダに【失注】を付ける） */
 function 見積_状態(番号, 状態) {

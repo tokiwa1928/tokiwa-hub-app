@@ -2383,7 +2383,14 @@ LOGIC = r"""
         var 今 = String(現在.fields['案件区分'] || '');
         if (v === '受注') { 合わせる(); 受注化する(); return; }
         if (v === '失注') { 合わせる(); 見積の状態を変える('失注'); return; }
-        if (v !== 今) { alert('予算見積書と見積書は、作成するときに決まります（番号が ' + (v === '見積' ? '-M01' : '-YM01') + ' の形になるため）。\n「新規作成」か「Repeat登録」で ' + (v === '見積' ? '見積書作成' : '予算見積書作成') + ' をしてください'); 合わせる(); return; }
+        if (v !== 今) {   // KUBUN-CHANGE: 予算見積 ⇔ 見積 を切り替える（番号が付け替わる）
+          var 旧 = String(現在.fields['見積番号'] || '');
+          if (document.querySelector('.fm-dirty')) { alert('先に「保存」してから切り替えてください（直したところが残っています）'); 合わせる(); return; }
+          if (!confirm(旧 + ' を「' + v + '」に切り替えます。\n\n番号が ' + (v === '見積' ? '-M○○' : '-YM○○') + ' の形に付け替わります（前の番号でも開けます）。よろしいですか？')) { 合わせる(); return; }
+          状態('切り替えています…', '');
+          呼ぶ('見積_種別変更', [旧, v]).then(function (r2) { var 新 = String(r2.番号 || (r2.record && r2.record.fields && r2.record.fields['見積番号']) || ''); 状態(旧 + ' を ' + v + '（' + 新 + '）に切り替えました', 'ok'); try { 番号欄.value = 新; } catch (e) {} 読み込む(新); try { if (window.parent && window.parent !== window && window.parent._hubQuotesLoad_) window.parent._hubQuotesLoad_(true); } catch (e) {} })
+            .catch(function (e) { 状態('切り替えられませんでした: ' + String(e.message || e), 'ng'); 合わせる(); });
+          return; }
         return; }
       k.value = v; k.dispatchEvent(new Event('change', { bubbles: true })); k.dispatchEvent(new Event('input', { bubbles: true })); setTimeout(合わせる, 50);
     }); });

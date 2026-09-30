@@ -1152,6 +1152,7 @@ function handle_(action, req, who) {
     case '画面_流用新規':     return 画面_流用新規(req.recordId, req['種別'], req['同じ案件'], req['初期値']);   // RYUYO-1／HUBMITSU-1
     case '見積_索引':         return 見積_索引();                                        // HUBMITSU-1: Hub の見積（予算見積・見積）の一覧
     case '見積_受注化':       return 見積_受注化(req['番号']);                           // HUBMITSU-1: 見積の内容で FileMaker に受注伝票を起こす
+    case '見積_種別変更':     return 見積_種別変更(req['番号'], req['種別']);             // KUBUN-CHANGE: 予算見積 ⇔ 見積
     case '見積_状態':         return 見積_状態(req['番号'], req['状態']);                // HUBMITSU-1: 見積中／提出済／失注／保留
     case '見積_P番号を揃える': return 見積_P番号を揃える(req['P番号']);                  // HUBMITSU-1: Hub 本体が付けた P番号を知らせる
     case '画面_削除':         return 画面_削除(req.recordId, req.modId);
