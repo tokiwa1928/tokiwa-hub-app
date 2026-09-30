@@ -208,10 +208,12 @@ function 見積_流用新規_(recordId, 種別, 同じ案件, 初期値) {
 }
 function 見積_消す_(recordId, modId) {
   var who = 画面_利用者_(); var o = 見積_探す_(String(recordId).slice(4)); if (!o) throw new Error('見積が保管庫にありません');
-  if (modId && String(o.at) !== String(modId)) throw new Error('読み込んだあとに誰かが直しています。読み直してから消してください');
+  // DEL-FIX（本多さん 9/30「消せない」）: Hub の見積の削除は印を付けるだけ（帳簿に残る）なので、読み込み後に状態や手配が変わっていても消せるようにする。
+  //   以前は modId（最終更新時刻）が違うと止めていたが、状態変更・手配の保存・種別変更のたびに時刻が進み、読み直しても消せないことがあった
+  var ずれ = !!(modId && String(o.at) !== String(modId));
   if (o['受注伝票番号']) throw new Error('受注になった見積は消せません（' + o['受注伝票番号'] + '）');
   o['状態'] = '削除'; o['修正日'] = 見積_今日_(); o.by = who.email; o.at = new Date().toISOString(); 見積_書く_(o);
-  log_(who, 'Hub見積', 'hub:' + o['番号'], { '削除': o['番号'] }, {});
+  log_(who, 'Hub見積', 'hub:' + o['番号'], { '削除': o['番号'], '読み込み後に更新あり': ずれ ? 'はい' : '' }, {});
   return { ok: true, user: who.email, 削除: o['番号'] };
 }
 
