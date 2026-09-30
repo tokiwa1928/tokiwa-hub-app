@@ -236,6 +236,7 @@
               <label class="chk" id="spineOpt"><input type="checkbox" id="mSpine" checked>背丁マーク</label>
               <label class="chk"><input type="checkbox" id="mInfo" checked>版面情報</label>
               <label class="chk" title="紙の上端に入る長い墨ベタ（高さ 2mm）。どちらが天か分かるようにする印。名刺や台紙への刷り込みでは外します"><input type="checkbox" id="mTen" checked>天の印（墨ベタ）</label>
+              <label class="chk" title="名刺カッター（きりっ子）が読む 6×6mm の黒ベタ。版の左右中央に、上の辺を 1 段目の上の断ち位置に合わせて入れます（センタードブが 6mm 以上ならドブの中。無ければ 1 段目のすぐ上）。きりっ子で断つときはトンボを外してください"><input type="checkbox" id="mKuro">黒マーク（きりっ子用 6×6mm）</label>
             </div>
             <p class="note">版面情報は用紙の左下に半角英数で入ります（ジョブ名の日本語は省かれます）。</p>
           </fieldset>
@@ -716,6 +717,14 @@
         const block = { x: lay.blockLeft, y: lay.blockBottom, w: lay.blockW, h: lay.blockH };
         if (cfg.marks.blockCorner) cornerMarks(sheet, block, bleed, bleed, Lx, Ly, mw, color, clip);
         if (cfg.marks.blockCenter) centerMarks(sheet, block, bleed, bleed, Lx, Ly, mw, color, clip);
+        // KURO-1: きりっ子用の黒マーク（6×6mm 黒ベタ）。版の左右中央。センタードブが 6mm 以上ならドブの中で、上の辺＝1 段目の上の断ち位置。
+        //   無ければ 1 段目のすぐ上（マークの後端＝断ち位置）。マークより先（紙の先端側）は白で抜いて、絵柄の塗り足しを読まないようにする
+        if (cfg.marks.kuro) {
+          const kr = kuroMark(lay, cfg);
+          sheet.drawRectangle({ x: kr.x, y: kr.top, width: kr.w, height: Math.max(0, lay.sheetH - kr.top), color: rgb(1, 1, 1) });
+          sheet.drawRectangle({ x: kr.x, y: kr.top - kr.h, width: kr.w, height: kr.h, color });
+          if (kr.lineTo != null) sheet.drawLine({ start: { x: kr.x + kr.w / 2, y: kr.top - kr.h }, end: { x: kr.x + kr.w / 2, y: kr.lineTo }, thickness: 0.3, color });
+        }
         // 背丁マーク
         if (cfg.marks.spineMark && !scheme.plain) drawSpineMarks(sheet, lay, cfg, s, nSig, color, scheme[side]);
         // 情報（フッター）: ファイル名・ジョブ名・折・表裏・面付・仕上がり・ドブ・日付
@@ -746,6 +755,14 @@
     if (cfg.pdfx && cfg.pdfx.on) { applyPdfX4(out, cfg); bytes = await out.save({ useObjectStreams: false }); if (bytes[5] === 0x31 && bytes[6] === 0x2e) bytes[7] = 0x36; }   // %PDF-1.7 → 1.6（PDF/X-4 の版）
     else bytes = await out.save();
     return { bytes, report, scheme, nSig, perSheet: per, srcPages: nSrc, lay, sides, markLen: { x: Lx / MM, y: Ly / MM } };
+  }
+
+  /* KURO-1: 黒マークの位置（pt・左下原点）。top＝マークの上の辺、lineTo＝下に引く細い線の終わり（ドブの中に置くときだけ。紙の上から 30mm、短くても 13mm） */
+  function kuroMark(lay, cfg) {
+    const K = 6 * MM, xc = lay.blockLeft + lay.blockW / 2;
+    const mid = (cfg.cols % 2 === 0) ? (lay.cg[cfg.cols / 2 - 1] || 0) : 0, inGap = mid >= K - 0.01;
+    const top = inGap ? lay.blockTop : Math.min(lay.sheetH, lay.blockTop + K);
+    return { x: xc - K / 2, w: K, h: K, top, inGap, lineTo: inGap ? Math.min(top - K - 13 * MM, lay.sheetH - 30 * MM) : null };
   }
 
   /* フッターの文字をブラウザの字で描いて画像に（日本語が出せる・フォント埋め込みが要らない） */
@@ -833,7 +850,7 @@
     }
   }
 
-  return { impose, boxOf };
+  return { impose, boxOf, kuroMark };
 });
 
 </script>
@@ -869,7 +886,7 @@
   const FIELDS = ['mode', 'plainKind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY', 'job', 'sheetPreset', 'sheetW', 'sheetH', 'pagePreset', 'pageW', 'pageH', 'grid',
     'foldFirst', 'foldV', 'foldH', 'flipMode', 'bleed', 'nodo', 'markLen', 'markWeight',
     'spineW', 'spineL', 'spineStart', 'spineStep', 'fit',
-    'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo', 'mTen', 'pdfx'];
+    'mFaceCorner', 'mFaceCenter', 'mBlockCorner', 'mBlockCenter', 'mSpine', 'mInfo', 'mTen', 'mKuro', 'pdfx'];
   const KEY = 'menzuke-dai-v1';
   /* ---- 出力条件の ICC（このブラウザの IndexedDB に覚える） ---- */
   let iccData = null;   // { name, bytes }
@@ -927,7 +944,7 @@
         stamp: new Date().toISOString().slice(0, 10),
         fileName: srcName ? srcName + '.pdf' : '',
         pdfx: { on: $('pdfx').checked, icc: iccData },
-        marks: { faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked, blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked, spineMark: false, info: $('mInfo').checked, ten: $('mTen').checked }, scheme
+        marks: { faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked, blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked, spineMark: false, info: $('mInfo').checked, ten: $('mTen').checked, kuro: $('mKuro').checked }, scheme
       };
     }
     const [cols, rows] = GRIDS[+$('grid').value];
@@ -948,7 +965,7 @@
       marks: {
         faceCorner: $('mFaceCorner').checked, faceCenter: $('mFaceCenter').checked,
         blockCorner: $('mBlockCorner').checked, blockCenter: $('mBlockCenter').checked,
-        spineMark: $('mSpine').checked, info: $('mInfo').checked, ten: $('mTen').checked
+        spineMark: $('mSpine').checked, info: $('mInfo').checked, ten: $('mTen').checked, kuro: $('mKuro').checked
       }, scheme
     };
   }
@@ -1032,6 +1049,13 @@
           const tl = el('text', { x: xc + bl_, y: yc - bw_ * 2, fill: 'var(--ink)', 'font-size': pad * 0.4, 'font-family': 'var(--mono)' }); tl.textContent = '背丁'; svg.appendChild(tl);
         }
       }
+    }
+    // KURO-1: 黒マーク（きりっ子用）
+    if (cfg.marks && cfg.marks.kuro && ImposePdf.kuroMark) {
+      const kr = ImposePdf.kuroMark(lay, cfg); const kx = px(kr.x), ky = cfg.sheetH - px(kr.top), kw = px(kr.w);
+      svg.appendChild(el('rect', { x: kx, y: ky, width: kw, height: kw, fill: '#111' }));
+      if (kr.lineTo != null) svg.appendChild(el('line', { x1: kx + kw / 2, y1: ky + kw, x2: kx + kw / 2, y2: cfg.sheetH - px(kr.lineTo), stroke: '#111', 'stroke-width': hair }));
+      const tk = el('text', { x: kx + kw * 1.3, y: ky + kw * 0.8, fill: 'var(--ink)', 'font-size': pad * 0.4, 'font-family': 'var(--mono)' }); tk.textContent = '黒マーク'; svg.appendChild(tk);
     }
     // 寸法注記
     const lab = (tx, ty, s, anchor) => {
@@ -1494,7 +1518,7 @@
   // その他（多面付け）の内蔵パターンの土台。プリセットの番号は呼び出すときに寸法から選び直す
   const PLAIN0 = { mode: 'plain', plainKind: 'same', plainRot: false, plainGapX: '', plainGapY: '', plainOffX: '', plainOffY: '', sheetPreset: String(SHEETS.length - 1), pagePreset: String(PAGES.length - 1),
     grid: '0', foldFirst: 'V', foldV: 'L', foldH: 'T', flipMode: 'LR', nodo: 1, markLen: 10, markWeight: 0.15, spineW: 1.2, spineL: 8, spineStart: 12, spineStep: 10, fit: 'actual',
-    mFaceCorner: true, mFaceCenter: false, mBlockCorner: true, mBlockCenter: false, mSpine: false, mInfo: false, mTen: false, pdfx: false };
+    mFaceCorner: true, mFaceCenter: false, mBlockCorner: true, mBlockCenter: false, mSpine: false, mInfo: false, mTen: false, mKuro: false, pdfx: false };
   const PAT_BUILTIN = [
     { name: '渋谷文泉閣 A5タテ16p 左綴（A判2裁 625×440）', v: {
       mode: 'booklet', job: 'A5T-16P-L',
@@ -1504,8 +1528,9 @@
       bleed: 3, nodo: 1, markLen: 10, markWeight: 0.15, spineW: 1.2, spineL: 8, spineStart: 12, spineStep: 10, fit: 'actual',
       mFaceCorner: true, mFaceCenter: false, mBlockCorner: true, mBlockCenter: true, mSpine: true, mInfo: true, pdfx: true } },
     // TAMEN-1: 面付ソフトテスト用素材（50_メディア/00_版下データ/一般/面付ソフトテスト用素材）の 6 つ。寸法は .ai から読んだもの
-    { name: '名刺10面 ドブ無し（A4・91×55・2×5／片面・両面）', v: Object.assign({}, PLAIN0, { job: 'MEISHI10', sheetW: 210, sheetH: 297, pageW: 91, pageH: 55, plainCols: 2, plainRows: 5, plainGapX: '0', plainGapY: '0', bleed: 3 }) },
-    { name: '名刺10面 ドブ有り 3mm（A4・91×55・2×5／両面）', v: Object.assign({}, PLAIN0, { job: 'MEISHI10D', sheetW: 210, sheetH: 297, pageW: 91, pageH: 55, plainCols: 2, plainRows: 5, plainGapX: '3', plainGapY: '3', bleed: 3 }) },
+    // KURO-1: きりっ子用。面は左 9・110 から（センタードブ 10mm）、黒マーク 6×6 は左右中央・1 段目の上の断ち位置。トンボは入れない（テンプレートどおり）
+    { name: '名刺10面 ドブ無し きりっ子用（A4・91×55・センター 10mm・黒マーク）', v: Object.assign({}, PLAIN0, { job: 'MEISHI10', sheetW: 210, sheetH: 297, pageW: 91, pageH: 55, plainCols: 2, plainRows: 5, plainGapX: '10', plainGapY: '0', bleed: 3, mFaceCorner: false, mBlockCorner: false, mKuro: true }) },
+    { name: '名刺10面 ドブ有り 3mm きりっ子用（A4・91×55・センター 10mm・黒マーク）', v: Object.assign({}, PLAIN0, { job: 'MEISHI10D', sheetW: 210, sheetH: 297, pageW: 91, pageH: 55, plainCols: 2, plainRows: 5, plainGapX: '10', plainGapY: '3', bleed: 3, mFaceCorner: false, mBlockCorner: false, mKuro: true }) },
     { name: 'A判4切 1刃（438×312・A4×2・ドブ無し）', v: Object.assign({}, PLAIN0, { job: 'A4x2-1HA', sheetW: 438, sheetH: 312, pageW: 210, pageH: 297, plainCols: 2, plainRows: 1, plainGapX: '0', plainGapY: '0', bleed: 3, mBlockCenter: true }) },
     { name: 'A判4切 2刃（438×312・A4×2・ドブ 3mm）', v: Object.assign({}, PLAIN0, { job: 'A4x2-2HA', sheetW: 438, sheetH: 312, pageW: 210, pageH: 297, plainCols: 2, plainRows: 1, plainGapX: '3', plainGapY: '3', bleed: 2, mBlockCenter: true }) },
     { name: '名刺8面 ファナックサーボ用（台紙 196×272.7・2×4）', v: Object.assign({}, PLAIN0, { job: 'FANUC8', sheetW: 196, sheetH: 272.7, pageW: 91, pageH: 55, plainCols: 2, plainRows: 4, plainGapX: '3', plainGapY: '3.8,3.6,3.7', plainOffX: '3', plainOffY: '18.94', bleed: 3, mFaceCenter: true }) },
@@ -1530,7 +1555,7 @@
   function patKey(o) {
     const plain = String(o.mode || 'booklet') === 'plain';
     const skip = ['job', 'sheetPreset', 'pagePreset'].concat(plain ? ['grid', 'foldFirst', 'foldV', 'foldH', 'flipMode', 'nodo', 'spineW', 'spineL', 'spineStart', 'spineStep', 'mSpine'] : ['plainKind', 'plainCols', 'plainRows', 'plainRot', 'plainGapX', 'plainGapY', 'plainOffX', 'plainOffY']);
-    return JSON.stringify(FIELDS.filter(f => skip.indexOf(f) < 0 && (f in o)).sort().map(f => { let x = o[f]; if (typeof x === 'boolean') x = x ? 1 : 0; else if (x !== '' && x !== null && !isNaN(Number(x))) x = Number(x); else x = String(x == null ? '' : x); return [f, x]; }));
+    return JSON.stringify(FIELDS.filter(f => skip.indexOf(f) < 0 && (f in o) && !(f === 'mKuro' && !o[f])).sort().map(f => { let x = o[f]; if (typeof x === 'boolean') x = x ? 1 : 0; else if (x !== '' && x !== null && !isNaN(Number(x))) x = Number(x); else x = String(x == null ? '' : x); return [f, x]; }));
   }
   function patRender() { const sel = $('patSel'); const cur = sel.value; const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
     const st = mzState(); const u = (st && st.利用者) || {}; const conf = (st && st.設定) || {}; const sv = patServer(); const all = sv.filter(p => p.範囲 === '全体'), own = sv.filter(p => p.範囲 !== '全体'); const loc = patList();
@@ -1548,7 +1573,7 @@
     const pick = (list, w, h) => { const i = list.findIndex(x => x[1] && Math.abs(x[1] - w) < 0.01 && Math.abs(x[2] - h) < 0.01); return String(i >= 0 ? i : list.length - 1); };
     $('sheetPreset').value = pick(SHEETS, num('sheetW', 0), num('sheetH', 0)); $('pagePreset').value = pick(PAGES, num('pageW', 0), num('pageH', 0));
   }
-  function patApply(o) { ['plainGapX', 'plainGapY', 'plainOffX', 'plainOffY'].forEach(f => { if (!(f in o) && $(f)) $(f).value = ''; }); if (!('mTen' in o)) $('mTen').checked = true;   // 古いパターンには無い項目は空（＝自動・中央）に戻す
+  function patApply(o) { ['plainGapX', 'plainGapY', 'plainOffX', 'plainOffY'].forEach(f => { if (!(f in o) && $(f)) $(f).value = ''; }); if (!('mTen' in o)) $('mTen').checked = true; if (!('mKuro' in o)) $('mKuro').checked = false;   // 古いパターンには無い項目は空（＝自動・中央）に戻す
     FIELDS.forEach(f => { if (!(f in o)) return; const el = $(f); if (!el) return; if (el.type === 'checkbox') el.checked = !!o[f]; else el.value = o[f]; }); presetSync(); try { if (typeof applyModeUI === 'function') applyModeUI(); } catch (e) {} if ($('pdfxBox')) $('pdfxBox').style.display = $('pdfx').checked ? 'block' : 'none'; refresh(); }
   async function patReload(selectId) { const r = await MZ.呼ぶ('面付_パターン一覧', {}); MZ.パターンを入れ替える(r.パターン || []); patRender(); if (selectId) $('patSel').value = 's' + selectId; }
   let patBusy = false;
