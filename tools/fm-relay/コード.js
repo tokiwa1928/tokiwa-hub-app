@@ -86,8 +86,10 @@ function doPost(e) {
     var req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     // SEIZO-7: 製造指示書の QR 確認は誰でも（返すのは「最新かどうか」と回数・日時だけ。伝票の中身は返さない）
     if (req.action === '指示書_確認') return json_({ ok: true, user: 'public', data: 指示書_確認(req['伝票番号'], req['記録id'], req['kind']) });
+    // MENZUKE-1: 面付ツール（関連会社へ公開）。社内ドメインの確認は通さず、menzuke.js が「登録してある人か」を自分で確かめる。FileMaker にはさわらない
+    if (/^面付_/.test(String(req.action || ''))) return json_({ ok: true, user: '', data: 面付_入口_(req) });
     var who = authorize_(req);
-    いま呼んでいる人 = who;                 // 画面_* が Session を使わずに済むように
+    いま呼んでいる人 = who;              // 画面_* が Session を使わずに済むように
     try {
       var out = handle_(req.action, req, who);
     } finally {
@@ -1222,6 +1224,8 @@ function handle_(action, req, who) {
     case '写し_一覧':         return 写し_一覧(req['条件']);
     case '写し_読み込み':     return 写し_読み込み(req['番号']);
     case '写し_状況':         return 写し_状況();
+    case '写し_健康':         return 写し_健康();                 // UTSUSHI-CATCHUP: どこまで写せているか
+    case '写し_追いつく':     { マスタ管理者か_(who); return 写し_追いつく(req['以降']); }   // 止まっていた分を追いつく（本多さん・福永さん）
     // GEN のデータも同じ保管庫へ
     case 'GEN_取り込み':      return GEN_取り込み(req['画面'], req['見出し'], req['鍵列'], req['行']);
     case 'GEN_ファイル取込':  { GEN_ファイルから取り込む(); return { ok: true }; }   // 保管庫の GEN取込_*.json を読み込む（エディタ不要）

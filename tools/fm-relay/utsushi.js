@@ -237,6 +237,24 @@ function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日
   return { 件数: rows.records.length, 更新: 更新, 追加: 追加, 以降: 昨日 };
 }
 
+/** 写しがどこまで追いついているか（索引にある一番新しい修正日・件数・json を作った時刻・写しの置き場）。読むだけ */
+function 写し_健康() {
+  var rows = 写し_索引_(); var 最新 = 0, 最新文 = '';
+  rows.forEach(function (o) { var n = 写し_日付数_(o['修正日']); if (n > 最新) { 最新 = n; 最新文 = String(o['修正日']); } });
+  var 作った = ''; try { var it = 写し_フォルダ_().getFilesByName(索引JSON名); if (it.hasNext()) 作った = it.next().getLastUpdated().toISOString(); } catch (e) {}
+  var 置き場 = ''; try { var f = 写し_フォルダ_(); var pr = f.getParents(); 置き場 = pr.hasNext() ? pr.next().getName() : 'マイドライブ'; } catch (e) {}
+  var 夜 = false; try { ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === '写し_毎晩') 夜 = true; }); } catch (e) {}
+  return { ok: true, 最新の修正日: 最新文, 件数: rows.length, 索引を作った: 作った, 置き場: 置き場, 毎晩の登録: 夜 };
+}
+/** 止まっていた分を追いつく。以降を省くと、索引にある一番新しい修正日の前日から写し直す（Drive が満杯などで毎晩が止まっていたとき用） */
+function 写し_追いつく(以降) {
+  var 日 = String(以降 || '').trim();
+  if (!日) { var h = 写し_健康(); if (!h.最新の修正日) throw new Error('索引に修正日がありません。以降（MM/DD/YYYY）を指定してください');
+    var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(h.最新の修正日); var d = new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])); d.setDate(d.getDate() - 1); 日 = 日付_(d); }
+  if (!/^\d\d\/\d\d\/\d{4}$/.test(日)) throw new Error('日付は MM/DD/YYYY で: ' + 日);
+  var r = 写し_毎晩(日); return { ok: true, 以降: 日, 結果: r };
+}
+
 /** LOT-1: 索引シートに列が増えたとき、見出しを足して 年別シート（全項目）から値を埋める。増えていなければ何もしない。
  *  年別は 索引の「年」の値ごとに開き、recordId で引く。列ごとに 1 回の読み書きなので 7 万行でも 1 分ほど */
 function 索引の列を揃える_() {

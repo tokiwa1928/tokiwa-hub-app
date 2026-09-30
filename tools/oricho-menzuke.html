@@ -124,11 +124,15 @@
   footer.foot{margin-top:28px;padding-top:14px;border-top:1px solid var(--rule);color:var(--muted);font-size:11.5px}
   @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 </style>
+<style>html.mz-wait body > .wrap{visibility:hidden}</style>
+<script>document.documentElement.classList.add('mz-wait');</script>
+<noscript><style>html.mz-wait body > .wrap{visibility:hidden}</style><p style="padding:24px">JavaScript を有効にしてください。</p></noscript>
 
 <div class="wrap">
   <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12px;margin-bottom:10px">
     <a href="../index.html" style="color:var(--accent);text-decoration:none;font-weight:700">← Hub</a>
     <a href="pdf-kosei.html#sec-mentu" style="color:var(--accent);text-decoration:none">📄 PDFツール（面付・試行錯誤）へ</a>
+    <span style="margin-left:auto"></span><span id="mz-chip-host"></span>
   </div>
   <header class="top">
     <h1>折丁面付台</h1>
@@ -150,11 +154,13 @@
           <fieldset>
             <div class="row"><label for="patSel">パターン</label>
               <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-                <select id="patSel" style="min-width:170px"><option value="">── 保存したパターン ──</option></select>
+                <select id="patSel" style="min-width:170px;max-width:100%"><option value="">── パターン ──</option></select>
                 <button type="button" id="patLoad" style="font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);cursor:pointer;font-weight:700">呼び出す</button>
                 <button type="button" id="patDel" style="font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--rule-strong);border-radius:8px;background:var(--surface);cursor:pointer;color:var(--nodo)">消す</button>
                 <input type="text" id="patName" placeholder="名前（例: A5タテ16p 左無線 菊2切）" style="min-width:200px;flex:1">
-                <button type="button" id="patSave" style="font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;font-weight:700">今の設定を保存</button>
+                <select id="patScope" title="登録先。自社＝自分の会社だけに見える／全体＝全社に見える（本多・福永だけ）" style="min-width:0"><option value="自社">自社に登録</option></select>
+                <button type="button" id="patSave" style="font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;font-weight:700">今の設定を登録</button>
+                <span id="patNote" style="font-size:11.5px;color:var(--muted);flex-basis:100%"></span>
               </div>
             </div>
             <div class="row"><label for="job">ジョブ名</label><input type="text" id="job" value="A5T-16P-L"></div>
@@ -340,6 +346,8 @@
   </footer>
 </div>
 
+<script src="fm-bridge.js"></script>
+<script src="menzuke-auth.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>try{ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){}</script>
@@ -1474,27 +1482,61 @@
       mFaceCorner: true, mFaceCenter: false, mBlockCorner: true, mBlockCenter: true, mSpine: true, mInfo: true, pdfx: true } }
   ];
   function patList() { try { return JSON.parse(localStorage.getItem(PAT_KEY) || '[]') || []; } catch (e) { return []; } }
-  function patAt(v) { v = String(v || ''); if (v.charAt(0) === 'b') return PAT_BUILTIN[+v.slice(1)] || null; return patList()[+v] || null; }
   function patStore(list) { try { localStorage.setItem(PAT_KEY, JSON.stringify(list)); } catch (e) {} }
-  function patRender() { const sel = $('patSel'); const cur = sel.value; const esc = (s) => String(s).replace(/</g, '&lt;');
+  /* MENZUKE-1: パターンは 全体（全社に見える）と 自社（自分の会社だけ）に分けて中継に置く。
+     値の頭: b＝内蔵 / s＝中継（全体・自社）/ 数字＝このブラウザに残っている古い保存 */
+  function mzState() { return (window.MZ && MZ.状態()) || null; }
+  function patServer() { const st = mzState(); return (st && st.パターン) || []; }
+  function patAt(v) { v = String(v || ''); if (v.charAt(0) === 'b') return PAT_BUILTIN[+v.slice(1)] || null; if (v.charAt(0) === 's') { const p = patServer().find(x => 's' + x.id === v); return p ? { name: p.名前, v: p.v, id: p.id, scope: p.範囲, scopeName: p.範囲名 } : null; } if (v === '') return null; return patList()[+v] || null; }
+  // 中身だけの指紋（名前・ジョブ名・プリセットの番号は除く。使わないモードの項目も除く）。同じ面付が別の名前で乱立しないように
+  function patKey(o) {
+    const plain = String(o.mode || 'booklet') === 'plain';
+    const skip = ['job', 'sheetPreset', 'pagePreset'].concat(plain ? ['grid', 'foldFirst', 'foldV', 'foldH', 'flipMode', 'nodo', 'spineW', 'spineL', 'spineStart', 'spineStep', 'mSpine'] : ['plainKind', 'plainCols', 'plainRows', 'plainRot']);
+    return JSON.stringify(FIELDS.filter(f => skip.indexOf(f) < 0 && (f in o)).sort().map(f => { let x = o[f]; if (typeof x === 'boolean') x = x ? 1 : 0; else if (x !== '' && x !== null && !isNaN(Number(x))) x = Number(x); else x = String(x == null ? '' : x); return [f, x]; }));
+  }
+  function patRender() { const sel = $('patSel'); const cur = sel.value; const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const st = mzState(); const u = (st && st.利用者) || {}; const conf = (st && st.設定) || {}; const sv = patServer(); const all = sv.filter(p => p.範囲 === '全体'), own = sv.filter(p => p.範囲 !== '全体'); const loc = patList();
     sel.innerHTML = '<option value="">── パターン ──</option>'
-      + '<optgroup label="登録済み">' + PAT_BUILTIN.map((p, i) => '<option value="b' + i + '">' + esc(p.name) + '</option>').join('') + '</optgroup>'
-      + '<optgroup label="このブラウザに保存したもの">' + patList().map((p, i) => '<option value="' + i + '">' + esc(p.name) + '</option>').join('') + '</optgroup>';
-    sel.value = cur; }
+      + (conf.全体を見る === false ? '' : '<optgroup label="全体（全社共通）">' + PAT_BUILTIN.map((p, i) => '<option value="b' + i + '">' + esc(p.name) + '</option>').join('') + all.map(p => '<option value="s' + esc(p.id) + '">' + esc(p.名前) + '</option>').join('') + '</optgroup>')
+      + '<optgroup label="自社（' + esc(u.会社名 || '') + '）">' + (own.length ? own.map(p => '<option value="s' + esc(p.id) + '">' + esc(p.名前) + '</option>').join('') : '<option value="" disabled>まだありません</option>') + '</optgroup>'
+      + (loc.length ? '<optgroup label="このブラウザだけの古い保存">' + loc.map((p, i) => '<option value="' + i + '">' + esc(p.name) + '</option>').join('') + '</optgroup>' : '');
+    sel.value = cur; if (sel.value !== cur) sel.value = '';
+    const sc = $('patScope'); const was = sc.value; sc.innerHTML = '<option value="自社">自社に登録（' + esc(u.会社名 || '自社') + '）</option>' + (u.管理者 ? '<option value="全体">全体に登録（全社共通）</option>' : ''); sc.value = (was === '全体' && u.管理者) ? '全体' : '自社';
+    const can = conf.登録できる !== false && !(st && st.通信なし); ['patName', 'patScope', 'patSave'].forEach(id => { $(id).style.display = can ? '' : 'none'; });
+    $('patNote').textContent = (st && st.通信なし) ? '通信できないため、パターンは前回のものを出しています。登録・削除はできません。' : !can ? 'この会社はパターンを登録できない設定です。' : (loc.length ? 'このブラウザだけの古い保存は、呼び出してから名前を付けて登録し直すと、会社のどの PC からも使えます。' : '');
+  }
   function patSnapshot() { const o = {}; FIELDS.forEach(f => { const el = $(f); if (!el) return; o[f] = el.type === 'checkbox' ? el.checked : el.value; }); return o; }
   function patApply(o) { FIELDS.forEach(f => { if (!(f in o)) return; const el = $(f); if (!el) return; if (el.type === 'checkbox') el.checked = !!o[f]; else el.value = o[f]; }); if ($('pdfxBox')) $('pdfxBox').style.display = $('pdfx').checked ? 'block' : 'none'; refresh(); }
-  $('patSave').addEventListener('click', () => {
+  async function patReload(selectId) { const r = await MZ.呼ぶ('面付_パターン一覧', {}); MZ.パターンを入れ替える(r.パターン || []); patRender(); if (selectId) $('patSel').value = 's' + selectId; }
+  let patBusy = false;
+  $('patSave').addEventListener('click', async () => {
     const name = ($('patName').value || '').trim(); if (!name) { $('status').textContent = 'パターンの名前を入れてください（例: A5タテ16p 左無線 菊2切）'; $('patName').focus(); return; }
-    const list = patList(); const i = list.findIndex(p => p.name === name);
-    if (i >= 0) { if (!confirm('「' + name + '」を今の設定で上書きしますか？')) return; list[i] = { name, v: patSnapshot(), at: new Date().toISOString() }; }
-    else list.push({ name, v: patSnapshot(), at: new Date().toISOString() });
-    patStore(list); patRender(); $('patSel').value = String(i >= 0 ? i : list.length - 1); $('patName').value = '';
-    $('status').textContent = 'パターン「' + name + '」を保存しました（このブラウザに残ります）。';
+    if (patBusy) return; const snap = patSnapshot(); const key = patKey(snap); const scope = $('patScope').value === '全体' ? '全体' : '自社';
+    const bi = PAT_BUILTIN.find(p => patKey(p.v) === key);
+    if (bi && !confirm('同じ中身の面付が、全体（全社共通）に既にあります:\n\n　・' + bi.name + '\n\nそちらを呼び出して使えます。それでも「' + name + '」として登録しますか？')) { $('status').textContent = '登録をやめました。全体の「' + bi.name + '」が同じ中身です。'; return; }
+    patBusy = true; $('patSave').disabled = true; $('status').textContent = '登録しています…';
+    try {
+      const body = { 名前: name, v: snap, 指紋: key, 範囲: scope }; if (bi) body.強行 = true;
+      let r = await MZ.呼ぶ('面付_パターン保存', body);
+      if (r && r.同名) { if (!confirm(r.範囲名 + ' の「' + name + '」を今の設定で上書きしますか？')) { $('status').textContent = '登録をやめました。'; return; } body.上書き = true; r = await MZ.呼ぶ('面付_パターン保存', body); }
+      if (r && r.重複) { if (!confirm('同じ中身の面付が既にあります:\n\n' + r.重複.map(d => '　・' + d.範囲名 + '「' + d.名前 + '」').join('\n') + '\n\nそちらを呼び出して使えます。それでも「' + name + '」として登録しますか？')) { $('status').textContent = '登録をやめました。' + r.重複[0].範囲名 + '「' + r.重複[0].名前 + '」が同じ中身です。'; return; } body.強行 = true; r = await MZ.呼ぶ('面付_パターン保存', body); }
+      if (!r || !r.ok) throw new Error('登録できませんでした');
+      await patReload(r.id); $('patName').value = '';
+      $('status').textContent = 'パターン「' + name + '」を ' + r.範囲名 + ' に' + (r.上書き ? '上書きしました。' : '登録しました。') + (r.範囲 === '全体' ? '全社に見えます。' : '自分の会社だけに見えます。');
+    } catch (e) { $('status').textContent = '登録できませんでした: ' + String(e.message || e); }
+    finally { patBusy = false; $('patSave').disabled = false; }
   });
   $('patLoad').addEventListener('click', () => { const p = patAt($('patSel').value); if (!p) { $('status').textContent = '呼び出すパターンを選んでください'; return; } patApply(p.v); $('status').textContent = 'パターン「' + p.name + '」を呼び出しました。'; });
   $('patSel').addEventListener('change', () => { const p = patAt($('patSel').value); if (p) { patApply(p.v); $('status').textContent = 'パターン「' + p.name + '」を呼び出しました。'; } });
-  $('patDel').addEventListener('click', () => { const v = String($('patSel').value || ''); if (v.charAt(0) === 'b') { $('status').textContent = '登録済みのパターンは消せません（保存したものだけ消せます）'; return; } const list = patList(); const i = +v; const p = list[i]; if (!p) { $('status').textContent = '消すパターンを選んでください'; return; } if (!confirm('パターン「' + p.name + '」を消しますか？')) return; list.splice(i, 1); patStore(list); $('patSel').value = ''; patRender(); $('status').textContent = 'パターン「' + p.name + '」を消しました。'; });
+  $('patDel').addEventListener('click', async () => { const v = String($('patSel').value || ''); if (v.charAt(0) === 'b') { $('status').textContent = 'はじめから入っているパターンは消せません'; return; }
+    const p = patAt(v); if (!p) { $('status').textContent = '消すパターンを選んでください'; return; }
+    if (v.charAt(0) === 's') { if (!confirm(p.scopeName + ' のパターン「' + p.name + '」を消しますか？' + (p.scope === '全体' ? '\n\n全社から見えなくなります。' : '\n\n会社のほかの人からも見えなくなります。'))) return;
+      try { await MZ.呼ぶ('面付_パターン削除', { id: p.id }); $('patSel').value = ''; await patReload(''); $('status').textContent = 'パターン「' + p.name + '」を消しました。'; } catch (e) { $('status').textContent = '消せませんでした: ' + String(e.message || e); } return; }
+    const list = patList(); const i = +v; if (!confirm('このブラウザのパターン「' + p.name + '」を消しますか？')) return; list.splice(i, 1); patStore(list); $('patSel').value = ''; patRender(); $('status').textContent = 'パターン「' + p.name + '」を消しました。'; });
   patRender();
+  // ログインが済んだら、会社・権限に合わせてパターンを出し直す
+  if (window.MZ) MZ.始める({ 題: '折丁面付台', 札の場所: '#mz-chip-host', 入った: function () { patRender(); } });
+  else { const d = document.createElement('p'); d.style.cssText = 'padding:24px;font-size:14px'; d.textContent = 'ログインの部品を読み込めませんでした。画面を読み直してください。'; document.body.insertBefore(d, document.body.firstChild); }   // 読み込めないときは開けない
   window.hubPresetFukunaga = function () {
     const set = (id, v) => { const el = $(id); if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; };
     set('job', 'A5T-16P-L');

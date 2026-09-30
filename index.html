@@ -1970,6 +1970,16 @@ setTimeout(_removeBootLoader_, 5000);
         <div id="ai-cost-estimate-box" style="font-size:12px;margin-top:6px"></div>
       </div>
     </div>
+    <!-- UTSUSHI-CATCHUP: FileMaker の写しがどこまで追いついているか。止まっていたら追いつかせる（本多・福永） -->
+    <div id="fm-utsushi-box" class="card" style="margin-top:12px;border-left:4px solid #0369a1;display:none">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <b>🗄 FileMaker の写し（受注の索引）</b>
+        <span style="font-size:11.5px;color:#64748b">毎晩 2 時に FileMaker から写しています。Drive が満杯などで止まると、案件管理・受注一覧に最新の伝票が出なくなります</span>
+        <button class="btn" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="fmUtsushiCheck()">どこまで写せているか</button>
+        <button class="btn btn-p" style="font-size:11px;padding:3px 10px" onclick="fmUtsushiCatchup()">止まっていた分を追いつかせる</button>
+      </div>
+      <div id="fm-utsushi-msg" style="font-size:12px;margin-top:6px;color:#334155"></div>
+    </div>
   </div>
   <!-- 状態で絞り込み (運用中/試作/開発中/停止中) -->
   <div id="tools-status-filter" style="display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 6px"></div>
@@ -26857,9 +26867,13 @@ var TOOLS_REGISTRY = [
     desc: 'Excelを開かずにxlsxをPDF化。図形/テキストボックス内の文字も拾って描画するので、「印刷するとテキストボックスの文字が消える」xlsxの救済に。日本語はブラウザのフォントで描画→A4 PDF出力。PC内処理・送信なし。',
     status: '試作', tag: '共通', companies: [] },
   { href: 'tools/oricho-menzuke.html', icon: '📐', name: '折丁面付台（折り丁の面付・刷版用PDF）',
-    desc: '折り方（縦横どちらから・どちらへ折るか・表裏の見当）から<b>表／裏の面付表</b>を作り、PDF を放り込むと塗り足し・ノド削り・トンボ・背丁付きの刷版用 PDF を書き出す。既定は A5タテ 16p 左無線（4列×2段）。用紙・仕上がりのプリセットあり。',
+    desc: '<b>関連会社にも公開（開くときにログイン）</b>。折り方（縦横どちらから・どちらへ折るか・表裏の見当）から<b>表／裏の面付表</b>を作り、PDF を放り込むと塗り足し・ノド削り・トンボ・背丁付きの刷版用 PDF を書き出す。既定は A5タテ 16p 左無線（4列×2段）。用紙・仕上がりのプリセットあり。',
     status: '試作', tag: '制作', companies: [] },
-  // MNTU-3: 面付は単体ページ化 (ログイン不要・別タブで現場利用)
+  // MENZUKE-1: 折丁面付台は関連会社にも公開。開くときにログイン（Google か ログインID＋パスワード）。公開の範囲は本多・福永が決める
+  { href: 'tools/menzuke-settei.html', icon: '🔐', name: '面付ツール 公開設定（どの会社に公開するか・利用者・パターン）',
+    desc: '折丁面付台を<b>どの会社に・どこまで公開するか</b>を決めます。会社ごとに「使える／全体のパターンを見る／自社のパターンを登録できる」、利用者の登録（Google アカウントか ログインID＋仮パスワード）、各社のパターンを全体に上げる・重なりをまとめる。変えられるのは本多・福永だけです。',
+    status: '試作', tag: '制作', cat: '業務効率化ツール', companies: ['TK'], superOnly: true },
+  // MNTU-3: 面付は単体ページ化 (別タブで現場利用)。MENZUKE-1 でログインが要るようになった
   { href: 'tools/data-gen.html', icon: '🖨', name: 'データ生成（差込・ラベル・名刺・連番）',
     desc: 'CSV/入力からPDFをブラウザ内生成しDTPを軽減。📋差し込み(CSV→多面)／🏷宛名ラベル(12/24/44面)／💳名刺(10面)／🔢連番・ナンバリング。日本語OK・PC内処理。',
     status: '試作', tag: '制作', companies: [] },
@@ -26870,6 +26884,7 @@ var TOOLS_REGISTRY = [
 var TOOLS_ADMIN_CODE = 'TK'; // トキワ印刷=管理会社 (全ツール閲覧可)
 function _toolVisibleForCompany_(t){
   var code = (typeof currentAuth!=='undefined' && currentAuth.companyCode) || '';
+  if(t.superOnly) return (typeof _isSuperAdmin_==='function') && _isSuperAdmin_();   // MENZUKE-1: 本多・福永だけ
   if(code === TOOLS_ADMIN_CODE) return true;           // 管理会社は全部
   if((currentAuth && currentAuth.role) === 'admin') return true; // システム管理者も全部
   if(!t.companies || !t.companies.length) return true; // 全社共通
@@ -26940,6 +26955,26 @@ function showAiCostEstimate(){
     + '<div style="font-size:10.5px;color:#64748b;margin-top:5px">※ 日本語1字≒1トークンの概算（署名/引用で±50%程度ぶれます）。Gemini無料枠内なら実質¥0の可能性あり。要約は1メール1回のみ・迷惑メールは対象外。実額は「💰今日の使用量」で確定します。</div>'
     + '</div>';
 }
+// UTSUSHI-CATCHUP: FileMaker の写しの状態と追いつき
+function fmUtsushiCheck(){
+  var el=document.getElementById('fm-utsushi-msg'); if(!el) return; el.textContent='確かめています…';
+  if(!_hubFmOn_()){ el.innerHTML='<span style="color:#b45309">FileMaker（中継）にログインしていません。受注入力を一度開いてログインしてください</span>'; return; }
+  FM.呼ぶ('写し_健康',[]).then(function(r){
+    var d=String(r.最新の修正日||''); var m=/^(\d\d)\/(\d\d)\/(\d{4})$/.exec(d); var iso=m?(m[3]+'-'+m[1]+'-'+m[2]):''; var days=iso?Math.floor((Date.now()-new Date(iso+'T00:00:00').getTime())/864e5):null;
+    var warn=(days!=null&&days>=3);
+    el.innerHTML='写せている一番新しい修正日: <b style="'+(warn?'color:#b91c1c':'color:#166534')+'">'+(iso||'不明')+'</b>'+(days!=null?'（'+days+' 日前）':'')+'　索引 '+Number(r.件数||0).toLocaleString()+' 件　置き場: '+_escDiff(String(r.置き場||''))+'　毎晩の登録: '+(r.毎晩の登録?'あり':'<span style="color:#b91c1c">なし</span>')
+      +(warn?'<div style="color:#b91c1c;margin-top:4px">3 日以上止まっています。info@ の Drive が満杯だと写しに書けません。空きを作ってから「止まっていた分を追いつかせる」を押してください</div>':'');
+  }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">確かめられませんでした: '+_escDiff(String(e.message||e))+'</span>'; });
+}
+function fmUtsushiCatchup(){
+  var el=document.getElementById('fm-utsushi-msg'); if(!el) return;
+  if(!_hubFmOn_()){ el.innerHTML='<span style="color:#b45309">FileMaker（中継）にログインしていません</span>'; return; }
+  var d=prompt('いつ以降の修正を写し直しますか？（YYYY-MM-DD。空のままなら、写せている一番新しい修正日の前日から）',''); if(d===null) return;
+  var 以降=''; if(d.trim()){ var m=/^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(d.trim()); if(!m){ el.textContent='日付は 2026-09-24 のように入れてください'; return; } 以降=('0'+m[2]).slice(-2)+'/'+('0'+m[3]).slice(-2)+'/'+m[1]; }
+  el.textContent='FileMaker から写し直しています（数分かかることがあります）…';
+  FM.呼ぶ('写し_追いつく',[以降]).then(function(r){ var x=r.結果||{}; el.innerHTML='<span style="color:#166534">追いつきました: '+_escDiff(String(r.以降))+' 以降の修正 '+Number(x.件数||0)+' 件（更新 '+Number(x.更新||0)+'・追加 '+Number(x.追加||0)+'）</span>'; try{ window._fmIdxCache_=null; }catch(e){} setTimeout(fmUtsushiCheck,500); })
+    .catch(function(e){ el.innerHTML='<span style="color:#b91c1c">追いつけませんでした: '+_escDiff(String(e.message||e))+'</span>'+(/quota|storage|容量|満杯|exceeded/i.test(String(e.message))?'<div>Drive の空きが無いと写しに書けません。ゴミ箱を空にするか、写しのフォルダを共有ドライブへ移してからやり直してください</div>':''); });
+}
 async function testGasAi(){
   var out = document.getElementById('aikey-test');
   out.innerHTML='🧪 GAS経由でAI接続テスト中...';
@@ -26957,6 +26992,7 @@ async function testGasAi(){
 }
 function renderToolsPage(){
   if(typeof updateAiKeyStatus==='function') updateAiKeyStatus();
+  try{ var ub=document.getElementById('fm-utsushi-box'); if(ub) ub.style.display=(typeof _isSuperAdmin_==='function'&&_isSuperAdmin_())?'':'none'; }catch(e){}   // UTSUSHI-CATCHUP
   var el = document.getElementById('tools-list'); if(!el) return;
   closeInternalTool(true);
   var stBadge = function(s, i){
