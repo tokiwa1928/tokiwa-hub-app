@@ -55570,7 +55570,7 @@ async function _inqUnzipAttachment_(inqId, attIdx){
 // ═══════════ ACTION-1: アクションを見逃さない ═══════════
 // 出来事ごとの「次に必ずやること」。証拠は Hub の記録から自動で拾う（evidence）。how は「やる」ボタンの動き
 var INQ_EVENTS = {
-  proof_ok:     { label:'校了',      steps:[ { k:'internal', label:'社内へ校了連絡（次の工程へ）', how:'internal', evidence:['internal','proofing_ok'] }, { k:'step', label:'案件の工程「校了」を進める', how:'step', evidence:['step'] }, { k:'seizo', label:'製造指示書を出す', how:'seizo', evidence:['seizo'] } ] },
+  proof_ok:     { label:'校了',      steps:[ { k:'proofok', label:'校正BOXを校了にする（押すと校了にして校正BOXへ）', how:'proofok', evidence:['proofing_ok'] }, { k:'internal', label:'社内へ校了連絡（次の工程へ）', how:'internal', evidence:['internal'] } ] },   // PROOF-OK: 校了メールが来たら、まず校正BOXを校了に。案件の工程「校了」もそのとき一緒に進める
   order:        { label:'発注',      kind:'order',        steps:[ { k:'register', label:'受注（案件）にする', how:'project', evidence:['project'] }, { k:'internal', label:'社内へ受注連絡', how:'internal', evidence:['internal'] } ] },
   proof_return: { label:'校正戻し',  kind:'proof_return', steps:[ { k:'internal', label:'修正を担当へ連絡', how:'internal', evidence:['internal','proofing_any'] }, { k:'proof', label:'校正BOXに戻りを登録', how:'proof', evidence:['proofing_any'] } ] },
   quote_req:    { label:'見積依頼',  kind:'quote_req',    steps:[ { k:'quote', label:'見積を作って送る', how:'quote', evidence:['quote'] } ] },
@@ -55609,8 +55609,8 @@ function _inqActionState_(inq){
     }
     if(kind === 'proofing_ok' || kind === 'proofing_any'){
       var prfs = (DB.proofings||[]).filter(function(p){ return p && ((proj && p.projectId === proj.id) || p.fromInquiryId === inq.id); });
-      var hit2 = prfs.find(function(p){ var st = String(p.status||''); var ok = /校了|完了|approved|final/.test(st); return (kind === 'proofing_ok' ? ok : true) && after(p.updatedAt||p.createdAt); });
-      return hit2 ? { at: hit2.updatedAt||hit2.createdAt, by: '', how: '校正BOX ' + (hit2.status||'') } : null;
+      var hit2 = prfs.find(function(p){ var st = String(p.status||''); var ok = /校了|完了|approved|final/.test(st) || !!((typeof _proofStatusMeta_==='function') && _proofStatusMeta_(st).done); return (kind === 'proofing_ok' ? ok : true) && after(p.lastMoveAt||p.updatedAt||p.createdAt); });
+      return hit2 ? { at: hit2.lastMoveAt||hit2.updatedAt||hit2.createdAt, by: '', how: '校正BOX ' + ((typeof _proofStatusMeta_==='function') ? _proofStatusMeta_(hit2.status).label : hit2.status||'') } : null;
     }
     if(kind === 'step'){ if(!proj) return null; var sv = String((proj.steps||{})['校了']||''); return /校了|OK|完了/.test(sv) ? { at: (proj.stepDates||{})['校了']||'', by: '', how: '案件の工程 校了＝' + sv } : null; }
     if(kind === 'seizo'){ if(!fmNo || typeof _sagyoPrintsOf_ !== 'function') return null; var pr = _sagyoPrintsOf_(fmNo).filter(function(r){ return after(r.at); }); var last = pr[pr.length-1]; return last ? { at: last.at, by: last.by||'', how: '製造指示書 第' + (last.n||'?') + '回' } : null; }
@@ -55689,10 +55689,48 @@ function _inqDoAction_(inqId, k){
     if(typeof saveDB === 'function') saveDB(); _toastMsg && _toastMsg('✅ 案件 ' + st.proj.id + ' の工程「校了」を進めました');
     openInquiryDetail(inqId); renderInquiryList(); return;
   }
+  if(how === 'proofok'){ _inqProofOk_(inqId, st); return; }   // PROOF-OK
   if(how === 'seizo'){ if(!st || !st.fmNo) return alert('この案件には FileMaker の伝票番号がありません。案件管理で伝票を紐づけてから出してください'); window.open('tools/sagyo.html?no=' + encodeURIComponent(st.fmNo) + '&type=seizo', '_blank'); return; }
   if(how === 'project'){ if(typeof _inqTransferToOrder_ === 'function') _inqTransferToOrder_(inqId); return; }
   if(how === 'quote'){ if(typeof _inqTransferToEstimate_ === 'function') _inqTransferToEstimate_(inqId); return; }
   if(how === 'proof'){ if(typeof forwardInquiryToProofing === 'function') forwardInquiryToProofing(inqId); return; }
+}
+// PROOF-OK: 校了メール → 校正BOX の該当カードを校了にして、校正BOXに飛ぶ（案件の工程「校了」も進める）
+function _inqProofCandidates_(inq, proj){
+  var all = (DB.proofings||[]).filter(function(p){ return p && !p.isDraft; });
+  var doneKey = (typeof _proofStatuses_ === 'function') ? ((_proofStatuses_().find(function(x){ return x.done; })||{}).key || '') : '';
+  var notDone = function(p){ return String(p.status||'') !== doneKey && !/校了|approved|final/.test(String(p.status||'')); };
+  var direct = all.filter(function(p){ return (proj && p.projectId === proj.id) || p.fromInquiryId === inq.id; });
+  if(direct.length) return direct.filter(notDone).length ? direct.filter(notDone) : direct;
+  var key = String(inq.from_company || inq.custName || '').replace(/株式会社|有限会社|\s/g, '');
+  if(!key) return [];
+  return all.filter(function(p){ var c = String(p.custName||'').replace(/株式会社|有限会社|\s/g, ''); return c && (c.indexOf(key) >= 0 || key.indexOf(c) >= 0); }).filter(notDone)
+    .sort(function(a, b){ return String(b.lastMoveAt||b.updatedAt||'').localeCompare(String(a.lastMoveAt||a.updatedAt||'')); });
+}
+function _inqProofOk_(inqId, st){
+  var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }); if(!inq) return;
+  var proj = st && st.proj; var cands = _inqProofCandidates_(inq, proj);
+  var go = function(p){ var doneKey = ((_proofStatuses_().find(function(x){ return x.done; })||{}).key) || 'approved';
+    p.timeline = p.timeline || []; p.timeline.push({ type:'note', at:new Date().toISOString(), by:(currentAuth && currentAuth.userName)||'', text:'✅ 校了の連絡（問い合わせ ' + inq.id + '：' + String(inq.subject||'').slice(0, 40) + '）' });
+    if(!p.fromInquiryId) p.fromInquiryId = inq.id;
+    updateProofingStatus(p.id, doneKey);
+    // 案件の工程「校了」も進める
+    try { var pr = proj || (DB.projects||[]).find(function(x){ return x.id === p.projectId; }); if(pr){ pr.steps = pr.steps || {}; var opts = (typeof PROC_OPTIONS !== 'undefined' && PROC_OPTIONS['校了']) || []; pr.steps['校了'] = opts.indexOf('校了') >= 0 ? '校了' : (opts[opts.length-1] || '完了'); pr.stepDates = pr.stepDates || {}; pr.stepDates['校了'] = new Date().toISOString().slice(0, 10); } } catch(e){}
+    if(typeof saveDB === 'function') saveDB();
+    var b = document.querySelector('.tb-btn[data-page="proofing"]'); if(typeof swPage === 'function') swPage('proofing', b);
+    setTimeout(function(){ try { if(typeof renderProofingList === 'function') renderProofingList(); showProofingDetail(p.id); } catch(e){} }, 300);
+    if(typeof _toastMsg === 'function') _toastMsg('✅ 校正BOX「' + (p.prodName||p.name||'') + '」を校了にしました');
+  };
+  if(cands.length === 1){ if(confirm('校正BOX の「' + (cands[0].custName||'') + ' / ' + (cands[0].prodName||cands[0].name||'') + '」を校了にします。よろしいですか？')) go(cands[0]); return; }
+  if(cands.length > 1){
+    var m = document.createElement('div'); m.className = 'proof-modal'; m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto';
+    m.innerHTML = '<div style="background:#fff;border-radius:10px;max-width:520px;width:100%;overflow:hidden"><div style="padding:12px 16px;background:#166534;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>どの校正を校了にしますか</b><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer">×</button></div><div style="padding:12px 16px;display:flex;flex-direction:column;gap:6px">'
+      + cands.map(function(p, i){ return '<div data-i="' + i + '" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;cursor:pointer"><b>' + _escDiff(p.prodName||p.name||'') + '</b><div style="font-size:11px;color:#64748b">' + _escDiff(p.custName||'') + ' ／ ' + _escDiff(p.projectId||'') + ' ／ いま: ' + _escDiff((typeof _proofStatusMeta_ === 'function' ? _proofStatusMeta_(p.status).label : p.status)||'') + '</div></div>'; }).join('') + '</div></div>';
+    m.querySelectorAll('div[data-i]').forEach(function(d){ d.onclick = function(){ m.remove(); go(cands[+d.getAttribute('data-i')]); }; });
+    document.body.appendChild(m); return;
+  }
+  alert('この問い合わせに合う校正BOXのカードが見つかりません。\n\n校正BOXで該当のカードを開き、段階を「校了」にしてください（得意先: ' + (inq.from_company||inq.custName||'') + '）');
+  var b2 = document.querySelector('.tb-btn[data-page="proofing"]'); if(typeof swPage === 'function') swPage('proofing', b2);
 }
 async function _inqAiActionCheck_(inqId){
   var inq = (DB.inquiries||[]).find(function(i){ return i.id === inqId; }); if(!inq) return;
