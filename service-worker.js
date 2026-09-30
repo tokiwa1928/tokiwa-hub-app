@@ -48,6 +48,14 @@ self.addEventListener('activate', (event) => {
 });
 
 // ─── fetch: リクエスト処理 ───
+// SW-IFRAME-1: Hub の中に組み込んだ画面（iframe）か、tools/ の画面か
+function isEmbedded(req, url) { return req.destination === 'iframe' || req.destination === 'embed' || url.pathname.includes('/tools/'); }
+function offlinePage() {
+  return new Response('<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<body style="margin:0;font-family:system-ui,sans-serif;background:#f8fafc;color:#334155"><div style="max-width:520px;margin:48px auto;padding:20px 24px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;line-height:1.8">'
+    + '<b style="font-size:15px">この画面を読み込めませんでした</b><div style="font-size:13px;margin-top:6px">通信が切れているか、サーバーに届きませんでした。ネットワークを確かめて、<a href="javascript:location.reload()">もう一度読み込む</a>か、いったん別の画面へ移ってから戻ってください。</div></div></body></html>',
+    { status: 503, headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' } });
+}
 self.addEventListener('fetch', (event) => {
   const req = event.request;
 
@@ -101,7 +109,9 @@ self.addEventListener('fetch', (event) => {
           }
           return res;
         })
-        .catch(() => caches.match(req).then((c) => c || caches.match('./index.html')))
+        // SW-IFRAME-1（本多さん 9/30「サイドバーがだぶる」）: 通信に失敗したとき、組み込みの画面（iframe の tools/…）に index.html を返すと
+        //   Hub の中に Hub がもう一つ出てしまう。検索文字列（?mode=…&t=…）を無視して同じ画面の控えを探し、無ければ短い案内を返す
+        .catch(() => caches.match(req, { ignoreSearch: true }).then((c) => c || (isEmbedded(req, url) ? offlinePage() : caches.match('./index.html'))))
     );
     return;
   }
@@ -130,7 +140,7 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => {
           // オフライン + 未キャッシュ → index.html を返してナビゲーションを救う
-          if (req.mode === 'navigate') return caches.match('./index.html');
+          if (req.mode === 'navigate') return isEmbedded(req, url) ? offlinePage() : caches.match('./index.html');   // SW-IFRAME-1
           return new Response('Offline', { status: 503 });
         });
     })
