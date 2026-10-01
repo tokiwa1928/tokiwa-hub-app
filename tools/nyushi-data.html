@@ -53,6 +53,9 @@
   .fig .t{ position:absolute; left:0; top:-18px; font-size:10px; background:var(--fig); color:#fff; padding:0 6px; white-space:nowrap; }
   .fig .rz{ position:absolute; right:-6px; bottom:-6px; width:12px; height:12px; background:var(--fig); cursor:nwse-resize; }
   .sel{ position:absolute; border:1.5px dashed var(--fig); background:var(--fig-soft); pointer-events:none; }
+  .lay{ position:absolute; inset:0; pointer-events:none; }
+  .lay svg{ position:absolute; left:0; top:0; width:100%; height:100%; }
+  .lay path{ fill:rgba(220,38,38,.55); stroke:none; }
   .list{ max-height:220px; overflow:auto; font-size:12px; border-top:1px solid var(--line); }
   .list div{ padding:2px 0; border-bottom:1px solid #f0ede7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
   .list div:hover{ background:var(--accent-soft); }
@@ -81,13 +84,15 @@
     <h2>3. 直す・図を決める</h2>
     <div class="f"><button id="modeText" aria-pressed="true">文字を直す</button><button id="modeFig" aria-pressed="false">図を囲む</button></div>
     <div class="small">文字の枠を押すと直せます（<kbd>Enter</kbd> で確定、空にすると消えます）。「図を囲む」でドラッグした範囲は図として元の画像のまま入ります（式・グラフ・絵）。図の中の文字は消します。</div>
-    <div class="f"><label><input type="checkbox" id="traceFig"> 図は線をなぞって線画（ベクター）にする</label></div>
+    <div class="f"><label><input type="checkbox" id="layoutOn" checked> 罫線・枠・図形もなぞって線画で入れる（レイアウト）</label></div>
+    <div class="f"><label><input type="checkbox" id="showLayout"> 画面にレイアウトの線を重ねて見る</label><span class="small" id="layoutInfo"></span></div>
+    <div class="f"><label><input type="checkbox" id="traceFig"> 図（囲んだ所）も線をなぞって線画にする（写真は画像のままがよい）</label></div>
     <div class="f"><button class="s" id="addLine">＋ 文字の枠を足す</button><button class="s" id="dropLow">読み取りの自信が低い枠を消す</button><button class="s" id="clearPage">このページの結果を消す</button></div>
     <div class="list" id="lines"></div>
     <h2>4. 書き出す</h2>
     <div class="f"><label>文字の書体</label><select id="font"><option value="BIZ UDPGothic, Yu Gothic, Meiryo, sans-serif">ゴシック</option><option value="BIZ UDPMincho, Yu Mincho, serif">明朝</option></select></div>
     <div class="f"><button class="p" id="exportSvg">SVG で書き出す（Illustrator 用）</button><button id="exportTxt">TXT</button></div>
-    <div class="small">SVG は 1 ページ 1 ファイルで ZIP にまとめます。Illustrator で開くと文字は文字のまま（書体は PC にあるものに置き換わります）。.ai／.eps は Illustrator から保存してください。縦書きは横書きの行で入るので、Illustrator で「縦組み」にしてください。</div>
+    <div class="small">SVG は 1 ページ 1 ファイルで ZIP にまとめます。層は「罫線・枠」（線画）・「図」・「文字」（段落ごと）。Illustrator で開くと文字は文字のまま（書体は PC にあるものに置き換わります）。.ai／.eps は Illustrator から保存してください。縦書きは横書きの行で入るので、Illustrator で「縦組み」にしてください。</div>
   </div>
   <div class="panel" style="padding:8px">
     <div class="f" style="justify-content:space-between"><span id="pageInfo" class="small">—</span><span class="f"><label>倍率</label><input type="range" id="zoom" min="0.2" max="1.5" step="0.05" value="0.5"></span></div>
@@ -158,7 +163,7 @@
     if (!p.url) p.url = p.canvas.toDataURL('image/jpeg', 0.85);
     sh.innerHTML = '<img src="' + p.url + '" alt=""><div class="ov" id="ov"></div>';
     $('pageInfo').textContent = (cur + 1) + ' / ' + pages.length + '　' + p.name + '　' + Math.round(p.wmm) + '×' + Math.round(p.hmm) + 'mm・' + Math.round(p.dpi) + 'dpi' + (p.done ? '　読み取り済み（' + p.lines.length + ' 行・図 ' + p.figs.length + '）' : '　まだ読み取っていません');
-    drawOverlay(); renderList();
+    drawOverlay(); renderList(); showLayoutOverlay();
   }
   function drawOverlay() {
     var p = P(), ov = $('ov'); if (!p || !ov) return; ov.innerHTML = '';
@@ -225,12 +230,16 @@
     try {
       say((i + 1) + ' ページ目を読み取っています…'); $('prog').style.display = '';
       var res = await w.recognize(p.canvas); var d = res.data; var out = [];
-      (d.lines || []).forEach(function (l) { var t = String(l.text || '').replace(/\s+$/, '').replace(/\n/g, ''); if (!t.trim()) return; var b = l.bbox; if (!b || b.x1 - b.x0 < 4 || b.y1 - b.y0 < 4) return;
+      // 段落ごとにまとめる（レイアウト）。段落の番号を行に持たせる
+      var paraNo = 0, lineList = [];
+      (d.blocks || []).forEach(function (bl) { (bl.paragraphs || []).forEach(function (pa) { paraNo++; (pa.lines || []).forEach(function (l) { lineList.push({ l: l, para: paraNo }); }); }); });
+      if (!lineList.length) (d.lines || []).forEach(function (l) { lineList.push({ l: l, para: ++paraNo }); });
+      lineList.forEach(function (it) { var l = it.l; var t = String(l.text || '').replace(/\s+$/, '').replace(/\n/g, ''); if (!t.trim()) return; var b = l.bbox; if (!b || b.x1 - b.x0 < 4 || b.y1 - b.y0 < 4) return;
         if (!v) t = t.replace(/([^\x20-\x7e])\s+(?=[^\x20-\x7e])/g, '$1');   // 日本語の間の空白は読み取りの癖なので詰める
-        out.push({ x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0, text: t, conf: Number(l.confidence || 0), v: v }); });
+        out.push({ x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0, text: t, conf: Number(l.confidence || 0), v: v, para: it.para }); });
       // 図の中の行は入れない
       out = out.filter(function (l) { var cx = l.x + l.w / 2, cy = l.y + l.h / 2; return !p.figs.some(function (f) { return cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h; }); });
-      p.lines = out; p.done = true; renderPages(); if (i === cur) show();
+      p.lines = out; p.done = true; p.layoutSvg = null; renderPages(); if (i === cur) show();
       var low = out.filter(function (l) { return l.conf < 60; }).length;
       say((i + 1) + ' ページ目: ' + out.length + ' 行を読み取りました' + (low ? '（赤い枠 ' + low + ' 行は自信が低いので確かめてください）' : '') + '。枠を押すと直せます。');
     } catch (e) { say('読み取れませんでした: ' + String(e.message || e), true); }
@@ -238,6 +247,35 @@
   }
   $('ocrOne').onclick = function () { if (cur >= 0) ocr(cur); else say('先にスキャンを読み込んでください', true); };
   $('ocrAll').onclick = async function () { if (!pages.length) { say('先にスキャンを読み込んでください', true); return; } for (var i = 0; i < pages.length; i++) { if (busy) await new Promise(function (r) { setTimeout(r, 300); }); await ocr(i); } say('全ページを読み取りました。ページの番号を押して確かめてください。'); };
+
+  /* ---------- レイアウト（罫線・枠・図形）: 文字と図を消した残りを線画に ---------- */
+  function layoutSvgOf(p) {
+    if (p.layoutSvg != null && p.layoutKey === layoutKeyOf(p)) return p.layoutSvg;
+    var sc = Math.min(1, 1600 / p.w);   // なぞるのは横 1600px まで（速さのため）。座標は元に戻す
+    var c = document.createElement('canvas'); c.width = Math.round(p.w * sc); c.height = Math.round(p.h * sc); var g = c.getContext('2d');
+    g.drawImage(p.canvas, 0, 0, c.width, c.height);
+    var id = g.getImageData(0, 0, c.width, c.height), d = id.data;
+    for (var i = 0; i < d.length; i += 4) { var k = (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) < 150 ? 0 : 255; d[i] = d[i + 1] = d[i + 2] = k; d[i + 3] = 255; }   // 2 値に
+    g.putImageData(id, 0, 0);
+    g.fillStyle = '#fff';
+    p.lines.forEach(function (l) { g.fillRect((l.x - 3) * sc, (l.y - 3) * sc, (l.w + 6) * sc, (l.h + 6) * sc); });   // 文字の枠は消す
+    p.figs.forEach(function (f) { g.fillRect(f.x * sc, f.y * sc, f.w * sc, f.h * sc); });                                  // 図の枠も消す（図は別に入れる）
+    var inner = '';
+    try { var s2 = ImageTracer.imagedataToSVG(g.getImageData(0, 0, c.width, c.height), { ltres: 1, qtres: 1, pathomit: 10, colorsampling: 0, numberofcolors: 2, blurradius: 0, strokewidth: 0, roundcoords: 1, viewbox: false, desc: false, scale: 1 / sc });
+      var m = /<svg[^>]*>([\s\S]*)<\/svg>/.exec(s2); inner = m ? m[1] : '';
+      inner = inner.replace(/<path[^>]*fill="rgb\((?:2[0-5]\d|1[89]\d),(?:2[0-5]\d|1[89]\d),(?:2[0-5]\d|1[89]\d)\)"[^>]*\/>/g, '');   // 白い塗りは落とす
+    } catch (e) { inner = ''; }
+    p.layoutSvg = inner; p.layoutKey = layoutKeyOf(p); return inner;
+  }
+  function layoutKeyOf(p) { return p.lines.length + ':' + p.lines.map(function (l) { return l.x + ',' + l.y + ',' + l.w + ',' + l.h; }).join('|').length + ':' + JSON.stringify(p.figs); }
+  function showLayoutOverlay() {
+    var p = P(), ov = $('ov'); if (!p || !ov) return; var old = ov.querySelector('.lay'); if (old) old.remove();
+    if (!$('showLayout').checked) { $('layoutInfo').textContent = ''; return; }
+    $('layoutInfo').textContent = '線をなぞっています…';
+    setTimeout(function () { var inner = layoutSvgOf(p); var d = document.createElement('div'); d.className = 'lay'; d.innerHTML = '<svg viewBox="0 0 ' + p.w + ' ' + p.h + '" xmlns="http://www.w3.org/2000/svg">' + inner + '</svg>'; ov.appendChild(d);
+      var n = (inner.match(/<path /g) || []).length; $('layoutInfo').textContent = '赤＝線画になる所（' + n + ' 個）。文字と図の中は入りません。'; }, 30);
+  }
+  $('showLayout').addEventListener('change', showLayoutOverlay);
 
   /* ---------- 書き出し ---------- */
   function cropPng(p, f) { var c = document.createElement('canvas'); c.width = f.w; c.height = f.h; c.getContext('2d').drawImage(p.canvas, f.x, f.y, f.w, f.h, 0, 0, f.w, f.h); return c; }
@@ -247,18 +285,21 @@
       inner = inner.replace(/<path[^>]*fill="rgb\(2[45]\d,2[45]\d,2[45]\d\)"[^>]*\/>/g, '');   // 白い塗りは落とす
       return inner; } catch (e) { return ''; }
   }
-  function pageSvg(p, fontFamily, trace) {
-    var mmX = p.wmm / p.w, mmY = p.hmm / p.h;   // px → mm
+  function pageSvg(p, fontFamily, trace, layout) {
     var s = '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="' + p.wmm.toFixed(2) + 'mm" height="' + p.hmm.toFixed(2) + 'mm" viewBox="0 0 ' + p.w + ' ' + p.h + '">\n';
+    if (layout) { var lay = layoutSvgOf(p); s += '<g id="罫線・枠">\n' + (lay || '') + '</g>\n'; }   // NYUSHI-2: 罫線・枠・図形
     s += '<g id="図">\n';
     p.figs.forEach(function (f, i) { var c = cropPng(p, f);
       if (trace) { var inner = traceSvg(c); if (inner) { s += '<g id="図' + (i + 1) + '" transform="translate(' + f.x + ' ' + f.y + ')">' + inner + '</g>\n'; return; } }
       s += '<image id="図' + (i + 1) + '" x="' + f.x + '" y="' + f.y + '" width="' + f.w + '" height="' + f.h + '" xlink:href="' + c.toDataURL('image/png') + '"/>\n'; });
     s += '</g>\n<g id="文字" font-family="' + esc(fontFamily) + '" fill="#000">\n';
     var order = p.lines.slice().sort(function (a, b) { return a.v ? (b.x - a.x) || (a.y - b.y) : (a.y - b.y) || (a.x - b.x); });
-    order.forEach(function (l) { var fs = fontSizeOf(l);
+    var curPara = null, open = false;   // 段落ごとに <g> でまとめる（Illustrator ではグループになる）
+    order.forEach(function (l) { var fs = fontSizeOf(l); var pa = (l.para == null) ? 'x' + Math.round(l.y) : l.para;
+      if (pa !== curPara) { if (open) s += '</g>\n'; s += '<g id="段落' + esc(String(pa)) + '">\n'; curPara = pa; open = true; }
       if (l.v) s += '<text x="' + (l.x + l.w / 2).toFixed(1) + '" y="' + l.y.toFixed(1) + '" font-size="' + fs + '" writing-mode="tb" glyph-orientation-vertical="0" text-anchor="start">' + esc(l.text) + '</text>\n';
       else s += '<text x="' + l.x.toFixed(1) + '" y="' + (l.y + l.h * 0.84).toFixed(1) + '" font-size="' + fs + '" textLength="' + l.w + '" lengthAdjust="spacingAndGlyphs">' + esc(l.text) + '</text>\n'; });
+    if (open) s += '</g>\n';
     s += '</g>\n</svg>\n';
     return s;
   }
@@ -266,9 +307,9 @@
   function textOf(p) { var order = p.lines.slice().sort(function (a, b) { return a.v ? (b.x - a.x) || (a.y - b.y) : (a.y - b.y) || (a.x - b.x); }); return order.map(function (l) { return l.text; }).join('\n'); }
   $('exportSvg').onclick = async function () {
     var done = pages.filter(function (p) { return p.done; }); if (!done.length) { say('まだ読み取ったページがありません', true); return; }
-    say('SVG を作っています…'); var zip = new JSZip(); var ff = $('font').value, tr = $('traceFig').checked;
-    done.forEach(function (p) { zip.file(p.name + '.svg', pageSvg(p, ff, tr)); zip.file(p.name + '.txt', textOf(p)); });
-    zip.file('読み方.txt', 'SVG を Illustrator で開くと、文字は文字のまま編集できます。書体は PC にあるものに置き換わります（書体を選び直してください）。\n図は元のスキャンの画像（か線画）です。縦書きのページは横書きの行として入っているので、文字ツールで「縦組み」にしてください。\n.ai や .eps にするときは Illustrator から保存してください。\n');
+    say('SVG を作っています…'); var zip = new JSZip(); var ff = $('font').value, tr = $('traceFig').checked, lo = $('layoutOn').checked;
+    for (var di = 0; di < done.length; di++) { var p = done[di]; say('SVG を作っています… ' + (di + 1) + '/' + done.length); await new Promise(function (r) { setTimeout(r, 10); }); zip.file(p.name + '.svg', pageSvg(p, ff, tr, lo)); zip.file(p.name + '.txt', textOf(p)); }
+    zip.file('読み方.txt', 'SVG を Illustrator で開くと、文字は文字のまま編集できます。書体は PC にあるものに置き換わります（書体を選び直してください）。\n層は「罫線・枠」（スキャンの線をなぞった線画）・「図」（囲んだ所。元の画像か線画）・「文字」（段落ごとのグループ）です。\n縦書きのページは横書きの行として入っているので、文字ツールで「縦組み」にしてください。\n.ai や .eps にするときは Illustrator から保存してください。\n');
     var blob = await zip.generateAsync({ type: 'blob' }); dl(blob, (done[0].name.replace(/_p\d+$/, '') || '文字起こし') + '_SVG.zip'); say(done.length + ' ページを SVG にしました（ZIP）。');
   };
   $('exportTxt').onclick = function () { var done = pages.filter(function (p) { return p.done; }); if (!done.length) { say('まだ読み取ったページがありません', true); return; } dl(new Blob(['﻿' + done.map(function (p) { return '===== ' + p.name + ' =====\n' + textOf(p); }).join('\n\n')], { type: 'text/plain' }), (done[0].name.replace(/_p\d+$/, '') || '文字起こし') + '.txt'); };
