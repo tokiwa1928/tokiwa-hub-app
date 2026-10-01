@@ -2767,15 +2767,67 @@ window.FM見た目 = function () {};
       $('gc-msg').textContent = 外注 ? '' : '外注はありません（＋ 行を足す で登録）';
     }).catch(function (e) { $('gc-msg').textContent = String(e.message || e); });
   }
+  // GAICHU-CODE: 外注先マスタ（コード⇔会社名）。候補と突き合わせに使う
+  function 外注先マスタ表() {
+    var byCode = {}, byName = {}, names = [];
+    try { var c = JSON.parse(localStorage.getItem('fm_master_外注先マスタ') || 'null'); (c && c.行 || []).forEach(function (r) { var cd = String(r['コード'] || r['外注コード'] || '').trim(), nm = String(r['会社名'] || r['外注先名'] || r['名称'] || '').trim(); if (!cd && !nm) return; if (cd) byCode[cd] = nm; if (nm) { byName[外注名寄せ(nm)] = cd; names.push(nm); } }); } catch (e) {}
+    return { byCode: byCode, byName: byName, names: names };
+  }
+  function 外注名寄せ(n) { return String(n || '').normalize('NFKC').replace(/[\s　]/g, '').replace(/\(株\)|株式会社|㈱/g, '㈱').replace(/\(有\)|有限会社|㈲/g, '㈲').toLowerCase(); }
+  // 会社名からコードを引く（名寄せで一致 → 無ければ、その名前で始まる会社が 1 つだけならそれ）
+  function 外注コードを引く(name, M) { M = M || 外注先マスタ表(); var k = 外注名寄せ(name); if (!k) return ''; if (M.byName[k]) return M.byName[k];
+    var 素 = function (x) { return x.replace(/[㈱㈲]/g, ''); }; var ks = 素(k); if (!ks) return '';
+    var hit = Object.keys(M.byName).filter(function (x) { return 素(x) === ks; }); if (hit.length === 1) return M.byName[hit[0]];   // ㈱㈲の有無だけ違う
+    hit = Object.keys(M.byName).filter(function (x) { var xs = 素(x); return xs.indexOf(ks) >= 0 || ks.indexOf(xs) >= 0; }); return hit.length === 1 ? M.byName[hit[0]] : ''; }   // 片方が片方を含む会社が 1 つだけ
+  // 行の コードと会社名をそろえる。会社名が本物（人が見て選ぶのは会社名）。戻り値: 直したか
+  function 外注行をそろえる(o, M) {
+    M = M || 外注先マスタ表(); var cd = String(o.外注コード || '').trim(), nm = String(o.会社名 || '').trim(); var before = cd + '|' + nm;
+    if (nm) { var c2 = 外注コードを引く(nm, M); if (c2) { if (c2 !== cd) o.外注コード = c2; } else if (cd && M.byCode[cd] !== undefined) { o.外注コード = ''; } }   // 会社名がマスタに無いのに、別の会社のコードが残っているときは外す
+    else if (cd && M.byCode[cd]) o.会社名 = M.byCode[cd];
+    return (String(o.外注コード || '') + '|' + String(o.会社名 || '')) !== before;
+  }
+  // GAICHU-FIND（本多さん 10/1「外注先の部分を検索して選択できるように」）: 外注先マスタを探して選ぶ小さな窓。選ぶとコードと会社名が入る
+  function 外注先を探す窓(tr) {
+    var old = $('gc-finder'); if (old) old.remove();
+    var rows = []; try { var c = JSON.parse(localStorage.getItem('fm_master_外注先マスタ') || 'null'); rows = (c && c.行) || []; } catch (e) {}
+    var cI = tr.querySelector('.gc-code'), nI = tr.querySelector('.gc-name'), anchor = tr.querySelector('.gc-find');
+    var box = document.createElement('div'); box.id = 'gc-finder';
+    box.style.cssText = 'position:absolute;z-index:60;background:#fff;border:1px solid #94a3b8;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.25);width:520px;max-width:94vw;padding:8px;font-size:12px';
+    var r0 = anchor.getBoundingClientRect(); box.style.left = Math.max(8, Math.min(r0.left + window.scrollX, window.scrollX + window.innerWidth - 540)) + 'px'; box.style.top = (r0.bottom + window.scrollY + 4) + 'px';
+    box.innerHTML = '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><input id="gc-fq" placeholder="会社名・コード・住所・電話で探す" style="flex:1;font:inherit;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px"><span id="gc-fn" style="color:#64748b;white-space:nowrap"></span><button type="button" class="plain" id="gc-fx">閉じる</button></div>'
+      + '<div id="gc-fl" style="max-height:300px;overflow:auto;border-top:1px solid #e2e8f0"></div>' + (rows.length ? '' : '<div style="color:#b45309;padding:6px">外注先マスタがまだ手元にありません。サインインして少し待つと取れます。</div>');
+    document.body.appendChild(box);
+    var q = box.querySelector('#gc-fq'), L = box.querySelector('#gc-fl');
+    function 描く() {
+      var k = 外注名寄せ(q.value), kr = String(q.value || '').normalize('NFKC').toLowerCase().replace(/[\s　-]/g, '');
+      var hit = rows.filter(function (r) { if (!k && !kr) return true; var nm = 外注名寄せ(r['会社名']); var 他 = String((r['コード'] || '') + ' ' + (r['住所'] || '') + ' ' + (r['TEL'] || '')).normalize('NFKC').toLowerCase().replace(/[\s　-]/g, ''); return nm.indexOf(k) >= 0 || 他.indexOf(kr) >= 0; });
+      hit.sort(function (a, b) { return String(a['コード'] || '').localeCompare(String(b['コード'] || '')); });
+      box.querySelector('#gc-fn').textContent = hit.length + ' 件';
+      L.innerHTML = hit.slice(0, 60).map(function (r) { return '<div class="gc-fi" data-code="' + esc(r['コード'] || '') + '" data-name="' + esc(r['会社名'] || '') + '" style="display:flex;gap:10px;align-items:baseline;padding:5px 6px;border-bottom:1px solid #f1f5f9;cursor:pointer"><span style="font-family:monospace;color:#64748b;width:44px">' + esc(r['コード'] || '') + '</span><b style="min-width:160px">' + esc(r['会社名'] || '') + '</b><span style="color:#64748b;font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc((r['住所'] || '').slice(0, 24)) + (r['TEL'] ? '　☎ ' + esc(r['TEL']) : '') + '</span></div>'; }).join('')
+        + (hit.length > 60 ? '<div style="padding:6px;color:#64748b">ほか ' + (hit.length - 60) + ' 件。言葉を足して絞ってください</div>' : '') + (!hit.length && rows.length ? '<div style="padding:8px;color:#64748b">見つかりません</div>' : '');
+      Array.prototype.forEach.call(L.querySelectorAll('.gc-fi'), function (d) { d.onmouseenter = function () { d.style.background = '#f0f9ff'; }; d.onmouseleave = function () { d.style.background = ''; };
+        d.onclick = function () { cI.value = d.getAttribute('data-code'); nI.value = d.getAttribute('data-name'); 外注行の見た目(tr); box.remove(); try { nI.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} }; });
+    }
+    q.value = nI.value.trim(); 描く(); q.focus(); q.select();
+    q.addEventListener('input', 描く); q.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') box.remove(); if (ev.key === 'Enter') { var f = L.querySelector('.gc-fi'); if (f) f.click(); } });
+    box.querySelector('#gc-fx').onclick = function () { box.remove(); };
+    setTimeout(function () { document.addEventListener('mousedown', function 外(ev) { if (!box.contains(ev.target) && ev.target !== anchor) { box.remove(); document.removeEventListener('mousedown', 外); } }); }, 0);
+  }
+  function 外注行の見た目(tr) {
+    var M = 外注先マスタ表(); var cd = tr.querySelector('.gc-code').value.trim(), nm = tr.querySelector('.gc-name').value.trim(); var c2 = 外注コードを引く(nm, M); var w = tr.querySelector('.gc-warn');
+    var msg = ''; if (nm && !c2 && Object.keys(M.byCode).length) msg = '（外注先マスタに無い会社名。コードは入りません）'; else if (nm && cd && c2 && c2 !== cd) msg = '（コード ' + cd + ' は ' + (M.byCode[cd] || '別の会社') + '。保存時に ' + c2 + ' にそろえます）';
+    if (!w) { w = document.createElement('div'); w.className = 'gc-warn'; w.style.cssText = 'font-size:10.5px;color:#b45309'; tr.querySelector('.gc-name').parentNode.appendChild(w); } w.textContent = msg;
+  }
   function 外注を描く(行) {
     var h = '';
+    var M0 = 外注先マスタ表(); var dl = $('dl-gc-name'); if (!dl) { dl = document.createElement('datalist'); dl.id = 'dl-gc-name'; document.body.appendChild(dl); } if (M0.names.length) dl.innerHTML = M0.names.sort().map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
     for (var i = 1; i <= 4; i++) {
       var x = 行.filter(function (y) { return Number(y.番) === i; })[0];
       if (!x && i > Math.max(1, 行.length)) continue;
       x = x || {};
       h += '<tr data-i="' + i + '"><td>' + i + '</td>'
         + '<td><input class="gc-code" style="width:60px" value="' + esc(x.外注コード || '') + '"></td>'
-        + '<td><input class="gc-name" style="width:180px" value="' + esc(x.会社名 || '') + '"></td>'
+        + '<td style="white-space:nowrap"><input class="gc-name" list="dl-gc-name" style="width:180px" value="' + esc(x.会社名 || '') + '" placeholder="外注先マスタから選ぶ"> <button type="button" class="plain gc-find" title="外注先マスタから探して選ぶ（コードも一緒に入ります）">🔍 検索</button></td>'
         + '<td style="white-space:nowrap"><input class="gc-what" value="' + esc(x.発注内容 || '') + '"> <button type="button" class="plain gc-pickbtn" title="区分（部分外注／完全外注／仕入）と、どこの・どれを を選んで発注内容を組みます">選ぶ ▾</button></td>'
         + '<td><input class="gc-qty n" value="' + esc(x.数量 == null ? '' : x.数量) + '"></td>'
         + '<td><input class="gc-price n" value="' + esc(x.単価 == null ? '' : x.単価) + '"></td>'
@@ -2785,6 +2837,15 @@ window.FM見た目 = function () {};
     $('gc-rows').innerHTML = h;
     外注合計を出す();
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('input.n'), function (el) { el.addEventListener('input', 外注合計を出す); });
+    // GAICHU-CODE: 会社名を入れたらコード、コードを入れたら会社名（外注先マスタ）
+    Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr[data-i]'), function (tr) {
+      var cI = tr.querySelector('.gc-code'), nI = tr.querySelector('.gc-name');
+      nI.addEventListener('change', function () { var M = 外注先マスタ表(); var c2 = 外注コードを引く(nI.value, M); if (c2) { cI.value = c2; if (M.byCode[c2]) nI.value = M.byCode[c2]; } else if (nI.value.trim() && M.byCode[cI.value.trim()] !== undefined) cI.value = ''; 外注行の見た目(tr); });
+      nI.addEventListener('input', function () { 外注行の見た目(tr); });
+      cI.addEventListener('change', function () { var M = 外注先マスタ表(); var nm = M.byCode[cI.value.trim()]; if (nm) nI.value = nm; 外注行の見た目(tr); });
+      var fb = tr.querySelector('.gc-find'); if (fb) fb.onclick = function () { 外注先を探す窓(tr); };
+      外注行の見た目(tr);
+    });
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-pickbtn'), function (b) { b.onclick = function () { 発注内容を選ぶ(b.closest('tr')); }; });
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-ord'), function (b) { 発注ボタンを描く(b, ((手配.外注 || {})[b.getAttribute('data-i')] || {}).ord); b.onclick = function () { 発注を切替(b); 手配が変わった(); }; });
   }
@@ -2861,7 +2922,7 @@ window.FM見た目 = function () {};
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('tr[data-i]'), function (tr) {
       var o = { 番: Number(tr.getAttribute('data-i')), 外注コード: tr.querySelector('.gc-code').value.trim(), 会社名: tr.querySelector('.gc-name').value.trim(),
                 発注内容: tr.querySelector('.gc-what').value.trim(), 数量: tr.querySelector('.gc-qty').value.trim(), 単価: tr.querySelector('.gc-price').value.trim() };
-      if (o.外注コード || o.会社名 || o.数量 || o.発注内容) out.push(o);
+      if (o.外注コード || o.会社名 || o.数量 || o.発注内容) { if (外注行をそろえる(o)) { tr.querySelector('.gc-code').value = o.外注コード || ''; tr.querySelector('.gc-name').value = o.会社名 || ''; } out.push(o); }   // GAICHU-CODE
     });
     return out;
   }
