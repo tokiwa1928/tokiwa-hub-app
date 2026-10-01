@@ -192,6 +192,7 @@
         <div class="w"><label><b>4</b>仕上がりサイズ</label><select id="wizSize"></select>
           <div class="pair" id="wizSizeCustom" style="display:none"><input type="number" id="wizW" step="0.5" placeholder="幅"><span class="x">×</span><input type="number" id="wizH" step="0.5" placeholder="高さ"><span class="unit">mm</span></div></div>
         <div class="w" id="wizPagesBox"><label><b>5</b>ページ数</label><input type="number" id="wizPages" min="4" step="4" value="16" title="冊子の総ページ数（4 の倍数）。折り丁の大きさ（4・8・16・32 ページ折り）を用紙に入る範囲で自動で決めます"></div>
+        <div class="w" id="wizBindBox"><label><b>6</b>製本（どこで製本する）</label><select id="wizBind" title="製本を別の会社に出すときは、その会社の面付の決まり（折り方・ノド削り・背丁・用紙）に合わせます。決まりはパターンとして登録してあるもの（名前が製本会社名で始まるもの）を使います"></select></div>
         <div class="w" id="wizDobuBox" style="display:none"><label><b>5</b>名刺の間（ドブ）</label><select id="wizDobu"><option value="0">ドブ無し（きりっ子・1 刃）</option><option value="3">ドブ 3mm</option></select></div>
         <div class="w"><label>&nbsp;</label><button class="primary" type="button" id="wizGo" style="width:100%;padding:9px 12px">⚙ 自動面付け</button></div>
       </div>
@@ -1756,11 +1757,21 @@
     TK: [{ name: 'A判4切（438×312）', sheet: [438, 312] }, { name: 'A判2切（625×440）', sheet: [625, 440] }, { name: '菊2切（636×469.5）', sheet: [636, 469.5] }, { name: 'A3ノビ（483×329）', sheet: [483, 329] }, { name: 'きりっ子 名刺（A4 210×297）', sheet: [210, 297], meishi: true }]
   };
   const GENERIC = SHEETS.filter(x => x[1]).map(([n, w, h]) => ({ name: n + '（' + w + '×' + h + '）', sheet: [w, h] }));
+  // WIZ-2: 製本会社とその決まり。パターン（内蔵・全体）の名前が会社名で始まるものを、その会社の指示として使う。over＝合うパターンが無いときに自動面付けへ上書きする項目
+  const BINDERIES = [
+    { key: 'bunsen', name: '渋谷文泉閣', over: { foldFirst: 'V', foldV: 'L', foldH: 'T', flipMode: 'LR', nodo: 1, mSpine: true, spineW: 1.2, spineL: 8, spineStart: 12, spineStep: 10, mBlockCenter: true, mFaceCorner: true, mInfo: true }, note: '背丁は 1 折 1 か所・ノドは 3 本トンボ・用紙は A判2裁' }
+  ];
+  function wizBindFill() { const sel = $('wizBind'); sel.innerHTML = '<option value="">製造会社で製本（または自社）</option>' + BINDERIES.map(b => '<option value="' + b.key + '">製本会社: ' + b.name + '（指示どおり）</option>').join('') + '<option value="other">その他の製本会社（指示書を見て手で設定）</option>'; }
+  function wizBindPatterns(b) {   // その製本会社の決まりとして登録されているパターン（内蔵＋全体。名前が会社名で始まる）
+    const out = []; PAT_BUILTIN.forEach((p, i) => { if (p.name.indexOf(b.name) === 0) out.push({ v: 'b' + i, name: p.name, o: p.v }); });
+    patServer().filter(p => p.範囲 === '全体' && String(p.名前 || '').indexOf(b.name) === 0).forEach(p => out.push({ v: 's' + p.id, name: p.名前, o: p.v }));
+    return out;
+  }
   function wizMachines(co) { const m = MACHINES[co] || []; return m.concat(GENERIC.filter(g => !m.some(x => x.sheet[0] === g.sheet[0] && x.sheet[1] === g.sheet[1]))); }
   function wizFillPress() { const sel = $('wizPress'); const was = sel.value; sel.innerHTML = wizMachines($('wizCo').value).map((m, i) => '<option value="' + i + '">' + m.name + '</option>').join(''); sel.value = was; if (sel.value !== was) sel.value = '0'; }
   function wizFillCo() { const sel = $('wizCo'); sel.innerHTML = COMPANIES.map(([c, n]) => '<option value="' + c + '">' + n + '</option>').join(''); const st = mzState(); const mine = st && st.利用者 && st.利用者.会社; sel.value = (mine && COMPANIES.some(x => x[0] === mine)) ? mine : 'TK'; }
   function wizFillSize() { const sel = $('wizSize'); sel.innerHTML = PAGES.map(([n, w, h], i) => '<option value="' + i + '">' + (n === 'カスタム' ? 'その他（寸法を入れる）' : n + '　' + w + '×' + h) + '</option>').join(''); }
-  function wizKindUI() { const k = $('wizKind').value; $('wizPagesBox').style.display = k === 'booklet' ? '' : 'none'; $('wizDobuBox').style.display = k === 'meishi' ? '' : 'none';
+  function wizKindUI() { const k = $('wizKind').value; $('wizPagesBox').style.display = k === 'booklet' ? '' : 'none'; $('wizDobuBox').style.display = k === 'meishi' ? '' : 'none'; $('wizBindBox').style.display = k === 'booklet' ? '' : 'none';
     if (k === 'meishi') { $('wizSize').value = String(PAGES.findIndex(x => x[0] === '名刺 ヨコ')); } else if (k === 'hagaki') { $('wizSize').value = String(PAGES.findIndex(x => x[0] === 'はがき')); }
     $('wizSizeCustom').style.display = $('wizSize').value === String(PAGES.length - 1) ? '' : 'none'; }
   function wizPageSize() { const i = +$('wizSize').value; if (i === PAGES.length - 1) return [num('wizW', 0), num('wizH', 0)]; return [PAGES[i][1], PAGES[i][2]]; }
@@ -1777,6 +1788,15 @@
     const bi = rule ? PAT_BUILTIN.findIndex(p => p.name.indexOf(rule.pattern) === 0) : -1;
     if (bi >= 0) { patApply(PAT_BUILTIN[bi].v); $('patSel').value = 'b' + bi; sum = '<b>' + esc(PAT_BUILTIN[bi].name) + '</b> を呼び出しました。'; job = $('job').value; }
     else if (kind === 'meishi' && mc.meishi) { const dobu = $('wizDobu').value; const i = PAT_BUILTIN.findIndex(p => p.name.indexOf(dobu === '0' ? '名刺10面 ドブ無し' : '名刺10面 ドブ有り') === 0); patApply(PAT_BUILTIN[i].v); $('patSel').value = 'b' + i; sum = '<b>' + esc(PAT_BUILTIN[i].name) + '</b> を呼び出しました（きりっ子用の黒マーク付き）。'; job = $('job').value; }
+    else if (kind === 'booklet' && $('wizBind').value && $('wizBind').value !== 'other' && (() => {   // WIZ-2: 製本会社の決まり（寸法が合うパターン）
+      const b = BINDERIES.find(x => x.key === $('wizBind').value); if (!b) return false;
+      const hit = wizBindPatterns(b).find(p => Math.abs(num0(p.o.pageW) - pw) < 0.01 && Math.abs(num0(p.o.pageH) - ph) < 0.01);
+      if (!hit) return false;
+      patApply(hit.o); $('patSel').value = hit.v; job = $('job').value;
+      const sw = num0(hit.o.sheetW), sh = num0(hit.o.sheetH);
+      sum = '製本会社 <b>' + esc(b.name) + '</b> の決まり <b>' + esc(hit.name) + '</b> を呼び出しました。' + ((Math.abs(sw - W) > 0.01 || Math.abs(sh - H) > 0.01) ? '<span style="color:var(--nodo)">用紙は製本会社の指示（' + sw + '×' + sh + '）にしてあります。選んだ印刷機の用紙（' + W + '×' + H + '）と違うので、印刷機側で確かめてください。</span>' : '');
+      const pages = Math.max(4, Math.round(num('wizPages', 16) / 4) * 4), g = GRIDS[+hit.o.grid] || [2, 1], sig = g[0] * g[1] * 2; sum += '　' + sig + ' ページ折り × ' + Math.ceil(pages / sig) + ' 折' + (pages % sig ? '（最後の折は ' + (pages % sig) + ' ページ分）' : '') + '。';
+      return true; })()) { /* 製本会社のパターンを当てた */ }
     else if (kind === 'booklet') {
       const pages = Math.max(4, Math.round(num('wizPages', 16) / 4) * 4); let best = null;
       GRIDS.forEach((g, gi) => { const sig = g[0] * g[1] * 2; if (sig > pages) return;
@@ -1787,9 +1807,11 @@
       setV('mode', 'booklet'); setV('job', job); setV('sheetW', W); setV('sheetH', H); setV('pageW', best.w); setV('pageH', best.h); setV('grid', String(best.gi));
       setV('foldFirst', 'V'); setV('foldV', 'L'); setV('foldH', 'T'); setV('flipMode', 'LR'); setV('bleed', b); setV('nodo', 1); setV('fit', 'actual');
       setV('mFaceCorner', true); setV('mFaceCenter', false); setV('mBlockCorner', true); setV('mBlockCenter', true); setV('mSpine', true); setV('mInfo', true); setV('mTen', true); setV('mKuro', false);
+      const bk = BINDERIES.find(x => x.key === $('wizBind').value); if (bk) Object.keys(bk.over).forEach(k => setV(k, bk.over[k]));   // WIZ-2: 製本会社の決まり（折り方・ノド・背丁）を上書き
       presetSync(); refresh();
       const g = GRIDS[best.gi];
-      sum = '<b>' + best.sig + ' ページ折り</b>（' + g[0] + '列×' + g[1] + '段・' + g[0] * g[1] + ' 面付）× <b>' + sigs + ' 折</b>　用紙 ' + W + '×' + H + '　仕上がり ' + pw + '×' + ph + (best.rot ? '（横に置く）' : '') + '　塗り足し 3・ノド削り 1・背丁あり。' + (pages % best.sig ? '最後の折は ' + (pages % best.sig) + ' ページ分（白ページが入ります）。' : '') + '中綴じで複数折のときは折り順に注意（この面付は折丁ごとの無線用）。';
+      sum = '<b>' + best.sig + ' ページ折り</b>（' + g[0] + '列×' + g[1] + '段・' + g[0] * g[1] + ' 面付）× <b>' + sigs + ' 折</b>　用紙 ' + W + '×' + H + '　仕上がり ' + pw + '×' + ph + (best.rot ? '（横に置く）' : '') + '　塗り足し 3・ノド削り 1・背丁あり。' + (pages % best.sig ? '最後の折は ' + (pages % best.sig) + ' ページ分（白ページが入ります）。' : '') + '中綴じで複数折のときは折り順に注意（この面付は折丁ごとの無線用）。'
+        + (bk ? '<span style="color:var(--nodo)">製本会社 ' + esc(bk.name) + ' の決まり（' + esc(bk.note || '折り方・ノド削り・背丁') + '）を当てましたが、この仕上がり寸法の登録パターンは無いので、用紙・面付は指示書で確かめてください。</span>' : ($('wizBind').value === 'other' ? '<span style="color:var(--nodo)">製本会社の指示書どおりに、下の「折りと面付」「ドブとトンボ」を手で合わせてください。合わせた設定は「今の設定をパターンに登録する」で製本会社名を頭に付けて登録すると、次から自動で呼べます。</span>' : ''));
     } else {
       const gap = kind === 'meishi' ? +$('wizDobu').value : 2 * b; let best = null;
       [[pw, ph, false], [ph, pw, true]].forEach(([w, h, rot]) => { const cols = Math.floor((W - 2 * m + gap) / (w + gap)), rows = Math.floor((H - 2 * m + gap) / (h + gap)); if (cols < 1 || rows < 1) return; const n = cols * rows; if (!best || n > best.n || (n === best.n && !rot && best.rot)) best = { cols, rows, n, rot }; });
@@ -1801,18 +1823,20 @@
       presetSync(); refresh();
       sum = '<b>' + best.n + ' 面付</b>（' + best.cols + '列×' + best.rows + '段）　用紙 ' + W + '×' + H + '　仕上がり ' + pw + '×' + ph + (best.rot ? '（横に置く）' : '') + '　面の間 ' + (kind === 'meishi' ? gap + 'mm' : '塗り足し×2') + '。' + (kind === 'single2' ? '両面: 表裏 2 ページの PDF を入れると 1 枚目＝表・2 枚目＝裏で出ます。' : '');
     }
-    wizLast = { coName, press: mc.name, kind: $('wizKind').selectedOptions[0].textContent, size: pw + '×' + ph, pages: kind === 'booklet' ? $('wizPages').value : '', job: $('job').value, sum: sum.replace(/<[^>]+>/g, '') };
+    const bindName = kind === 'booklet' ? ($('wizBind').selectedOptions[0] || {}).textContent || '' : '';
+    wizLast = { coName, press: mc.name, kind: $('wizKind').selectedOptions[0].textContent, size: pw + '×' + ph, pages: kind === 'booklet' ? $('wizPages').value : '', bind: bindName, job: $('job').value, sum: sum.replace(/<[^>]+>/g, '') };
     $('wizSum').innerHTML = '<b>' + esc(coName) + '</b>／' + esc(mc.name) + '　→　' + sum + '　次は <b>原稿の PDF を入れる → 書き出す</b>。';
     $('status').textContent = '自動で面付を決めました。右のプレビューで確かめて、原稿の PDF を入れてください。';
     try { $('drop').scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
   }
-  function handMemo() { const w = wizLast || {}; const f = lastFileName || ''; return ['【面付データ】' + (w.job || $('job').value || ''), '製造会社: ' + (w.coName || ''), '印刷機・用紙: ' + (w.press || ($('sheetW').value + '×' + $('sheetH').value)), '種別: ' + (w.kind || ''), '仕上がり: ' + (w.size || ($('pageW').value + '×' + $('pageH').value)) + (w.pages ? '　' + w.pages + ' ページ' : ''), '面付: ' + (w.sum || ''), 'ファイル: ' + f, ($('pdfx').checked ? 'PDF/X-4' : 'PDF') + '　塗り足し ' + $('bleed').value + 'mm', '（折丁面付台 ' + new Date().toLocaleDateString('ja-JP') + '）'].join('\n'); }
+  function handMemo() { const w = wizLast || {}; const f = lastFileName || ''; return ['【面付データ】' + (w.job || $('job').value || ''), '製造会社: ' + (w.coName || ''), '印刷機・用紙: ' + (w.press || ($('sheetW').value + '×' + $('sheetH').value)), '種別: ' + (w.kind || ''), (w.bind ? '製本: ' + w.bind : ''), '仕上がり: ' + (w.size || ($('pageW').value + '×' + $('pageH').value)) + (w.pages ? '　' + w.pages + ' ページ' : ''), '面付: ' + (w.sum || ''), 'ファイル: ' + f, ($('pdfx').checked ? 'PDF/X-4' : 'PDF') + '　塗り足し ' + $('bleed').value + 'mm', '（折丁面付台 ' + new Date().toLocaleDateString('ja-JP') + '）'].filter(Boolean).join('\n'); }
   function handShow() { $('handoff').style.display = 'flex'; }
   $('handCopy').addEventListener('click', async () => { const t = handMemo(); try { await navigator.clipboard.writeText(t); $('status').textContent = '渡すメモをコピーしました。メールやチャットに貼って、書き出した PDF を添えて渡してください。'; } catch (e) { prompt('コピーしてください', t); } });
   $('handMail').addEventListener('click', () => { const w = wizLast || {}; location.href = 'mailto:?subject=' + encodeURIComponent('面付データ ' + (w.job || $('job').value || '') + (w.coName ? '（' + w.coName + '）' : '')) + '&body=' + encodeURIComponent(handMemo() + '\n\n※ 面付 PDF を添付してください'); });
   $('wizCo').addEventListener('change', wizFillPress); $('wizKind').addEventListener('change', wizKindUI); $('wizSize').addEventListener('change', () => { $('wizSizeCustom').style.display = $('wizSize').value === String(PAGES.length - 1) ? '' : 'none'; });
   $('wizGo').addEventListener('click', wizAuto);
-  wizFillCo(); wizFillPress(); wizFillSize(); wizKindUI();
+  const num0 = (v) => { const x = parseFloat(v); return isFinite(x) ? x : 0; };
+  wizFillCo(); wizFillPress(); wizFillSize(); wizBindFill(); wizKindUI();
 })();
 
 </script>
