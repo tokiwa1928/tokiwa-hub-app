@@ -1613,6 +1613,7 @@ setTimeout(_removeBootLoader_, 5000);
     #proj-filter-row > *{ flex:0 0 auto }
   </style>
   <div style="overflow-x:auto">
+  <div id="proj-sort-bar" style="display:none;font-size:11.5px;color:#1d4ed8;margin:2px 0 4px"></div>
   <table class="m-tbl" id="proj-table" style="min-width:1080px">
     <thead id="proj-thead"><tr>
       <th style="width:20px;padding:3px 1px;text-align:center"><input type="checkbox" id="psel-all" onchange="_pselAll_(this.checked)" title="表示中を全選択（一括削除/更新/リピート用）" style="width:14px;height:14px;cursor:pointer"></th>
@@ -21379,6 +21380,15 @@ function _proofRowClick_(id, el){
   if(typeof showProofingDetail==='function') showProofingDetail(id);
 }
 // 選択中の校正に手入力コメントを「修正指示」として追加
+// KOSEI-CHAT-1: 定型文（押すと欄に入る。送ると状態も進む）。N は今の校数
+function _proofCannedHtml_(p){
+  var r; try{ r=_calcCurrentProofRound_(p,'instruction'); }catch(e){ r={round:1}; } var n=Math.max(1, r.round||1);
+  var list=[ [n+'校修正お願いします','s_wait'], ['修正開始','s_proof'], [(n+1)+'校出し','s_proof'], ['内校OK',''], ['校正出し（お客様へ）','s_proof'], ['校了','s_done'] ];
+  return list.map(function(x){ var t=x[0].replace(/'/g,''); return '<button class="btn" style="font-size:11px;padding:2px 9px;background:#fff;border-color:#fcd34d;color:#92400e" onclick="var ta=document.getElementById(\'proof-cmt-input\');if(ta){ta.value=(ta.value?ta.value+\'\\n\':\'\')+\''+t+'\';ta.focus();}">'+_escDiff(x[0])+'</button>'; }).join('');
+}
+function _proofStatusForText_(t){
+  t=String(t||''); if(/校了/.test(t)) return 's_done'; if(/校正出し|校出し|修正開始/.test(t)) return 's_proof'; if(/修正お願い|修正依頼|戻り/.test(t)) return 's_wait'; return '';
+}
 function _proofAddComment_(id){
   var p=(DB.proofings||[]).find(function(x){ return x.id===id; }); if(!p) return;
   var ta=document.getElementById('proof-cmt-input'); var t=(ta&&ta.value||'').trim();
@@ -21387,10 +21397,10 @@ function _proofAddComment_(id){
   var r; try{ r=_calcCurrentProofRound_(p,'instruction'); }catch(e){ r={round:1,subVersion:1}; }
   var who=(typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName)||'';
   p.versions.push({ id:'VER'+Date.now(), fileName:'コメント/修正指示', kind:'instruction', round:r.round, subVersion:r.subVersion, uploadedAt:new Date().toISOString(), feedback:'【'+(who||'社内')+'】\n'+t, annotations:[], manual:true });
-  p.status='feedback'; p.lastMoveAt=new Date().toISOString();
+  var _st=_proofStatusForText_(t); p.status=_st||'s_wait'; p.lastMoveAt=new Date().toISOString();   // KOSEI-CHAT-1: 定型文なら状態も進める
   if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
   showProofingDetail(id); if(typeof renderProofingList==='function') renderProofingList();
-  if(typeof _toastMsg==='function') _toastMsg('💬 修正指示を追加しました');
+  if(typeof _toastMsg==='function') _toastMsg('💬 コメントを追加しました' + (_st ? '（状態: ' + _proofStatusMeta_(_st).label + '）' : ''));
 }
 // メール/LINEの連絡を選んでこの校正に修正指示として取り込む
 // KOSEI-MAIL-2: メールから付けた修正指示のカード（制作がそのまま読める: 差出人・日時・件名・本文全文・添付）
@@ -21939,10 +21949,14 @@ function showProofingDetail(proofingId){
         <button class="btn btn-p" style="font-size:12.5px;padding:7px 14px" onclick="_proofForwardPick_('${p.id}')" title="お客様からのメール／LINE を選ぶと、本文と添付がそのまま校正履歴に付き、制作がそのまま読めます">📧 お客様のメールをそのまま付ける（本文・添付ごと）</button>
         <span style="font-size:11px;color:#a16207">営業はメールを選ぶだけ。制作には差出人・日時・件名・本文の全文・添付がそのまま見えます。</span>
       </div>
-      <details style="margin-top:6px"><summary style="cursor:pointer;font-size:11.5px;color:#92400e">自分で書く（短い指示・社内メモ）</summary>
-        <textarea id="proof-cmt-input" rows="3" placeholder="例: P2の電話番号を修正／表紙の色を前回見本に合わせる など" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #fcd34d;border-radius:6px;resize:vertical;box-sizing:border-box;margin-top:4px"></textarea>
-        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button class="btn" style="font-size:12px;background:#fff7ed;border-color:#fdba74;color:#9a3412" onclick="_proofAddComment_('${p.id}')">💬 この文を修正指示として追加</button></div>
-      </details>
+      <!-- KOSEI-CHAT-1: コメントは常に開いた状態（チャットのように）。定型文のチップで状態も進む -->
+      <div style="margin-top:8px;border-top:1px dashed #fde68a;padding-top:8px">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;align-items:center"><span style="font-size:10.5px;color:#a16207">定型文:</span>${_proofCannedHtml_(p)}</div>
+        <div style="display:flex;gap:6px;align-items:flex-end">
+          <textarea id="proof-cmt-input" rows="2" placeholder="コメント・修正指示（Ctrl+Enter で送る）。${_escDiff((typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName) || '')} として記録されます" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #fcd34d;border-radius:6px;resize:vertical;box-sizing:border-box" onkeydown="if(event.ctrlKey&&event.key==='Enter'){event.preventDefault();_proofAddComment_('${p.id}')}"></textarea>
+          <button class="btn btn-p" style="font-size:12px;padding:8px 14px;white-space:nowrap" onclick="_proofAddComment_('${p.id}')">送る</button>
+        </div>
+      </div>
       <div style="font-size:10px;color:#a16207;margin-top:4px">※ 付けると校正履歴に「戻り（指示）」として残り、状態が「修正依頼あり」になります。</div>
     </div>
     ${_proofTimelineHtml_(p)}
@@ -22870,6 +22884,11 @@ function createProofingFromProjectId(projectId){
 function forwardInquiryToProofing(inqId){
   const inq = (DB.inquiries||[]).find(i => i.id === inqId);
   if(!inq){ alert('連絡が見つかりません'); return; }
+  // KOSEI-CHAT-1: 同じ問い合わせから 2 回作らない（3 件入ってしまう不具合）。二重押しも 5 秒は無視
+  if(window._fwdProofBusy_ && Date.now() - window._fwdProofBusy_ < 5000) return;
+  window._fwdProofBusy_ = Date.now();
+  var _dup = (DB.proofings||[]).find(function(x){ return x && (x.fromInquiryId === inqId || (inq.linked_proofing_id && x.id === inq.linked_proofing_id)); });
+  if(_dup){ if(confirm('この連絡は既に校正BOXに入っています（' + _dup.id + '）。\n\nそれを開きますか？\n（キャンセル＝もう 1 件新しく作る）')){ closeInquiryDetail(); jumpToProofing(_dup.id); return; } }
   if(!confirm('この連絡内容を校正BOXに転送しますか?\n\n新規校正セッションが作成され、本文+添付があれば一緒に登録されます。\nリンク済みの案件があればその案件に紐付けます。')) return;
 
   const linkedProj = inq.linked_project_id ? (DB.projects||[]).find(p => p.id === inq.linked_project_id) : null;
@@ -36516,7 +36535,7 @@ function showMailSignatureSettings(){
             'バックエンドが Haiku モデル切替済なら、ON でも従来の 1/3〜1/5 のコストで動作します。' +
           '</div>' +
           '<label style="font-size:12px;display:block;margin-top:10px"><div style="margin-bottom:3px;color:#555;font-weight:600">下書きトーン</div><select id="mail-auto-tone" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px">' +
-            '<option value="polite"' + (settings.autoDraftTone==='polite' ? ' selected' : '') + '>📝 丁寧 (敬語)</option>' +
+            '<option value="polite"' + (settings.autoDraftTone==='polite' ? ' selected' : '') + '>📝 丁寧（硬すぎない・宛名入り）</option>' +
             '<option value="friendly"' + (settings.autoDraftTone==='friendly' ? ' selected' : '') + '>😊 親しみ</option>' +
             '<option value="concise"' + (settings.autoDraftTone==='concise' ? ' selected' : '') + '>⚡ 簡潔</option>' +
           '</select></label>' +
@@ -46676,6 +46695,53 @@ function _clearProjFilters_(){
 function _projGroupKey_(r){ if(!r) return ''; return r.master_no?('M:'+String(r.master_no)):''; }
 // PNO-1: 動いているか。納品済／完了は納品日から 7 日間は「動いている」扱い（現場の後始末があるため）、失注・キャンセルは動いていない
 function _projDeliveredAt_(r){ if(!r) return ''; return String(r.deliveredAt||(r.stepDates&&r.stepDates['納品'])||(r.stepEnd&&r.stepEnd['納品'])||'').slice(0,10) || ((r.status==='納品済'||r.status==='完了') ? String(r.updatedAt||r.orderDate||'').slice(0,10) : ''); }
+// SORT-1: 案件管理表の並び順（見出しを押す）。[{col, dir}] を端末に残す。Shift＋押しで 2 番目以降を足す
+function _projSortKeys_(){ try{ var v = JSON.parse(localStorage.getItem('tokiwa_proj_sort')||'[]'); return Array.isArray(v) ? v : []; }catch(e){ return []; } }
+function _projSortSave_(keys){ try{ localStorage.setItem('tokiwa_proj_sort', JSON.stringify(keys||[])); }catch(e){} }
+function _projSortVal_(r, col){
+  switch(col){
+    case 'no': return String(r.master_no || r.fmNo || r.id || '');
+    case 'quoteNo': return String(r.fromQuote || r.quoteNo || r.estNo || '');
+    case 'due': return String(r.dueDate || r.due || '');
+    case 'orderDate': return String(r.orderDate || r.createdAt || '');
+    case 'cust': return String(r.cust || '');
+    case 'endUser': return String(r.endUser || r.user || '');
+    case 'item': return String(r.item || '');
+    case 'unit': return (r.exTax>0 && r.qty>0) ? r.exTax/r.qty : -1;
+    case 'amount': return Number(r.exTax) || 0;
+    case 'gp': return Number(r.grossProfit) || 0;
+    case 'gpRate': return (r.exTax>0 && r.grossProfit!=null) ? Number(r.grossProfit)/Number(r.exTax) : -1;
+    case 'status': return String(r.status || '');
+    case 'tanto': return String(r.assignee || '');
+    default: return String(r[col] == null ? '' : r[col]);
+  }
+}
+function _projApplySort_(list){
+  var keys = _projSortKeys_().filter(function(k){ return k && k.col; }); if(!keys.length) return list;
+  var coll = new Intl.Collator('ja', { numeric:true, sensitivity:'base' });
+  return list.slice().sort(function(a,b){
+    for(var i=0;i<keys.length;i++){ var k=keys[i]; var va=_projSortVal_(a,k.col), vb=_projSortVal_(b,k.col); var c = (typeof va==='number' && typeof vb==='number') ? (va-vb) : coll.compare(String(va), String(vb)); if(c) return k.dir==='desc' ? -c : c; }
+    return 0;
+  });
+}
+function _projSortClick_(col, ev){
+  var keys = _projSortKeys_(); var i = keys.findIndex(function(k){ return k.col===col; });
+  if(ev && ev.shiftKey){ if(i<0) keys.push({col:col,dir:'asc'}); else if(keys[i].dir==='asc') keys[i].dir='desc'; else keys.splice(i,1); }
+  else { if(i<0) keys=[{col:col,dir:'asc'}]; else if(keys[i].dir==='asc' && keys.length===1) keys=[{col:col,dir:'desc'}]; else if(keys.length===1) keys=[]; else keys=[{col:col,dir:'asc'}]; }
+  _projSortSave_(keys); _projSortPaint_(); if(typeof renderProjects==='function') renderProjects();
+}
+function _projSortPaint_(){
+  var keys=_projSortKeys_(); var th=document.querySelectorAll('#proj-thead th[data-col]');
+  Array.prototype.forEach.call(th, function(h){ var col=h.getAttribute('data-col'); if(col==='ops') return; var old=h.querySelector('.sort-mark'); if(old) old.remove();
+    var i=keys.findIndex(function(k){ return k.col===col; }); h.style.cursor='pointer'; h.title = (h.getAttribute('data-title0')||h.title||'') ; if(!h.getAttribute('data-title0')) h.setAttribute('data-title0', h.title||'');
+    h.title = (h.getAttribute('data-title0') ? h.getAttribute('data-title0')+'　' : '') + '押すと並び替え（昇順→降順→解除）。Shift＋押しで 2 番目以降の順を足す';
+    var m=document.createElement('span'); m.className='sort-mark'; m.style.cssText='margin-left:4px;font-size:10px;color:'+(i>=0?'#1d4ed8':'#b6bcc4');
+    m.textContent = i>=0 ? ((keys[i].dir==='desc'?'▼':'▲') + (keys.length>1 ? String(i+1) : '')) : '⇅'; h.appendChild(m);
+    if(!h._sortBound){ h._sortBound=true; h.addEventListener('click', function(ev){ if(ev.target && ev.target.tagName==='INPUT') return; _projSortClick_(col, ev); }); }
+  });
+  var bar=document.getElementById('proj-sort-bar'); if(bar){ var lb={no:'案件番号',quoteNo:'見積番号',due:'納期',orderDate:'受注日',cust:'得意先',endUser:'ユーザー',item:'品名',unit:'単価',amount:'受注金額',gp:'粗利',gpRate:'粗利率',status:'ステータス',tanto:'担当者'};
+    bar.innerHTML = keys.length ? '並び順: ' + keys.map(function(k,i){ return (i+1)+'. '+(lb[k.col]||k.col)+(k.dir==='desc'?'（降順）':'（昇順）'); }).join(' → ') + ' <button class="btn" style="font-size:10.5px;padding:1px 8px;margin-left:6px" onclick="_projSortSave_([]);_projSortPaint_();renderProjects()">並び順を解除</button>' : ''; bar.style.display = keys.length ? '' : 'none'; }
+}
 function _projIsMoving_(r){
   if(!r) return false; var st=r.status||'';
   if(st==='失注'||st==='キャンセル') return false;
@@ -47196,6 +47262,7 @@ function _pselExec_(mode){
   window._PSEL_.clear(); if(typeof saveDB==='function') saveDB(); renderProjects(); _pselUi_();
 }
 function renderProjects(){
+  try{ setTimeout(_projSortPaint_, 0); }catch(e){}   // SORT-1
   if(typeof _migrateProjStatuses_ === 'function') _migrateProjStatuses_();
   if(typeof _checkMasterPriceRises_ === 'function') _checkMasterPriceRises_();
   if(typeof renderProjStageTabs === 'function') renderProjStageTabs();
@@ -47268,6 +47335,7 @@ function renderProjects(){
   // PNO-1: 動いているものを上に（同じ中では今までどおり新しい順）。受注案件一覧では納品後 1 週間たったものは出さない（「納品済も出す」で戻る）
   if(stage==='orders' && !window._projShowDone_ && !sf){ _projAllRev = _projAllRev.filter(function(r){ return _projIsMoving_(r); }); }
   _projAllRev = _projAllRev.map(function(r,i){ return { r:r, i:i, m:_projIsMoving_(r)?0:1 }; }).sort(function(a,b){ return a.m-b.m || a.i-b.i; }).map(function(x){ return x.r; });
+  try{ _projAllRev = _projApplySort_(_projAllRev); }catch(e){}   // SORT-1: 見出しで選んだ並び順（無ければ今までどおり）
   // GROUP-1: 同じ案件（案件ID）は 1 行に。仲間は絞り込み（期間など）に関係なく全案件から集め、代表＝絞り込みに残っている中でいちばん新しいもの。
   //          展開している案件は子（過去の年の受注）も代表の直後に出す
   const _grpAll = {};
@@ -55380,7 +55448,7 @@ async function _generateInquiryDraft_(inq, tone, instruction){
   // 2. claudeChat 直叩きフォールバック (バックエンドが古くてもこれは動く)
   try {
     var toneInstruction = ({
-      'polite':   '丁寧で礼儀正しい敬語、「いつもお世話になっております」「何卒よろしくお願い申し上げます」等を含む正式なビジネス文書',
+      'polite':   '丁寧だが硬すぎない、ふだんの取引先とのやり取りの調子。挨拶は「いつもお世話になっております。」程度、結びは「よろしくお願いいたします。」程度。「何卒」「申し上げます」「賜り」のような重い定型句は使わない。相手の名前（宛名）を呼びかけに使う',
       'friendly': '親しみやすく丁寧、「お世話になります」「ご検討よろしくお願いいたします」等のカジュアル寄りビジネス文書',
       'concise':  '簡潔で要点のみ、社内向けの短い連絡文'
     })[tone] || '丁寧なビジネス文書';
