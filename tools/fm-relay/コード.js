@@ -544,6 +544,46 @@ function 外注_作る_(伝票番号, 行, who) {
   return r.response.recordId;
 }
 
+// ------------------------------------------------------------ GAICHU-CODE-2: 外注コード ⇔ 会社名 を外注先マスタでそろえる
+function 外注_名寄せ_(n) { return String(n || '').normalize('NFKC').replace(/[\s　]/g, '').replace(/\(株\)|株式会社|㈱/g, '㈱').replace(/\(有\)|有限会社|㈲/g, '㈲').toLowerCase(); }
+/** 外注先マスタ（コード⇔会社名）。6 時間キャッシュ */
+function 外注_マスタ表_() {
+  var c = CacheService.getScriptCache(), key = 'gc_master_v1'; var j = null; try { j = JSON.parse(c.get(key) || 'null'); } catch (e) {}
+  if (!j) { var m = マスタ_読む_('外注先マスタ'); var byCode = {}, byName = {};
+    (m.行 || []).forEach(function (r) { var cd = String(r['コード'] || '').trim(), nm = String(r['会社名'] || '').trim(); if (cd) byCode[cd] = nm; if (nm) byName[外注_名寄せ_(nm)] = cd; });
+    j = { byCode: byCode, byName: byName }; try { c.put(key, JSON.stringify(j), 6 * 3600); } catch (e) {} }
+  return j;
+}
+/** 会社名からコード。名寄せで一致 → ㈱㈲の有無だけ違う会社が 1 つ → 片方が片方を含む会社が 1 つ。それ以外は '' */
+function 外注_コードを引く_(name, M) {
+  var k = 外注_名寄せ_(name); if (!k) return ''; if (M.byName[k]) return M.byName[k];
+  var 素 = function (x) { return x.replace(/[㈱㈲]/g, ''); }, ks = 素(k); if (!ks) return '';
+  var hit = Object.keys(M.byName).filter(function (x) { return 素(x) === ks; }); if (hit.length === 1) return M.byName[hit[0]];
+  hit = Object.keys(M.byName).filter(function (x) { var xs = 素(x); return xs.indexOf(ks) >= 0 || ks.indexOf(xs) >= 0; }); return hit.length === 1 ? M.byName[hit[0]] : '';
+}
+/** 1 行ぶん（{外注コード, 会社名}）をそろえる。直したら true */
+function 外注_行をそろえる_(o, M) {
+  var cd = String(o.外注コード || '').trim(), nm = String(o.会社名 || '').trim(), before = cd + '|' + nm;
+  if (nm) { var c2 = 外注_コードを引く_(nm, M); if (c2) { if (c2 !== cd) o.外注コード = c2; } else if (cd && M.byCode[cd] !== undefined && M.byCode[cd] && 外注_名寄せ_(M.byCode[cd]) !== 外注_名寄せ_(nm)) { /* マスタに無い会社名＋別の会社のコード: コードは残さない */ o.外注コード = ''; } }
+  else if (cd && M.byCode[cd]) o.会社名 = M.byCode[cd];
+  return (String(o.外注コード || '') + '|' + String(o.会社名 || '')) !== before;
+}
+/** 伝票番号の外注データ（FileMaker）を読んで、食い違いがあれば書き戻す。戻り値: 直した行の説明（無ければ []） */
+function 外注_そろえる_(伝票番号, who) {
+  var out = []; if (!伝票番号) return out;
+  var M; try { M = 外注_マスタ表_(); } catch (e) { return out; }
+  if (!Object.keys(M.byCode).length) return out;
+  var r = find_(外注LAYOUT, [{ '伝票番号': '==' + 伝票番号 }], 5, 1, null);
+  r.records.forEach(function (rec) {
+    var f = rec.fields, upd = {}, 前 = {};
+    for (var i = 1; i <= 4; i++) { var sfx = 外注_添字_(i); var o = { 外注コード: f['外注コード' + sfx] || '', 会社名: f['会社名' + sfx] || '' }; if (!o.外注コード && !o.会社名) continue;
+      var b = o.外注コード + '|' + o.会社名; if (!外注_行をそろえる_(o, M)) continue;
+      ['外注コード', '会社名'].forEach(function (k) { if (String(o[k]) !== String(f[k + sfx] || '')) { upd[k + sfx] = o[k]; 前[k + sfx] = f[k + sfx] || ''; } });
+      out.push(i + ' 行目: ' + b.replace('|', '／') + ' → ' + o.外注コード + '／' + o.会社名); }
+    if (Object.keys(upd).length) { var u = update_(外注LAYOUT, rec.recordId, rec.modId, upd, who || { email: 'hub-auto' }); if (u.conflict) throw new Error('外注データが同時に直されました。読み直してください'); }
+  });
+  return out;
+}
 /** 画面用: 外注データを新しく作る */
 function 画面_外注作成(伝票番号, 行) {
   var who = 画面_利用者_();
@@ -558,7 +598,8 @@ function 画面_外注作成(伝票番号, 行) {
 function 画面_外注(伝票番号) {
   var who = 画面_利用者_();
   if (!伝票番号) throw new Error('伝票番号がありません');
-  return { ok: true, user: who.email, 伝票番号: 伝票番号, 外注: 外注_読む_(伝票番号), 書けない: fieldInfo_(外注LAYOUT).readonly };
+  var 直した = []; try { 直した = 外注_そろえる_(伝票番号, who); } catch (e) { 直した = ['そろえられませんでした: ' + String(e.message || e)]; }   // GAICHU-CODE-2: FileMaker 側で食い違っていれば、読む前に直す
+  return { ok: true, user: who.email, 伝票番号: 伝票番号, 外注: 外注_読む_(伝票番号), 書けない: fieldInfo_(外注LAYOUT).readonly, 直した: 直した };
 }
 
 /** 画面用: 外注データの行を直す（数量・単価・発注内容・外注先）。合計は 数量×単価 で置き直す */
@@ -569,9 +610,11 @@ function 画面_外注保存(recordId, modId, 行) {
   if (got.code !== '0') throw new Error('外注データを読めません (' + got.code + ') ' + got.message);
   var d = (got.response.data || [])[0]; var f = d.fieldData || {};
   var upd = {}, 前 = {}, 総 = 0;
+  var M0 = null; try { M0 = 外注_マスタ表_(); } catch (e) {}   // GAICHU-CODE-2: 保存の前に コード⇔会社名 をそろえる
   for (var i = 1; i <= 4; i++) {
     var s = 外注_添字_(i);
     var x = (行 || []).filter(function (y) { return Number(y.番) === i; })[0];
+    if (x && M0) { try { 外注_行をそろえる_(x, M0); } catch (e) {} }
     if (x) {
       ['外注コード', '会社名', '発注内容'].forEach(function (k) { if (x[k] !== undefined && String(x[k]) !== String(f[k + s] || '')) { upd[k + s] = String(x[k]); 前[k + s] = f[k + s]; } });
       var 数 = Number(x.数量 || 0), 単 = Number(x.単価 || 0), 計 = Math.round(数 * 単);

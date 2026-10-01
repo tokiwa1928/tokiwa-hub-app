@@ -233,8 +233,10 @@ function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日
     else { 索引.appendRow(索引行); 索引位置[String(rec.recordId)] = 索引.getLastRow(); }
   });
   索引キャッシュを捨てる_(); 写し_索引_();   // 索引の json を作り直しておく（朝一番の人を待たせない）
-  Logger.log('毎晩の写し: 更新 ' + 更新 + '・追加 ' + 追加 + '（修正日 ' + 昨日 + ' 以降 ' + rows.records.length + ' 件）');
-  return { 件数: rows.records.length, 更新: 更新, 追加: 追加, 以降: 昨日 };
+  // GAICHU-CODE-2: その日に直った伝票の外注データで、外注コードと会社名が食い違っていればそろえる（FileMaker 側で会社名だけ直した分）。多すぎる日は 150 件まで
+  var そろえた = 0; try { var 見た = 0; rows.records.forEach(function (rec) { if (見た++ >= 150) return; var no = String(rec.fields['伝票番号'] || ''); if (!no) return; try { if (外注_そろえる_(no, { email: 'hub-yoru' }).length) そろえた++; } catch (e) {} }); } catch (e) { Logger.log('外注そろえ: ' + e.message); }
+  Logger.log('毎晩の写し: 更新 ' + 更新 + '・追加 ' + 追加 + '（修正日 ' + 昨日 + ' 以降 ' + rows.records.length + ' 件）' + (そろえた ? '　外注のコードをそろえた伝票 ' + そろえた : ''));
+  return { 件数: rows.records.length, 更新: 更新, 追加: 追加, 以降: 昨日, 外注そろえ: そろえた };
 }
 
 /** 写しがどこまで追いついているか（索引にある一番新しい修正日・件数・json を作った時刻・写しの置き場）。読むだけ */
