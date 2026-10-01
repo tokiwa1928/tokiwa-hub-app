@@ -207,7 +207,16 @@
           <label style="display:flex;flex-direction:column;gap:3px"><span><input type="checkbox" id="dwEnd"> <b>見返し（前・後）</b></span><input type="text" id="dwPaperEnd" placeholder="見返しの用紙 例: 色上質 中厚"></label>
           <label style="display:flex;flex-direction:column;gap:3px"><span><input type="checkbox" id="dwObi"> <b>帯</b></span><input type="text" id="dwPaperObi" placeholder="帯の用紙"></label>
           <label style="display:flex;flex-direction:column;gap:3px"><span style="font-weight:700">備考（指示書に載せる）</span><input type="text" id="dwNote" placeholder="例: 色校正あり・納期 10/20"></label>
+          <label style="display:flex;flex-direction:column;gap:3px"><span style="font-weight:700">部数</span><input type="number" id="dwQty" min="1" step="1" placeholder="例: 500"></label>
+          <label style="display:flex;flex-direction:column;gap:3px"><span style="font-weight:700">背幅（mm）</span><input type="number" id="dwSpine" min="0" step="0.5" value="3" title="表紙・カバーの幅＝仕上がり幅×2＋背幅。面付（1 枚に何面入るか）の計算に使います"></label>
+          <label style="display:flex;flex-direction:column;gap:3px"><span style="font-weight:700">カバー折り返し（mm）</span><input type="number" id="dwFlap" min="0" step="1" value="80" title="表紙カバーの両側の折り返し（袖）の幅"></label>
+          <label style="display:flex;flex-direction:column;gap:3px"><span style="font-weight:700">帯の高さ（mm）</span><input type="number" id="dwObiH" min="0" step="1" value="60"></label>
+          <label style="display:flex;flex-direction:column;gap:3px"><span style="font-weight:700">予備（％）</span><input type="number" id="dwSpare" min="0" step="1" value="5" title="用紙の予備。必要枚数 ＝ 部数 ÷ 丁数 を切り上げ ×（1＋予備％）"></label>
         </div>
+        <!-- DAIWARI-2: 台ごとの表と用紙の発注量 -->
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b style="font-size:12.5px">台割（台ごと）と用紙の発注量</b><button type="button" id="dwBuild" style="font:inherit;font-size:12px;padding:4px 10px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);cursor:pointer;font-weight:700" title="今の面付と構成から台ごとの表を作り直します（直した丁数・用紙は台の名前が同じなら残ります）">↻ 台割を作り直す</button><span class="note" id="dwHint" style="margin:0">「自動面付け」のあとに作れます。丁数（1 枚の紙に何丁入るか）と用紙は台ごとに直せます。</span></div>
+        <div id="dwTableBox" style="overflow-x:auto;margin-top:6px"></div>
+        <div id="dwPaperSum" style="margin-top:6px;font-size:12.5px"></div>
         <p class="note" style="margin-top:6px">ここで入れた件名・用紙・備考は、このブラウザに残ります（中継には送りません）。</p>
       </details>
       <div class="wiz-foot">
@@ -1844,10 +1853,11 @@
     wizLast = { coName, press: mc.name, kind: $('wizKind').selectedOptions[0].textContent, size: pw + '×' + ph, pages: kind === 'booklet' ? $('wizPages').value : '', bind: bindName, job: $('job').value, sum: sum.replace(/<[^>]+>/g, '') };
     $('wizSum').innerHTML = '<b>' + esc(coName) + '</b>／' + esc(mc.name) + '　→　' + sum + '　次は <b>原稿の PDF を入れる → 書き出す</b>。';
     $('status').textContent = '自動で面付を決めました。右のプレビューで確かめて、原稿の PDF を入れてください。';
+    try { dwRender(); } catch (e) {}   // DAIWARI-2
     try { $('drop').scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
   }
   /* ---------- SHIJI-1: 事前指示書 PDF ---------- */
-  const DW_KEY = 'menzuke-daiwari-v1', DW_FIELDS = ['dwTitle', 'dwBind', 'dwPaperBody', 'dwCover', 'dwPaperCover', 'dwJacket', 'dwPaperJacket', 'dwEnd', 'dwPaperEnd', 'dwObi', 'dwPaperObi', 'dwNote'];
+  const DW_KEY = 'menzuke-daiwari-v1', DW_FIELDS = ['dwTitle', 'dwBind', 'dwPaperBody', 'dwCover', 'dwPaperCover', 'dwJacket', 'dwPaperJacket', 'dwEnd', 'dwPaperEnd', 'dwObi', 'dwPaperObi', 'dwNote', 'dwQty', 'dwSpare', 'dwSpine', 'dwFlap', 'dwObiH'];
   function dwLoad() { try { const o = JSON.parse(localStorage.getItem(DW_KEY) || 'null'); if (!o) return; DW_FIELDS.forEach(f => { const el = $(f); if (!el || !(f in o)) return; if (el.type === 'checkbox') el.checked = !!o[f]; else el.value = o[f]; }); } catch (e) {} }
   function dwSave() { try { const o = {}; DW_FIELDS.forEach(f => { const el = $(f); if (el) o[f] = el.type === 'checkbox' ? el.checked : el.value; }); localStorage.setItem(DW_KEY, JSON.stringify(o)); } catch (e) {} }
   DW_FIELDS.forEach(f => { const el = $(f); if (el) el.addEventListener('change', dwSave); }); dwLoad();
@@ -1856,7 +1866,7 @@
     if (!jfBytes) { $('status').textContent = '日本語の書体を取り寄せています…（初回だけ・約 5MB）'; const r = await fetch(JF_URL); if (!r.ok) throw new Error('書体を取り寄せられませんでした（' + r.status + '）'); jfBytes = await r.arrayBuffer(); }
     if (!jfParsed) jfParsed = opentype.parse(jfBytes.slice(0));
     const font = jfParsed, glyphs = [font.glyphs.get(0)], seen = { 0: 1 };
-    const FIXED = "×…›→　、。「」〜いうえおかがきくけこさしすせただってでなにのはぶへまみめもよらりるれわをんァイカクコジセタデトドナノバフブペボマョルン・ー一丁上下事仕他付件会作備先入内出分列初別刷削前割動半印反台右号各同名品図地基報塗多天子字定少左帯幅度待後情成所折押指数文方書替最期未本枚構横機段決添無版用番白確示社種第紙線縦考背自表裏製見覧記設認読足転込返送造進選部長面順願黒（）／＝ぁあぃいぅうぇえぉおかがきぎくぐけげこごさざしじすずせぜそぞただちぢっつづてでとどなにぬねのはばぱひびぴふぶぷへべぺほぼぽまみむめもゃやゅゆょよらりるれろゎわゐゑをんゔゕゖァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヰヱヲンヴヵヶヷヸヹヺー〜・「」（）、。";   // 指示書で使う固まった文字（かな全部＋見出し・項目名）
+    const FIXED = "×—…›→　、。「」〜いうえおかがきくけこごさしじすせただっつてでとどなにのはぶへまみめもよらりるれわをんァイカクコジセタデトドナノバフブペボマョルン・ー一丁上下予事仕他付件会何作例値備先入内出分列初別刷削前割動半印反台右号各同名品図地基報塗多天子字定容寸少展左帯幅度待後必情成所折押指数文方書替最期未本枚構横機段決法注添無版用番発白直確示社種第紙線縦考背自表裏製要見覧記設認読質足転込返送造進選部量長開面順願黒％（）／＝［］｜ぁあぃいぅうぇえぉおかがきぎくぐけげこごさざしじすずせぜそぞただちぢっつづてでとどなにぬねのはばぱひびぴふぶぷへべぺほぼぽまみむめもゃやゅゆょよらりるれろゎわゐゑをんゔゕゖァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヰヱヲンヴヵヶヷヸヹヺー〜・「」（）、。［］";   // 指示書で使う固まった文字（かな全部＋見出し・項目名）
     Array.from(new Set(Array.from(text + FIXED + ' 0123456789.,:/()（）×mm›…'))).forEach(ch => { const g = font.charToGlyph(ch); if (g && g.index && !seen[g.index]) { seen[g.index] = 1; if (!g.name) g.name = 'g' + g.index; glyphs.push(g); } });
     return new opentype.Font({ familyName: 'BIZUDPGothic', styleName: 'Regular', unitsPerEm: font.unitsPerEm, ascender: font.ascender, descender: font.descender, glyphs }).toArrayBuffer();
   }
@@ -1888,6 +1898,53 @@
     if (jk) parts.push({ k: 'jacket', t: '表紙カバー', s: '' });
     return parts;
   }
+  /* ---------- DAIWARI-2: 台ごとの表と用紙の発注量 ---------- */
+  const DWO_KEY = 'menzuke-daiwari-override-v1';   // 台の名前 → { cho, paper, sheet }（手で直した分）
+  function dwoLoad() { try { return JSON.parse(localStorage.getItem(DWO_KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function dwoSave(o) { try { localStorage.setItem(DWO_KEY, JSON.stringify(o)); } catch (e) {} }
+  // DAIWARI-3（本多さん 10/1「面付をここで先に自動で出して勝手に入るように。表紙は 1 面とか」）: 各部の寸法から、その用紙に何面入るかを自動で出す
+  function dwFit(W, H, w, h, b) { const m = 6, gap = 2 * b; let best = null; [[w, h, false], [h, w, true]].forEach(([pw, ph, rot]) => { const c = Math.floor((W - 2 * m + gap) / (pw + gap)), r = Math.floor((H - 2 * m + gap) / (ph + gap)); if (c < 1 || r < 1) return; const n = c * r; if (!best || n > best.n) best = { n, c, r, rot }; }); return best || { n: 0, c: 0, r: 0, rot: false }; }
+  function dwPartSize(k, cfg) {   // 各部の展開寸法（幅×高さ）。表紙＝仕上がり×2＋背、カバー＝それ＋折り返し×2、見返し＝仕上がり×2、帯＝カバー幅×帯の高さ
+    const pw = isPlain() ? num('pageW', 148) : cfg.pageW, ph = isPlain() ? num('pageH', 210) : cfg.pageH; const sp = num('dwSpine', 3), flap = num('dwFlap', 80), obiH = num('dwObiH', 60);
+    if (k === 'cover') return [2 * pw + sp, ph]; if (k === 'jacket') return [2 * pw + sp + 2 * flap, ph]; if (k === 'end') return [2 * pw, ph]; if (k === 'obi') return [2 * pw + sp + 2 * flap, obiH]; return null;
+  }
+  function dwRows() {   // 台ごとの行。丁数の既定: 本文の折＝1 丁／枚（表裏）、4 ページ折り並べ＝丁／枚、単片＝面数。表紙・見返し・カバー・帯＝寸法から自動（直せる）
+    if (!lastCfg) return [];
+    const cfg = readConfig(); const info = shijiRows(cfg); const parts = shijiParts(info); const ov = dwoLoad();
+    const sheet = cfg.sheetW + '×' + cfg.sheetH; const per = cfg.scheme.perSheet || 1;
+    const bodyCho = cfg.scheme.plain === '4p' ? per / 4 : cfg.scheme.plain ? cfg.cols * cfg.rows : 1;
+    const r1 = (v) => Math.round(v * 10) / 10;
+    const autoCho = (k) => { const sz = dwPartSize(k, cfg); if (!sz) return { n: bodyCho, txt: cfg.scheme.plain ? cfg.cols + '×' + cfg.rows : '折 1' }; const f = dwFit(cfg.sheetW, cfg.sheetH, sz[0], sz[1], cfg.bleed || 3); return { n: f.n, txt: (f.n ? f.n + ' 面 ' + f.c + '×' + f.r + (f.rot ? ' 横' : '') : '入らない') + '（' + r1(sz[0]) + '×' + r1(sz[1]) + '）' }; };
+    const paperOf = { body: $('dwPaperBody').value, cover: $('dwPaperCover').value, jacket: $('dwPaperJacket').value, end: $('dwPaperEnd').value, obi: $('dwPaperObi').value };
+    const rows = []; const seen = {};
+    parts.forEach(p => { if (p.k === 'end' && seen.end) return; if (p.k === 'cover' && seen.cover) return; if (p.k === 'jacket' && seen.jacket) return; seen[p.k] = 1;
+      const name = p.k === 'end' ? '見返し（前・後）' : p.k === 'cover' ? '表紙（表1〜表4）' : p.t; const o = ov[name] || {};
+      const ac = autoCho(p.k);   // 見返しは前後で 2 枚要るので、1 部ぶんは「入る面数 ÷ 2」
+      rows.push({ k: p.k, name, what: p.k === 'body' ? p.s : (p.k === 'end' ? '前後 2 枚' : p.k === 'cover' ? '4 ページ' : ''), paper: o.paper != null ? o.paper : (paperOf[p.k] || ''), sheet: o.sheet != null ? o.sheet : sheet, fit: ac.txt + (p.k === 'end' ? '　前後で 2 枚' : ''), cho: o.cho != null ? +o.cho : (p.k === 'body' ? bodyCho : p.k === 'end' ? Math.max(1, Math.floor(ac.n / 2)) : Math.max(1, ac.n)) }); });
+    const qty = Math.max(0, Math.round(num('dwQty', 0))), spare = Math.max(0, num('dwSpare', 5)) / 100;
+    rows.forEach(r => { r.need = (qty && r.cho > 0) ? Math.ceil(qty / r.cho) : 0; r.needSpare = r.need ? Math.ceil(r.need * (1 + spare)) : 0; });
+    return rows;
+  }
+  function dwPaperGroups(rows) {   // 同じ用紙（＋用紙寸法）はひとまとめ
+    const g = {}; rows.forEach(r => { const key = (r.paper || '（用紙未記入）') + '｜' + r.sheet; if (!g[key]) g[key] = { paper: r.paper || '（用紙未記入）', sheet: r.sheet, dai: 0, need: 0, needSpare: 0, names: [] }; g[key].dai++; g[key].need += r.need; g[key].needSpare += r.needSpare; g[key].names.push(r.name); });
+    return Object.values(g);
+  }
+  function dwRender() {
+    const box = $('dwTableBox'), sum = $('dwPaperSum'); if (!lastCfg) { box.innerHTML = ''; sum.innerHTML = ''; return; }
+    const rows = dwRows(); const qty = Math.round(num('dwQty', 0)); const escs = (v) => esc(v).replace(/"/g, '&quot;');
+    box.innerHTML = '<table style="border-collapse:collapse;font-size:12px;min-width:640px"><tr style="background:var(--surface-2)"><th style="text-align:left;padding:4px 8px">台</th><th style="text-align:left;padding:4px 8px">内容</th><th style="text-align:left;padding:4px 8px">用紙</th><th style="text-align:left;padding:4px 8px">用紙寸法</th><th style="text-align:left;padding:4px 8px" title="各部の展開寸法から、この用紙に何面入るか（自動）">面付（自動）</th><th style="padding:4px 8px" title="1 枚の紙に何丁（何部ぶん）入るか。自動の値を直せます">丁数／枚</th><th style="padding:4px 8px">必要枚数</th><th style="padding:4px 8px">予備込み</th></tr>'
+      + rows.map((r, i) => '<tr style="border-top:1px solid var(--rule)"><td style="padding:3px 8px;white-space:nowrap">' + (i + 1) + '　' + escs(r.name) + '</td><td style="padding:3px 8px;color:var(--muted)">' + escs(r.what) + '</td>'
+        + '<td style="padding:3px 6px"><input class="dw-paper" data-name="' + escs(r.name) + '" value="' + escs(r.paper) + '" placeholder="例: 上質 135kg" style="width:150px;font-size:12px"></td>'
+        + '<td style="padding:3px 6px"><input class="dw-sheet" data-name="' + escs(r.name) + '" value="' + escs(r.sheet) + '" style="width:90px;font-size:12px"></td>'
+        + '<td style="padding:3px 8px;color:var(--muted);white-space:nowrap">' + escs(r.fit || '') + '</td>'
+        + '<td style="padding:3px 6px;text-align:center"><input class="dw-cho" data-name="' + escs(r.name) + '" type="number" min="1" step="1" value="' + r.cho + '" style="width:56px;font-size:12px;text-align:center"></td>'
+        + '<td style="padding:3px 8px;text-align:right">' + (r.need ? r.need.toLocaleString() : '—') + '</td><td style="padding:3px 8px;text-align:right;font-weight:700">' + (r.needSpare ? r.needSpare.toLocaleString() : '—') + '</td></tr>').join('') + '</table>';
+    box.querySelectorAll('input').forEach(inp => inp.addEventListener('change', () => { const ov = dwoLoad(); const n = inp.getAttribute('data-name'); ov[n] = ov[n] || {}; ov[n][inp.classList.contains('dw-cho') ? 'cho' : inp.classList.contains('dw-sheet') ? 'sheet' : 'paper'] = inp.value; dwoSave(ov); dwRender(); }));
+    const gs = dwPaperGroups(rows);
+    sum.innerHTML = '<b>用紙の発注量</b>' + (qty ? '（部数 ' + qty.toLocaleString() + '・予備 ' + num('dwSpare', 5) + '％）' : '<span style="color:var(--nodo)">　部数を入れると枚数が出ます</span>') + '<table style="border-collapse:collapse;font-size:12px;margin-top:4px"><tr style="background:var(--surface-2)"><th style="text-align:left;padding:4px 8px">用紙</th><th style="text-align:left;padding:4px 8px">用紙寸法</th><th style="padding:4px 8px">台数</th><th style="padding:4px 8px">必要枚数</th><th style="padding:4px 8px">予備込み</th><th style="text-align:left;padding:4px 8px">どの台</th></tr>'
+      + gs.map(g => '<tr style="border-top:1px solid var(--rule)"><td style="padding:3px 8px;font-weight:700">' + escs(g.paper) + '</td><td style="padding:3px 8px">' + escs(g.sheet) + '</td><td style="padding:3px 8px;text-align:center">×' + g.dai + ' 台</td><td style="padding:3px 8px;text-align:right">' + (g.need ? g.need.toLocaleString() : '—') + '</td><td style="padding:3px 8px;text-align:right;font-weight:700">' + (g.needSpare ? g.needSpare.toLocaleString() + ' 枚' : '—') + '</td><td style="padding:3px 8px;color:var(--muted)">' + escs(g.names.join('・')) + '</td></tr>').join('') + '</table>';
+  }
+  $('dwBuild').addEventListener('click', dwRender); ['dwQty', 'dwSpare', 'dwSpine', 'dwFlap', 'dwObiH', 'dwPaperBody', 'dwPaperCover', 'dwPaperJacket', 'dwPaperEnd', 'dwPaperObi', 'dwCover', 'dwJacket', 'dwEnd', 'dwObi'].forEach(id => $(id).addEventListener('change', () => { if ($('dwTableBox').innerHTML) dwRender(); }));
   async function shijiPdf() {
     if (!lastCfg) { $('status').textContent = '先に面付を決めてください（順に選ぶ → 自動面付け）'; return; }
     if (!window.fontkit || !window.opentype) { $('status').textContent = '指示書の部品がまだ読み込めていません。少し待ってもう一度押してください'; return; }
@@ -1937,6 +1994,15 @@
       if (info.pages) { need(40); text('4. 折丁一覧', M, y - 11, 11, acc); y -= 18;
         const body = parts.filter(p => p.k === 'body'); const cw = Math.floor((W - 2 * M) / 4);
         body.forEach((p, i) => { if (i % 4 === 0) { need(14); } const x = M + (i % 4) * cw; text(p.t + '　' + p.s, x, y - 10, 8.5, ink, cw - 6); if (i % 4 === 3 || i === body.length - 1) y -= 13; }); y -= 6; }
+      // 5. 台ごとと用紙の発注量（DAIWARI-2）
+      try { const rows = dwRows(); const qty = Math.round(num('dwQty', 0)); if (rows.length) {
+        need(40); text('5. 台割（台ごと）と用紙の発注量' + (qty ? '（部数 ' + qty.toLocaleString() + '・予備 ' + num('dwSpare', 5) + '％）' : '（部数 未記入）'), M, y - 11, 11, acc); y -= 18;
+        const cx = [M, M + 130, M + 250, M + 320, M + 400, M + 445, M + 495]; const hd = ['台', '用紙', '用紙寸法', '面付', '丁数／枚', '必要枚数', '予備込み'];
+        need(14); hd.forEach((h, i) => text(h, cx[i], y - 9, 8, mute)); y -= 12; page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.4, color: line }); y -= 2;
+        rows.forEach((r, i) => { need(13); text((i + 1) + '　' + r.name, cx[0], y - 9, 8, ink, 125); text(r.paper || '（未記入）', cx[1], y - 9, 8, ink, 115); text(r.sheet, cx[2], y - 9, 8, ink, 66); text(String(r.fit || '').split('（')[0], cx[3], y - 9, 8, ink, 76); text(String(r.cho), cx[4] + 14, y - 9, 8); text(r.need ? r.need.toLocaleString() : '—', cx[5] + 8, y - 9, 8); text(r.needSpare ? r.needSpare.toLocaleString() : '—', cx[6] + 8, y - 9, 8); y -= 12; });
+        y -= 6; const gs = dwPaperGroups(rows); need(14); text('用紙別のまとめ（同じ用紙は 1 つに）', M, y - 9, 9, acc); y -= 13;
+        gs.forEach(g => { need(13); text(g.paper + '　' + g.sheet + '　×' + g.dai + ' 台　' + (g.needSpare ? '必要 ' + g.need.toLocaleString() + ' 枚・予備込み ' + g.needSpare.toLocaleString() + ' 枚' : '（部数未記入）') + '　［' + g.names.join('・') + '］', M + 6, y - 9, 8.5, ink, W - 2 * M - 6); y -= 12; });
+        y -= 6; } } catch (e) {}
       need(30); page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.6, color: line }); y -= 12;
       text('この指示書は「折丁面付台」の設定から作りました。面付データ（PDF）は別に書き出して添えます。折り方・トンボ・用紙はこれで進めてよいか、事前に確認をお願いします。', M, y - 9, 8, mute, W - 2 * M);
       const bytes = await doc.save(); const ymd = today.getFullYear() + ('0' + (today.getMonth() + 1)).slice(-2) + ('0' + today.getDate()).slice(-2);
