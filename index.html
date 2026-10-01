@@ -2684,7 +2684,7 @@ setTimeout(_removeBootLoader_, 5000);
       </div>
       <!-- フィルタ (1行配置 — 各 select 幅 90px 固定でコンパクトに) -->
       <div style="display:flex;gap:4px;margin-bottom:.65rem;align-items:center;flex-wrap:wrap">
-        <input id="inq-search" placeholder="🔍検索（空白=AND・OR）" title="空白で区切ると全部含む（AND）。「OR」か「|」で どちらか（OR）。先頭に - で含まない。案件番号 P0001／a108393、連絡ID、タグ、担当でも当たります" style="flex:1;min-width:120px;max-width:180px;font-size:12px;padding:4px 8px" oninput="if(window._inqViewMode_==='kanban'){renderInquiryKanban()}else{renderInquiryList()}">
+        <input id="inq-search" placeholder="🔍検索（空白=AND・OR）" title="空白で区切ると全部含む（AND）。「OR」か「|」で どちらか（OR）。先頭に - で含まない。案件番号 P0001／a108393、連絡ID、タグ、担当でも当たります" style="flex:1;min-width:120px;max-width:180px;font-size:12px;padding:4px 8px" oninput="_deb_('inqSearch',function(){ if(window._inqViewMode_==='kanban'){renderInquiryKanban()}else{renderInquiryList()} },250)">
         <select id="inq-status-f" style="font-size:11px;padding:4px 4px;width:90px" onchange="renderInquiryList()" title="ステータス">
           <option value="">📊 状態</option>
           <option value="new">新規</option>
@@ -4429,8 +4429,16 @@ function _idbSaveNow_(){
   return _idbPut_(_IDB_KEY, { at:Date.now(), json:s }).then(function(){ _idbLastOk=Date.now(); _idbLastErr=''; return true; })
     .catch(function(e){ _idbLastErr=String(e&&e.message||e); console.warn('[IDB] 保存失敗', e); return false; });
 }
-function _idbSaveSoon_(){ if(_idbSaveTimer) clearTimeout(_idbSaveTimer); _idbSaveTimer=setTimeout(function(){ _idbSaveTimer=null; _idbSaveNow_(); }, 400); }
-try{ window.addEventListener('pagehide', function(){ if(_idbSaveTimer) _idbSaveNow_(); }); }catch(e){}
+// SPEED-3: 入力のたびに重い処理をしない。_deb_＝打ち終わって少ししたら 1 回、_whenIdle_＝操作の手が止まってから（最長 maxWait）
+var _debTimers_={};
+function _deb_(key, fn, ms){ clearTimeout(_debTimers_[key]); _debTimers_[key]=setTimeout(function(){ delete _debTimers_[key]; try{ fn(); }catch(e){ console.warn('[deb]',key,e); } }, ms||250); }
+var _lastUserAct_=0;
+try{ ['keydown','pointerdown','input','wheel'].forEach(function(ev){ window.addEventListener(ev, function(){ _lastUserAct_=Date.now(); }, { passive:true, capture:true }); }); }catch(e){}
+function _userBusy_(){ return Date.now()-_lastUserAct_ < 3000; }
+function _whenIdle_(fn, maxWaitMs){ var t0=Date.now(); (function tick(){ if(_userBusy_() && Date.now()-t0 < (maxWaitMs||15000)){ setTimeout(tick, 800); return; } if(window.requestIdleCallback) requestIdleCallback(function(){ fn(); }, { timeout:2000 }); else fn(); })(); }
+var _idbSavePending_=false;
+function _idbSaveSoon_(){ _idbSavePending_=true; if(_idbSaveTimer) clearTimeout(_idbSaveTimer); _idbSaveTimer=setTimeout(function(){ _idbSaveTimer=null; _whenIdle_(function(){ if(_idbSavePending_){ _idbSavePending_=false; _idbSaveNow_(); } }, 15000); }, 1500); }   // SPEED-3: 21MB の書き出し（0.2〜0.4 秒固まる）は手が止まってから
+try{ window.addEventListener('pagehide', function(){ if(_idbSaveTimer || _idbSavePending_){ _idbSavePending_=false; _idbSaveNow_(); } }); }catch(e){}
 // 項目ごとの「中身の印」（ツールが localStorage の控えのどこを変えたかを見分ける）
 function _lsSigOf_(obj){ var out={}; Object.keys(obj||{}).forEach(function(k){ var s; try{ s=JSON.stringify(obj[k]); }catch(e){ s=''; } s=s||''; var h=5381; for(var i=0;i<s.length;i++) h=((h*33)^s.charCodeAt(i))|0; out[k]=s.length+':'+h; }); return out; }
 // 起動直後: IndexedDB の控えがあれば、それで本体を置き換える（localStorage の控えより新しい）
@@ -4455,10 +4463,12 @@ function _persistLocal_(){
   if(_idbLoaded_) _idbSaveSoon_();   // 主: IndexedDB（起動直後に控えを読み終わるまでは書かない＝古い方で上書きしない）
   // SPEED-1: 従の localStorage（5MB 超・同期で 100〜500ms）は 1.5 秒後にまとめて書く。押すたびに固まらないように
   if(_lsSaveTimer_) clearTimeout(_lsSaveTimer_);
-  _lsSaveTimer_=setTimeout(function(){ _lsSaveTimer_=null; try{ _persistLocalNow_(); }catch(e){ console.warn('[控え]',e); } }, 1500);
+  _lsSavePending_=true;
+  _lsSaveTimer_=setTimeout(function(){ _lsSaveTimer_=null; _whenIdle_(function(){ if(!_lsSavePending_) return; _lsSavePending_=false; try{ _persistLocalNow_(); }catch(e){ console.warn('[控え]',e); } }, 20000); }, 4000);   // SPEED-3
   return _idbLoaded_?0:(_lsFailAt_?-1:0);
 }
-try{ window.addEventListener('pagehide', function(){ if(_lsSaveTimer_){ clearTimeout(_lsSaveTimer_); _lsSaveTimer_=null; try{ _persistLocalNow_(); }catch(e){} } }); }catch(e){}
+var _lsSavePending_=false;
+try{ window.addEventListener('pagehide', function(){ if(_lsSaveTimer_ || _lsSavePending_){ if(_lsSaveTimer_){ clearTimeout(_lsSaveTimer_); _lsSaveTimer_=null; } _lsSavePending_=false; try{ _persistLocalNow_(); }catch(e){} } }); }catch(e){}
 function _persistLocalNow_(){
   // 従: localStorage（ツールが読む控え）。入らないときは 60 秒に 1 回だけ試す
   var now=Date.now();
@@ -29570,7 +29580,7 @@ function _renderLedger_(cfg){
   }).join(' ');
   var panel='<div class="rd-filter-panel no-print"><span class="rd-filter-title">🔎 表示条件</span>'
     +'<div class="rd-filter-row">'
-    +'<input id="led-'+cfg.key+'-q" placeholder="'+(cfg.searchPlaceholder||'検索…')+'" value="'+esc(st.q).replace(/"/g,'&quot;')+'" oninput="'+cfg.renderFn+'()">'
+    +'<input id="led-'+cfg.key+'-q" placeholder="'+(cfg.searchPlaceholder||'検索…')+'" value="'+esc(st.q).replace(/"/g,'&quot;')+'" oninput="_deb_(\'led-'+cfg.key+'\','+cfg.renderFn+',300)">'
     +'<select id="led-'+cfg.key+'-period" onchange="'+cfg.renderFn+'()">'+periodOpts+'</select>'
     +'<select id="led-'+cfg.key+'-sort" onchange="'+cfg.renderFn+'()">'+sortOpts+'</select>'
     +'<button class="btn" onclick="_ledgerClear_(\''+cfg.key+'\',\''+cfg.renderFn+'\')">× クリア</button>'
@@ -46680,7 +46690,8 @@ function _projMatchesChips_(r){
   return true;
 }
 
-function _onProjFilterChange_(){
+function _onProjFilterChange_(){ _deb_('projFilter', _onProjFilterChangeNow_, 250); }   // SPEED-3: 1 文字ごとに全部描き直さない
+function _onProjFilterChangeNow_(){
   _populateProjFilterOptions_();
   if((window._projViewMode_||'detail') === 'ledger') renderProjectLedger();
   else renderProjects();
@@ -51550,6 +51561,7 @@ function startAutoInquirySync(){
     if(_inqSyncInFlight_) return;
     var now = Date.now();
     if(now - _lastInqSyncAt_ < 15000) return;  // 15秒以内の二重実行を防止
+    if(typeof _userBusy_==='function' && _userBusy_() && now - _lastInqSyncAt_ < 180000) return;   // SPEED-3: 操作している最中は後に回す（最長 3 分）
     _inqSyncInFlight_ = true;
     try {
       // 既存件数を覚えておく → 新規件数を計算
