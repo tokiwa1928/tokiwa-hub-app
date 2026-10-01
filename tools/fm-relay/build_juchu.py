@@ -1388,6 +1388,13 @@ LOGIC = r"""
       var fb = tr.querySelector('.gc-find'); if (fb) fb.onclick = function () { 外注先を探す窓(tr); };
       外注行の見た目(tr);
     });
+    // GAICHU-CODE: 読み込んだ外注に、コードと会社名が合っていない行があれば、1 回押すだけでそろえて保存できるようにする（FileMaker 側に残っている食い違いを直す）
+    try { var M1 = 外注先マスタ表(); if (Object.keys(M1.byCode).length) { var ズレ = [];
+      行.forEach(function (x) { var o = { 外注コード: x.外注コード, 会社名: x.会社名 }; if (外注行をそろえる(o, M1) && (o.外注コード || '') !== String(x.外注コード || '')) ズレ.push((x.番) + ' 行目: コード ' + (x.外注コード || '（空）') + (M1.byCode[x.外注コード] ? '＝' + M1.byCode[x.外注コード] : '') + '、会社名 ' + (x.会社名 || '（空）') + ' → ' + (o.外注コード || '（空）')); });
+      var old = $('gc-fix'); if (old) old.remove();
+      if (ズレ.length) { var fx = document.createElement('div'); fx.id = 'gc-fix'; fx.style.cssText = 'margin:6px 0;padding:6px 10px;border:1px solid #f59e0b;background:#fffbeb;font-size:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+        fx.innerHTML = '<b style="color:#b45309">外注コードと会社名が合っていません</b><span>' + esc(ズレ.join('　／　')) + '</span><button type="button" class="plain" id="gc-fix-go" style="font-weight:700">会社名に合わせてコードをそろえて保存</button>';
+        $('gc-rows').parentNode.parentNode.insertBefore(fx, $('gc-rows').parentNode); $('gc-fix-go').onclick = function () { 外注の行(); $('gc-save').click(); fx.remove(); }; } } } catch (e) {}
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-pickbtn'), function (b) { b.onclick = function () { 発注内容を選ぶ(b.closest('tr')); }; });
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-ord'), function (b) { 発注ボタンを描く(b, ((手配.外注 || {})[b.getAttribute('data-i')] || {}).ord); b.onclick = function () { 発注を切替(b); 手配が変わった(); }; });
   }
