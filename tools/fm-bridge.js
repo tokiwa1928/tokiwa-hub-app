@@ -100,7 +100,8 @@
     'やること_設定_書く':    ['設定'],
     'やること_知らせを入れる': ['入れる'],
     'やること_今すぐ知らせる': [],
-    'layoutFind':          ['layout', 'query', 'limit'],   // SHIRABE-1: どのレイアウトでも読むだけ（FileMaker の項目しらべ）
+    'layoutFind':          ['layout', 'query', 'limit'],
+    '外注_見回り':          [],   // GAICHU-CODE-3   // SHIRABE-1: どのレイアウトでも読むだけ（FileMaker の項目しらべ）
     'layouts':             []
   };
 

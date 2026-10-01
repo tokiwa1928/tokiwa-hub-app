@@ -1307,7 +1307,7 @@ LOGIC = r"""
       外注 = (r.外注 && r.外注[0]) || null;
       外注を描く(外注 ? 外注.行 : []);
       $('gc-msg').textContent = 外注 ? '' : '外注はありません（＋ 行を足す で登録）';
-      if (r.直した && r.直した.length) $('gc-msg').textContent = '外注コードと会社名が合っていなかったので、会社名に合わせて FileMaker を直しました（' + r.直した.join('　／　') + '）';   // GAICHU-CODE-2
+      if (r.直した && r.直した.length) $('gc-msg').textContent = '外注コードと会社名が合っていなかったので、コードに合わせて会社名を FileMaker で直しました（' + r.直した.join('　／　') + '）';   // GAICHU-CODE-2/3
     }).catch(function (e) { $('gc-msg').textContent = String(e.message || e); });
   }
   // GAICHU-CODE: 外注先マスタ（コード⇔会社名）。候補と突き合わせに使う
@@ -1322,11 +1322,12 @@ LOGIC = r"""
     var 素 = function (x) { return x.replace(/[㈱㈲]/g, ''); }; var ks = 素(k); if (!ks) return '';
     var hit = Object.keys(M.byName).filter(function (x) { return 素(x) === ks; }); if (hit.length === 1) return M.byName[hit[0]];   // ㈱㈲の有無だけ違う
     hit = Object.keys(M.byName).filter(function (x) { var xs = 素(x); return xs.indexOf(ks) >= 0 || ks.indexOf(xs) >= 0; }); return hit.length === 1 ? M.byName[hit[0]] : ''; }   // 片方が片方を含む会社が 1 つだけ
-  // 行の コードと会社名をそろえる。会社名が本物（人が見て選ぶのは会社名）。戻り値: 直したか
+  // 行の コードと会社名をそろえる。GAICHU-CODE-3: コードが本物（FileMaker の 受注データA「社名で検索」はコードだけを書き換える）。
+  // 画面で会社名を打ったときは change でコードを引くので、ここに来るのは読み込んだ行の突き合わせと保存前。戻り値: 直したか
   function 外注行をそろえる(o, M) {
     M = M || 外注先マスタ表(); var cd = String(o.外注コード || '').trim(), nm = String(o.会社名 || '').trim(); var before = cd + '|' + nm;
-    if (nm) { var c2 = 外注コードを引く(nm, M); if (c2) { if (c2 !== cd) o.外注コード = c2; } else if (cd && M.byCode[cd] !== undefined) { o.外注コード = ''; } }   // 会社名がマスタに無いのに、別の会社のコードが残っているときは外す
-    else if (cd && M.byCode[cd]) o.会社名 = M.byCode[cd];
+    if (cd && M.byCode[cd]) { if (外注名寄せ(M.byCode[cd]) !== 外注名寄せ(nm)) o.会社名 = M.byCode[cd]; }
+    else if (!cd && nm) { var c2 = 外注コードを引く(nm, M); if (c2) { o.外注コード = c2; if (M.byCode[c2] && 外注名寄せ(M.byCode[c2]) !== 外注名寄せ(nm)) o.会社名 = M.byCode[c2]; } }
     return (String(o.外注コード || '') + '|' + String(o.会社名 || '')) !== before;
   }
   // GAICHU-FIND（本多さん 10/1「外注先の部分を検索して選択できるように」）: 外注先マスタを探して選ぶ小さな窓。選ぶとコードと会社名が入る
@@ -1358,7 +1359,7 @@ LOGIC = r"""
   }
   function 外注行の見た目(tr) {
     var M = 外注先マスタ表(); var cd = tr.querySelector('.gc-code').value.trim(), nm = tr.querySelector('.gc-name').value.trim(); var c2 = 外注コードを引く(nm, M); var w = tr.querySelector('.gc-warn');
-    var msg = ''; if (nm && !c2 && Object.keys(M.byCode).length) msg = '（外注先マスタに無い会社名。コードは入りません）'; else if (nm && cd && c2 && c2 !== cd) msg = '（コード ' + cd + ' は ' + (M.byCode[cd] || '別の会社') + '。保存時に ' + c2 + ' にそろえます）';
+    var msg = ''; if (nm && !c2 && Object.keys(M.byCode).length) msg = '（外注先マスタに無い会社名' + (cd && M.byCode[cd] ? '。保存するとコード ' + cd + ' の ' + M.byCode[cd] + ' に戻ります' : '。コードは入りません') + '）'; else if (nm && cd && c2 && c2 !== cd) msg = '（コード ' + cd + ' は ' + (M.byCode[cd] || '別の会社') + '。会社名を確定するとコードが ' + c2 + ' に変わります）';
     if (!w) { w = document.createElement('div'); w.className = 'gc-warn'; w.style.cssText = 'font-size:10.5px;color:#b45309'; tr.querySelector('.gc-name').parentNode.appendChild(w); } w.textContent = msg;
   }
   function 外注を描く(行) {
@@ -1391,10 +1392,10 @@ LOGIC = r"""
     });
     // GAICHU-CODE: 読み込んだ外注に、コードと会社名が合っていない行があれば、1 回押すだけでそろえて保存できるようにする（FileMaker 側に残っている食い違いを直す）
     try { var M1 = 外注先マスタ表(); if (Object.keys(M1.byCode).length) { var ズレ = [];
-      行.forEach(function (x) { var o = { 外注コード: x.外注コード, 会社名: x.会社名 }; if (外注行をそろえる(o, M1) && (o.外注コード || '') !== String(x.外注コード || '')) ズレ.push((x.番) + ' 行目: コード ' + (x.外注コード || '（空）') + (M1.byCode[x.外注コード] ? '＝' + M1.byCode[x.外注コード] : '') + '、会社名 ' + (x.会社名 || '（空）') + ' → ' + (o.外注コード || '（空）')); });
+      行.forEach(function (x) { var o = { 外注コード: x.外注コード, 会社名: x.会社名 }; if (外注行をそろえる(o, M1)) ズレ.push((x.番) + ' 行目: コード ' + (x.外注コード || '（空）') + '、会社名 ' + (x.会社名 || '（空）') + ' → ' + (o.外注コード || '（空）') + '／' + (o.会社名 || '（空）')); });
       var old = $('gc-fix'); if (old) old.remove();
       if (ズレ.length) { var fx = document.createElement('div'); fx.id = 'gc-fix'; fx.style.cssText = 'margin:6px 0;padding:6px 10px;border:1px solid #f59e0b;background:#fffbeb;font-size:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
-        fx.innerHTML = '<b style="color:#b45309">外注コードと会社名が合っていません</b><span>' + esc(ズレ.join('　／　')) + '</span><button type="button" class="plain" id="gc-fix-go" style="font-weight:700">会社名に合わせてコードをそろえて保存</button>';
+        fx.innerHTML = '<b style="color:#b45309">外注コードと会社名が合っていません</b><span>' + esc(ズレ.join('　／　')) + '</span><button type="button" class="plain" id="gc-fix-go" style="font-weight:700">コードに合わせてそろえて保存</button>';
         $('gc-rows').parentNode.parentNode.insertBefore(fx, $('gc-rows').parentNode); $('gc-fix-go').onclick = function () { 外注の行(); $('gc-save').click(); fx.remove(); }; } } } catch (e) {}
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-pickbtn'), function (b) { b.onclick = function () { 発注内容を選ぶ(b.closest('tr')); }; });
     Array.prototype.forEach.call($('gc-rows').querySelectorAll('.gc-ord'), function (b) { 発注ボタンを描く(b, ((手配.外注 || {})[b.getAttribute('data-i')] || {}).ord); b.onclick = function () { 発注を切替(b); 手配が変わった(); }; });

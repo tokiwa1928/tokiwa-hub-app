@@ -561,12 +561,38 @@ function 外注_コードを引く_(name, M) {
   var hit = Object.keys(M.byName).filter(function (x) { return 素(x) === ks; }); if (hit.length === 1) return M.byName[hit[0]];
   hit = Object.keys(M.byName).filter(function (x) { var xs = 素(x); return xs.indexOf(ks) >= 0 || ks.indexOf(xs) >= 0; }); return hit.length === 1 ? M.byName[hit[0]] : '';
 }
-/** 1 行ぶん（{外注コード, 会社名}）をそろえる。直したら true */
+/** 1 行ぶん（{外注コード, 会社名}）をそろえる。直したら true
+ *  GAICHU-CODE-3: コードが本物。FileMaker の 受注データA「外注先」「社名で検索」はコードだけを書き換えるので、会社名はコードに合わせる。
+ *  コードがマスタに無い（古いコード・空）ときだけ会社名からコードを引く。会社名がマスタに無くコードも無ければ触らない */
 function 外注_行をそろえる_(o, M) {
   var cd = String(o.外注コード || '').trim(), nm = String(o.会社名 || '').trim(), before = cd + '|' + nm;
-  if (nm) { var c2 = 外注_コードを引く_(nm, M); if (c2) { if (c2 !== cd) o.外注コード = c2; } else if (cd && M.byCode[cd] !== undefined && M.byCode[cd] && 外注_名寄せ_(M.byCode[cd]) !== 外注_名寄せ_(nm)) { /* マスタに無い会社名＋別の会社のコード: コードは残さない */ o.外注コード = ''; } }
-  else if (cd && M.byCode[cd]) o.会社名 = M.byCode[cd];
+  if (cd && M.byCode[cd]) { if (外注_名寄せ_(M.byCode[cd]) !== 外注_名寄せ_(nm)) o.会社名 = M.byCode[cd]; }
+  else if (!cd && nm) { var c2 = 外注_コードを引く_(nm, M); if (c2) { o.外注コード = c2; if (M.byCode[c2] && 外注_名寄せ_(M.byCode[c2]) !== 外注_名寄せ_(nm)) o.会社名 = M.byCode[c2]; } }
   return (String(o.外注コード || '') + '|' + String(o.会社名 || '')) !== before;
+}
+/** GAICHU-CODE-3: 15 分ごとの見回り。新しい伝票 300 件の外注データで、コードと会社名が食い違っていればそろえる（FileMaker で直した分を Hub を開かなくても追いかける） */
+function 外注_見回り() {
+  var M; try { M = 外注_マスタ表_(); } catch (e) { Logger.log('外注_見回り: マスタが読めない ' + e.message); return; }
+  if (!Object.keys(M.byCode).length) return;
+  var r = find_(外注LAYOUT, [{ '伝票番号': '*' }], 300, 1, [{ fieldName: '伝票番号', sortOrder: 'descend' }]);
+  var 直した = [];
+  r.records.forEach(function (rec) {
+    var f = rec.fields, upd = {}, memo = [];
+    for (var i = 1; i <= 4; i++) { var sfx = 外注_添字_(i); var o = { 外注コード: f['外注コード' + sfx] || '', 会社名: f['会社名' + sfx] || '' }; if (!o.外注コード && !o.会社名) continue;
+      var b = o.外注コード + '|' + o.会社名; if (!外注_行をそろえる_(o, M)) continue;
+      ['外注コード', '会社名'].forEach(function (k) { if (String(o[k]) !== String(f[k + sfx] || '')) upd[k + sfx] = o[k]; });
+      memo.push(i + ' 行目: ' + b.replace('|', '／') + ' → ' + o.外注コード + '／' + o.会社名); }
+    if (!Object.keys(upd).length) return;
+    try { var u = update_(外注LAYOUT, rec.recordId, rec.modId, upd, { email: 'hub-mimawari' }); if (!u.conflict) 直した.push(String(f['伝票番号'] || rec.recordId) + '（' + memo.join('・') + '）'); } catch (e) { Logger.log('外注_見回り ' + f['伝票番号'] + ': ' + e.message); }
+  });
+  if (直した.length) Logger.log('外注_見回り: ' + 直した.length + ' 伝票をそろえた ' + 直した.join(' / '));
+  return 直した;
+}
+/** 見回りのトリガーが無ければ入れる（画面_外注 のついでに 6 時間に 1 回だけ確かめる） */
+function 外注_見回りを入れる_() {
+  var c = CacheService.getScriptCache(), key = 'gc_patrol_v1'; if (c.get(key)) return; try { c.put(key, '1', 6 * 3600); } catch (e) {}
+  var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === '外注_見回り'; });
+  if (!has) { ScriptApp.newTrigger('外注_見回り').timeBased().everyMinutes(15).create(); Logger.log('外注_見回り を 15 分ごとに入れた'); }
 }
 /** 伝票番号の外注データ（FileMaker）を読んで、食い違いがあれば書き戻す。戻り値: 直した行の説明（無ければ []） */
 function 外注_そろえる_(伝票番号, who) {
@@ -599,6 +625,7 @@ function 画面_外注(伝票番号) {
   var who = 画面_利用者_();
   if (!伝票番号) throw new Error('伝票番号がありません');
   var 直した = []; try { 直した = 外注_そろえる_(伝票番号, who); } catch (e) { 直した = ['そろえられませんでした: ' + String(e.message || e)]; }   // GAICHU-CODE-2: FileMaker 側で食い違っていれば、読む前に直す
+  try { 外注_見回りを入れる_(); } catch (e) {}   // GAICHU-CODE-3
   return { ok: true, user: who.email, 伝票番号: 伝票番号, 外注: 外注_読む_(伝票番号), 書けない: fieldInfo_(外注LAYOUT).readonly, 直した: 直した };
 }
 
@@ -1271,7 +1298,8 @@ function handle_(action, req, who) {
     case '写し_読み込み':     return 写し_読み込み(req['番号']);
     case '写し_状況':         return 写し_状況();
     case '写し_健康':         return 写し_健康();                 // UTSUSHI-CATCHUP: どこまで写せているか
-    case '写し_追いつく':     { マスタ管理者か_(who); return 写し_追いつく(req['以降']); }   // 止まっていた分を追いつく（本多さん・福永さん）
+    case '写し_追いつく':     { マスタ管理者か_(who); return 写し_追いつく(req['以降']); }
+    case '外注_見回り':       { マスタ管理者か_(who); 外注_見回りを入れる_(); return { 直した: 外注_見回り() || [], トリガー: ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === '外注_見回り'; }).length }; }   // GAICHU-CODE-3: 手で 1 回まわす（本多さん・福永さん）   // 止まっていた分を追いつく（本多さん・福永さん）
     // GEN のデータも同じ保管庫へ
     case 'GEN_取り込み':      return GEN_取り込み(req['画面'], req['見出し'], req['鍵列'], req['行']);
     case 'GEN_ファイル取込':  { GEN_ファイルから取り込む(); return { ok: true }; }   // 保管庫の GEN取込_*.json を読み込む（エディタ不要）
