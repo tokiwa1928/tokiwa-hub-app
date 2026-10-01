@@ -2043,6 +2043,7 @@ setTimeout(_removeBootLoader_, 5000);
         <button class="btn btn-p" onclick="_bmOpenForm_()">＋ リンクを追加</button>
         <button class="btn" onclick="_bmOpenImport_()">📥 一括取込</button>
         <button class="btn" onclick="_bmOpenCatManager_()">⚙ カテゴリ管理</button>
+        <button class="btn" onclick="_bmShortcut_()" title="リンク集を直接開くショートカット（アドレスのコピー・デスクトップ用）">📌 ショートカット</button>
       </span>
     </div>
     <div style="font-size:12px;color:#777;margin:2px 0 10px">よく使うURLやブックマークをカテゴリ別に保管。クリックで新規タブで開きます。全社員で共有されます。</div>
@@ -2075,7 +2076,7 @@ setTimeout(_removeBootLoader_, 5000);
         <label style="font-size:12px;color:#555">タイトル<br><input id="bm-title" class="inp" placeholder="例: ヤマト B2クラウド" style="width:100%"></label>
         <label style="font-size:12px;color:#555">カテゴリ<br><select id="bm-category" class="inp" style="width:100%"></select></label>
       </div>
-      <label style="font-size:12px;color:#555;display:block;margin-top:8px">URL<br><input id="bm-url" class="inp" placeholder="https://..." style="width:100%"></label>
+      <label style="font-size:12px;color:#555;display:block;margin-top:8px">URL<br><input id="bm-url" class="inp" placeholder="https://...（FileMaker は fmp://サーバー/ファイル名 も可）" style="width:100%"></label>
       <label style="font-size:12px;color:#555;display:block;margin-top:8px">メモ (任意)<br><input id="bm-memo" class="inp" placeholder="ログインID・用途など" style="width:100%"></label>
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
         <button class="btn btn-p" onclick="_bmSave_()">保存</button>
@@ -6603,8 +6604,29 @@ function _bmSafeUrl_(u){
   u = String(u||'').trim();
   if(!u) return '';
   if(/^https?:\/\//i.test(u)) return u;
+  if(_bmIsApp_(u)) return u;   // BM-APP-1: アプリの呼び出し口（fmp:// など決めたものだけ）
   if(/^[a-z][a-z0-9+.-]*:/i.test(u)) return ''; // 他スキーム(javascript:等)は拒否
   return 'https://' + u;
+}
+// BM-APP-1: デスクトップアプリのうち、自分用の呼び出し口を持つもの（FileMaker・Office・Teams・Zoom・Slack・メール・電話）だけ通す
+function _bmIsApp_(u){ return /^(fmp\d{0,2}|ms-excel|ms-word|ms-powerpoint|msteams|zoommtg|slack|mailto|tel):/i.test(String(u||'').trim()); }
+// BM-APP-1: リンク集を直接開くショートカット（?page=bookmarks）。アドレスのコピーと、デスクトップ用の .url
+function _bmShortcut_(){
+  var url = location.origin + location.pathname.replace(/index\.html$/,'') + '?page=bookmarks';
+  var old = document.getElementById('bm-shortcut-pop'); if(old){ old.remove(); return; }
+  var d = document.createElement('div'); d.id = 'bm-shortcut-pop';
+  d.style.cssText = 'background:#F4F7F3;border:1px solid #D6DED2;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.8';
+  d.innerHTML = '<div style="font-weight:700;margin-bottom:4px">📌 リンク集を直接開くショートカット</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input class="inp" readonly value="'+_bmEsc_(url)+'" style="flex:1;min-width:240px" onclick="this.select()">'
+    + '<button class="btn btn-p" id="bm-sc-copy">アドレスをコピー</button><button class="btn" id="bm-sc-dl">デスクトップ用をダウンロード</button><button class="btn" onclick="document.getElementById(\'bm-shortcut-pop\').remove()">閉じる</button></div>'
+    + '<div style="font-size:12px;color:#4A574E;margin-top:4px">ダウンロードした「Tokiwa Hub リンク集」をデスクトップに置くと、押すだけでリンク集が開きます。ブラウザーのブックマークに入れるときは、コピーしたアドレスを使ってください。</div>';
+  var host = document.getElementById('bm-cat-manager'); host.parentNode.insertBefore(d, host);
+  document.getElementById('bm-sc-copy').onclick = function(){ var done=function(){ if(typeof _toastMsg==='function') _toastMsg('📋 アドレスをコピーしました'); }; try{ navigator.clipboard.writeText(url).then(done, function(){ prompt('このアドレスをコピーしてください', url); }); }catch(e){ prompt('このアドレスをコピーしてください', url); } };
+  document.getElementById('bm-sc-dl').onclick = function(){
+    var blob = new Blob(['[InternetShortcut]\r\nURL=' + url + '\r\n'], { type:'application/internet-shortcut' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'Tokiwa Hub リンク集.url'; document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    if(typeof _toastMsg==='function') _toastMsg('📌 ダウンロードしました。デスクトップに置いてください');
+  };
 }
 function _bmList_(){ return (window.DB && Array.isArray(DB.bookmarks)) ? DB.bookmarks : (DB.bookmarks = []); }
 // カテゴリは別管理 (DB.bookmarkCategories)。初回のみ既定値を投入 (空配列にされたら再投入しない)
@@ -6795,7 +6817,7 @@ function _bmSave_(){
   var urlRaw = document.getElementById('bm-url').value.trim();
   var url = _bmSafeUrl_(urlRaw);
   if(!title){ alert('タイトルを入力してください'); return; }
-  if(!url){ alert('正しいURL（http:// または https://）を入力してください'); return; }
+  if(!url){ alert('正しいURL（http:// または https://）を入力してください。\nアプリを開くリンクは fmp://（FileMaker）、ms-excel:、ms-word:、ms-powerpoint:、msteams:、zoommtg:、slack:、mailto:、tel: が使えます'); return; }
   var cat = document.getElementById('bm-category').value.trim() || '未分類';
   var memo = document.getElementById('bm-memo').value.trim();
   var editId = document.getElementById('bm-edit-id').value;
@@ -6971,7 +6993,8 @@ function renderBookmarksPage(){
         out += '<div style="display:flex;align-items:flex-start;gap:6px">';
         if(selMode) out += '<input type="checkbox" class="bm-sel-cb" data-id="'+b.id+'"'+(_bmSelSet_()[b.id]?' checked':'')+' onclick="event.stopPropagation();_bmSelToggle_(\''+b.id+'\',this.checked)" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex:0 0 auto">';
         out += '<span style="color:#bbb;font-size:15px;cursor:grab;line-height:1.2;flex:0 0 auto" title="ドラッグで別カテゴリへ移動">⠿</span>';
-        out += '<a href="'+_bmEsc_(safe)+'" target="_blank" rel="noopener noreferrer" draggable="false" style="flex:1;min-width:0;font-weight:600;color:#1d4ed8;text-decoration:none;font-size:14px;word-break:break-word">'+_bmEsc_(b.title||'(無題)')+' ↗</a>';
+        var isApp=_bmIsApp_(safe);   // BM-APP-1
+        out += '<a href="'+_bmEsc_(safe)+'"'+(isApp?' title="この PC のアプリで開きます"':' target="_blank" rel="noopener noreferrer"')+' draggable="false" style="flex:1;min-width:0;font-weight:600;color:#1d4ed8;text-decoration:none;font-size:14px;word-break:break-word">'+_bmEsc_(b.title||'(無題)')+(isApp?' 🖥':' ↗')+'</a>';
         out += '<span style="display:flex;gap:3px;white-space:nowrap">'
           + '<button class="use-btn" title="編集" onclick="event.stopPropagation();_bmEdit_(\''+b.id+'\')" style="font-size:11px;padding:2px 6px">✏</button>'
           + '<button class="use-btn" title="削除" onclick="event.stopPropagation();_bmDelete_(\''+b.id+'\')" style="font-size:11px;padding:2px 6px;border-color:#fca5a5;color:#b91c1c">🗑</button>'
