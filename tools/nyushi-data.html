@@ -91,8 +91,8 @@
     <div class="list" id="lines"></div>
     <h2>4. 書き出す</h2>
     <div class="f"><label>文字の書体</label><select id="font"><option value="BIZ UDPGothic, Yu Gothic, Meiryo, sans-serif">ゴシック</option><option value="BIZ UDPMincho, Yu Mincho, serif">明朝</option></select></div>
-    <div class="f"><button class="p" id="exportSvg">SVG で書き出す（Illustrator 用）</button><button id="exportTxt">TXT</button></div>
-    <div class="small">SVG は 1 ページ 1 ファイルで ZIP にまとめます。層は「罫線・枠」（線画）・「図」・「文字」（段落ごと）。Illustrator で開くと文字は文字のまま（書体は PC にあるものに置き換わります）。.ai／.eps は Illustrator から保存してください。縦書きは横書きの行で入るので、Illustrator で「縦組み」にしてください。</div>
+    <div class="f"><button class="p" id="exportAi">Illustrator 用（.ai）で書き出す</button><button id="exportSvg">SVG</button><button id="exportTxt">TXT</button></div>
+    <div class="small">.ai は 1 ページ 1 ファイルで ZIP にまとめます（PDF 互換の .ai。ダブルクリックで Illustrator が開きます。開くときに「Illustrator の編集機能を保持していない」と出たらそのまま OK）。文字は文字のまま、書体（BIZ UDP ゴシック／明朝）を埋め込みます。罫線・枠・図形は線画（パス）、囲んだ図は画像か線画。縦書きの行は 1 文字ずつ縦に並べて入れます。SVG は層（罫線・枠／図／文字）付きの別形式です。</div>
   </div>
   <div class="panel" style="padding:8px">
     <div class="f" style="justify-content:space-between"><span id="pageInfo" class="small">—</span><span class="f"><label>倍率</label><input type="range" id="zoom" min="0.2" max="1.5" step="0.05" value="0.5"></span></div>
@@ -103,6 +103,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/imagetracerjs@1.2.6/imagetracer_v1.2.6.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/opentype.js/1.3.4/opentype.min.js"></script>
 <script>
 (function () {
   'use strict';
@@ -303,6 +306,54 @@
     s += '</g>\n</svg>\n';
     return s;
   }
+  /* ---------- NYUSHI-3: Illustrator 用（PDF 互換の .ai）。pdf-lib で文字・線画・図を置く。書体はブラウザが取り寄せて埋め込む（取得のみ） ---------- */
+  var FONT_URL = { g: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/bizudpgothic/BIZUDPGothic-Regular.ttf', m: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/bizudpmincho/BIZUDPMincho-Regular.ttf' };
+  var fontBytesCache = {};
+  async function fontBytes(kind) {
+    var url = FONT_URL[kind] || FONT_URL.g; if (fontBytesCache[url]) return fontBytesCache[url];
+    say('書体を取り寄せています…（初回だけ。約 5MB）'); var r = await fetch(url); if (!r.ok) throw new Error('書体を取り寄せられませんでした（' + r.status + '）'); var b = await r.arrayBuffer(); fontBytesCache[url] = b; return b;
+  }
+  // 使う文字だけの小さな書体を作る（opentype.js）。pdf-lib の subset は この書体で字が抜けるので使わない
+  var parsedFont = {};
+  function subsetFont(url, bytes, text) {
+    var font = parsedFont[url] || (parsedFont[url] = opentype.parse(bytes.slice(0)));
+    var glyphs = [font.glyphs.get(0)], seen = { 0: 1 };
+    Array.from(new Set(Array.from(text + ' 0123456789'))).forEach(function (ch) { var g = font.charToGlyph(ch); if (g && g.index && !seen[g.index]) { seen[g.index] = 1; if (!g.name) g.name = 'g' + g.index; glyphs.push(g); } });
+    var sub = new opentype.Font({ familyName: (font.names.fontFamily && (font.names.fontFamily.en || font.names.fontFamily.ja)) || 'BIZUDPGothic', styleName: 'Regular', unitsPerEm: font.unitsPerEm, ascender: font.ascender, descender: font.descender, glyphs: glyphs });
+    return sub.toArrayBuffer();
+  }
+  function svgPaths(inner) { var out = [], re = /<path[^>]*\sd="([^"]+)"/g, m; while ((m = re.exec(inner))) out.push(m[1]); return out; }
+  async function pagePdf(p, fb, trace, layout) {
+    var L = window.PDFLib, doc = await L.PDFDocument.create(); doc.registerFontkit(window.fontkit);
+    var font = await doc.embedFont(fb, { subset: false }); var okChars = {}; try { font.getCharacterSet().forEach(function (c) { okChars[c] = 1; }); } catch (e) { okChars = null; }
+    var safe = function (t) { if (!okChars) return t; var o = ''; for (var i = 0; i < t.length; i++) { var cp = t.codePointAt(i); if (cp > 0xffff) i++; o += (okChars[cp] || cp === 32) ? String.fromCodePoint(cp) : '□'; } return o; };
+    var W = p.wmm / 25.4 * 72, H = p.hmm / 25.4 * 72, k = W / p.w;   // px → pt
+    var page = doc.addPage([W, H]); var black = L.rgb(0, 0, 0);
+    if (layout) svgPaths(layoutSvgOf(p) || '').forEach(function (d) { try { page.drawSvgPath(d, { x: 0, y: H, scale: k, color: black, borderWidth: 0 }); } catch (e) {} });
+    for (var fi = 0; fi < p.figs.length; fi++) { var f = p.figs[fi], c = cropPng(p, f);
+      if (trace) { var ps = svgPaths(traceSvg(c)); if (ps.length) { ps.forEach(function (d) { try { page.drawSvgPath(d, { x: f.x * k, y: H - f.y * k, scale: k, color: black, borderWidth: 0 }); } catch (e) {} }); continue; } }
+      try { var img = await doc.embedPng(c.toDataURL('image/png')); page.drawImage(img, { x: f.x * k, y: H - (f.y + f.h) * k, width: f.w * k, height: f.h * k }); } catch (e) {} }
+    var order = p.lines.slice().sort(function (a, b) { return a.v ? (b.x - a.x) || (a.y - b.y) : (a.y - b.y) || (a.x - b.x); });
+    order.forEach(function (l) { var t = safe(String(l.text || '').replace(/[\r\n]+/g, ' ')); if (!t.trim()) return; var fs = fontSizeOf(l) * k;
+      if (l.v) { var chars = Array.from(t), pitch = chars.length ? (l.h * k) / chars.length : fs; var x = (l.x + l.w / 2) * k - fs / 2, y = H - l.y * k - fs * 0.9;
+        chars.forEach(function (ch) { if (ch.trim()) { try { page.drawText(ch, { x: x, y: y, size: fs, font: font, color: black }); } catch (e) {} } y -= pitch; }); }
+      else { var nat = 0; try { nat = font.widthOfTextAtSize(t, fs); } catch (e) {} var size = (nat > 0 && l.w > 0 && nat > l.w * k * 1.02) ? fs * (l.w * k / nat) : fs;   // 枠より長ければ少し小さく
+        try { page.drawText(t, { x: l.x * k, y: H - (l.y + l.h * 0.84) * k, size: size, font: font, color: black }); } catch (e) {} } });
+    doc.setTitle(p.name); doc.setProducer('Tokiwa Hub スキャンの文字起こし'); doc.setCreator('Tokiwa Hub');
+    return await doc.save();
+  }
+  $('exportAi').onclick = async function () {
+    var done = pages.filter(function (p) { return p.done; }); if (!done.length) { say('まだ読み取ったページがありません', true); return; }
+    if (!window.PDFLib || !window.fontkit || !window.opentype) { say('PDF の部品がまだ読み込めていません。少し待ってもう一度押してください', true); return; }
+    try {
+      var kind = /Mincho/i.test($('font').value) ? 'm' : 'g'; var full = await fontBytes(kind); say('書体を使う文字だけに絞っています…');
+      var allText = done.map(textOf).join(''); var fb = subsetFont(FONT_URL[kind], full, allText);
+      var zip = new JSZip(), tr = $('traceFig').checked, lo = $('layoutOn').checked;
+      for (var di = 0; di < done.length; di++) { var p = done[di]; say('.ai を作っています… ' + (di + 1) + '/' + done.length); await new Promise(function (r) { setTimeout(r, 10); }); zip.file(p.name + '.ai', await pagePdf(p, fb, tr, lo)); zip.file(p.name + '.txt', textOf(p)); }
+      zip.file('読み方.txt', '.ai は PDF 互換の Illustrator ファイルです。ダブルクリックで Illustrator が開きます。\n開くときに「Illustrator の編集機能を保持していない」と出たら、そのまま OK で開けます（文字・線画・図は編集できます）。\n文字は BIZ UDP ゴシック（または明朝）を埋め込んでいます。縦書きの行は 1 文字ずつ縦に並べてあるので、まとめて縦組みにするときは文字ツールで組み直してください。\n');
+      var blob = await zip.generateAsync({ type: 'blob' }); dl(blob, (done[0].name.replace(/_p\d+$/, '') || '文字起こし') + '_ai.zip'); say(done.length + ' ページを .ai にしました（ZIP）。');
+    } catch (e) { say('作れませんでした: ' + (e.message || e), true); }
+  };
   function dl(blob, name) { var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000); }
   function textOf(p) { var order = p.lines.slice().sort(function (a, b) { return a.v ? (b.x - a.x) || (a.y - b.y) : (a.y - b.y) || (a.x - b.x); }); return order.map(function (l) { return l.text; }).join('\n'); }
   $('exportSvg').onclick = async function () {
