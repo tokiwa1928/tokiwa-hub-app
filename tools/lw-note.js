@@ -9,7 +9,13 @@
   var S = null;   // いま開いている 1 件の状態
 
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-  function me() { var a = (typeof currentAuth !== 'undefined' && currentAuth) || {}; return { email: String(a.userEmail || a.email || '').toLowerCase(), name: a.userName || '' }; }
+  var ME_KEY = 'tokiwa_lwnote_me';   // LWNOTE-3: ログインにメールが無いとき（会社を選んで入る「管理者」）は、この PC で 1 回だけ聞いて覚える
+  function savedMe() { try { var m = JSON.parse(localStorage.getItem(ME_KEY) || 'null'); return (m && m.email) ? m : null; } catch (e) { return null; } }
+  function me() {
+    var a = (typeof currentAuth !== 'undefined' && currentAuth) || {}, email = String(a.userEmail || a.email || '').toLowerCase().trim();
+    if (email) return { email: email, name: a.userName || '', fixed: true };
+    var m = savedMe(); return m ? { email: String(m.email).toLowerCase(), name: m.name || '', fixed: false } : { email: '', name: '', fixed: false };
+  }
   function api(action, data) {
     if (typeof callCloudAPI !== 'function') return Promise.resolve({ success: false, error: 'no_cloud' });
     data = data || {}; data.email = me().email;
@@ -35,7 +41,6 @@
   function open(inqId) {
     var inq = ((typeof DB !== 'undefined' && DB.inquiries) || []).find(function (i) { return i.id === inqId; });
     if (!inq) { alert('問い合わせが見つかりません'); return; }
-    if (!me().email) { alert('ログインしている人のメールアドレスが分かりません。入り直してください'); return; }
     close();
     var st = null; try { if (typeof _inqActionState_ === 'function') st = _inqActionState_(inq); } catch (e) { }
     var fmNo = (st && st.fmNo) || '';
@@ -53,7 +58,28 @@
     document.body.appendChild(m);
     $('lwn-x').onclick = close;
     m.addEventListener('mousedown', function (ev) { if (ev.target === m && !(S && S.busy)) close(); });
-    api('lwNoteStatus').then(function (r) { if (!S) return; if (r.success && r.connected) loadGroups(); else if (r.success) showConnect(); else showMsg(why(r)); });
+    if (!me().email) showWho(); else start();
+  }
+  function start() { $('lwn-body').innerHTML = '読み込み中…'; $('lwn-foot').innerHTML = ''; api('lwNoteStatus').then(function (r) { if (!S) return; if (r.success && r.connected) loadGroups(); else if (r.success) showConnect(); else showMsg(why(r)); }); }
+
+  // LWNOTE-3: 書く人を聞く（ログインにメールアドレスが無いとき）
+  function showWho() {
+    var m = savedMe() || {};
+    $('lwn-body').innerHTML = '<div style="padding:6px 2px"><div style="font-weight:700;font-size:14px">ノートに書く人を教えてください（この PC で 1 回だけ）</div>'
+      + '<div style="margin-top:6px;color:#4A574E">いまのログインにはメールアドレスが無いので、誰の LINE WORKS で書くかが分かりません。ご自分の名前と、LINE WORKS のメールアドレスを入れてください。</div>'
+      + '<div style="margin-top:12px;display:grid;grid-template-columns:90px 1fr;gap:8px;align-items:center;max-width:460px">'
+      + '<span>名前</span><input id="lwn-who-name" value="' + esc(m.name || '') + '" placeholder="例: 本多" style="padding:6px 8px;border:1px solid #D6DED2;font-size:13px">'
+      + '<span>メール</span><input id="lwn-who-mail" value="' + esc(m.email || '') + '" placeholder="例: honda@tokiwap.co.jp" style="padding:6px 8px;border:1px solid #D6DED2;font-size:13px"></div>'
+      + '<div id="lwn-who-msg" style="margin-top:8px;font-size:12px;color:#B42318"></div></div>';
+    $('lwn-foot').innerHTML = '<button class="btn" id="lwn-close">やめる</button><button class="btn btn-p" id="lwn-who-ok" style="font-weight:700">次へ</button>';
+    $('lwn-close').onclick = close;
+    $('lwn-who-ok').onclick = function () {
+      var name = $('lwn-who-name').value.trim(), mail = $('lwn-who-mail').value.trim().toLowerCase();
+      if (!name) { $('lwn-who-msg').textContent = '名前を入れてください'; return; }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) { $('lwn-who-msg').textContent = 'メールアドレスの形になっていません'; return; }
+      try { localStorage.setItem(ME_KEY, JSON.stringify({ name: name, email: mail })); } catch (e) { }
+      start();
+    };
   }
 
   function showMsg(msg, withRetry) {
@@ -106,9 +132,10 @@
       + sec('③ ファイル', fileRows)
       + sec('④ コメント', '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' + CANNED.map(function (c, i) { return '<button class="btn lwn-canned" data-i="' + i + '" style="font-size:12px;padding:2px 10px">' + esc(c) + '</button>'; }).join('') + '</div>'
         + '<textarea id="lwn-comment" rows="4" placeholder="ノートに書き足す文（空でも入れられます）" style="width:100%;padding:8px;border:1px solid #D6DED2;font-size:13px;box-sizing:border-box;font-family:inherit"></textarea>'
-        + '<div style="font-size:11px;color:#4A574E;margin-top:2px">ノートの本文の末尾に【日時 ' + esc(me().name) + '】を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>');
+        + '<div style="font-size:11px;color:#4A574E;margin-top:2px">書く人: <b>' + esc(me().name) + '</b>（' + esc(me().email) + '）' + (me().fixed ? '' : '　<a href="#" id="lwn-who-change" style="color:#15743A">変える</a>') + '<br>ノートの本文の末尾に【日時 ' + esc(me().name) + '】を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>');
     $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#B42318"></span><button class="btn" id="lwn-cancel">やめる</button><button class="btn btn-p" id="lwn-go" style="font-weight:700;min-width:140px">ノートに入れる</button>';
     $('lwn-cancel').onclick = close; $('lwn-go').onclick = go;
+    if ($('lwn-who-change')) $('lwn-who-change').onclick = function (ev) { ev.preventDefault(); showWho(); };
     $('lwn-gq').oninput = paintGroups; $('lwn-greload').onclick = function (ev) { ev.preventDefault(); loadGroups(true); };
     Array.prototype.forEach.call(document.querySelectorAll('.lwn-canned'), function (b) { b.onclick = function () { var t = $('lwn-comment'); t.value = (t.value ? t.value.replace(/\s*$/, '') + '\n' : '') + CANNED[+b.dataset.i]; t.focus(); }; });
     paintGroups();
