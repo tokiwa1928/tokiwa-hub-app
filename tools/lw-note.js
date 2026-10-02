@@ -40,13 +40,13 @@
     if (/戻り/.test(t)) words.push('戻り'); if (/出し/.test(t) || /出しました/.test(t)) words.push('出し');
     return words.filter(function (w) { return String(label || '').indexOf(w) < 0; });
   }
-  // LWNOTE-8: LINE WORKS のノートのラベル（名前は LINE WORKS 側と同じにする。DB.conf.lwNoteLabels で直せる）
-  var LABELS_DEFAULT = ['メディア部作業待ち(優先度高)', 'メディア部作業待ち', '外注DTP・デザイン会社作業待ち', '校正依頼(メディア部→営業)', '校正中(営業→お客様)', '校正中(営業→提携印刷会社)', '校了'];
+  // LWNOTE-8: LINE WORKS のノートのカテゴリー（名前は LINE WORKS 側と同じにする。DB.conf.lwNoteLabels で直せる）
+  var LABELS_DEFAULT = ['1-1.メディア部作業待ち（優先度高）', '1-2.メディア部作業待ち', '1-3.確認事項返信待ち', '2.校正依頼(メディア部➡営業)', '3-1.校正中(営業➡お客様)', '3-2.校正中(営業➡提携印刷会社)', '4.校了', '5.校了作業済'];   // LWNOTE-9: LINE WORKS のノートの「カテゴリー」と同じ名前（数字つき）
   function labels() { var c = (typeof DB !== 'undefined' && DB.conf && DB.conf.lwNoteLabels); return (Array.isArray(c) && c.length) ? c : LABELS_DEFAULT; }
   // 種類から、付けるラベルを見立てる（支給データ・校正戻り → メディア部の作業待ち／校正出し → お客様で校正中／校了・責了 → 校了）
   function labelFor(kind) {
     var L = labels(), find = function (f) { return L.filter(f)[0] || ''; };
-    if (kind === 'koryo' || kind === 'sekiryo') return find(function (x) { return x === '校了'; }) || find(function (x) { return /校了/.test(x); });
+    if (kind === 'koryo' || kind === 'sekiryo') return find(function (x) { return /(^|[.．\s])校了$/.test(x); }) || find(function (x) { return /校了/.test(x) && !/済/.test(x); }) || find(function (x) { return /校了/.test(x); });
     if (kind === 'modori' || kind === 'shikyu') return find(function (x) { return /メディア/.test(x) && /待ち/.test(x) && !/優先/.test(x); }) || find(function (x) { return /メディア/.test(x) && /待ち/.test(x); });
     if (kind === 'dashi') return find(function (x) { return /お客様/.test(x); });
     return '';
@@ -55,10 +55,10 @@
     var w = $('lwn-lwrap'); if (!w) return;
     var chip = function (v, text) { var on = S.label === v; return '<button class="btn lwn-label" data-v="' + esc(v) + '" style="font-size:12px;padding:3px 12px;' + (on ? 'background:#15743A;color:#fff;border-color:#15743A;font-weight:700' : '') + '">' + (on ? '● ' : '') + esc(text) + '</button>'; };
     w.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap">' + chip('', '変えない') + labels().map(function (x) { return chip(x, x); }).join('') + '</div>'
-      + '<div style="font-size:11px;color:#4A574E;margin-top:4px">' + (S.label ? '送ったあと、LINE WORKS でこのノートのラベルを <b>' + esc(S.label) + '</b> に付け替えます（Hub からは変えられないので、次の画面で案内します）。' : 'ラベルは今のままにします。') + '　<a href="#" id="lwn-ledit" style="color:#15743A">ラベルの名前を直す</a></div><div id="lwn-leditbox"></div>';
+      + '<div style="font-size:11px;color:#4A574E;margin-top:4px">' + (S.label ? '送ったあと、LINE WORKS でこのノートのカテゴリーを <b>' + esc(S.label) + '</b> に付け替えます（Hub からは変えられないので、次の画面で案内します）。' : 'カテゴリーは今のままにします。') + '　<a href="#" id="lwn-ledit" style="color:#15743A">カテゴリーの名前を直す</a></div><div id="lwn-leditbox"></div>';
     Array.prototype.forEach.call(w.querySelectorAll('.lwn-label'), function (b) { b.onclick = function () { S.label = b.dataset.v; S.labelTouched = true; paintLabel(); }; });
     $('lwn-ledit').onclick = function (ev) { ev.preventDefault();
-      $('lwn-leditbox').innerHTML = '<textarea id="lwn-ltext" rows="7" style="width:100%;margin-top:6px;padding:8px;border:1px solid #D6DED2;font-size:12px;box-sizing:border-box;font-family:inherit"></textarea><div style="font-size:11px;color:#4A574E">1 行に 1 つ。LINE WORKS のラベルと同じ名前・同じ順にしてください（全員に効きます）。</div><button class="btn" id="lwn-lsave" style="font-size:12px;margin-top:4px">ラベルの名前を保存</button>';
+      $('lwn-leditbox').innerHTML = '<textarea id="lwn-ltext" rows="7" style="width:100%;margin-top:6px;padding:8px;border:1px solid #D6DED2;font-size:12px;box-sizing:border-box;font-family:inherit"></textarea><div style="font-size:11px;color:#4A574E">1 行に 1 つ。LINE WORKS のカテゴリーと同じ名前・同じ順にしてください（全員に効きます）。</div><button class="btn" id="lwn-lsave" style="font-size:12px;margin-top:4px">カテゴリーの名前を保存</button>';
       $('lwn-ltext').value = labels().join('\n');
       $('lwn-lsave').onclick = function () { var list = $('lwn-ltext').value.split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean); if (!list.length) return; DB.conf = DB.conf || {}; DB.conf.lwNoteLabels = list; if (typeof saveDB === 'function') saveDB(); if (typeof saveToCloud === 'function') try { saveToCloud(); } catch (e) { } if (list.indexOf(S.label) < 0) S.label = S.labelTouched ? '' : labelFor(S.kind); paintLabel(); };
     };
@@ -189,7 +189,7 @@
       + sec('④ 連絡の種類と文', '<div id="lwn-kwrap"></div>'
         + '<textarea id="lwn-comment" rows="4" placeholder="ノートに書き足す文（空でも入れられます）" style="width:100%;padding:8px;border:1px solid #D6DED2;font-size:13px;box-sizing:border-box;font-family:inherit"></textarea>'
         + '<div style="font-size:11px;color:#4A574E;margin-top:2px">書く人: <b>' + esc(me().name) + '</b>（' + esc(me().email) + '）' + (me().fixed ? '' : '　<a href="#" id="lwn-who-change" style="color:#15743A">変える</a>') + '<br>ノートの本文の末尾に <b id="lwn-head"></b> を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>')
-      + sec('⑤ ノートのラベル（LINE WORKS 側）', '<div id="lwn-lwrap"></div>');
+      + sec('⑤ ノートのカテゴリー（LINE WORKS 側）', '<div id="lwn-lwrap"></div>');
     $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#B42318"></span><button class="btn" id="lwn-cancel">やめる</button><button class="btn btn-p" id="lwn-go" style="font-weight:700;min-width:140px">ノートに入れる</button>';
     $('lwn-cancel').onclick = close; $('lwn-go').onclick = go;
     if ($('lwn-who-change')) $('lwn-who-change').onclick = function (ev) { ev.preventDefault(); showWho(); };
@@ -324,12 +324,12 @@
       } catch (e) { }
       var needLabel = !!label;   // LWNOTE-7・8: ラベルは LINE WORKS 側でしか変えられない → 変えるまで閉じない
       $('lwn-body').innerHTML = '<div style="padding:8px 2px"><div style="font-weight:700;font-size:15px;color:#15743A">ノートに入れました</div>'
-        + (needLabel ? '<div style="margin-top:10px;padding:12px 14px;background:#FFF4D6;border:2px solid #E0A100;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#7A4B00">つぎに、LINE WORKS でこのノートのラベルを変えてください</div><div style="font-size:14px;margin-top:4px">付け替えるラベル: <b style="font-size:17px">' + esc(label) + '</b>' + (kind ? '　<span style="font-size:12px;color:#4A574E">（今回の連絡: ' + esc(kind) + '）</span>' : '') + '</div><div style="font-size:12px;color:#4A574E;margin-top:4px">ラベルは Hub からは変えられません（LINE WORKS が外から変える口を出していないため）。LINE WORKS でノート「' + esc(title) + '」を開いて、ラベルを選び直してください。</div></div>' : '')
+        + (needLabel ? '<div style="margin-top:10px;padding:12px 14px;background:#FFF4D6;border:2px solid #E0A100;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#7A4B00">つぎに、LINE WORKS でこのノートのカテゴリーを変えてください</div><div style="font-size:14px;margin-top:4px">付け替えるカテゴリー: <b style="font-size:17px">' + esc(label) + '</b>' + (kind ? '　<span style="font-size:12px;color:#4A574E">（今回の連絡: ' + esc(kind) + '）</span>' : '') + '</div><div style="font-size:12px;color:#4A574E;margin-top:4px">カテゴリーは Hub からは変えられません（LINE WORKS が外から変える口を出していないため）。LINE WORKS でノート「' + esc(title) + '」を開いて「修正」→ 上の「カテゴリー」で選び直して「投稿」。</div></div>' : '')
         + '<div style="margin-top:6px">' + (kind ? '<b>【' + esc(kind) + '】</b> ' : '') + esc(group.name) + ' ／ ' + esc(title) + (r.created ? '（新しく作りました）' : '（本文の末尾に書き足しました）') + '</div>'
         + (ok.length ? '<div style="margin-top:8px">添付したファイル: ' + ok.map(function (f) { return esc(f.name); }).join('、') + '</div>' : '')
         + (ng.length ? '<div style="margin-top:8px;color:#B42318">入らなかったファイル:<br>' + ng.map(function (f) { return '・' + esc(f.name) + ' … ' + esc(f.why); }).join('<br>') + '</div>' : '') + '</div>';
-      $('lwn-foot').innerHTML = (needLabel ? '<button class="btn" id="lwn-later" style="margin-right:auto;font-size:12px">あとで変える</button>' : '') + '<button class="btn btn-p" id="lwn-close" style="font-weight:700">' + (needLabel ? 'ラベルを変えた → 閉じる' : '閉じる') + '</button>';
-      if (needLabel) { S.busy = true; $('lwn-later').onclick = function () { try { if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_label_later', at: new Date().toISOString(), by: me().name || 'user', text: '⚠ LINE WORKS のノートのラベルをまだ変えていない（' + label + '）' }); } catch (e) { } $('lwn-close').onclick(); }; }
+      $('lwn-foot').innerHTML = (needLabel ? '<button class="btn" id="lwn-later" style="margin-right:auto;font-size:12px">あとで変える</button>' : '') + '<button class="btn btn-p" id="lwn-close" style="font-weight:700">' + (needLabel ? 'カテゴリーを変えた → 閉じる' : '閉じる') + '</button>';
+      if (needLabel) { S.busy = true; $('lwn-later').onclick = function () { try { if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_label_later', at: new Date().toISOString(), by: me().name || 'user', text: '⚠ LINE WORKS のノートのカテゴリーをまだ変えていない（' + label + '）' }); } catch (e) { } $('lwn-close').onclick(); }; }
       $('lwn-close').onclick = function () { var id = inq.id; S.busy = false; close(); try { if (typeof openInquiryDetail === 'function' && document.querySelector('#inq-detail-panel.show')) openInquiryDetail(id); } catch (e) { } };
       if (typeof _toastMsg === 'function') _toastMsg('💼 LINE WORKS のノートに入れました');
     });
