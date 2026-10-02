@@ -40,6 +40,29 @@
     if (/戻り/.test(t)) words.push('戻り'); if (/出し/.test(t) || /出しました/.test(t)) words.push('出し');
     return words.filter(function (w) { return String(label || '').indexOf(w) < 0; });
   }
+  // LWNOTE-8: LINE WORKS のノートのラベル（名前は LINE WORKS 側と同じにする。DB.conf.lwNoteLabels で直せる）
+  var LABELS_DEFAULT = ['メディア部作業待ち(優先度高)', 'メディア部作業待ち', '外注DTP・デザイン会社作業待ち', '校正依頼(メディア部→営業)', '校正中(営業→お客様)', '校正中(営業→提携印刷会社)', '校了'];
+  function labels() { var c = (typeof DB !== 'undefined' && DB.conf && DB.conf.lwNoteLabels); return (Array.isArray(c) && c.length) ? c : LABELS_DEFAULT; }
+  // 種類から、付けるラベルを見立てる（支給データ・校正戻り → メディア部の作業待ち／校正出し → お客様で校正中／校了・責了 → 校了）
+  function labelFor(kind) {
+    var L = labels(), find = function (f) { return L.filter(f)[0] || ''; };
+    if (kind === 'koryo' || kind === 'sekiryo') return find(function (x) { return x === '校了'; }) || find(function (x) { return /校了/.test(x); });
+    if (kind === 'modori' || kind === 'shikyu') return find(function (x) { return /メディア/.test(x) && /待ち/.test(x) && !/優先/.test(x); }) || find(function (x) { return /メディア/.test(x) && /待ち/.test(x); });
+    if (kind === 'dashi') return find(function (x) { return /お客様/.test(x); });
+    return '';
+  }
+  function paintLabel() {
+    var w = $('lwn-lwrap'); if (!w) return;
+    var chip = function (v, text) { var on = S.label === v; return '<button class="btn lwn-label" data-v="' + esc(v) + '" style="font-size:12px;padding:3px 12px;' + (on ? 'background:#15743A;color:#fff;border-color:#15743A;font-weight:700' : '') + '">' + (on ? '● ' : '') + esc(text) + '</button>'; };
+    w.innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap">' + chip('', '変えない') + labels().map(function (x) { return chip(x, x); }).join('') + '</div>'
+      + '<div style="font-size:11px;color:#4A574E;margin-top:4px">' + (S.label ? '送ったあと、LINE WORKS でこのノートのラベルを <b>' + esc(S.label) + '</b> に付け替えます（Hub からは変えられないので、次の画面で案内します）。' : 'ラベルは今のままにします。') + '　<a href="#" id="lwn-ledit" style="color:#15743A">ラベルの名前を直す</a></div><div id="lwn-leditbox"></div>';
+    Array.prototype.forEach.call(w.querySelectorAll('.lwn-label'), function (b) { b.onclick = function () { S.label = b.dataset.v; S.labelTouched = true; paintLabel(); }; });
+    $('lwn-ledit').onclick = function (ev) { ev.preventDefault();
+      $('lwn-leditbox').innerHTML = '<textarea id="lwn-ltext" rows="7" style="width:100%;margin-top:6px;padding:8px;border:1px solid #D6DED2;font-size:12px;box-sizing:border-box;font-family:inherit"></textarea><div style="font-size:11px;color:#4A574E">1 行に 1 つ。LINE WORKS のラベルと同じ名前・同じ順にしてください（全員に効きます）。</div><button class="btn" id="lwn-lsave" style="font-size:12px;margin-top:4px">ラベルの名前を保存</button>';
+      $('lwn-ltext').value = labels().join('\n');
+      $('lwn-lsave').onclick = function () { var list = $('lwn-ltext').value.split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean); if (!list.length) return; DB.conf = DB.conf || {}; DB.conf.lwNoteLabels = list; if (typeof saveDB === 'function') saveDB(); if (typeof saveToCloud === 'function') try { saveToCloud(); } catch (e) { } if (list.indexOf(S.label) < 0) S.label = S.labelTouched ? '' : labelFor(S.kind); paintLabel(); };
+    };
+  }
   function fmtSize(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'; }
   var S = null;   // いま開いている 1 件の状態
 
@@ -82,7 +105,7 @@
     var subj = String(inq.subject || '').replace(/^(\s*(re|fw|fwd)\s*[:：]\s*)+/i, '').trim();
     var files = (inq.attachments || []).filter(function (a) { return a && !a.expanded; }).map(function (a, i) { return { id: a.driveFileId || '', name: a.name || a.filename || ('添付' + (i + 1)), size: a.size || 0, on: !!a.driveFileId }; });
     var gk = guessKind(inq, files.length > 0);
-    S = { inq: inq, fmNo: fmNo, files: files, local: [], kind: gk.kind, stage: gk.stage, autoText: '', groups: [], group: null, posts: [], nextCursor: '', postId: '', newTitle: ((fmNo ? fmNo + ' ' : '') + (st && st.proj ? (st.proj.item || st.proj.prod || subj) : subj)).slice(0, 190), busy: false };
+    S = { inq: inq, fmNo: fmNo, files: files, local: [], kind: gk.kind, stage: gk.stage, autoText: '', label: labelFor(gk.kind), labelTouched: false, groups: [], group: null, posts: [], nextCursor: '', postId: '', newTitle: ((fmNo ? fmNo + ' ' : '') + (st && st.proj ? (st.proj.item || st.proj.prod || subj) : subj)).slice(0, 190), busy: false };
     var m = document.createElement('div'); m.id = 'lwn-modal'; m.className = 'proof-modal';
     m.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(23,33,26,.45);display:flex;align-items:center;justify-content:center';
     m.innerHTML = '<style>#lwn-modal input[type=radio],#lwn-modal input[type=checkbox]{width:auto!important;min-width:0!important;min-height:0!important;flex:none!important;margin:0}#lwn-modal label{font-weight:400}</style>'
@@ -165,7 +188,8 @@
       + sec('③ ファイル', '<div id="lwn-fwrap"></div><input type="file" id="lwn-add" multiple style="display:none">')
       + sec('④ 連絡の種類と文', '<div id="lwn-kwrap"></div>'
         + '<textarea id="lwn-comment" rows="4" placeholder="ノートに書き足す文（空でも入れられます）" style="width:100%;padding:8px;border:1px solid #D6DED2;font-size:13px;box-sizing:border-box;font-family:inherit"></textarea>'
-        + '<div style="font-size:11px;color:#4A574E;margin-top:2px">書く人: <b>' + esc(me().name) + '</b>（' + esc(me().email) + '）' + (me().fixed ? '' : '　<a href="#" id="lwn-who-change" style="color:#15743A">変える</a>') + '<br>ノートの本文の末尾に <b id="lwn-head"></b> を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>');
+        + '<div style="font-size:11px;color:#4A574E;margin-top:2px">書く人: <b>' + esc(me().name) + '</b>（' + esc(me().email) + '）' + (me().fixed ? '' : '　<a href="#" id="lwn-who-change" style="color:#15743A">変える</a>') + '<br>ノートの本文の末尾に <b id="lwn-head"></b> を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>')
+      + sec('⑤ ノートのラベル（LINE WORKS 側）', '<div id="lwn-lwrap"></div>');
     $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#B42318"></span><button class="btn" id="lwn-cancel">やめる</button><button class="btn btn-p" id="lwn-go" style="font-weight:700;min-width:140px">ノートに入れる</button>';
     $('lwn-cancel').onclick = close; $('lwn-go').onclick = go;
     if ($('lwn-who-change')) $('lwn-who-change').onclick = function (ev) { ev.preventDefault(); showWho(); };
@@ -176,7 +200,7 @@
     body.ondragleave = function () { body.style.outline = ''; };
     body.ondrop = function (ev) { body.style.outline = ''; if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length) { ev.preventDefault(); addLocal(ev.dataTransfer.files); } };
     $('lwn-comment').value = S.autoText = kindText();
-    paintFiles(); paintKind(); paintGroups();
+    paintFiles(); paintKind(); paintLabel(); paintGroups();
   }
   // ③ メールの添付（Drive にあるもの）＋ PC から足したもの
   function paintFiles() {
@@ -210,7 +234,7 @@
     var pick = function () {
       var t = $('lwn-comment'), cur = t.value.trim();
       if (!cur || cur === S.autoText.trim()) t.value = kindText();   // 手で直していなければ、選んだ種類の文に入れ替える
-      S.autoText = kindText(); paintKind();
+      S.autoText = kindText(); if (!S.labelTouched) S.label = labelFor(S.kind); paintKind(); paintLabel();   // LWNOTE-8: 手で選んでいなければ、種類に合わせてラベルも変える
     };
     Array.prototype.forEach.call(document.querySelectorAll('.lwn-kind'), function (b) { b.onclick = function () { S.kind = b.dataset.k; pick(); }; });
     Array.prototype.forEach.call(document.querySelectorAll('.lwn-stage'), function (b) { b.onclick = function () { S.stage = b.dataset.k; pick(); }; });
@@ -276,6 +300,7 @@
     S.files.forEach(function (f) { if (f.on && f.id) { ids.push(f.id); names.push(f.name); } });
     var comment = $('lwn-comment').value.trim(), kind = kindLabel(), local = S.local.slice();
     if (!ids.length && !local.length && !comment && !kind) { msg.style.color = '#B42318'; msg.textContent = 'ファイルか文のどちらかを入れてください'; return; }
+    var label = S.label || '';
     var bad = mismatch(comment, kind);   // LWNOTE-7
     if (bad.length && !confirm('文に「' + bad.join('」「') + '」とありますが、選んだ種類は「' + (kind || 'その他') + '」です。\n\nこのまま送りますか？\n（種類を直すときは「キャンセル」を押して、④ で選び直してください）')) { msg.style.color = '#B42318'; msg.textContent = '④ の種類を確かめてください'; return; }
     var post = isNew ? null : S.posts.filter(function (p) { return String(p.postId) === S.postId; })[0];
@@ -284,7 +309,7 @@
     $('lwn-go').disabled = true; $('lwn-cancel').disabled = true;
     var inq = S.inq, group = S.group, postId = isNew ? '' : S.postId;
     Promise.all(local.map(function (f) { return readB64(f).then(function (b64) { return { name: f.name, type: f.type || '', b64: b64 }; }); })).then(function (uploads) {
-      return api('lwNoteInsert', { groupId: group.id, postId: postId, title: title, kind: kind, comment: comment, by: me().name, fileIds: ids, uploads: uploads, mailSubject: String(inq.subject || ''), mailFrom: [inq.from_company, inq.from_name].filter(Boolean).join(' ') });
+      return api('lwNoteInsert', { groupId: group.id, postId: postId, title: title, kind: kind, label: label, comment: comment, by: me().name, fileIds: ids, uploads: uploads, mailSubject: String(inq.subject || ''), mailFrom: [inq.from_company, inq.from_name].filter(Boolean).join(' ') });
     }, function () { return { success: false, error: 'PC のファイルを読めませんでした' }; }).then(function (r) {
       if (!S) return; S.busy = false;
       if (!r.success) {
@@ -297,14 +322,14 @@
         if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_note', at: new Date().toISOString(), by: me().name || 'user', group: group.name, note: title,
           text: 'LINE WORKS のノート「' + title + '」（' + group.name + '）に入れた' + (kind ? '【' + kind + '】' : '') + (ok.length ? '・ファイル ' + ok.length + ' 件' : '') + (comment ? '・コメント' : '') + (ng.length ? '（入らなかったファイル ' + ng.length + ' 件）' : '') });
       } catch (e) { }
-      var needLabel = !!kind;   // LWNOTE-7: ラベルは LINE WORKS 側でしか変えられない → 変えるまで閉じない
+      var needLabel = !!label;   // LWNOTE-7・8: ラベルは LINE WORKS 側でしか変えられない → 変えるまで閉じない
       $('lwn-body').innerHTML = '<div style="padding:8px 2px"><div style="font-weight:700;font-size:15px;color:#15743A">ノートに入れました</div>'
-        + (needLabel ? '<div style="margin-top:10px;padding:12px 14px;background:#FFF4D6;border:2px solid #E0A100;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#7A4B00">つぎに、LINE WORKS でこのノートのラベルを変えてください</div><div style="font-size:14px;margin-top:4px">今回の連絡: <b style="font-size:16px">【' + esc(kind) + '】</b></div><div style="font-size:12px;color:#4A574E;margin-top:4px">ラベルは Hub からは変えられません（LINE WORKS が外から変える口を出していないため）。LINE WORKS でノート「' + esc(title) + '」を開いて、ラベルを選び直してください。</div></div>' : '')
+        + (needLabel ? '<div style="margin-top:10px;padding:12px 14px;background:#FFF4D6;border:2px solid #E0A100;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#7A4B00">つぎに、LINE WORKS でこのノートのラベルを変えてください</div><div style="font-size:14px;margin-top:4px">付け替えるラベル: <b style="font-size:17px">' + esc(label) + '</b>' + (kind ? '　<span style="font-size:12px;color:#4A574E">（今回の連絡: ' + esc(kind) + '）</span>' : '') + '</div><div style="font-size:12px;color:#4A574E;margin-top:4px">ラベルは Hub からは変えられません（LINE WORKS が外から変える口を出していないため）。LINE WORKS でノート「' + esc(title) + '」を開いて、ラベルを選び直してください。</div></div>' : '')
         + '<div style="margin-top:6px">' + (kind ? '<b>【' + esc(kind) + '】</b> ' : '') + esc(group.name) + ' ／ ' + esc(title) + (r.created ? '（新しく作りました）' : '（本文の末尾に書き足しました）') + '</div>'
         + (ok.length ? '<div style="margin-top:8px">添付したファイル: ' + ok.map(function (f) { return esc(f.name); }).join('、') + '</div>' : '')
         + (ng.length ? '<div style="margin-top:8px;color:#B42318">入らなかったファイル:<br>' + ng.map(function (f) { return '・' + esc(f.name) + ' … ' + esc(f.why); }).join('<br>') + '</div>' : '') + '</div>';
       $('lwn-foot').innerHTML = (needLabel ? '<button class="btn" id="lwn-later" style="margin-right:auto;font-size:12px">あとで変える</button>' : '') + '<button class="btn btn-p" id="lwn-close" style="font-weight:700">' + (needLabel ? 'ラベルを変えた → 閉じる' : '閉じる') + '</button>';
-      if (needLabel) { S.busy = true; $('lwn-later').onclick = function () { try { if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_label_later', at: new Date().toISOString(), by: me().name || 'user', text: '⚠ LINE WORKS のノートのラベルをまだ変えていない（' + kind + '）' }); } catch (e) { } $('lwn-close').onclick(); }; }
+      if (needLabel) { S.busy = true; $('lwn-later').onclick = function () { try { if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_label_later', at: new Date().toISOString(), by: me().name || 'user', text: '⚠ LINE WORKS のノートのラベルをまだ変えていない（' + label + '）' }); } catch (e) { } $('lwn-close').onclick(); }; }
       $('lwn-close').onclick = function () { var id = inq.id; S.busy = false; close(); try { if (typeof openInquiryDetail === 'function' && document.querySelector('#inq-detail-panel.show')) openInquiryDetail(id); } catch (e) { } };
       if (typeof _toastMsg === 'function') _toastMsg('💼 LINE WORKS のノートに入れました');
     });
