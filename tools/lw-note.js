@@ -41,7 +41,7 @@
     return words.filter(function (w) { return String(label || '').indexOf(w) < 0; });
   }
   // LWNOTE-8: LINE WORKS のノートのカテゴリー（名前は LINE WORKS 側と同じにする。DB.conf.lwNoteLabels で直せる）
-  var LABELS_DEFAULT = ['1-1.メディア部作業待ち（優先度高）', '1-2.メディア部作業待ち', '1-3.確認事項返信待ち', '2.校正依頼(メディア部➡営業)', '3-1.校正中(営業➡お客様)', '3-2.校正中(営業➡提携印刷会社)', '4.校了', '5.校了作業済'];   // LWNOTE-9: LINE WORKS のノートの「カテゴリー」と同じ名前（数字つき）
+  var LABELS_DEFAULT = ['1-1.メディア部作業待ち（優先度高）', '1-2.メディア部作業待ち', '1-3.確認事項返信待ち', '2.校正依頼(メディア部➡営業)', '3-1.校正中(営業➡お客様)', '3-2.校正中(営業➡提携印刷会社)', '4.校了', '5.校了作業済', '5-1.校了作業済(名刺印刷待ち)', '5-2.校了作業済(封筒印刷待ち)', '5-3.校了作業済(その他印刷待ち)', '6-1.データ移動・保存済', '6-2.外注用データアップロード済', '7-1.社内印刷手配済', '7-2.外注印刷手配済', '8.印刷完了/データ納品完了'];   // LWNOTE-9: LINE WORKS のノートの「カテゴリー」と同じ名前（数字つき）
   function labels() { var c = (typeof DB !== 'undefined' && DB.conf && DB.conf.lwNoteLabels); return (Array.isArray(c) && c.length) ? c : LABELS_DEFAULT; }
   // 種類から、付けるラベルを見立てる（支給データ・校正戻り → メディア部の作業待ち／校正出し → お客様で校正中／校了・責了 → 校了）
   function labelFor(kind) {
