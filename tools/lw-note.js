@@ -5,7 +5,33 @@
    ・中身は会社 GAS（19_lwnote.js）が送る。この画面は選ぶだけ */
 (function () {
   var RECENT_KEY = 'tokiwa_lwnote_recent';
-  var CANNED = ['支給データです', '校正戻りです。修正お願いします', '確認お願いします', '校了です'];
+  // LWNOTE-5: 連絡の種類。選ぶと文が変わり、見出し（【2校戻り】など）がノートの本文に入る
+  var STAGES = ['初校', '2校', '3校', '4校', '5校', '6校'];
+  var KINDS = [
+    { k: 'shikyu', label: '支給データ', text: function () { return '支給データが届きました。確認をお願いします。'; } },
+    { k: 'dashi', label: '校正出し', stage: true, text: function (st) { return st + 'を出しました。確認をお願いします。'; } },
+    { k: 'modori', label: '校正戻り', stage: true, text: function (st) { return st + 'の戻りです。修正をお願いします。'; } },
+    { k: 'koryo', label: '校了', text: function () { return '校了です。次の工程へ進めてください。'; } },
+    { k: 'sekiryo', label: '責了', text: function () { return '責了です。赤字を直して、そのまま進めてください。'; } },
+    { k: 'kakunin', label: '確認・質問', text: function () { return 'お客様から確認の連絡です。内容を見て対応をお願いします。'; } },
+    { k: 'other', label: 'その他', text: function () { return ''; } }
+  ];
+  var MAX_LOCAL = 30 * 1024 * 1024;   // PC から足すファイルの合計（会社側へ 1 回で送れる大きさの都合）
+  function kindOf(k) { return KINDS.filter(function (x) { return x.k === k; })[0] || KINDS[KINDS.length - 1]; }
+  function kindLabel() { var d = kindOf(S.kind); return d.k === 'other' ? '' : d.stage ? S.stage + d.label.replace('校正', '') : d.label; }
+  function kindText() { return kindOf(S.kind).text(S.stage); }
+  // メールの件名・本文から見立てる（決めつけない。違えば選び直す）
+  function guessKind(inq, hasFiles) {
+    var t = (String(inq.subject || '') + '\n' + String(inq.summary || inq.body || '').slice(0, 600)).replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
+    var stage = /(6校|六校)/.test(t) ? '6校' : /(5校|五校)/.test(t) ? '5校' : /(4校|四校)/.test(t) ? '4校' : /(3校|三校)/.test(t) ? '3校' : /(2校|二校|再校)/.test(t) ? '2校' : '初校';
+    var hasStage = /(初校|[1-6]校|[一二三四五六]校|再校)/.test(t);
+    if (/責了/.test(t)) return { kind: 'sekiryo', stage: stage };
+    if (/校了/.test(t)) return { kind: 'koryo', stage: stage };
+    if (hasStage || /(校正|赤字|修正|訂正)/.test(t)) return { kind: 'modori', stage: stage };
+    if (hasFiles && /(入稿|原稿|データ|支給)/.test(t)) return { kind: 'shikyu', stage: stage };
+    return { kind: 'other', stage: stage };
+  }
+  function fmtSize(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'; }
   var S = null;   // いま開いている 1 件の状態
 
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -45,8 +71,9 @@
     var st = null; try { if (typeof _inqActionState_ === 'function') st = _inqActionState_(inq); } catch (e) { }
     var fmNo = (st && st.fmNo) || '';
     var subj = String(inq.subject || '').replace(/^(\s*(re|fw|fwd)\s*[:：]\s*)+/i, '').trim();
-    var files = (inq.attachments || []).filter(function (a) { return a && !a.expanded; }).map(function (a, i) { return { id: a.driveFileId || '', name: a.name || a.filename || ('添付' + (i + 1)), size: a.size || 0 }; });
-    S = { inq: inq, fmNo: fmNo, files: files, groups: [], group: null, posts: [], nextCursor: '', postId: '', newTitle: ((fmNo ? fmNo + ' ' : '') + (st && st.proj ? (st.proj.item || st.proj.prod || subj) : subj)).slice(0, 190), busy: false };
+    var files = (inq.attachments || []).filter(function (a) { return a && !a.expanded; }).map(function (a, i) { return { id: a.driveFileId || '', name: a.name || a.filename || ('添付' + (i + 1)), size: a.size || 0, on: !!a.driveFileId }; });
+    var gk = guessKind(inq, files.length > 0);
+    S = { inq: inq, fmNo: fmNo, files: files, local: [], kind: gk.kind, stage: gk.stage, autoText: '', groups: [], group: null, posts: [], nextCursor: '', postId: '', newTitle: ((fmNo ? fmNo + ' ' : '') + (st && st.proj ? (st.proj.item || st.proj.prod || subj) : subj)).slice(0, 190), busy: false };
     var m = document.createElement('div'); m.id = 'lwn-modal'; m.className = 'proof-modal';
     m.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(23,33,26,.45);display:flex;align-items:center;justify-content:center';
     m.innerHTML = '<style>#lwn-modal input[type=radio],#lwn-modal input[type=checkbox]{width:auto!important;min-width:0!important;min-height:0!important;flex:none!important;margin:0}#lwn-modal label{font-weight:400}</style>'
@@ -121,25 +148,66 @@
   }
 
   function renderMain() {
-    var fileRows = S.files.length ? S.files.map(function (f, i) {
-      return '<label style="display:flex;gap:8px;align-items:center;padding:3px 0;' + (f.id ? 'cursor:pointer' : 'color:#9aa59d') + '"><input type="checkbox" class="lwn-file" data-i="' + i + '"' + (f.id ? ' checked' : ' disabled') + '> <span>' + esc(f.name) + '</span>' + (f.id ? '' : '<span style="font-size:11px">（Drive に無いので入れられません）</span>') + '</label>';
-    }).join('') : '<div style="color:#4A574E">このメールに添付はありません（コメントだけ入れられます）</div>';
     $('lwn-body').innerHTML =
       sec('① グループ', '<input id="lwn-gq" placeholder="グループ名で絞る" style="width:100%;padding:6px 8px;border:1px solid #D6DED2;font-size:13px;box-sizing:border-box">'
         + '<div id="lwn-glist" style="margin-top:6px;border:1px solid #D6DED2;max-height:150px;overflow:auto"></div>'
         + '<div style="margin-top:4px;font-size:11px;color:#4A574E">' + S.groups.length + ' グループ　<a href="#" id="lwn-greload" style="color:#15743A">読み直す</a></div>')
       + sec('② ノート', '<div id="lwn-pwrap" style="color:#4A574E">先にグループを選んでください</div>')
-      + sec('③ ファイル', fileRows)
-      + sec('④ コメント', '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' + CANNED.map(function (c, i) { return '<button class="btn lwn-canned" data-i="' + i + '" style="font-size:12px;padding:2px 10px">' + esc(c) + '</button>'; }).join('') + '</div>'
+      + sec('③ ファイル', '<div id="lwn-fwrap"></div><input type="file" id="lwn-add" multiple style="display:none">')
+      + sec('④ 連絡の種類と文', '<div id="lwn-kwrap"></div>'
         + '<textarea id="lwn-comment" rows="4" placeholder="ノートに書き足す文（空でも入れられます）" style="width:100%;padding:8px;border:1px solid #D6DED2;font-size:13px;box-sizing:border-box;font-family:inherit"></textarea>'
-        + '<div style="font-size:11px;color:#4A574E;margin-top:2px">書く人: <b>' + esc(me().name) + '</b>（' + esc(me().email) + '）' + (me().fixed ? '' : '　<a href="#" id="lwn-who-change" style="color:#15743A">変える</a>') + '<br>ノートの本文の末尾に【日時 ' + esc(me().name) + '】を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>');
+        + '<div style="font-size:11px;color:#4A574E;margin-top:2px">書く人: <b>' + esc(me().name) + '</b>（' + esc(me().email) + '）' + (me().fixed ? '' : '　<a href="#" id="lwn-who-change" style="color:#15743A">変える</a>') + '<br>ノートの本文の末尾に <b id="lwn-head"></b> を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>');
     $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#B42318"></span><button class="btn" id="lwn-cancel">やめる</button><button class="btn btn-p" id="lwn-go" style="font-weight:700;min-width:140px">ノートに入れる</button>';
     $('lwn-cancel').onclick = close; $('lwn-go').onclick = go;
     if ($('lwn-who-change')) $('lwn-who-change').onclick = function (ev) { ev.preventDefault(); showWho(); };
     $('lwn-gq').oninput = paintGroups; $('lwn-greload').onclick = function (ev) { ev.preventDefault(); loadGroups(true); };
-    Array.prototype.forEach.call(document.querySelectorAll('.lwn-canned'), function (b) { b.onclick = function () { var t = $('lwn-comment'); t.value = (t.value ? t.value.replace(/\s*$/, '') + '\n' : '') + CANNED[+b.dataset.i]; t.focus(); }; });
-    paintGroups();
+    $('lwn-add').onchange = function () { addLocal(this.files); this.value = ''; };
+    var body = $('lwn-body');   // ファイルをドラッグして足す
+    body.ondragover = function (ev) { if (ev.dataTransfer && Array.prototype.indexOf.call(ev.dataTransfer.types || [], 'Files') >= 0) { ev.preventDefault(); body.style.outline = '2px dashed #15743A'; } };
+    body.ondragleave = function () { body.style.outline = ''; };
+    body.ondrop = function (ev) { body.style.outline = ''; if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length) { ev.preventDefault(); addLocal(ev.dataTransfer.files); } };
+    $('lwn-comment').value = S.autoText = kindText();
+    paintFiles(); paintKind(); paintGroups();
   }
+  // ③ メールの添付（Drive にあるもの）＋ PC から足したもの
+  function paintFiles() {
+    var total = S.local.reduce(function (n, f) { return n + f.size; }, 0);
+    $('lwn-fwrap').innerHTML = (S.files.length ? S.files.map(function (f, i) {
+      return '<label style="display:flex;gap:8px;align-items:center;padding:3px 0;' + (f.id ? 'cursor:pointer' : 'color:#9aa59d') + '"><input type="checkbox" class="lwn-file" data-i="' + i + '"' + (f.id ? (f.on ? ' checked' : '') : ' disabled') + '> <span>' + esc(f.name) + '</span>' + (f.id ? '' : '<span style="font-size:11px">（Drive に無いので入れられません）</span>') + '</label>';
+    }).join('') : '<div style="color:#4A574E">このメールに添付はありません</div>')
+      + S.local.map(function (f, i) { return '<div style="display:flex;gap:8px;align-items:center;padding:3px 0"><span style="color:#15743A">＋</span><span>' + esc(f.name) + '</span><span style="font-size:11px;color:#4A574E">' + fmtSize(f.size) + '</span><a href="#" class="lwn-ldel" data-i="' + i + '" style="color:#B42318;font-size:12px">外す</a></div>'; }).join('')
+      + '<div style="margin-top:6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="btn" id="lwn-addbtn" style="font-size:12px;padding:3px 12px">＋ PC のファイルを足す</button><span style="font-size:11px;color:#4A574E">ここにドラッグしても足せます（合計 30MB まで' + (S.local.length ? '・いま ' + fmtSize(total) : '') + '）</span></div>';
+    $('lwn-addbtn').onclick = function () { $('lwn-add').click(); };
+    Array.prototype.forEach.call(document.querySelectorAll('.lwn-file'), function (c) { c.onchange = function () { var f = S.files[+c.dataset.i]; if (f) f.on = c.checked; }; });
+    Array.prototype.forEach.call(document.querySelectorAll('.lwn-ldel'), function (a) { a.onclick = function (ev) { ev.preventDefault(); S.local.splice(+a.dataset.i, 1); paintFiles(); }; });
+  }
+  function addLocal(list) {
+    var msg = $('lwn-msg'); if (msg) { msg.style.color = '#B42318'; msg.textContent = ''; }
+    Array.prototype.forEach.call(list || [], function (f) {
+      if (!f || !f.size) return;
+      if (S.local.some(function (x) { return x.name === f.name && x.size === f.size; })) return;
+      var total = S.local.reduce(function (n, x) { return n + x.size; }, 0);
+      if (total + f.size > MAX_LOCAL) { if (msg) msg.textContent = '「' + f.name + '」は足せません（PC から足せるのは合計 30MB まで）'; return; }
+      S.local.push(f);
+    });
+    paintFiles();
+  }
+  // ④ 連絡の種類。選ぶと文が変わる（手で直した文は消さない）
+  function paintKind() {
+    var d = kindOf(S.kind);
+    var chip = function (cls, key, label, on) { return '<button class="btn ' + cls + '" data-k="' + esc(key) + '" style="font-size:12px;padding:3px 12px;' + (on ? 'background:#15743A;color:#fff;border-color:#15743A;font-weight:700' : '') + '">' + esc(label) + '</button>'; };
+    $('lwn-kwrap').innerHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' + KINDS.map(function (x) { return chip('lwn-kind', x.k, x.label, x.k === S.kind); }).join('') + '</div>'
+      + (d.stage ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center"><span style="font-size:12px;color:#4A574E">何校:</span>' + STAGES.map(function (st) { return chip('lwn-stage', st, st, st === S.stage); }).join('') + '</div>' : '');
+    var pick = function () {
+      var t = $('lwn-comment'), cur = t.value.trim();
+      if (!cur || cur === S.autoText.trim()) t.value = kindText();   // 手で直していなければ、選んだ種類の文に入れ替える
+      S.autoText = kindText(); paintKind();
+    };
+    Array.prototype.forEach.call(document.querySelectorAll('.lwn-kind'), function (b) { b.onclick = function () { S.kind = b.dataset.k; pick(); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('.lwn-stage'), function (b) { b.onclick = function () { S.stage = b.dataset.k; pick(); }; });
+    var lb = kindLabel(); if ($('lwn-head')) $('lwn-head').textContent = '【日時 ' + me().name + '】' + (lb ? '【' + lb + '】' : '');
+  }
+  function readB64(f) { return new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { var v = String(fr.result || ''); res(v.slice(v.indexOf(',') + 1)); }; fr.onerror = function () { rej(new Error('読めません')); }; fr.readAsDataURL(f); }); }
   function sec(title, inner) { return '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:13px;color:#2E3D35;margin-bottom:5px">' + title + '</div>' + inner + '</div>'; }
 
   function paintGroups() {
@@ -196,15 +264,17 @@
     if (!S.postId) { msg.textContent = '② ノートを選んでください'; return; }
     if (isNew && !S.newTitle.trim()) { msg.textContent = '新しいノートの題を入れてください'; return; }
     var ids = [], names = [];
-    Array.prototype.forEach.call(document.querySelectorAll('.lwn-file'), function (c) { var f = S.files[+c.dataset.i]; if (c.checked && f && f.id) { ids.push(f.id); names.push(f.name); } });
-    var comment = $('lwn-comment').value.trim();
-    if (!ids.length && !comment) { msg.textContent = 'ファイルかコメントのどちらかを入れてください'; return; }
+    S.files.forEach(function (f) { if (f.on && f.id) { ids.push(f.id); names.push(f.name); } });
+    var comment = $('lwn-comment').value.trim(), kind = kindLabel(), local = S.local.slice();
+    if (!ids.length && !local.length && !comment && !kind) { msg.style.color = '#B42318'; msg.textContent = 'ファイルか文のどちらかを入れてください'; return; }
     var post = isNew ? null : S.posts.filter(function (p) { return String(p.postId) === S.postId; })[0];
     var title = isNew ? S.newTitle.trim() : (post ? post.title : '');
     S.busy = true; msg.style.color = '#4A574E'; msg.textContent = 'LINE WORKS へ送っています…（ファイルが大きいと 1〜2 分かかります）';
     $('lwn-go').disabled = true; $('lwn-cancel').disabled = true;
-    var inq = S.inq, group = S.group;
-    api('lwNoteInsert', { groupId: group.id, postId: isNew ? '' : S.postId, title: title, comment: comment, by: me().name, fileIds: ids, mailSubject: String(inq.subject || ''), mailFrom: [inq.from_company, inq.from_name].filter(Boolean).join(' ') }).then(function (r) {
+    var inq = S.inq, group = S.group, postId = isNew ? '' : S.postId;
+    Promise.all(local.map(function (f) { return readB64(f).then(function (b64) { return { name: f.name, type: f.type || '', b64: b64 }; }); })).then(function (uploads) {
+      return api('lwNoteInsert', { groupId: group.id, postId: postId, title: title, kind: kind, comment: comment, by: me().name, fileIds: ids, uploads: uploads, mailSubject: String(inq.subject || ''), mailFrom: [inq.from_company, inq.from_name].filter(Boolean).join(' ') });
+    }, function () { return { success: false, error: 'PC のファイルを読めませんでした' }; }).then(function (r) {
       if (!S) return; S.busy = false;
       if (!r.success) {
         if (r.error === 'lw_not_connected') { showConnect('つなぎ直しが要ります'); return; }
@@ -214,10 +284,10 @@
       var ok = (r.files || []).filter(function (f) { return f.ok; }), ng = (r.files || []).filter(function (f) { return !f.ok; });
       try {
         if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_note', at: new Date().toISOString(), by: me().name || 'user', group: group.name, note: title,
-          text: 'LINE WORKS のノート「' + title + '」（' + group.name + '）に入れた' + (ok.length ? '・ファイル ' + ok.length + ' 件' : '') + (comment ? '・コメント' : '') + (ng.length ? '（入らなかったファイル ' + ng.length + ' 件）' : '') });
+          text: 'LINE WORKS のノート「' + title + '」（' + group.name + '）に入れた' + (kind ? '【' + kind + '】' : '') + (ok.length ? '・ファイル ' + ok.length + ' 件' : '') + (comment ? '・コメント' : '') + (ng.length ? '（入らなかったファイル ' + ng.length + ' 件）' : '') });
       } catch (e) { }
       $('lwn-body').innerHTML = '<div style="padding:8px 2px"><div style="font-weight:700;font-size:15px;color:#15743A">ノートに入れました</div>'
-        + '<div style="margin-top:6px">' + esc(group.name) + ' ／ ' + esc(title) + (r.created ? '（新しく作りました）' : '（本文の末尾に書き足しました）') + '</div>'
+        + '<div style="margin-top:6px">' + (kind ? '<b>【' + esc(kind) + '】</b> ' : '') + esc(group.name) + ' ／ ' + esc(title) + (r.created ? '（新しく作りました）' : '（本文の末尾に書き足しました）') + '</div>'
         + (ok.length ? '<div style="margin-top:8px">添付したファイル: ' + ok.map(function (f) { return esc(f.name); }).join('、') + '</div>' : '')
         + (ng.length ? '<div style="margin-top:8px;color:#B42318">入らなかったファイル:<br>' + ng.map(function (f) { return '・' + esc(f.name) + ' … ' + esc(f.why); }).join('<br>') + '</div>' : '') + '</div>';
       $('lwn-foot').innerHTML = '<button class="btn btn-p" id="lwn-close">閉じる</button>'; $('lwn-close').onclick = function () { var id = inq.id; close(); try { if (typeof openInquiryDetail === 'function' && document.querySelector('#inq-detail-panel.show')) openInquiryDetail(id); } catch (e) { } };
