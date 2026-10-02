@@ -162,6 +162,6 @@
     ログイン画面('');
   }
 
-  global.MZ = { 始める: 始める, 呼ぶ: 呼ぶ, 出る: 出る, 状態: function () { return 状態; }, 通信の失敗か: 通信の失敗か,
+  global.MZ = { 始める: 始める, 呼ぶ: 呼ぶ, 公開で読む: function (action) { return 送る({ action: action }); }, 出る: 出る, 状態: function () { return 状態; }, 通信の失敗か: 通信の失敗か,
     パターンを入れ替える: function (list) { if (状態) { 状態.パターン = list || []; if (!状態.通信なし) 置く(前回の置き場, JSON.stringify({ at: Date.now(), r: 状態 })); } } };
 })(window);
