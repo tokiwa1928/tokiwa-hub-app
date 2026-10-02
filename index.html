@@ -36482,13 +36482,46 @@ function _saveMailSettings_(s){
 }
 
 // SIG-DEFAULT: 会社マスタから署名を組み立てる（会社ページで署名を登録していない会社用）
-function _companyDefaultSignature_(co, cp){
+// SIG-PERSON: 署名に入れる名前。届いた宛先（受信した窓口のアドレス）が表にあればその人、無ければ既定の名前。表は DB.conf.sigPeople（全 PC 共通）
+function _sigPeople_(){
+  var c = (typeof DB !== 'undefined' && DB.conf && DB.conf.sigPeople) || {};
+  return { def: c.def === undefined ? '本多 亮' : String(c.def || ''), byEmail: Array.isArray(c.byEmail) ? c.byEmail : [{ email: 'fukunaga@tokiwap.co.jp', name: '福永 健児' }] };
+}
+function _sigPersonFor_(inq){
+  var p = _sigPeople_(); var to = String((inq && (inq.to_email || inq.delivered_to || inq.received_to)) || '').toLowerCase();
+  var hit = to ? p.byEmail.filter(function(x){ var e = String((x && x.email) || '').toLowerCase().trim(); return e && to.indexOf(e) >= 0; })[0] : null;
+  return hit ? { name: String(hit.name || ''), email: String(hit.email || '').trim() } : { name: p.def, email: '' };
+}
+function _sigPeopleRow_(x){
+  var e = function(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  return '<div class="sigp-row" style="display:flex;gap:6px;margin-top:4px"><input class="sigp-mail" value="' + e(x.email) + '" placeholder="届いた宛先のアドレス" style="flex:1.4;padding:6px 8px;border:1px solid #ccc;font-size:12px" onchange="_sigPeopleSave_()"><input class="sigp-name" value="' + e(x.name) + '" placeholder="署名に入れる名前" style="flex:1;padding:6px 8px;border:1px solid #ccc;font-size:12px" onchange="_sigPeopleSave_()"><button class="btn" style="font-size:11px" onclick="this.parentNode.remove();_sigPeopleSave_()">外す</button></div>';
+}
+function _sigPeopleHtml_(){
+  var p = _sigPeople_(); var e = function(v){ return String(v == null ? '' : v).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+  return '<div id="sigp-box" style="background:#F4F7F3;border:1px solid #D6DED2;padding:12px;margin-bottom:14px">'
+    + '<div style="font-size:13px;font-weight:700;color:#2E3D35;margin-bottom:4px">✍ 署名に入れる名前（全員・全 PC 共通）</div>'
+    + '<div style="font-size:11px;color:#4A574E;margin-bottom:8px;line-height:1.6">会社の署名（会社名・住所・電話）に、名前の行を入れます。ふだんは「既定の名前」。下の表のアドレスに届いたメールへの返信は、その人の名前とアドレスになります。</div>'
+    + '<label style="font-size:12px;display:flex;gap:8px;align-items:center">既定の名前 <input id="sigp-def" value="' + e(p.def) + '" style="width:180px;padding:6px 8px;border:1px solid #ccc;font-size:12px" onchange="_sigPeopleSave_()"></label>'
+    + '<div id="sigp-rows" style="margin-top:6px">' + p.byEmail.map(_sigPeopleRow_).join('') + '</div>'
+    + '<button class="btn" style="font-size:11px;margin-top:6px" onclick="_sigPeopleAdd_()">＋ 宛先と名前を足す</button>'
+    + '<span id="sigp-msg" style="font-size:11px;color:#15743A;margin-left:10px"></span></div>';
+}
+function _sigPeopleAdd_(){ var d = document.createElement('div'); d.innerHTML = _sigPeopleRow_({ email: '', name: '' }); var row = d.firstChild; document.getElementById('sigp-rows').appendChild(row); row.querySelector('.sigp-mail').focus(); }
+function _sigPeopleSave_(){
+  var rows = Array.prototype.map.call(document.querySelectorAll('#sigp-rows .sigp-row'), function(r){ return { email: r.querySelector('.sigp-mail').value.trim().toLowerCase(), name: r.querySelector('.sigp-name').value.trim() }; }).filter(function(x){ return x.email && x.name; });
+  DB.conf = DB.conf || {}; DB.conf.sigPeople = { def: document.getElementById('sigp-def').value.trim(), byEmail: rows };
+  if(typeof saveDB === 'function') saveDB(); if(typeof saveToCloud === 'function') try { saveToCloud(); } catch(e){}
+  var m = document.getElementById('sigp-msg'); if(m){ m.textContent = '保存しました'; setTimeout(function(){ m.textContent = ''; }, 2500); }
+}
+function _companyDefaultSignature_(co, cp, inq){
   co = co || {}; cp = cp || {};
   var tel = String(cp.tel || co.tel || '').trim(), fax = String(cp.fax || co.fax || '').trim();
   if(tel && !/TEL/i.test(tel)) tel = 'TEL ' + tel; if(fax && !/FAX/i.test(fax)) fax = 'FAX ' + fax;
   var mail = String(cp.replyEmail || cp.email || co.email || '').trim();
+  var who = _sigPersonFor_(inq); if(who.email) mail = who.email;   // SIG-PERSON: その人宛に届いたメールなら、その人の名前とアドレス
   var lines = ['──────────────', String(cp.name || co.name || '').trim()];
   if(cp.dept) lines.push(String(cp.dept).trim());
+  if(who.name) lines.push(who.name);
   var addr = ((co.zip ? '〒' + String(co.zip).trim() + ' ' : '') + String(cp.addr || co.addr || '').trim()).trim(); if(addr) lines.push(addr);
   if(tel || fax) lines.push([tel, fax].filter(Boolean).join(' / '));
   if(mail) lines.push('MAIL: ' + mail);
@@ -36538,14 +36571,14 @@ function _pickSignatureProfile_(inq, channel){
     try {
       var rc = _inqRecipient_(inq); var list = (DB && DB.companies && DB.companies.length) ? DB.companies : (typeof COMPANY_INIT !== 'undefined' ? COMPANY_INIT : []);
       var co = rc && rc.key ? list.find(function(c){ return c && c.name && c.name.indexOf(rc.key) >= 0; }) : null;
-      if(co){ var cp = _companyProfile_(co.id) || {}; return { id:'company:'+co.id, name:cp.replyName||co.name, receivingEmails:[cp.email||cp.replyEmail||''], replyEmail:cp.replyEmail||cp.email||'', signature:(_signatureNeedsDefault_(cp.signature) ? _companyDefaultSignature_(co, cp) : cp.signature), lwSignature:'', company:co.id }; }   // SIG-DEFAULT: 署名が無くても会社マスタから作る
+      if(co){ var cp = _companyProfile_(co.id) || {}; return { id:'company:'+co.id, name:cp.replyName||co.name, receivingEmails:[cp.email||cp.replyEmail||''], replyEmail:cp.replyEmail||cp.email||'', signature:(_signatureNeedsDefault_(cp.signature) ? _companyDefaultSignature_(co, cp, inq) : cp.signature), lwSignature:'', company:co.id }; }   // SIG-DEFAULT: 署名が無くても会社マスタから作る
     } catch(e){}
   }
   // 3. デフォルト or 最初
   if(hits.length === 0){
     var def = sigs.find(function(x){ return x.isDefault; }) || sigs[0];
     // SIG-DEFAULT: 「署名を登録してください」のままなら、ログイン中の会社のマスタから作った署名にする
-    try { if(def && _signatureNeedsDefault_(def.signature) && currentAuth && currentAuth.companyId){ var list3 = (DB && DB.companies && DB.companies.length) ? DB.companies : (typeof COMPANY_INIT !== 'undefined' ? COMPANY_INIT : []); var co3 = list3.find(function(c){ return c && c.id === currentAuth.companyId; }); if(co3){ var cp3 = _companyProfile_(co3.id) || {}; def = Object.assign({}, def, { signature: _companyDefaultSignature_(co3, cp3), replyEmail: def.replyEmail || cp3.replyEmail || cp3.email || co3.email || '' }); } } } catch(e){}
+    try { if(def && _signatureNeedsDefault_(def.signature) && currentAuth && currentAuth.companyId){ var list3 = (DB && DB.companies && DB.companies.length) ? DB.companies : (typeof COMPANY_INIT !== 'undefined' ? COMPANY_INIT : []); var co3 = list3.find(function(c){ return c && c.id === currentAuth.companyId; }); if(co3){ var cp3 = _companyProfile_(co3.id) || {}; def = Object.assign({}, def, { signature: _companyDefaultSignature_(co3, cp3, inq), replyEmail: def.replyEmail || cp3.replyEmail || cp3.email || co3.email || '' }); } } } catch(e){}
     return def;
   }
   return hits[0];
@@ -36579,6 +36612,7 @@ function showMailSignatureSettings(){
           '</select></label>' +
         '</div>' +
 
+        _sigPeopleHtml_() +   // SIG-PERSON
         // 署名プロファイル一覧
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
           '<label style="font-size:13px;font-weight:700;color:#374151">📝 署名プロファイル (受注アドレス・LWユーザーで自動選択)</label>' +
