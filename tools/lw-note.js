@@ -63,6 +63,23 @@
       $('lwn-lsave').onclick = function () { var list = $('lwn-ltext').value.split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean); if (!list.length) return; DB.conf = DB.conf || {}; DB.conf.lwNoteLabels = list; if (typeof saveDB === 'function') saveDB(); if (typeof saveToCloud === 'function') try { saveToCloud(); } catch (e) { } if (list.indexOf(S.label) < 0) S.label = S.labelTouched ? '' : labelFor(S.kind); paintLabel(); };
     };
   }
+  // LWCAT-1: 拡張機能とチャンネル番号
+  function extVersion() { return document.documentElement.getAttribute('data-tokiwa-lw-ext') || ''; }
+  var CHANNEL_SEED = [[/メディア部/, '4109422']];   // 名前で分かるものは最初から（LINE WORKS のノートの URL の /note/<この番号>/…）
+  function channelNoFor(group) {
+    if (!group) return '';
+    var m = (typeof DB !== 'undefined' && DB.conf && DB.conf.lwChannelNo) || {};
+    if (m[group.id]) return String(m[group.id]);
+    var hit = CHANNEL_SEED.filter(function (x) { return x[0].test(group.name || ''); })[0];
+    return hit ? hit[1] : '';
+  }
+  function learnChannelNo(group, url) {
+    var m = /\/note\/(\d+)\//.exec(String(url || '')); if (!m) return '';
+    DB.conf = DB.conf || {}; DB.conf.lwChannelNo = DB.conf.lwChannelNo || {}; DB.conf.lwChannelNo[group.id] = m[1];
+    if (typeof saveDB === 'function') saveDB(); if (typeof saveToCloud === 'function') try { saveToCloud(); } catch (e) { }
+    return m[1];
+  }
+  function noteUrl(ch, postId, label) { return 'https://talk.worksmobile.com/note/' + ch + '/' + postId + (label ? '#hubcat=' + encodeURIComponent(label) : ''); }
   function fmtSize(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'; }
   var S = null;   // いま開いている 1 件の状態
 
@@ -305,6 +322,8 @@
     if (bad.length && !confirm('文に「' + bad.join('」「') + '」とありますが、選んだ種類は「' + (kind || 'その他') + '」です。\n\nこのまま送りますか？\n（種類を直すときは「キャンセル」を押して、④ で選び直してください）')) { msg.style.color = '#B42318'; msg.textContent = '④ の種類を確かめてください'; return; }
     var post = isNew ? null : S.posts.filter(function (p) { return String(p.postId) === S.postId; })[0];
     var title = isNew ? S.newTitle.trim() : (post ? post.title : '');
+    var lwTab = null, chNo = channelNoFor(S.group);
+    if (label && extVersion() && chNo) { try { lwTab = window.open('about:blank', '_blank'); if (lwTab && lwTab.document) { lwTab.document.title = 'LINE WORKS へ送っています…'; lwTab.document.body.innerHTML = '<p style="font:15px system-ui;padding:24px">Tokiwa Hub: LINE WORKS へ送っています… 送り終わると、このタブでノートを開いてカテゴリーを付け替えます。</p>'; } } catch (e) { lwTab = null; } }
     S.busy = true; msg.style.color = '#4A574E'; msg.textContent = 'LINE WORKS へ送っています…（ファイルが大きいと 1〜2 分かかります）';
     $('lwn-go').disabled = true; $('lwn-cancel').disabled = true;
     var inq = S.inq, group = S.group, postId = isNew ? '' : S.postId;
@@ -314,22 +333,28 @@
       if (!S) return; S.busy = false;
       if (!r.success) {
         if (r.error === 'lw_not_connected') { showConnect('つなぎ直しが要ります'); return; }
-        msg.style.color = '#B42318'; msg.textContent = why(r); $('lwn-go').disabled = false; $('lwn-cancel').disabled = false; return;
+        msg.style.color = '#B42318'; msg.textContent = why(r); $('lwn-go').disabled = false; $('lwn-cancel').disabled = false; try { if (lwTab) lwTab.close(); } catch (e) { } return;
       }
       pushRecent(group);
+      var auto = false;   // LWCAT-1: 拡張機能に付け替えてもらう
+      if (lwTab && label) { try { lwTab.location.href = noteUrl(chNo, r.postId, label); auto = true; } catch (e) { } }
       var ok = (r.files || []).filter(function (f) { return f.ok; }), ng = (r.files || []).filter(function (f) { return !f.ok; });
       try {
         if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_note', at: new Date().toISOString(), by: me().name || 'user', group: group.name, note: title,
           text: 'LINE WORKS のノート「' + title + '」（' + group.name + '）に入れた' + (kind ? '【' + kind + '】' : '') + (ok.length ? '・ファイル ' + ok.length + ' 件' : '') + (comment ? '・コメント' : '') + (ng.length ? '（入らなかったファイル ' + ng.length + ' 件）' : '') });
       } catch (e) { }
-      var needLabel = !!label;   // LWNOTE-7・8: ラベルは LINE WORKS 側でしか変えられない → 変えるまで閉じない
+      var needLabel = !!label && !auto;   // LWNOTE-7・8: ラベルは LINE WORKS 側でしか変えられない → 変えるまで閉じない（拡張機能が付け替えるときは出さない）
+      var needCh = !!label && !!extVersion() && !chNo;   // 拡張機能はあるが、このグループのノートの番号をまだ知らない
       $('lwn-body').innerHTML = '<div style="padding:8px 2px"><div style="font-weight:700;font-size:15px;color:#15743A">ノートに入れました</div>'
-        + (needLabel ? '<div style="margin-top:10px;padding:12px 14px;background:#FFF4D6;border:2px solid #E0A100;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#7A4B00">つぎに、LINE WORKS でこのノートのカテゴリーを変えてください</div><div style="font-size:14px;margin-top:4px">付け替えるカテゴリー: <b style="font-size:17px">' + esc(label) + '</b>' + (kind ? '　<span style="font-size:12px;color:#4A574E">（今回の連絡: ' + esc(kind) + '）</span>' : '') + '</div><div style="font-size:12px;color:#4A574E;margin-top:4px">カテゴリーは Hub からは変えられません（LINE WORKS が外から変える口を出していないため）。LINE WORKS でノート「' + esc(title) + '」を開いて「修正」→ 上の「カテゴリー」で選び直して「投稿」。</div></div>' : '')
+        + (auto ? '<div style="margin-top:10px;padding:12px 14px;background:#E3F1E6;border:2px solid #15743A;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#15743A">別のタブで LINE WORKS を開き、カテゴリーを「' + esc(label) + '」に付け替えています</div><div style="font-size:12px;color:#4A574E;margin-top:4px">そのタブの上に緑の帯が出て閉じれば完了です。赤い帯が出たら、理由が書いてあるので、その場で「移動」から手で付け替えてください。</div></div>' : '')
+        + (needCh ? '<div style="margin-top:10px;padding:12px 14px;background:#FFF4D6;border:2px solid #E0A100;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#7A4B00">このグループのノートの番号を、1 回だけ教えてください</div><div style="font-size:12px;color:#4A574E;margin-top:4px">LINE WORKS で「' + esc(group.name) + '」のノートをどれか開き、アドレス（https://talk.worksmobile.com/note/数字/数字）をここに貼ってください。覚えたら、次からは自動でカテゴリーを付け替えます。</div><div style="display:flex;gap:6px;margin-top:6px"><input id="lwn-churl" placeholder="https://talk.worksmobile.com/note/…" style="flex:1;padding:6px 8px;border:1px solid #D6DED2;font-size:12px"><button class="btn btn-p" id="lwn-chgo" style="font-size:12px">覚えて付け替える</button></div><div id="lwn-chmsg" style="font-size:12px;color:#B42318;margin-top:4px"></div></div>' : '')
+        + (needLabel && !needCh ? '<div style="margin-top:10px;padding:12px 14px;background:#FFF4D6;border:2px solid #E0A100;line-height:1.7"><div style="font-weight:700;font-size:15px;color:#7A4B00">つぎに、LINE WORKS でこのノートのカテゴリーを変えてください</div><div style="font-size:14px;margin-top:4px">付け替えるカテゴリー: <b style="font-size:17px">' + esc(label) + '</b>' + (kind ? '　<span style="font-size:12px;color:#4A574E">（今回の連絡: ' + esc(kind) + '）</span>' : '') + '</div><div style="font-size:12px;color:#4A574E;margin-top:4px">カテゴリーは Hub からは変えられません（LINE WORKS が外から変える口を出していないため）。LINE WORKS でノート「' + esc(title) + '」を開いて「移動」→ カテゴリーを選んで OK。</div><div style="font-size:12px;margin-top:6px"><a href="tools/lw-ext/setup.html" target="_blank" style="color:#15743A">この付け替えを自動にする（Chrome に拡張機能を入れる・1 回だけ）</a></div></div>' : '')
         + '<div style="margin-top:6px">' + (kind ? '<b>【' + esc(kind) + '】</b> ' : '') + esc(group.name) + ' ／ ' + esc(title) + (r.created ? '（新しく作りました）' : '（本文の末尾に書き足しました）') + '</div>'
         + (ok.length ? '<div style="margin-top:8px">添付したファイル: ' + ok.map(function (f) { return esc(f.name); }).join('、') + '</div>' : '')
         + (ng.length ? '<div style="margin-top:8px;color:#B42318">入らなかったファイル:<br>' + ng.map(function (f) { return '・' + esc(f.name) + ' … ' + esc(f.why); }).join('<br>') + '</div>' : '') + '</div>';
-      $('lwn-foot').innerHTML = (needLabel ? '<button class="btn" id="lwn-later" style="margin-right:auto;font-size:12px">あとで変える</button>' : '') + '<button class="btn btn-p" id="lwn-close" style="font-weight:700">' + (needLabel ? 'カテゴリーを変えた → 閉じる' : '閉じる') + '</button>';
-      if (needLabel) { S.busy = true; $('lwn-later').onclick = function () { try { if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_label_later', at: new Date().toISOString(), by: me().name || 'user', text: '⚠ LINE WORKS のノートのカテゴリーをまだ変えていない（' + label + '）' }); } catch (e) { } $('lwn-close').onclick(); }; }
+      $('lwn-foot').innerHTML = (needLabel && !needCh ? '<button class="btn" id="lwn-later" style="margin-right:auto;font-size:12px">あとで変える</button>' : '') + '<button class="btn btn-p" id="lwn-close" style="font-weight:700">' + (needLabel && !needCh ? 'カテゴリーを変えた → 閉じる' : '閉じる') + '</button>';
+      if (needCh) { $('lwn-chgo').onclick = function () { var ch = learnChannelNo(group, $('lwn-churl').value); if (!ch) { $('lwn-chmsg').textContent = 'アドレスの形が違います（https://talk.worksmobile.com/note/数字/数字 …）'; return; } window.open(noteUrl(ch, r.postId, label), '_blank'); $('lwn-chmsg').style.color = '#15743A'; $('lwn-chmsg').textContent = '覚えました。別のタブで付け替えています。'; }; }
+      if (needLabel && !needCh) { S.busy = true; $('lwn-later').onclick = function () { try { if (typeof _inqPushTimeline_ === 'function') _inqPushTimeline_(inq, { type: 'lw_label_later', at: new Date().toISOString(), by: me().name || 'user', text: '⚠ LINE WORKS のノートのカテゴリーをまだ変えていない（' + label + '）' }); } catch (e) { } $('lwn-close').onclick(); }; }
       $('lwn-close').onclick = function () { var id = inq.id; S.busy = false; close(); try { if (typeof openInquiryDetail === 'function' && document.querySelector('#inq-detail-panel.show')) openInquiryDetail(id); } catch (e) { } };
       if (typeof _toastMsg === 'function') _toastMsg('💼 LINE WORKS のノートに入れました');
     });
