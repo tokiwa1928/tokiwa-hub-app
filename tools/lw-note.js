@@ -204,6 +204,7 @@
       + sec('② ノート', '<div id="lwn-pwrap" style="color:#4A574E">先にグループを選んでください</div>')
       + sec('③ ファイル', '<div id="lwn-fwrap"></div><input type="file" id="lwn-add" multiple style="display:none">')
       + sec('④ 連絡の種類と文', '<div id="lwn-kwrap"></div>'
+        + '<label style="display:flex;gap:6px;align-items:center;font-size:12px;margin:4px 0"><input type="checkbox" id="lwn-mailbody" checked> メールの本文もノートに入れる（先頭 800 字）</label>'
         + '<textarea id="lwn-comment" rows="4" placeholder="ノートに書き足す文（空でも入れられます）" style="width:100%;padding:8px;border:1px solid #D6DED2;font-size:13px;box-sizing:border-box;font-family:inherit"></textarea>'
         + '<div style="font-size:11px;color:#4A574E;margin-top:2px">書く人: <b>' + esc(me().name) + '</b>（' + esc(me().email) + '）' + (me().fixed ? '' : '　<a href="#" id="lwn-who-change" style="color:#15743A">変える</a>') + '<br>ノートの本文の末尾に <b id="lwn-head"></b> を付けて書き足します。メールの件名と差出人、入れたファイル名も添えます。</div>')
       + sec('⑤ ノートのカテゴリー（LINE WORKS 側）', '<div id="lwn-lwrap"></div>');
@@ -328,7 +329,8 @@
     $('lwn-go').disabled = true; $('lwn-cancel').disabled = true;
     var inq = S.inq, group = S.group, postId = isNew ? '' : S.postId;
     Promise.all(local.map(function (f) { return readB64(f).then(function (b64) { return { name: f.name, type: f.type || '', b64: b64 }; }); })).then(function (uploads) {
-      return api('lwNoteInsert', { groupId: group.id, postId: postId, title: title, kind: kind, label: label, comment: comment, by: me().name, fileIds: ids, uploads: uploads, mailSubject: String(inq.subject || ''), mailFrom: [inq.from_company, inq.from_name].filter(Boolean).join(' ') });
+      var mailBody = ($('lwn-mailbody') && $('lwn-mailbody').checked) ? String(inq.body || inq.summary || '').replace(/\r/g, '').trim().slice(0, 800) : '';
+      return api('lwNoteInsert', { groupId: group.id, postId: postId, title: title, kind: kind, label: label, comment: comment, by: me().name, fileIds: ids, uploads: uploads, mailSubject: String(inq.subject || ''), mailFrom: [inq.from_company, inq.from_name].filter(Boolean).join(' '), mailBody: mailBody });
     }, function () { return { success: false, error: 'PC のファイルを読めませんでした' }; }).then(function (r) {
       if (!S) return; S.busy = false;
       if (!r.success) {
@@ -336,6 +338,8 @@
         msg.style.color = '#B42318'; msg.textContent = why(r); $('lwn-go').disabled = false; $('lwn-cancel').disabled = false; try { if (lwTab) lwTab.close(); } catch (e) { } return;
       }
       pushRecent(group);
+      // LWNOTE-11: 校正に関わる連絡なら、問い合わせの結果を「校正に回した」に（今日やることから外れる）
+      try { if (/^(shikyu|dashi|modori|koryo|sekiryo)$/.test(S.kind) && typeof _inqSetOutcome_ === 'function' && !inq.outcome) _inqSetOutcome_(inq.id, 'proofing', true); } catch (e) { }
       var auto = false;   // LWCAT-1: 拡張機能に付け替えてもらう
       if (lwTab && label) { try { lwTab.location.href = noteUrl(chNo, r.postId, label); auto = true; } catch (e) { } }
       var ok = (r.files || []).filter(function (f) { return f.ok; }), ng = (r.files || []).filter(function (f) { return !f.ok; });
