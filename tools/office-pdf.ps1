@@ -5,7 +5,7 @@
   - マクロは動かさない・元のファイルは読み取り専用で開く（変えない・保存しない）
   - 使い方: PDFにしてデスクトップへ.bat に ファイル／フォルダ をドラッグ&ドロップ。bat をダブルクリックするとファイルを選ぶ窓が出る
 #>
-param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Paths)   # 落としたファイル全部（bat から 1 つずつ渡る）
+param([switch]$SameFolder, [Parameter(ValueFromRemainingArguments = $true)][string[]]$Paths)   # 落としたファイル全部（bat から 1 つずつ渡る）。-SameFolder＝デスクトップでなく元のファイルの隣に置く（PDFを同じ場所へ.bat）
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $desktop = [Environment]::GetFolderPath('Desktop')
@@ -34,9 +34,9 @@ foreach ($p in $Paths) {
 $files = $files | Where-Object { $exts -contains $_.Extension.ToLower() }
 if (-not $files -or $files.Count -eq 0) { Write-Host 'Excel・Word・PowerPoint のファイルがありません。'; exit 1 }
 
-function Out-Name([string]$base) {   # デスクトップに同じ名前。あれば (2) (3) …
-  $out = Join-Path $desktop ($base + '.pdf'); $n = 2
-  while (Test-Path -LiteralPath $out) { $out = Join-Path $desktop ("$base ($n).pdf"); $n++ }
+function Out-Name([string]$base, [string]$dir) {   # 置き場（デスクトップ か 元の隣）に同じ名前。あれば (2) (3) …
+  $out = Join-Path $dir ($base + '.pdf'); $n = 2
+  while (Test-Path -LiteralPath $out) { $out = Join-Path $dir ("$base ($n).pdf"); $n++ }
   return $out
 }
 # 出力名は [string] に直して渡す（PowerShell が包んだ文字列のままだと Word の ExportAsFixedFormat が返ってこない。10/9 に確認）
@@ -44,10 +44,10 @@ function Release($o) { if ($o) { try { [void][Runtime.InteropServices.Marshal]::
 
 $xl = $null; $wd = $null; $pp = $null
 $done = @(); $failed = @()
-Write-Host ("{0} 件を PDF にします → {1}" -f $files.Count, $desktop)
+Write-Host ("{0} 件を PDF にします → {1}" -f $files.Count, $(if ($SameFolder) { '元のファイルと同じ場所' } else { $desktop }))
 foreach ($f in $files) {
   $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
-  $out = Out-Name $base
+  $out = Out-Name $base $(if ($SameFolder) { $f.DirectoryName } else { $desktop })
   $ext = $f.Extension.ToLower()
   try {
     if ($ext -in '.xls', '.xlsx', '.xlsm') {

@@ -56,7 +56,7 @@
 </header>
 <main>
   <div class="sec">
-    <div id="drop" onclick="document.getElementById('fi').click()">📂 Excel・Word・PowerPoint をここに落とす（複数OK）<small>同じ名前の PDF ができて、デスクトップに入ります。例: 見積書_○○様.xlsx → 見積書_○○様.pdf</small></div>
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 Excel・Word・PowerPoint をここに落とす（複数OK）<small>同じ名前の PDF ができて、デスクトップに入ります。例: 見積書_○○様.xlsx → 見積書_○○様.pdf<br><b>フォルダごと落とす</b>と、中の Excel・Word を全部変換して<b>そのフォルダ（元と同じ場所）</b>に置きます</small></div>
     <input type="file" id="fi" multiple accept=".xls,.xlsx,.xlsm,.csv,.doc,.docx,.docm,.rtf,.odt,.txt,.ppt,.pptx,.pptm,.odp" style="display:none" onchange="addFiles(this.files);this.value=''">
     <div id="dest">
       <span>保存先:</span><span class="where" id="dest-where">（まだ選んでいません → ダウンロードフォルダに入ります）</span>
@@ -70,6 +70,7 @@
     <div class="st">決まりごと</div>
     <ul>
       <li>PDF の名前は元のファイルと同じ。保存先に同じ名前があれば <code>名前 (2).pdf</code> にして、上書きしません</li>
+      <li><b>元の Excel がある場所に置きたいとき</b>は、ファイルではなく<b>フォルダごと</b>落とす（ブラウザはファイル単体だと元の場所を教えてくれません）。フォルダ直下の Excel・Word を全部変換します（中のフォルダは見ません）。1 回「許可」を聞かれます</li>
       <li>変換は会社の Google（info@ の Drive）を一瞬通ります。終わると一時ファイルは完全に消えます。元のファイルは変わりません</li>
       <li>Excel は全シート（印刷範囲どおり・方眼線なし・横幅に合わせる）、Word は全ページ、PowerPoint は全スライド</li>
       <li>対象: .xls .xlsx .xlsm .csv ／ .doc .docx .docm .rtf ／ .ppt .pptx .pptm。1 ファイル 20MB まで</li>
@@ -83,6 +84,7 @@
       <div class="muted" style="margin:8px 0">2 つのファイルをダウンロードして、どちらもデスクトップに置く。Excel・Word・PowerPoint のファイルを bat の上にドラッグ&ドロップすると、デスクトップに同じ名前の PDF ができます（bat をダブルクリックするとファイルを選ぶ窓）。</div>
       <a class="btn" href="office-pdf.bat" download="PDFにしてデスクトップへ.bat">⬇ PDFにしてデスクトップへ.bat</a>
       <a class="btn" href="office-pdf.ps1" download="office-pdf.ps1">⬇ office-pdf.ps1</a>
+      <a class="btn" href="office-pdf-same.bat" download="PDFを同じ場所へ.bat">⬇ PDFを同じ場所へ.bat（元の Excel の隣に置く）</a>
       <div class="muted" style="margin-top:6px">Chrome が「危険な可能性」と言ったら、ダウンロードの一覧から「保存」を選ぶ（社内で作ったファイルです）。元は読み取り専用・マクロは動かしません。</div>
     </details>
   </div>
@@ -120,9 +122,11 @@ async function uniqueName(dir, base){   // 同じ名前があれば (2) (3) …
   var name=base+'.pdf', n=2;
   while(true){ try{ await dir.getFileHandle(name); name=base+' ('+n+').pdf'; n++; }catch(e){ return name; } }
 }
-async function saveBlob(blob, base){   // 返り値: {how:'desktop'|'download', name}
+async function writeTo(dir, blob, base){ var name=await uniqueName(dir, base); var fh=await dir.getFileHandle(name,{create:true}); var w=await fh.createWritable(); await w.write(blob); await w.close(); return name; }
+async function saveBlob(blob, base, srcDir){   // 返り値: {how:'folder'|'desktop'|'download', name}。srcDir＝落としたフォルダ（あれば元と同じ場所に置く）
+  if(srcDir){ try{ var p=await srcDir.queryPermission({mode:'readwrite'}); if(p!=='granted') p=await srcDir.requestPermission({mode:'readwrite'}); if(p==='granted') return {how:'folder',name:await writeTo(srcDir, blob, base), where:srcDir.name}; }catch(e){} }
   var dir=await ensureDir();
-  if(dir){ var name=await uniqueName(dir, base); var fh=await dir.getFileHandle(name,{create:true}); var w=await fh.createWritable(); await w.write(blob); await w.close(); return {how:'desktop',name:name}; }
+  if(dir){ return {how:'desktop',name:await writeTo(dir, blob, base)}; }
   var url=URL.createObjectURL(blob); var a=document.createElement('a'); a.href=url; a.download=base+'.pdf'; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(url);},60000);
   return {how:'download',name:base+'.pdf'};
 }
@@ -131,7 +135,22 @@ async function saveBlob(blob, base){   // 返り値: {how:'desktop'|'download', 
 var drop=document.getElementById('drop');
 ['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('over');}); });
 ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('over');}); });
-drop.addEventListener('drop',function(e){ addFiles(e.dataTransfer.files); });
+// OFFICEPDF-4: フォルダを落としたら、その中の Excel・Word を変換して「同じ場所」に PDF を置く（本多さん 10/9「エクセルがある場所に保存」）。
+// ブラウザはファイル単体では元の場所を教えてくれないので、同じ場所に置けるのはフォルダごと落としたときだけ
+drop.addEventListener('drop',async function(e){
+  var items=[].slice.call(e.dataTransfer.items||[]);
+  if(!items.length || !items[0].getAsFileSystemHandle){ addFiles(e.dataTransfer.files); return; }
+  var out=[];
+  for(var i=0;i<items.length;i++){
+    var h=null; try{ h=await items[i].getAsFileSystemHandle(); }catch(err){}
+    if(!h){ var f0=items[i].getAsFile(); if(f0) out.push({file:f0}); continue; }
+    if(h.kind==='file'){ out.push({file:await h.getFile()}); continue; }
+    try{ for await (var ent of h.values()){ if(ent.kind==='file' && OK_EXT.test(ent.name) && !/^~\$/.test(ent.name)) out.push({file:await ent.getFile(), dir:h}); } }
+    catch(err){ toast('フォルダ '+h.name+' を読めませんでした'); }
+  }
+  if(!out.length){ toast('Excel・Word・PowerPoint が入っていません'); return; }
+  addFiles(out);
+});
 var rows=[]; var queue=[]; var running=false;
 function render(){
   document.getElementById('flist').innerHTML=rows.map(function(r){
@@ -142,8 +161,9 @@ function render(){
 function addFiles(fl){
   var arr=[].slice.call(fl||[]);
   if(!arr.length) return;
-  arr.forEach(function(f){
-    var r={ name:f.name, size:f.size, status:'待ち', file:f };
+  arr.forEach(function(x){
+    var f=x.file||x;   // {file, dir}（フォルダから）か File そのもの
+    var r={ name:f.name, size:f.size, status:'待ち', file:f, dir:x.dir||null };
     if(!OK_EXT.test(f.name)){ r.cls='ng'; r.status='Excel・Word・PowerPoint ではありません'; }
     else if(f.size>MAX){ r.cls='ng'; r.status='20MB を超えています'; }
     else queue.push(r);
@@ -165,8 +185,8 @@ async function pump(){
       var blob=new Blob([bytes],{type:'application/pdf'});
       r.url=URL.createObjectURL(blob);
       var base=r.name.replace(/\.[^.]+$/,'');
-      var sv=await saveBlob(blob, base);
-      r.cls='ok'; r.status=(sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name;
+      var sv=await saveBlob(blob, base, r.dir);
+      r.cls='ok'; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name;
     }catch(e){ r.cls='ng'; r.status='できませんでした: '+(e && e.message || e); }
     render();
   }
