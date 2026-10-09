@@ -66,6 +66,13 @@
   .sheet canvas{ width:100%; height:auto; display:block; border:1px solid #e5e7eb; background:#fff; margin-bottom:4px; }
   .sheet .nm2{ font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sheet .meta{ color:#64748b; font-size:11px; }
+  /* OFFICEPDF-8: 社外の名前・原価の語の警告 */
+  .warnbox{ flex-basis:100%; background:#fff7ed; border:2px solid #f97316; border-radius:8px; padding:8px 12px; margin-top:8px; font-size:13px; color:#7c2d12; line-height:1.7; }
+  .warnbox b{ color:#9a3412; }
+  .warnbox .hit{ display:inline-block; background:#fed7aa; border-radius:4px; padding:0 6px; margin:1px 2px; font-weight:700; }
+  .warnbox .ok{ color:#166534; }
+  .sheet .wb{ position:absolute; right:8px; bottom:40px; background:#f97316; color:#fff; border-radius:12px; padding:2px 8px; font-size:11px; font-weight:800; }
+  .sheet.warn{ border-color:#f97316; }
   .sheet-bar{ flex-basis:100%; display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding-top:6px; }
   #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
 </style>
@@ -104,6 +111,7 @@
       <li>変換は会社の Google（info@ の Drive）を一瞬通ります。終わると一時ファイルは完全に消えます。元のファイルは変わりません</li>
       <li>Excel は<b>シートごとに見本が出るので、入れるシートを選んで「この内容で保存」</b>。印刷範囲が設定してあればその範囲だけ、横向きのシートは横で出ます（方眼線なし・横幅に合わせる）。非表示のシートは最初は外れています。Word は全ページ、PowerPoint は全スライド</li>
       <li>対象: .xls .xlsx .xlsm .csv ／ .doc .docx .docm .rtf ／ .ppt .pptx .pptm。1 ファイル 20MB まで</li>
+      <li><b>社外の名前の点検</b>: PDF の文字を見て、外注先マスタの会社名・グループ会社・得意先が 2 社以上・原価／仕入／粗利 などの語・「○○印刷」「○○株式会社」のような名前があれば ⚠ で知らせます。Word・PowerPoint は警告があると保存を止めて「確認した・このまま保存する」を押してもらいます。Excel はシートの札に ⚠ の数が出て、保存のときに確認が出ます（点検は PDF に見えている文字だけ。隠した列や白い文字も PDF に入っていれば拾います）</li>
       <li>Google の変換なので、Office と見た目が少し変わることがあります（書体の置き換え・テキストボックスの位置など）。きれいに出したいときは下の方法で</li>
     </ul>
   </div>
@@ -195,16 +203,17 @@ function render(){
   document.getElementById('flist').innerHTML=rows.map(function(r){
     return '<div class="frow '+(r.cls||'')+'"><span>'+(r.cls==='ok'?'✅':r.cls==='ng'?'❌':'⏳')+'</span><span class="nm" title="'+esc(r.name)+'">'+esc(r.name)+'</span><span class="muted">'+kb(r.size)+'</span>'
       + '<span class="stt">'+esc(r.status)+'</span>'+(r.url?'<a href="'+r.url+'" target="_blank" rel="noopener">開く</a>':'')
-      + (r.pick ? sheetPickHtml(r) : '') + '</div>';
+      + (r.pick ? sheetPickHtml(r) : '') + warnBoxHtml(r) + '</div>';
   }).join('');
   rows.forEach(function(r){ if(r.pick) r.pick.forEach(function(s,i){ var cv=document.getElementById('cv-'+r.id+'-'+i); if(cv && s.thumb){ cv.width=s.thumb.width; cv.height=s.thumb.height; cv.getContext('2d').drawImage(s.thumb,0,0); } }); });
 }
 // OFFICEPDF-5: シートを選ぶ札（見本つき）。押すと ON/OFF。「この内容で保存」で選んだシートだけつなぐ
 function sheetPickHtml(r){
   return '<div class="sheets">' + r.pick.map(function(s,i){
-    return '<div class="sheet'+(s.on?' on':'')+'" onclick="toggleSheet('+r.id+','+i+')" onmouseenter="hovShow('+r.id+','+i+')" onmouseleave="hovHide()" title="'+esc(s.name)+(s.range?'（印刷範囲 '+esc(s.range)+'）':'')+'">'
+    return '<div class="sheet'+(s.on?' on':'')+(s.warn&&s.warn.hits.length?' warn':'')+'" onclick="toggleSheet('+r.id+','+i+')" onmouseenter="hovShow('+r.id+','+i+')" onmouseleave="hovHide()" title="'+esc(s.name)+(s.range?'（印刷範囲 '+esc(s.range)+'）':'')+'">'
       + (s.error ? '' : '<label class="ck" onclick="event.stopPropagation()"><input type="checkbox" '+(s.on?'checked ':'')+'onchange="toggleSheet('+r.id+','+i+')">'+(s.on?'入れる':'入れない')+'</label>')
       + (s.error ? '<div class="meta" style="color:#b91c1c">'+esc(s.error)+'</div>' : '<canvas id="cv-'+r.id+'-'+i+'"></canvas>'+(s.thumb?'':(s.thumbErr?'<div class="meta" style="color:#b91c1c">見本を描けませんでした（'+esc(s.thumbErr)+'） <a href="#" onclick="event.preventDefault();event.stopPropagation();redrawThumb('+r.id+','+i+')">描き直す</a></div>':'<div class="meta">見本を描いています…</div>'))+'<button class="zoom" onclick="event.stopPropagation();openPv('+r.id+','+i+')" title="全ページを大きく見る">🔍 大きく</button>')
+      + (s.warn && s.warn.hits.length ? '<span class="wb" title="'+esc(s.warn.hits.join('、'))+'">⚠ '+s.warn.hits.length+'</span>' : '')
       + '<div class="nm2">'+esc(s.name)+'</div>'
       + '<div class="meta">'+(s.range?'印刷範囲 '+esc(s.range):'全体')+(s.landscape?'・横':'')+(s.hidden?'・非表示のシート':'')+(s.pages?'・'+s.pages+'p':'')+'</div></div>';
   }).join('')
@@ -248,6 +257,8 @@ async function pump(){
       var blob=new Blob([bytes],{type:'application/pdf'});
       r.url=URL.createObjectURL(blob);
       var base=r.name.replace(/\.[^.]+$/,'');
+      r.text=await pdfText(res.base64); r.warn=inspectText(r.text);
+      if(r.warn.hits.length){ r.blob=blob; r.base=base; r.cls=''; r.status='社外の名前らしきものが入っています。下を確かめてから保存'; render(); continue; }
       var sv=await saveBlob(blob, base, r.dir);
       r.cls='ok'; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name;
     }catch(e){ r.cls='ng'; r.status='できませんでした: '+(e && e.message || e); }
@@ -287,10 +298,56 @@ async function loadThumbs(r, only){
     s.thumbErr=''; s.drawing=true; render();
     try{ var t=await Promise.race([thumb(s.b64), new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('時間切れ')); }, 20000); })]); s.thumb=t.canvas; s.pages=t.pages; }
     catch(e){ s.thumbErr=String(e && e.message || e); }
+    if(!s.warn){ try{ s.text=await pdfText(s.b64); s.warn=inspectText(s.text); }catch(e){ s.warn={hits:[],notes:[]}; } }
     s.drawing=false; render();
   }
 }
 function redrawThumb(id,i){ var r=rows.filter(function(x){return x.id===id;})[0]; if(r) loadThumbs(r,i); }
+// ── OFFICEPDF-8: 社外の名前・原価の語の点検（本多さん 10/9「お客様と自社以外の名前が入っていないか。計算式や外注の名前が入っているときがある」）──
+// 見るもの: ①外注先マスタ（FileMaker・localStorage fm_master_外注先マスタ）の会社名 ②グループ会社の名前 ③得意先マスタの会社名が 2 社以上 ④原価・仕入・粗利 などの語 ⑤「○○印刷」「○○株式会社」のような会社らしき語
+var OWN=['トキワ印刷','トキワ','常盤印刷','TOKIWA'];
+var GROUP=['村山印刷','北上プリント','アート・エス','アートエス','津島プリント','中尾印刷','ヤマウチ印刷','ソネ商事','こがわ','グラフィック','プリントパック'];
+var COST_WORDS=['原価','仕入','仕入れ','外注','粗利','利益','掛率','掛け率','原価率','社内','内訳メモ','発注先','下請'];
+function nz(n){ return String(n||'').normalize('NFKC').replace(/[\s　]/g,'').replace(/\(株\)|株式会社|㈱/g,'').replace(/\(有\)|有限会社|㈲/g,'').toLowerCase(); }
+function masterNames(key, fields){ var out=[]; try{ var c=JSON.parse(localStorage.getItem(key)||'null'); (c && c.行 || []).forEach(function(r){ for(var i=0;i<fields.length;i++){ var v=String(r[fields[i]]||'').trim(); if(v){ out.push(v); break; } } }); }catch(e){} return out; }
+async function pdfText(b64){   // PDF の文字を全部つなぐ（30 ページまで）
+  for(var w=0; typeof pdfjsLib==='undefined' && w<40; w++) await new Promise(function(res){ setTimeout(res,250); });
+  var bytes=Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); });
+  var doc=await pdfjsLib.getDocument({data:bytes}).promise; var n=Math.min(doc.numPages,30), t='';
+  for(var p=1;p<=n;p++){ var pg=await doc.getPage(p); var tc=await pg.getTextContent(); t+=tc.items.map(function(it){ return it.str; }).join(' ')+'\n'; }
+  return t;
+}
+function inspectText(text){
+  var raw=String(text||''), z=nz(raw), hits=[], notes=[];
+  function isOwn(n){ var k=nz(n); return OWN.some(function(o){ return k.indexOf(nz(o))>=0; }); }
+  function add(label,n){ var h=n+'（'+label+'）'; if(hits.indexOf(h)<0) hits.push(h); }
+  masterNames('fm_master_外注先マスタ',['会社名','外注先名','名称']).forEach(function(n){ var k=nz(n); if(k.length>=2 && !isOwn(n) && z.indexOf(k)>=0) add('外注先マスタ',n); });
+  GROUP.forEach(function(n){ if(z.indexOf(nz(n))>=0) add('グループ会社',n); });
+  var custs=[]; masterNames('fm_master_得意先マスタ',['得意先名','会社名','名称','名前']).forEach(function(n){ var k=nz(n); if(k.length>=2 && !isOwn(n) && z.indexOf(k)>=0 && custs.indexOf(n)<0) custs.push(n); });
+  if(custs.length>=2){ custs.forEach(function(n){ add('得意先が '+custs.length+' 社',n); }); }
+  COST_WORDS.forEach(function(w){ if(z.indexOf(nz(w))>=0) add('原価の語',w); });
+  // 会社らしき語（マスタに無くても拾う）
+  var m=raw.normalize('NFKC').match(/[一-龥ァ-ヶーA-Za-z0-9・]{2,20}(株式会社|有限会社|㈱|㈲|印刷|紙業|製本|商事|工業|製作所|プリント|紙工|印刷所)|(株式会社|有限会社|㈱|㈲)[一-龥ァ-ヶーA-Za-z0-9・]{2,20}/g)||[];
+  m.forEach(function(n){ if(isOwn(n)) return; var k=nz(n); if(hits.some(function(h){ return nz(h).indexOf(k)>=0 || k.indexOf(nz(h.replace(/（.*$/,'')))>=0; })) return; if(custs.length===1 && nz(custs[0]).indexOf(k)>=0) return; add('会社らしき名前',n); });
+  // このブラウザで「これはお客様」と教えた名前は得意先として扱う（localStorage office_pdf_customers）
+  var known=[]; try{ known=JSON.parse(localStorage.getItem('office_pdf_customers')||'[]'); }catch(e){}
+  hits=hits.filter(function(h){ var n=h.replace(/（.*$/,''); if(known.some(function(k){ return nz(k)===nz(n); })){ if(custs.indexOf(n)<0) custs.push(n); return false; } return true; });
+  if(custs.length===1) notes.push('得意先: '+custs[0]);
+  return { hits:hits, notes:notes };
+}
+function warnBoxHtml(r){
+  var hits=[], notes=[];
+  if(r.pick){ r.pick.forEach(function(s){ if(s.on && s.warn){ s.warn.hits.forEach(function(h){ if(hits.indexOf(h)<0) hits.push(h); }); s.warn.notes.forEach(function(h){ if(notes.indexOf(h)<0) notes.push(h); }); } }); if(!r.pick.some(function(s){ return s.warn; })) return ''; }
+  else if(r.warn){ hits=r.warn.hits; notes=r.warn.notes; } else return '';
+  if(!hits.length) return '<div class="warnbox" style="background:#f0fdf4;border-color:#86efac;color:#166534"><span class="ok">✔ お客様と自社以外の名前・原価の語は見つかりませんでした</span>'+(notes.length?'　<span class="muted">'+esc(notes.join('　'))+'</span>':'')+'</div>';
+  return '<div class="warnbox"><b>⚠ お客様と自社以外の名前らしきもの・原価の語が入っています。</b>外注先の名前や計算式の欄が残っていないか確かめてください。<br>'
+    + hits.map(function(h){ var n=h.replace(/（.*$/,''); return '<span class="hit">'+esc(h)+(/会社らしき名前/.test(h)?' <a href="#" title="この名前はお客様なので次から警告しない" onclick="event.preventDefault();markCustomer(\x27'+esc(n).replace(/'/g,'')+'\x27)">お客様です</a>':'')+'</span>'; }).join('')+(notes.length?'<br><span class="muted">'+esc(notes.join('　'))+'</span>':'')
+    + (r.blob ? '<div style="margin-top:6px"><button class="btn btn-g" onclick="saveAnyway('+r.id+')">確認した・このまま保存する</button> <button class="btn" onclick="dropRow('+r.id+')">やめる</button></div>' : '')
+    + '</div>';
+}
+async function saveAnyway(id){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r||!r.blob) return; try{ var sv=await saveBlob(r.blob, r.base, r.dir); r.blob=null; r.cls='ok'; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name; }catch(e){ r.status='できませんでした: '+(e && e.message || e); } render(); }
+function markCustomer(n){ var k=[]; try{ k=JSON.parse(localStorage.getItem('office_pdf_customers')||'[]'); }catch(e){} if(k.indexOf(n)<0) k.push(n); localStorage.setItem('office_pdf_customers', JSON.stringify(k)); rows.forEach(function(r){ if(r.warn && r.text!=null) r.warn=inspectText(r.text); if(r.pick) r.pick.forEach(function(s){ if(s.warn && s.text!=null) s.warn=inspectText(s.text); }); }); render(); toast('「'+n+'」をお客様として覚えました'); }
+function dropRow(id){ rows=rows.filter(function(x){return x.id!==id;}); render(); }
 // OFFICEPDF-6: 大きく見る。そのシートの PDF を全ページ（最大 30）描いて縦に並べる。前後のシートへ送れる・ここでも 入れる／入れない を変えられる
 var _pv={ id:null, i:-1 };
 async function openPv(id,i){
@@ -325,6 +382,8 @@ document.addEventListener('keydown',function(e){ if(document.getElementById('pv'
 async function saveSheets(id){
   var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return;
   var sel=r.pick.filter(function(s){ return s.on && s.b64; });
+  var hits=[]; sel.forEach(function(s){ if(s.warn) s.warn.hits.forEach(function(h){ if(hits.indexOf(h)<0) hits.push(h); }); });
+  if(hits.length && !confirm('選んだシートに、お客様と自社以外の名前らしきものや原価の語が入っています:\n\n　'+hits.join('、')+'\n\nこのまま PDF にして保存しますか？（やめる＝キャンセル）')) return;
   if(!sel.length){ toast('シートを 1 つ以上選んでください'); return; }
   try{
     r.status='つないでいます…'; render();
