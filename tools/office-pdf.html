@@ -42,11 +42,23 @@
   details summary{ cursor:pointer; font-weight:700; font-size:13px; }
   ul{ margin:.3rem 0 0; padding-left:1.3em; font-size:13px; line-height:1.8; }
   code{ background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+  .frow{ flex-wrap:wrap; }
+  .sheets{ flex-basis:100%; display:flex; gap:10px; flex-wrap:wrap; padding:8px 0 2px; border-top:1px dashed var(--line); margin-top:6px; }
+  .sheet{ width:150px; border:1px solid var(--line); border-radius:6px; padding:6px; background:#fafaf8; cursor:pointer; font-size:12px; }
+  .sheet.on{ border-color:var(--grn); background:#f0fdf4; }
+  .sheet canvas{ width:100%; height:auto; display:block; border:1px solid #e5e7eb; background:#fff; margin-bottom:4px; }
+  .sheet .nm2{ font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sheet .meta{ color:#64748b; font-size:11px; }
+  .sheet-bar{ flex-basis:100%; display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding-top:6px; }
   #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
 </style>
 <link rel="stylesheet" href="hub-square.css"><link rel="stylesheet" href="hub-theme.css">
 <script src="hub-nav.js"></script>
 <script src="hub-api.js"></script>
+<!-- OFFICEPDF-5: Excel はシートごと（xlsx を JSZip で読んで 印刷範囲・向き・非表示 を拾う → シートを選ぶ・見本を見る → pdf-lib でつなぐ） -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
 <header>
@@ -72,7 +84,7 @@
       <li>PDF の名前は元のファイルと同じ。保存先に同じ名前があれば <code>名前 (2).pdf</code> にして、上書きしません</li>
       <li><b>元の Excel がある場所に置きたいとき</b>は、ファイルではなく<b>フォルダごと</b>落とす（ブラウザはファイル単体だと元の場所を教えてくれません）。フォルダ直下の Excel・Word を全部変換します（中のフォルダは見ません）。1 回「許可」を聞かれます</li>
       <li>変換は会社の Google（info@ の Drive）を一瞬通ります。終わると一時ファイルは完全に消えます。元のファイルは変わりません</li>
-      <li>Excel は全シート（印刷範囲どおり・方眼線なし・横幅に合わせる）、Word は全ページ、PowerPoint は全スライド</li>
+      <li>Excel は<b>シートごとに見本が出るので、入れるシートを選んで「この内容で保存」</b>。印刷範囲が設定してあればその範囲だけ、横向きのシートは横で出ます（方眼線なし・横幅に合わせる）。非表示のシートは最初は外れています。Word は全ページ、PowerPoint は全スライド</li>
       <li>対象: .xls .xlsx .xlsm .csv ／ .doc .docx .docm .rtf ／ .ppt .pptx .pptm。1 ファイル 20MB まで</li>
       <li>Google の変換なので、Office と見た目が少し変わることがあります（書体の置き換え・テキストボックスの位置など）。きれいに出したいときは下の方法で</li>
     </ul>
@@ -151,19 +163,34 @@ drop.addEventListener('drop',async function(e){
   if(!out.length){ toast('Excel・Word・PowerPoint が入っていません'); return; }
   addFiles(out);
 });
-var rows=[]; var queue=[]; var running=false;
+var rows=[]; var queue=[]; var running=false; var _rid=0;
 function render(){
   document.getElementById('flist').innerHTML=rows.map(function(r){
     return '<div class="frow '+(r.cls||'')+'"><span>'+(r.cls==='ok'?'✅':r.cls==='ng'?'❌':'⏳')+'</span><span class="nm" title="'+esc(r.name)+'">'+esc(r.name)+'</span><span class="muted">'+kb(r.size)+'</span>'
-      + '<span class="stt">'+esc(r.status)+'</span>'+(r.url?'<a href="'+r.url+'" target="_blank" rel="noopener">開く</a>':'')+'</div>';
+      + '<span class="stt">'+esc(r.status)+'</span>'+(r.url?'<a href="'+r.url+'" target="_blank" rel="noopener">開く</a>':'')
+      + (r.pick ? sheetPickHtml(r) : '') + '</div>';
   }).join('');
+  rows.forEach(function(r){ if(r.pick) r.pick.forEach(function(s,i){ var cv=document.getElementById('cv-'+r.id+'-'+i); if(cv && s.thumb){ cv.width=s.thumb.width; cv.height=s.thumb.height; cv.getContext('2d').drawImage(s.thumb,0,0); } }); });
 }
+// OFFICEPDF-5: シートを選ぶ札（見本つき）。押すと ON/OFF。「この内容で保存」で選んだシートだけつなぐ
+function sheetPickHtml(r){
+  return '<div class="sheets">' + r.pick.map(function(s,i){
+    return '<div class="sheet'+(s.on?' on':'')+'" onclick="toggleSheet('+r.id+','+i+')" title="'+esc(s.name)+(s.range?'（印刷範囲 '+esc(s.range)+'）':'')+'">'
+      + (s.error ? '<div class="meta" style="color:#b91c1c">'+esc(s.error)+'</div>' : '<canvas id="cv-'+r.id+'-'+i+'"></canvas>')
+      + '<div class="nm2">'+(s.on?'☑ ':'☐ ')+esc(s.name)+'</div>'
+      + '<div class="meta">'+(s.range?'印刷範囲 '+esc(s.range):'全体')+(s.landscape?'・横':'')+(s.hidden?'・非表示のシート':'')+(s.pages?'・'+s.pages+'p':'')+'</div></div>';
+  }).join('')
+  + '</div><div class="sheet-bar"><button class="btn btn-g" onclick="saveSheets('+r.id+')">⬇ この内容で保存（'+r.pick.filter(function(s){return s.on&&!s.error;}).length+' シート）</button>'
+  + '<button class="btn" onclick="setSheets('+r.id+',true)">全部</button><button class="btn" onclick="setSheets('+r.id+',false)">なし</button><span class="muted">シートの札を押して選ぶ。見本は各シートの 1 ページ目</span></div>';
+}
+function toggleSheet(id,i){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return; r.pick[i].on=!r.pick[i].on; render(); }
+function setSheets(id,on){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return; r.pick.forEach(function(s){ if(!s.error) s.on=on; }); render(); }
 function addFiles(fl){
   var arr=[].slice.call(fl||[]);
   if(!arr.length) return;
   arr.forEach(function(x){
     var f=x.file||x;   // {file, dir}（フォルダから）か File そのもの
-    var r={ name:f.name, size:f.size, status:'待ち', file:f, dir:x.dir||null };
+    var r={ id:++_rid, name:f.name, size:f.size, status:'待ち', file:f, dir:x.dir||null };
     if(!OK_EXT.test(f.name)){ r.cls='ng'; r.status='Excel・Word・PowerPoint ではありません'; }
     else if(f.size>MAX){ r.cls='ng'; r.status='20MB を超えています'; }
     else queue.push(r);
@@ -179,8 +206,16 @@ async function pump(){
     try{
       r.status='変換中…'; render();
       var b64=await toBase64(r.file);
-      var res=await HubAPI.call('officeToPdf', {}, { name:r.name, base64:b64 });
+      // OFFICEPDF-5: xlsx はシートの一覧（印刷範囲・向き・非表示）を手元で読んで、シートごとに PDF をもらい、選んでから保存
+      var sheets=null; if(/\.(xlsx|xlsm)$/i.test(r.name)){ try{ sheets=await readXlsxSheets(r.file); }catch(e){ sheets=null; } }
+      var res=await HubAPI.call('officeToPdf', {}, sheets && sheets.length ? { name:r.name, base64:b64, sheets:sheets.map(function(s){ return { name:s.name, range:s.range||'', landscape:!!s.landscape }; }) } : { name:r.name, base64:b64 });
       if(!res || !res.success) throw new Error((res && res.error) || '変換できません');
+      if(res.sheets){
+        r.pick=res.sheets.map(function(s,i){ var meta=sheets[i]||{}; return { name:s.name, error:s.error?'出せませんでした':'', b64:s.base64||'', range:meta.range||'', landscape:!!meta.landscape, hidden:!!meta.hidden, on:!s.error && !meta.hidden }; });
+        r.cls=''; r.status='シートを選んで「この内容で保存」'; render();
+        for(var i=0;r.pick && i<r.pick.length;i++){ if(r.pick[i].b64){ try{ var t=await thumb(r.pick[i].b64); r.pick[i].thumb=t.canvas; r.pick[i].pages=t.pages; }catch(e){ r.pick[i].thumbErr=String(e && e.message || e); } render(); } }
+        continue;
+      }
       var bytes=Uint8Array.from(atob(res.base64), function(c){ return c.charCodeAt(0); });
       var blob=new Blob([bytes],{type:'application/pdf'});
       r.url=URL.createObjectURL(blob);
@@ -191,6 +226,46 @@ async function pump(){
     render();
   }
   running=false;
+}
+// ── OFFICEPDF-5: xlsx のシート一覧（名前・非表示・印刷範囲 _xlnm.Print_Area・向き pageSetup）。Google の変換は Excel の印刷範囲を引き継がないので手元で読む ──
+async function readXlsxSheets(file){
+  var zip=await JSZip.loadAsync(file);
+  var wb=await zip.file('xl/workbook.xml').async('string');
+  var rels=await (zip.file('xl/_rels/workbook.xml.rels')||{async:function(){return '';}}).async('string');
+  var relMap={}; rels.replace(/<Relationship\b[^>]*>/g,function(t){ var id=(t.match(/\bId="([^"]+)"/)||[])[1], tg=(t.match(/\bTarget="([^"]+)"/)||[])[1]; if(id&&tg) relMap[id]=tg.replace(/^\/?xl\//,'').replace(/^\//,''); return t; });
+  var sheets=[]; wb.replace(/<sheet\b[^>]*>/g,function(t){ var nm=(t.match(/\bname="([^"]*)"/)||[])[1]||''; var st=(t.match(/\bstate="([^"]*)"/)||[])[1]||''; var rid=(t.match(/\br:id="([^"]+)"/)||[])[1]||''; sheets.push({ name:unx(nm), hidden:st==='hidden'||st==='veryHidden', rid:rid }); return t; });
+  wb.replace(/<definedName\b([^>]*)>([^<]*)<\/definedName>/g,function(t,attrs,val){ if(!/name="_xlnm\.Print_Area"/.test(attrs)) return t; var idx=parseInt((attrs.match(/localSheetId="(\d+)"/)||[])[1]); if(isNaN(idx)||!sheets[idx]) return t; var first=unx(val).split(',')[0]; var m=first.match(/!\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/); if(m) sheets[idx].range=m[1]+m[2]+':'+m[3]+m[4]; return t; });
+  for(var i=0;i<sheets.length;i++){ var p=relMap[sheets[i].rid]; if(!p) continue; var f=zip.file('xl/'+p)||zip.file(p); if(!f) continue; var x=await f.async('string'); sheets[i].landscape=/<pageSetup\b[^>]*orientation="landscape"/.test(x); }
+  return sheets;
+}
+function unx(s){ return String(s||'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'"); }
+// 各シートの 1 ページ目を小さく描く（pdf.js）
+async function thumb(b64){
+  for(var w=0; typeof pdfjsLib==='undefined' && w<40; w++) await new Promise(function(res){ setTimeout(res,250); });   // CDN の読み込み待ち（最大 10 秒）
+  if(typeof pdfjsLib==='undefined') throw new Error('pdf.js');
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  var bytes=Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); });
+  var doc=await pdfjsLib.getDocument({data:bytes}).promise; var pg=await doc.getPage(1);
+  var vp=pg.getViewport({scale:1}); var sc=280/vp.width; vp=pg.getViewport({scale:sc});
+  var cv=document.createElement('canvas'); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+  await pg.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
+  return { canvas:cv, pages:doc.numPages };
+}
+// 選んだシートの PDF を 1 本につないで保存（pdf-lib）
+async function saveSheets(id){
+  var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return;
+  var sel=r.pick.filter(function(s){ return s.on && s.b64; });
+  if(!sel.length){ toast('シートを 1 つ以上選んでください'); return; }
+  try{
+    r.status='つないでいます…'; render();
+    var out=await PDFLib.PDFDocument.create();
+    for(var i=0;i<sel.length;i++){ var src=await PDFLib.PDFDocument.load(Uint8Array.from(atob(sel[i].b64), function(c){ return c.charCodeAt(0); })); var pages=await out.copyPages(src, src.getPageIndices()); pages.forEach(function(p){ out.addPage(p); }); }
+    var blob=new Blob([await out.save()],{type:'application/pdf'});
+    r.url=URL.createObjectURL(blob);
+    var sv=await saveBlob(blob, r.name.replace(/\.[^.]+$/,''), r.dir);
+    r.cls='ok'; r.pick=null; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name+'（'+sel.length+' シート）';
+  }catch(e){ r.status='できませんでした: '+(e && e.message || e); }
+  render();
 }
 idbGet('dest').then(function(h){ if(h){ dirHandle=h; } showDest(); }).catch(function(){ showDest(); });
 </script>
