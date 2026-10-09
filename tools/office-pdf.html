@@ -6,11 +6,11 @@
 <title>🖨 PDFにしてデスクトップへ（Excel・Word・PowerPoint） | Tokiwa Hub Tools</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2365a30d'/><circle cx='50' cy='50' r='30' fill='none' stroke='%23ffffff' stroke-width='6'/><circle cx='50' cy='20' r='9.5' fill='%23ffffff'/><circle cx='50' cy='50' r='8' fill='%23ffffff'/></svg>">
 <!--
-  OFFICEPDF-1: Excel・Word・PowerPoint を「同じ名前の PDF」にしてデスクトップへ（本多さん 10/9）。
-  ブラウザでは Office の見た目どおりに変換できないので、PC に入っている Office で変換する bat＋PowerShell を配る。
-  - office-pdf.bat: ファイルを落とすと office-pdf.ps1 を呼ぶ。ダブルクリックで選ぶ窓
-  - office-pdf.ps1: Excel/Word/PowerPoint の COM で PDF 出力（印刷と同じ見た目）。元は読み取り専用、マクロは動かさない、同名は (2)
-  PC 内処理・送信なし。
+  OFFICEPDF-2: Excel・Word・PowerPoint をここに落とすと、同じ名前の PDF ができてデスクトップに入る（本多さん 10/9「ツールにファイルをアップして出来上がる感じ」）。
+  - 変換は会社 GAS の officeToPdf（Drive に一時的に入れて Google 形式に変換 → PDF → 一時ファイルは完全に消す）
+  - デスクトップへの保存は File System Access API（はじめに 1 回「デスクトップを選ぶ」。選んだ場所は IndexedDB に覚える）。使えないブラウザはダウンロード
+  - 同じ名前の PDF があれば (2) (3) … 上書きしない
+  - OFFICEPDF-1 の bat（PC の Office で変換・印刷と同じ見た目）は下に「きれいに出したいとき」として残す
 -->
 <style>
   :root{ --ink:#1a1a1a; --line:#e0ddd6; --bg:#f4f3f0; --grn:#16a34a; --cyan:#0891b2; }
@@ -23,59 +23,156 @@
   main{ max-width:900px; margin:14px auto; padding:0 14px; }
   .sec{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:.9rem 1.1rem; margin-bottom:.7rem; }
   .st{ font-size:13px; font-weight:800; color:#333; margin-bottom:.5rem; }
-  .btn{ display:inline-block; padding:10px 18px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:14px; font-family:inherit; font-weight:700; color:var(--ink); text-decoration:none; }
+  .btn{ display:inline-block; padding:9px 16px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; color:var(--ink); text-decoration:none; }
   .btn-g{ background:var(--grn); border-color:var(--grn); color:#fff; }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
   .muted{ font-size:12px; color:#64748b; }
-  .step{ display:flex; gap:12px; align-items:flex-start; padding:10px 0; border-top:1px dashed var(--line); }
-  .step:first-of-type{ border-top:0; }
-  .step b.n{ flex:0 0 28px; height:28px; border-radius:50%; background:#1a1a1a; color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:13px; }
-  .step .t{ font-size:14px; line-height:1.7; }
+  #drop{ border:2.5px dashed #94a3b8; border-radius:10px; padding:34px 16px; text-align:center; color:#475569; font-size:16px; font-weight:700; cursor:pointer; background:#fff; }
+  #drop small{ display:block; font-weight:400; font-size:12px; color:#94a3b8; margin-top:6px; }
+  #drop.over{ border-color:var(--cyan); background:#ecfeff; }
+  #dest{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:10px; font-size:13px; }
+  #dest .where{ font-weight:700; }
+  .frow{ display:flex; gap:10px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:7px; margin-top:6px; background:#fff; font-size:13.5px; }
+  .frow .nm{ flex:1; min-width:0; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .frow .stt{ font-size:12.5px; color:#64748b; white-space:nowrap; }
+  .frow.ok .stt{ color:var(--grn); font-weight:700; }
+  .frow.ng .stt{ color:#b91c1c; font-weight:700; white-space:normal; }
+  .frow a{ color:#0369a1; font-size:12.5px; white-space:nowrap; }
   .warn{ background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 12px; font-size:12.5px; color:#78350f; line-height:1.7; }
+  details summary{ cursor:pointer; font-weight:700; font-size:13px; }
   ul{ margin:.3rem 0 0; padding-left:1.3em; font-size:13px; line-height:1.8; }
   code{ background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; }
 </style>
 <link rel="stylesheet" href="hub-square.css"><link rel="stylesheet" href="hub-theme.css">
 <script src="hub-nav.js"></script>
+<script src="hub-api.js"></script>
 </head>
 <body>
 <header>
   <span class="logo">TOKIWA <b>HUB</b> 🖨</span>
   <span class="tname">PDFにしてデスクトップへ（Excel・Word・PowerPoint）</span>
-  <span class="user">🔒 PC内処理・送信なし</span>
+  <span class="user">🔒 社内の Google で変換・残さない</span>
 </header>
 <main>
   <div class="sec">
-    <div class="st">Excel・Word・PowerPoint を、同じ名前の PDF にしてデスクトップに置きます</div>
-    <div class="muted">例: <code>見積書_○○様.xlsx</code> → デスクトップに <code>見積書_○○様.pdf</code>。PC に入っている Office で変換するので、印刷したときと同じ見た目（印刷範囲・改ページ・テキストボックスもそのまま）になります。</div>
-  </div>
-
-  <div class="sec">
-    <div class="st">はじめの 1 回だけ（デスクトップに置く）</div>
-    <div class="step"><b class="n">1</b><div class="t">2 つのファイルをダウンロードして、<b>どちらもデスクトップに置く</b><br>
-      <a class="btn btn-g" href="office-pdf.bat" download="PDFにしてデスクトップへ.bat">⬇ PDFにしてデスクトップへ.bat</a>
-      <a class="btn" href="office-pdf.ps1" download="office-pdf.ps1">⬇ office-pdf.ps1</a>
-      <div class="muted" style="margin-top:4px">bat が ps1 を呼びます。2 つは同じ場所に置いてください（デスクトップでなくても、同じフォルダなら動きます）。</div></div></div>
-    <div class="step"><b class="n">2</b><div class="t">Chrome が「このファイルは危険な可能性があります」と言ったら、ダウンロードの一覧から「保存」を選ぶ（社内で作ったファイルです）</div></div>
-  </div>
-
-  <div class="sec">
-    <div class="st">毎回の使い方</div>
-    <div class="step"><b class="n">A</b><div class="t"><b>Excel・Word・PowerPoint のファイルを「PDFにしてデスクトップへ.bat」の上にドラッグ&ドロップ</b>（複数OK・フォルダごとOK）。黒い窓が出て、終わるとデスクトップが開き、できた PDF が選ばれた状態になります。</div></div>
-    <div class="step"><b class="n">B</b><div class="t">または bat を<b>ダブルクリック</b> → ファイルを選ぶ窓で選ぶ（複数OK）</div></div>
+    <div id="drop" onclick="document.getElementById('fi').click()">📂 Excel・Word・PowerPoint をここに落とす（複数OK）<small>同じ名前の PDF ができて、デスクトップに入ります。例: 見積書_○○様.xlsx → 見積書_○○様.pdf</small></div>
+    <input type="file" id="fi" multiple accept=".xls,.xlsx,.xlsm,.csv,.doc,.docx,.docm,.rtf,.odt,.txt,.ppt,.pptx,.pptm,.odp" style="display:none" onchange="addFiles(this.files);this.value=''">
+    <div id="dest">
+      <span>保存先:</span><span class="where" id="dest-where">（まだ選んでいません → ダウンロードフォルダに入ります）</span>
+      <button class="btn" id="dest-btn" onclick="pickDesktop()">📁 デスクトップを選ぶ（はじめに 1 回）</button>
+      <span class="muted" id="dest-note"></span>
+    </div>
+    <div id="flist"></div>
   </div>
 
   <div class="sec">
     <div class="st">決まりごと</div>
     <ul>
-      <li>PDF の名前は元のファイルと同じ。デスクトップに同じ名前の PDF があるときは <code>名前 (2).pdf</code> にして、上書きしません</li>
-      <li>元のファイルは読み取り専用で開くので、変わりません・保存もしません。マクロは動かしません</li>
-      <li>Excel は全シート、Word は全ページ、PowerPoint は全スライド。印刷範囲・用紙・向きは Office の設定どおり</li>
-      <li>対象: .xls .xlsx .xlsm ／ .doc .docx .docm .rtf ／ .ppt .pptx .pptm</li>
-      <li>パスワード付き・壊れているファイル・Office が入っていない PC では「できなかった」に出ます</li>
+      <li>PDF の名前は元のファイルと同じ。保存先に同じ名前があれば <code>名前 (2).pdf</code> にして、上書きしません</li>
+      <li>変換は会社の Google（info@ の Drive）を一瞬通ります。終わると一時ファイルは完全に消えます。元のファイルは変わりません</li>
+      <li>Excel は全シート（印刷範囲どおり・方眼線なし・横幅に合わせる）、Word は全ページ、PowerPoint は全スライド</li>
+      <li>対象: .xls .xlsx .xlsm .csv ／ .doc .docx .docm .rtf ／ .ppt .pptx .pptm。1 ファイル 20MB まで</li>
+      <li>Google の変換なので、Office と見た目が少し変わることがあります（書体の置き換え・テキストボックスの位置など）。きれいに出したいときは下の方法で</li>
     </ul>
   </div>
 
-  <div class="warn">Office を開かずに xlsx を描いて PDF にする（テキストボックスが印刷で消えるファイルの救済）は、別ツール <a href="excel-pdf.html" style="color:#0369a1">📊 Excel→PDF（テキストボックス対応）</a> です。こちらは Office そのもので変換します。</div>
+  <div class="sec">
+    <details>
+      <summary>🖥 きれいに出したいとき（PC の Office で変換。印刷と同じ見た目）</summary>
+      <div class="muted" style="margin:8px 0">2 つのファイルをダウンロードして、どちらもデスクトップに置く。Excel・Word・PowerPoint のファイルを bat の上にドラッグ&ドロップすると、デスクトップに同じ名前の PDF ができます（bat をダブルクリックするとファイルを選ぶ窓）。</div>
+      <a class="btn" href="office-pdf.bat" download="PDFにしてデスクトップへ.bat">⬇ PDFにしてデスクトップへ.bat</a>
+      <a class="btn" href="office-pdf.ps1" download="office-pdf.ps1">⬇ office-pdf.ps1</a>
+      <div class="muted" style="margin-top:6px">Chrome が「危険な可能性」と言ったら、ダウンロードの一覧から「保存」を選ぶ（社内で作ったファイルです）。元は読み取り専用・マクロは動かしません。</div>
+    </details>
+  </div>
+  <div class="warn">Office を開かずに xlsx を描いて PDF にする（テキストボックスが印刷で消えるファイルの救済）は <a href="excel-pdf.html" style="color:#0369a1">📊 Excel→PDF（テキストボックス対応）</a>。</div>
 </main>
+<div id="toast"></div>
+
+<script>
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},3000); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function kb(n){ return n>1048576 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB'; }
+var OK_EXT=/\.(xls|xlsx|xlsm|csv|ods|doc|docx|docm|rtf|odt|txt|ppt|pptx|pptm|odp)$/i;
+var MAX=20*1024*1024;
+
+// ── 保存先（デスクトップ）: File System Access API。選んだ場所は IndexedDB に覚える ──
+var dirHandle=null;
+function idb(){ return new Promise(function(res,rej){ var r=indexedDB.open('office-pdf',1); r.onupgradeneeded=function(){ r.result.createObjectStore('kv'); }; r.onsuccess=function(){ res(r.result); }; r.onerror=function(){ rej(r.error); }; }); }
+function idbGet(k){ return idb().then(function(db){ return new Promise(function(res){ var q=db.transaction('kv').objectStore('kv').get(k); q.onsuccess=function(){ res(q.result); }; q.onerror=function(){ res(null); }; }); }); }
+function idbSet(k,v){ return idb().then(function(db){ return new Promise(function(res){ var q=db.transaction('kv','readwrite').objectStore('kv').put(v,k); q.onsuccess=function(){ res(); }; q.onerror=function(){ res(); }; }); }); }
+function showDest(){
+  var w=document.getElementById('dest-where'), b=document.getElementById('dest-btn'), n=document.getElementById('dest-note');
+  if(!window.showDirectoryPicker){ w.textContent='ダウンロードフォルダ'; b.style.display='none'; n.textContent='このブラウザはフォルダを選べないので、PDF はダウンロードに入ります（Chrome／Edge なら選べます）'; return; }
+  if(dirHandle){ w.textContent='📁 '+dirHandle.name; b.textContent='📁 保存先を変える'; n.textContent=''; }
+  else { w.textContent='（まだ選んでいません → ダウンロードフォルダに入ります）'; b.textContent='📁 デスクトップを選ぶ（はじめに 1 回）'; }
+}
+async function pickDesktop(){
+  try{ dirHandle=await window.showDirectoryPicker({ id:'office-pdf-dest', mode:'readwrite', startIn:'desktop' }); await idbSet('dest', dirHandle); showDest(); toast('保存先: '+dirHandle.name); }
+  catch(e){ if(e && e.name!=='AbortError') toast('選べませんでした: '+(e.message||e)); }
+}
+async function ensureDir(){   // 覚えている保存先に書く許可をもらう（ブラウザを開き直したあとは 1 回確認が出る）
+  if(!dirHandle) return null;
+  try{ var p=await dirHandle.queryPermission({mode:'readwrite'}); if(p!=='granted') p=await dirHandle.requestPermission({mode:'readwrite'}); return p==='granted'?dirHandle:null; }catch(e){ return null; }
+}
+async function uniqueName(dir, base){   // 同じ名前があれば (2) (3) …
+  var name=base+'.pdf', n=2;
+  while(true){ try{ await dir.getFileHandle(name); name=base+' ('+n+').pdf'; n++; }catch(e){ return name; } }
+}
+async function saveBlob(blob, base){   // 返り値: {how:'desktop'|'download', name}
+  var dir=await ensureDir();
+  if(dir){ var name=await uniqueName(dir, base); var fh=await dir.getFileHandle(name,{create:true}); var w=await fh.createWritable(); await w.write(blob); await w.close(); return {how:'desktop',name:name}; }
+  var url=URL.createObjectURL(blob); var a=document.createElement('a'); a.href=url; a.download=base+'.pdf'; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(url);},60000);
+  return {how:'download',name:base+'.pdf'};
+}
+
+// ── ファイル受け取り → 会社 GAS で変換 → 保存 ──
+var drop=document.getElementById('drop');
+['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('over');}); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('over');}); });
+drop.addEventListener('drop',function(e){ addFiles(e.dataTransfer.files); });
+var rows=[]; var queue=[]; var running=false;
+function render(){
+  document.getElementById('flist').innerHTML=rows.map(function(r){
+    return '<div class="frow '+(r.cls||'')+'"><span>'+(r.cls==='ok'?'✅':r.cls==='ng'?'❌':'⏳')+'</span><span class="nm" title="'+esc(r.name)+'">'+esc(r.name)+'</span><span class="muted">'+kb(r.size)+'</span>'
+      + '<span class="stt">'+esc(r.status)+'</span>'+(r.url?'<a href="'+r.url+'" target="_blank" rel="noopener">開く</a>':'')+'</div>';
+  }).join('');
+}
+function addFiles(fl){
+  var arr=[].slice.call(fl||[]);
+  if(!arr.length) return;
+  arr.forEach(function(f){
+    var r={ name:f.name, size:f.size, status:'待ち', file:f };
+    if(!OK_EXT.test(f.name)){ r.cls='ng'; r.status='Excel・Word・PowerPoint ではありません'; }
+    else if(f.size>MAX){ r.cls='ng'; r.status='20MB を超えています'; }
+    else queue.push(r);
+    rows.push(r);
+  });
+  render(); pump();
+}
+function toBase64(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(){ res(String(fr.result).split(',')[1]); }; fr.onerror=function(){ rej(fr.error); }; fr.readAsDataURL(file); }); }
+async function pump(){
+  if(running) return; running=true;
+  while(queue.length){
+    var r=queue.shift();
+    try{
+      r.status='変換中…'; render();
+      var b64=await toBase64(r.file);
+      var res=await HubAPI.call('officeToPdf', {}, { name:r.name, base64:b64 });
+      if(!res || !res.success) throw new Error((res && res.error) || '変換できません');
+      var bytes=Uint8Array.from(atob(res.base64), function(c){ return c.charCodeAt(0); });
+      var blob=new Blob([bytes],{type:'application/pdf'});
+      r.url=URL.createObjectURL(blob);
+      var base=r.name.replace(/\.[^.]+$/,'');
+      var sv=await saveBlob(blob, base);
+      r.cls='ok'; r.status=(sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name;
+    }catch(e){ r.cls='ng'; r.status='できませんでした: '+(e && e.message || e); }
+    render();
+  }
+  running=false;
+}
+idbGet('dest').then(function(h){ if(h){ dirHandle=h; } showDest(); }).catch(function(){ showDest(); });
+</script>
 </body>
 </html>
