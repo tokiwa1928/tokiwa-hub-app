@@ -112,7 +112,8 @@
       <li>変換は会社の Google（info@ の Drive）を一瞬通ります。終わると一時ファイルは完全に消えます。元のファイルは変わりません</li>
       <li>Excel は<b>シートの札が出るので、入れるシートを選んで「👀 見本を出す」→「この内容で保存」</b>（PDF にするのは選んだシートだけ。保存・印刷を押せば見本なしでも進みます）。印刷範囲が設定してあればその範囲だけ、横向きのシートは横で、Excel で「1 ページに収める」にしてあれば 1 ページに収めて出ます（読めないファイルは「📄 1ページに収める」を ON）（方眼線なし・横幅に合わせる）。非表示のシートは最初は外れています。Word は全ページ、PowerPoint は全スライド</li>
       <li>対象: .xls .xlsx .xlsm .csv ／ .doc .docx .docm .rtf ／ .ppt .pptx .pptm。1 ファイル 20MB まで</li>
-      <li><b>社外の名前の点検</b>: PDF の文字を見て、外注先マスタの会社名・グループ会社・得意先が 2 社以上・原価／仕入／粗利 などの語・「○○印刷」「○○株式会社」のような名前があれば ⚠ で知らせます。Word・PowerPoint は警告があると保存を止めて「確認した・このまま保存する」を押してもらいます。Excel はシートの札に ⚠ の数が出て、保存のときに確認が出ます（点検は PDF に見えている文字だけ。隠した列や白い文字も PDF に入っていれば拾います）</li>
+      <li><b>代表者・日付・タイトルの点検</b>: 文書に出ている会社（グループ各社）と「代表取締役 ○○」が合っているか（村山印刷・津島プリント・北上プリント・アート・エス・中尾印刷・ヤマウチ印刷は 本多 亮、トキワ印刷は 白尾 浩志）、文書の日付が 60 日より前や 30 日より先でないか、有効期限・納期が見積日より前でないか、文書のタイトル（見積書・納品書・請求書…）とファイル名が食い違っていないかを見て ⚠ で知らせます</li>
+      <li><b>社外の名前の点検（見積だけ）</b>: PDF の文字を見て、外注先マスタの会社名・グループ会社・得意先が 2 社以上・原価／仕入／粗利 などの語・「○○印刷」「○○株式会社」のような名前があれば ⚠ で知らせます。Word・PowerPoint は警告があると保存を止めて「確認した・このまま保存する」を押してもらいます。Excel はシートの札に ⚠ の数が出て、保存のときに確認が出ます（点検は PDF に見えている文字だけ。隠した列や白い文字も PDF に入っていれば拾います）</li>
       <li>Google の変換なので、Office と見た目が少し変わることがあります（書体の置き換え・テキストボックスの位置など）。きれいに出したいときは下の方法で</li>
     </ul>
   </div>
@@ -263,8 +264,8 @@ async function pump(){
       var blob=new Blob([bytes],{type:'application/pdf'});
       r.url=URL.createObjectURL(blob);
       var base=r.name.replace(/\.[^.]+$/,'');
-      r.text=await pdfText(res.base64); r.warn=inspectText(r.text);
-      if(r.warn.hits.length){ r.blob=blob; r.base=base; r.cls=''; r.status='社外の名前らしきものが入っています。下を確かめてから保存'; render(); continue; }
+      r.text=await pdfText(res.base64); r.warn=inspectText(r.text, r.name);
+      if(r.warn.hits.length){ r.blob=blob; r.base=base; r.cls=''; r.status='気になる点があります。下を確かめてから保存'; render(); continue; }
       var sv=await saveBlob(blob, base, r.dir);
       r.cls='ok'; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name;
     }catch(e){ r.cls='ng'; r.status='できませんでした: '+(e && e.message || e); }
@@ -351,7 +352,7 @@ async function loadThumbs(r, only){
     s.thumbErr=''; s.drawing=true; render();
     try{ var t=await Promise.race([thumb(s.b64), new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('時間切れ')); }, 20000); })]); s.thumb=t.canvas; s.pages=t.pages; }
     catch(e){ s.thumbErr=String(e && e.message || e); }
-    if(!s.warn){ try{ s.text=await pdfText(s.b64); s.warn=inspectText(s.text); }catch(e){ s.warn={hits:[],notes:[]}; } }
+    if(!s.warn){ try{ s.text=await pdfText(s.b64); s.warn=inspectText(s.text, r.name); }catch(e){ s.warn={hits:[],notes:[]}; } }
     s.drawing=false; render();
   }
 }
@@ -370,36 +371,87 @@ async function pdfText(b64){   // PDF の文字を全部つなぐ（30 ページ
   for(var p=1;p<=n;p++){ var pg=await doc.getPage(p); var tc=await pg.getTextContent(); t+=tc.items.map(function(it){ return it.str; }).join(' ')+'\n'; }
   return t;
 }
-function inspectText(text){
+// グループ会社の代表者（Hub 本体の会社台帳と同じ。本多さん 10/9: アート・エス・中尾印刷・津島プリント・村山印刷は 本多 亮）
+var REPS=[['トキワ印刷','白尾浩志'],['村山印刷','本多亮'],['津島プリント','本多亮'],['北上プリント','本多亮'],['アート・エス','本多亮'],['アートエス','本多亮'],['中尾印刷','本多亮'],['ヤマウチ印刷','本多亮']];
+var DOC_TYPES=[['見積','見積書'],['納品','納品書'],['請求','請求書'],['領収','領収書'],['注文','注文書'],['発注','発注書'],['指示','指示書'],['仕様','仕様書']];
+function docTypeOf(t){ var z=String(t||'').normalize('NFKC'); for(var i=0;i<DOC_TYPES.length;i++){ if(z.indexOf(DOC_TYPES[i][0])>=0) return DOC_TYPES[i][1]; } return ''; }
+// 日付を拾う（2026年10月9日・2026/10/9・2026.10.9・令和8年10月9日・R8.10.9）→ Date の配列（出てきた順）
+function findDates(raw){
+  var t=String(raw||'').normalize('NFKC'), out=[], m, re=/(\d{4})\s*[年\/.\-]\s*(\d{1,2})\s*[月\/.\-]\s*(\d{1,2})\s*日?/g;
+  while((m=re.exec(t))){ var d=new Date(+m[1],+m[2]-1,+m[3]); if(!isNaN(d)&&+m[2]>=1&&+m[2]<=12&&+m[3]>=1&&+m[3]<=31) out.push({d:d,s:m[0]}); }
+  re=/(令和|平成|R|H)\s*(\d{1,2}|元)\s*[年.]\s*(\d{1,2})\s*[月.]\s*(\d{1,2})\s*日?/g;
+  while((m=re.exec(t))){ var n=m[2]==='元'?1:+m[2]; var y=(m[1]==='令和'||m[1]==='R')?2018+n:1988+n; var d2=new Date(y,+m[3]-1,+m[4]); if(!isNaN(d2)) out.push({d:d2,s:m[0]}); }
+  return out;
+}
+function ymd(d){ return d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate(); }
+// 差出し会社（自社）を決める: 「代表」の直前 60 字にあるグループ会社 → 無ければ頭 300 字で「御中」が続かない最初のグループ会社
+var ALLCO=REPS.concat([['ソネ商事','']]);
+function issuerOf(zz){
+  var flat=String(zz||'').replace(/[\s　]/g,'');
+  var pi=flat.indexOf('代表');
+  if(pi>=0){ var before=flat.slice(Math.max(0,pi-60),pi), best=null; ALLCO.forEach(function(c){ var k=before.lastIndexOf(c[0]); if(k>=0 && (!best || k>best.k)) best={c:c,k:k}; }); if(best) return best.c; }
+  var head=flat.slice(0,300), first=null;
+  ALLCO.forEach(function(c){ var k=head.indexOf(c[0]); if(k<0) return; var after=head.slice(k+c[0].length, k+c[0].length+12); if(/御中|様/.test(after)) return; if(!first || k<first.k) first={c:c,k:k}; });
+  return first?first.c:null;
+}
+function inspectText(text, fileName){
   var raw=String(text||''), z=nz(raw), hits=[], notes=[];
   function isOwn(n){ var k=nz(n); return OWN.some(function(o){ return k.indexOf(nz(o))>=0; }); }
   function add(label,n){ var h=n+'（'+label+'）'; if(hits.indexOf(h)<0) hits.push(h); }
-  masterNames('fm_master_外注先マスタ',['会社名','外注先名','名称']).forEach(function(n){ var k=nz(n); if(k.length>=2 && !isOwn(n) && z.indexOf(k)>=0) add('外注先マスタ',n); });
-  GROUP.forEach(function(n){ if(z.indexOf(nz(n))>=0) add('グループ会社',n); });
+  // ── 種類（見積か）: 文書の頭 300 字とファイル名から ──
+  var head=raw.normalize('NFKC').slice(0,300), typeDoc=docTypeOf(head), typeFile=docTypeOf(fileName||'');
+  var isQuote=(typeDoc==='見積書')||(typeFile==='見積書' && !typeDoc)||(!typeDoc && !typeFile && /見積/.test(raw));
+  if(typeDoc||typeFile) notes.push('種類: '+(typeDoc||typeFile));
+  if(typeDoc && typeFile && typeDoc!==typeFile) add('タイトルとファイル名が合いません', '文書「'+typeDoc+'」／ファイル名「'+typeFile+'」');
   var custs=[]; masterNames('fm_master_得意先マスタ',['得意先名','会社名','名称','名前']).forEach(function(n){ var k=nz(n); if(k.length>=2 && !isOwn(n) && z.indexOf(k)>=0 && custs.indexOf(n)<0) custs.push(n); });
-  if(custs.length>=2){ custs.forEach(function(n){ add('得意先が '+custs.length+' 社',n); }); }
-  COST_WORDS.forEach(function(w){ if(z.indexOf(nz(w))>=0) add('原価の語',w); });
-  // 会社らしき語（マスタに無くても拾う）
-  var m=raw.normalize('NFKC').match(/[一-龥ァ-ヶーA-Za-z0-9・]{2,20}(株式会社|有限会社|㈱|㈲|印刷|紙業|製本|商事|工業|製作所|プリント|紙工|印刷所)|(株式会社|有限会社|㈱|㈲)[一-龥ァ-ヶーA-Za-z0-9・]{2,20}/g)||[];
-  m.forEach(function(n){ if(isOwn(n)) return; var k=nz(n); if(hits.some(function(h){ return nz(h).indexOf(k)>=0 || k.indexOf(nz(h.replace(/（.*$/,'')))>=0; })) return; if(custs.length===1 && nz(custs[0]).indexOf(k)>=0) return; add('会社らしき名前',n); });
-  // このブラウザで「これはお客様」と教えた名前は得意先として扱う（localStorage office_pdf_customers）
   var known=[]; try{ known=JSON.parse(localStorage.getItem('office_pdf_customers')||'[]'); }catch(e){}
-  hits=hits.filter(function(h){ var n=h.replace(/（.*$/,''); if(known.some(function(k){ return nz(k)===nz(n); })){ if(custs.indexOf(n)<0) custs.push(n); return false; } return true; });
-  if(custs.length===1) notes.push('得意先: '+custs[0]);
+  if(isQuote){   // OFFICEPDF-18: 外注先・原価の語・社外名の点検は 見積 のときだけ（本多さん 10/9）
+    masterNames('fm_master_外注先マスタ',['会社名','外注先名','名称']).forEach(function(n){ var k=nz(n); if(k.length>=2 && !isOwn(n) && z.indexOf(k)>=0) add('外注先マスタ',n); });
+    var iss=issuerOf(raw.normalize('NFKC'));
+    GROUP.forEach(function(n){ if(iss && nz(iss[0])===nz(n)) return; if(iss && nz(n)==='アートエス' && nz(iss[0])==='アート・エス') return; if(z.indexOf(nz(n))>=0) add('グループ会社',n); });
+    if(custs.length>=2){ custs.forEach(function(n){ add('得意先が '+custs.length+' 社',n); }); }
+    COST_WORDS.forEach(function(w){ if(z.indexOf(nz(w))>=0) add('原価の語',w); });
+    var m=raw.normalize('NFKC').match(/[一-龥ァ-ヶーA-Za-z0-9・]{2,20}(株式会社|有限会社|㈱|㈲|印刷|紙業|製本|商事|工業|製作所|プリント|紙工|印刷所)|(株式会社|有限会社|㈱|㈲)[一-龥ァ-ヶーA-Za-z0-9・]{2,20}/g)||[];
+    m.forEach(function(n){ if(isOwn(n)) return; var k=nz(n); if(iss && (k.indexOf(nz(iss[0]))>=0 || (nz(iss[0])==='アート・エス' && k.indexOf('アートエス')>=0))) return; if(hits.some(function(h){ return nz(h).indexOf(k)>=0 || k.indexOf(nz(h.replace(/（.*$/,'')))>=0; })) return; if(custs.length===1 && nz(custs[0]).indexOf(k)>=0) return; add('会社らしき名前',n); });
+    hits=hits.filter(function(h){ var n=h.replace(/（.*$/,''); if(known.some(function(k){ return nz(k)===nz(n); })){ if(custs.indexOf(n)<0) custs.push(n); return false; } return true; });
+    if(custs.length===1) notes.push('得意先: '+custs[0]);
+  } else notes.push('見積ではないので、社外の名前・原価の語の点検は省きました');
+  // ── 代表者: 文書に出ている会社と「代表取締役 ○○」の名前が合うか ──
+  var zz=raw.normalize('NFKC');
+  var present=REPS.filter(function(c){ return zz.replace(/[\s　]/g,'').indexOf(c[0])>=0; });
+  var issuer=issuerOf(zz); if(issuer) notes.push('差出し: '+issuer[0]+(isOwn(issuer[0])?'':'（グループ会社）'));
+  var repNames=[]; var rr=/代表(?:取締役|者|取締役社長|社長)?[\s　]*([一-龥々]{1,4})[\s　]+([一-龥々]{1,4})/g, mm;
+  while((mm=rr.exec(zz))){ var nm=mm[1]+mm[2]; if(/^(社長|取締|印刷|株式|有限|会社)/.test(nm)) continue; if(repNames.indexOf(nm)<0) repNames.push(nm); }
+  repNames.forEach(function(nm){
+    var target=issuer?[issuer]:present;
+    var okFor=target.filter(function(c){ return c[1]===nm; });
+    if(okFor.length) return;
+    var expect=target.length?target.map(function(c){ return c[0]+'は '+c[1].replace(/^(..)/,'$1 '); }).join('・'):'';
+    add('代表者が違います'+(expect?'（正: '+expect+'）':''), nm.replace(/^(..)/,'$1 '));
+  });
+  // ── 日付: 文書の最初の日付が古すぎ／先すぎ、有効期限や納期が見積日より前 ──
+  var ds=findDates(raw), today=new Date(); today.setHours(0,0,0,0);
+  if(ds.length){
+    var d0=ds[0].d, diff=Math.round((d0-today)/86400000);
+    if(diff<-60) add('日付が古い（'+(-diff)+' 日前。今日は '+ymd(today)+'）', ds[0].s);
+    else if(diff>30) add('日付が先（'+diff+' 日後。今日は '+ymd(today)+'）', ds[0].s);
+    for(var k=1;k<ds.length;k++){ var i0=zz.indexOf(ds[k].s); var ctx=zz.slice(Math.max(0,i0-12),i0); var kw=(ctx.match(/(有効期限|期限|納期|納品日|納品)/)||[])[1]; if(kw && ds[k].d<d0) add('見積日より前の日付（'+kw+'）', ds[k].s); }
+    notes.push('日付: '+ds[0].s);
+  } else if(isQuote) add('日付が見つかりません','（見積日）');
   return { hits:hits, notes:notes };
 }
 function warnBoxHtml(r){
   var hits=[], notes=[];
   if(r.pick){ r.pick.forEach(function(s){ if(s.on && s.warn){ s.warn.hits.forEach(function(h){ if(hits.indexOf(h)<0) hits.push(h); }); s.warn.notes.forEach(function(h){ if(notes.indexOf(h)<0) notes.push(h); }); } }); if(!r.pick.some(function(s){ return s.warn; })) return ''; }
   else if(r.warn){ hits=r.warn.hits; notes=r.warn.notes; } else return '';
-  if(!hits.length) return '<div class="warnbox" style="background:#f0fdf4;border-color:#86efac;color:#166534"><span class="ok">✔ お客様と自社以外の名前・原価の語は見つかりませんでした</span>'+(notes.length?'　<span class="muted">'+esc(notes.join('　'))+'</span>':'')+'</div>';
-  return '<div class="warnbox"><b>⚠ お客様と自社以外の名前らしきもの・原価の語が入っています。</b>外注先の名前や計算式の欄が残っていないか確かめてください。<br>'
+  if(!hits.length) return '<div class="warnbox" style="background:#f0fdf4;border-color:#86efac;color:#166534"><span class="ok">✔ 気になる点は見つかりませんでした（社外の名前・原価の語・代表者・日付・タイトル）</span>'+(notes.length?'　<span class="muted">'+esc(notes.join('　'))+'</span>':'')+'</div>';
+  return '<div class="warnbox"><b>⚠ 確かめてください。</b>見積なら外注先の名前・計算式の欄が残っていないか、代表者・日付・タイトルが合っているか。<br>'
     + hits.map(function(h){ var n=h.replace(/（.*$/,''); return '<span class="hit">'+esc(h)+(/会社らしき名前/.test(h)?' <a href="#" title="この名前はお客様なので次から警告しない" onclick="event.preventDefault();markCustomer(\x27'+esc(n).replace(/'/g,'')+'\x27)">お客様です</a>':'')+'</span>'; }).join('')+(notes.length?'<br><span class="muted">'+esc(notes.join('　'))+'</span>':'')
     + (r.blob ? '<div style="margin-top:6px"><button class="btn btn-g" onclick="saveAnyway('+r.id+')">確認した・このまま保存する</button> <button class="btn" onclick="printRow('+r.id+')">🖨 印刷だけ</button> <button class="btn" onclick="dropRow('+r.id+')">やめる</button></div>' : '')
     + '</div>';
 }
 async function saveAnyway(id){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r||!r.blob) return; try{ var sv=await saveBlob(r.blob, r.base, r.dir); r.blob=null; r.cls='ok'; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name; }catch(e){ r.status='できませんでした: '+(e && e.message || e); } render(); }
-function markCustomer(n){ var k=[]; try{ k=JSON.parse(localStorage.getItem('office_pdf_customers')||'[]'); }catch(e){} if(k.indexOf(n)<0) k.push(n); localStorage.setItem('office_pdf_customers', JSON.stringify(k)); rows.forEach(function(r){ if(r.warn && r.text!=null) r.warn=inspectText(r.text); if(r.pick) r.pick.forEach(function(s){ if(s.warn && s.text!=null) s.warn=inspectText(s.text); }); }); render(); toast('「'+n+'」をお客様として覚えました'); }
+function markCustomer(n){ var k=[]; try{ k=JSON.parse(localStorage.getItem('office_pdf_customers')||'[]'); }catch(e){} if(k.indexOf(n)<0) k.push(n); localStorage.setItem('office_pdf_customers', JSON.stringify(k)); rows.forEach(function(r){ if(r.warn && r.text!=null) r.warn=inspectText(r.text, r.name); if(r.pick) r.pick.forEach(function(s){ if(s.warn && s.text!=null) s.warn=inspectText(s.text, r.name); }); }); render(); toast('「'+n+'」をお客様として覚えました'); }
 function dropRow(id){ rows=rows.filter(function(x){return x.id!==id;}); render(); }
 // OFFICEPDF-6: 大きく見る。そのシートの PDF を全ページ（最大 30）描いて縦に並べる。前後のシートへ送れる・ここでも 入れる／入れない を変えられる
 var _pv={ id:null, i:-1 };
@@ -438,7 +490,7 @@ async function mergeSelected(id, what){
   var sel=r.pick.filter(function(s){ return s.on && s.b64; });
   if(!sel.length){ toast('シートを 1 つ以上選んでください'); return null; }
   var hits=[]; sel.forEach(function(s){ if(s.warn) s.warn.hits.forEach(function(h){ if(hits.indexOf(h)<0) hits.push(h); }); });
-  if(hits.length && !confirm('選んだシートに、お客様と自社以外の名前らしきものや原価の語が入っています:\n\n　'+hits.join('、')+'\n\nこのまま '+what+'しますか？（やめる＝キャンセル）')) return null;
+  if(hits.length && !confirm('選んだシートに、気になる点があります:\n\n　'+hits.join('、')+'\n\nこのまま '+what+'しますか？（やめる＝キャンセル）')) return null;
   r.status='つないでいます…'; render();
   var out=await PDFLib.PDFDocument.create();
   for(var i=0;i<sel.length;i++){ var src=await PDFLib.PDFDocument.load(Uint8Array.from(atob(sel[i].b64), function(c){ return c.charCodeAt(0); })); var pages=await out.copyPages(src, src.getPageIndices()); pages.forEach(function(p){ out.addPage(p); }); }
