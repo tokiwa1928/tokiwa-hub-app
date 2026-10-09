@@ -202,7 +202,7 @@ var rows=[]; var queue=[]; var running=false; var _rid=0;
 function render(){
   document.getElementById('flist').innerHTML=rows.map(function(r){
     return '<div class="frow '+(r.cls||'')+'"><span>'+(r.cls==='ok'?'✅':r.cls==='ng'?'❌':'⏳')+'</span><span class="nm" title="'+esc(r.name)+'">'+esc(r.name)+'</span><span class="muted">'+kb(r.size)+'</span>'
-      + '<span class="stt">'+esc(r.status)+'</span>'+(r.url?'<a href="'+r.url+'" target="_blank" rel="noopener">開く</a>':'')
+      + '<span class="stt">'+esc(r.status)+'</span>'+(r.url?'<a href="'+r.url+'" target="_blank" rel="noopener">開く</a> <a href="#" onclick="event.preventDefault();printRow('+r.id+')">🖨 印刷</a>':'')
       + (r.pick ? sheetPickHtml(r) : '') + warnBoxHtml(r) + '</div>';
   }).join('');
   rows.forEach(function(r){ if(r.pick) r.pick.forEach(function(s,i){ var cv=document.getElementById('cv-'+r.id+'-'+i); if(cv && s.thumb){ cv.width=s.thumb.width; cv.height=s.thumb.height; cv.getContext('2d').drawImage(s.thumb,0,0); } }); });
@@ -218,6 +218,7 @@ function sheetPickHtml(r){
       + '<div class="meta">'+(s.range?'印刷範囲 '+esc(s.range):'全体')+(s.landscape?'・横':'')+(s.hidden?'・非表示のシート':'')+(s.pages?'・'+s.pages+'p':'')+'</div></div>';
   }).join('')
   + '</div><div class="sheet-bar"><button class="btn btn-g" onclick="saveSheets('+r.id+')">⬇ この内容で保存（'+r.pick.filter(function(s){return s.on&&!s.error;}).length+' シート）</button>'
+  + '<button class="btn" onclick="printSheets('+r.id+')" title="選んだシートだけ印刷の窓を出す（保存はしない）">🖨 選んだシートを印刷</button>'
   + '<button class="btn" onclick="setSheets('+r.id+',true)">☑ 全選択</button><button class="btn" onclick="setSheets('+r.id+',false)">☐ クリア</button><span class="muted">札を押すと 入れる／入れない が切り替わる。マウスを乗せると右に大きな見本、「🔍 大きく」で全ページ</span></div>';
 }
 function toggleSheet(id,i){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return; r.pick[i].on=!r.pick[i].on; render(); }
@@ -342,7 +343,7 @@ function warnBoxHtml(r){
   if(!hits.length) return '<div class="warnbox" style="background:#f0fdf4;border-color:#86efac;color:#166534"><span class="ok">✔ お客様と自社以外の名前・原価の語は見つかりませんでした</span>'+(notes.length?'　<span class="muted">'+esc(notes.join('　'))+'</span>':'')+'</div>';
   return '<div class="warnbox"><b>⚠ お客様と自社以外の名前らしきもの・原価の語が入っています。</b>外注先の名前や計算式の欄が残っていないか確かめてください。<br>'
     + hits.map(function(h){ var n=h.replace(/（.*$/,''); return '<span class="hit">'+esc(h)+(/会社らしき名前/.test(h)?' <a href="#" title="この名前はお客様なので次から警告しない" onclick="event.preventDefault();markCustomer(\x27'+esc(n).replace(/'/g,'')+'\x27)">お客様です</a>':'')+'</span>'; }).join('')+(notes.length?'<br><span class="muted">'+esc(notes.join('　'))+'</span>':'')
-    + (r.blob ? '<div style="margin-top:6px"><button class="btn btn-g" onclick="saveAnyway('+r.id+')">確認した・このまま保存する</button> <button class="btn" onclick="dropRow('+r.id+')">やめる</button></div>' : '')
+    + (r.blob ? '<div style="margin-top:6px"><button class="btn btn-g" onclick="saveAnyway('+r.id+')">確認した・このまま保存する</button> <button class="btn" onclick="printRow('+r.id+')">🖨 印刷だけ</button> <button class="btn" onclick="dropRow('+r.id+')">やめる</button></div>' : '')
     + '</div>';
 }
 async function saveAnyway(id){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r||!r.blob) return; try{ var sv=await saveBlob(r.blob, r.base, r.dir); r.blob=null; r.cls='ok'; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name; }catch(e){ r.status='できませんでした: '+(e && e.message || e); } render(); }
@@ -379,17 +380,34 @@ function pvToggle(){ var r=rows.filter(function(x){return x.id===_pv.id;})[0]; i
 function pvStep(d){ var r=rows.filter(function(x){return x.id===_pv.id;})[0]; if(!r) return; var j=_pv.i; do{ j+=d; }while(r.pick[j] && !r.pick[j].b64); if(!r.pick[j]){ toast(d>0?'最後のシートです':'最初のシートです'); return; } openPv(_pv.id,j); }
 document.addEventListener('keydown',function(e){ if(document.getElementById('pv').style.display!=='block') return; if(e.key==='Escape') closePv(); else if(e.key==='ArrowRight') pvStep(1); else if(e.key==='ArrowLeft') pvStep(-1); });
 // 選んだシートの PDF を 1 本につないで保存（pdf-lib）
-async function saveSheets(id){
-  var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return;
+// OFFICEPDF-9: 選んだシートをつなぐ（保存と印刷で共通）。警告があれば確認。返り値 {r, blob, sel} か null
+async function mergeSelected(id, what){
+  var r=rows.filter(function(x){return x.id===id;})[0]; if(!r||!r.pick) return null;
   var sel=r.pick.filter(function(s){ return s.on && s.b64; });
+  if(!sel.length){ toast('シートを 1 つ以上選んでください'); return null; }
   var hits=[]; sel.forEach(function(s){ if(s.warn) s.warn.hits.forEach(function(h){ if(hits.indexOf(h)<0) hits.push(h); }); });
-  if(hits.length && !confirm('選んだシートに、お客様と自社以外の名前らしきものや原価の語が入っています:\n\n　'+hits.join('、')+'\n\nこのまま PDF にして保存しますか？（やめる＝キャンセル）')) return;
-  if(!sel.length){ toast('シートを 1 つ以上選んでください'); return; }
+  if(hits.length && !confirm('選んだシートに、お客様と自社以外の名前らしきものや原価の語が入っています:\n\n　'+hits.join('、')+'\n\nこのまま '+what+'しますか？（やめる＝キャンセル）')) return null;
+  r.status='つないでいます…'; render();
+  var out=await PDFLib.PDFDocument.create();
+  for(var i=0;i<sel.length;i++){ var src=await PDFLib.PDFDocument.load(Uint8Array.from(atob(sel[i].b64), function(c){ return c.charCodeAt(0); })); var pages=await out.copyPages(src, src.getPageIndices()); pages.forEach(function(p){ out.addPage(p); }); }
+  var blob=new Blob([await out.save()],{type:'application/pdf'});
+  return { r:r, blob:blob, sel:sel };
+}
+// 選んだシートだけ印刷（PDF を見えない枠に入れて印刷の窓を出す。保存はしない）
+async function printSheets(id){
+  try{ var m=await mergeSelected(id,'印刷'); if(!m) return; m.r.status='シートを選んで「この内容で保存」'; render(); printBlob(m.blob); toast(m.sel.length+' シートを印刷の窓へ'); }
+  catch(e){ toast('印刷できませんでした: '+(e && e.message || e)); }
+}
+function printBlob(blob){
+  var old=document.getElementById('print-frame'); if(old) old.remove();
+  var f=document.createElement('iframe'); f.id='print-frame'; f.style.cssText='position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0';
+  var url=URL.createObjectURL(blob); f.src=url; document.body.appendChild(f);
+  f.onload=function(){ setTimeout(function(){ try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){ window.open(url,'_blank'); } },300); };
+}
+function printRow(id){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return; if(r.blob){ printBlob(r.blob); return; } if(r.url) fetch(r.url).then(function(x){ return x.blob(); }).then(printBlob); }
+async function saveSheets(id){
+  var m=await mergeSelected(id,'PDF にして保存'); if(!m) return; var r=m.r, sel=m.sel, blob=m.blob;
   try{
-    r.status='つないでいます…'; render();
-    var out=await PDFLib.PDFDocument.create();
-    for(var i=0;i<sel.length;i++){ var src=await PDFLib.PDFDocument.load(Uint8Array.from(atob(sel[i].b64), function(c){ return c.charCodeAt(0); })); var pages=await out.copyPages(src, src.getPageIndices()); pages.forEach(function(p){ out.addPage(p); }); }
-    var blob=new Blob([await out.save()],{type:'application/pdf'});
     r.url=URL.createObjectURL(blob);
     var sv=await saveBlob(blob, r.name.replace(/\.[^.]+$/,''), r.dir);
     r.cls='ok'; r.pick=null; r.status=(sv.how==='folder'?('同じ場所（'+sv.where+'）に保存: '):sv.how==='desktop'?'デスクトップに保存: ':'ダウンロード: ')+sv.name+'（'+sel.length+' シート）';
