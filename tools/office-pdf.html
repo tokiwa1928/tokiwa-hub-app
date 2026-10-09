@@ -83,7 +83,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script><!-- 作業役も先に読んでおく（同じ流れの中で描く。初回の見本が返ってこない対策） -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script><!-- OFFICEPDF-12: .xls（旧形式）の印刷範囲・非表示を読む --><!-- 作業役も先に読んでおく（同じ流れの中で描く。初回の見本が返ってこない対策） -->
 </head>
 <body>
 <header>
@@ -214,7 +215,7 @@ function sheetPickHtml(r){
       + (s.error ? '' : '<label class="ck" onclick="event.stopPropagation()"><input type="checkbox" '+(s.on?'checked ':'')+'onchange="toggleSheet('+r.id+','+i+')">'+(s.on?'入れる':'入れない')+'</label>')
       + (s.error ? '<div class="meta" style="color:#b91c1c">'+esc(s.error)+'</div>' : '<canvas id="cv-'+r.id+'-'+i+'"></canvas>'+(s.thumb?'':(s.thumbErr?'<div class="meta" style="color:#b91c1c">見本を描けませんでした（'+esc(s.thumbErr)+'） <a href="#" onclick="event.preventDefault();event.stopPropagation();redrawThumb('+r.id+','+i+')">描き直す</a></div>':'<div class="meta">見本を描いています…</div>'))+'<button class="zoom" onclick="event.stopPropagation();openPv('+r.id+','+i+')" title="全ページを大きく見る">🔍 大きく</button>')
       + (s.warn && s.warn.hits.length ? '<span class="wb" title="'+esc(s.warn.hits.join('、'))+'">⚠ '+s.warn.hits.length+'</span>' : '')
-      + '<div class="nm2">'+esc(s.name)+'</div>'
+      + '<div class="nm2">'+esc(s.label||s.name)+'</div>'
       + '<div class="meta">'+(s.range?'印刷範囲 '+esc(s.range):'全体')+(s.landscape?'・横':'')+(s.hidden?'・非表示のシート':'')+(s.pages?'・'+s.pages+'p':'')+'</div></div>';
   }).join('')
   + '</div><div class="sheet-bar"><button class="btn btn-g" onclick="saveSheets('+r.id+')">⬇ この内容で保存（'+r.pick.filter(function(s){return s.on&&!s.error;}).length+' シート）</button>'
@@ -245,11 +246,11 @@ async function pump(){
       r.status='変換中…'; render();
       var b64=await toBase64(r.file);
       // OFFICEPDF-5: xlsx はシートの一覧（印刷範囲・向き・非表示）を手元で読んで、シートごとに PDF をもらい、選んでから保存
-      var sheets=null; if(/\.(xlsx|xlsm)$/i.test(r.name)){ try{ sheets=await readXlsxSheets(r.file); }catch(e){ sheets=null; } }
+      var sheets=null; if(/\.(xls|xlsx|xlsm)$/i.test(r.name)){ try{ sheets=await readSheetMeta(r.file); }catch(e){ sheets=null; } }
       var res=await HubAPI.call('officeToPdf', {}, sheets && sheets.length ? { name:r.name, base64:b64, sheets:sheets.map(function(s){ return { name:s.name, range:s.range||'', landscape:!!s.landscape }; }) } : { name:r.name, base64:b64 });
       if(!res || !res.success) throw new Error((res && res.error) || '変換できません');
       if(res.sheets){
-        r.pick=res.sheets.map(function(s,i){ var meta=sheets[i]||{}; return { name:s.name, error:s.error?'出せませんでした':'', b64:s.base64||'', range:meta.range||'', landscape:!!meta.landscape, hidden:!!meta.hidden, on:!s.error && !meta.hidden }; });
+        r.pick=res.sheets.map(function(s,i){ var meta=sheets[i]||{}; return { name:s.name, label:meta.label||s.name, error:s.error?'出せませんでした':'', b64:s.base64||'', range:meta.range||'', landscape:!!meta.landscape, hidden:!!meta.hidden, on:!s.error && !meta.hidden }; });
         r.cls=''; r.status='シートを選んで「この内容で保存」'; render();
         loadThumbs(r);   // 見本は別で描く（変換の列を止めない。時間切れなら札に「描き直す」）
         continue;
@@ -274,9 +275,38 @@ async function readXlsxSheets(file){
   var rels=await (zip.file('xl/_rels/workbook.xml.rels')||{async:function(){return '';}}).async('string');
   var relMap={}; rels.replace(/<Relationship\b[^>]*>/g,function(t){ var id=(t.match(/\bId="([^"]+)"/)||[])[1], tg=(t.match(/\bTarget="([^"]+)"/)||[])[1]; if(id&&tg) relMap[id]=tg.replace(/^\/?xl\//,'').replace(/^\//,''); return t; });
   var sheets=[]; wb.replace(/<sheet\b[^>]*>/g,function(t){ var nm=(t.match(/\bname="([^"]*)"/)||[])[1]||''; var st=(t.match(/\bstate="([^"]*)"/)||[])[1]||''; var rid=(t.match(/\br:id="([^"]+)"/)||[])[1]||''; sheets.push({ name:unx(nm), hidden:st==='hidden'||st==='veryHidden', rid:rid }); return t; });
-  wb.replace(/<definedName\b([^>]*)>([^<]*)<\/definedName>/g,function(t,attrs,val){ if(!/name="_xlnm\.Print_Area"/.test(attrs)) return t; var idx=parseInt((attrs.match(/localSheetId="(\d+)"/)||[])[1]); if(isNaN(idx)||!sheets[idx]) return t; var first=unx(val).split(',')[0]; var m=first.match(/!\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/); if(m) sheets[idx].range=m[1]+m[2]+':'+m[3]+m[4]; return t; });
+  wb.replace(/<definedName\b([^>]*)>([^<]*)<\/definedName>/g,function(t,attrs,val){ if(!/name="_xlnm\.Print_Area"/.test(attrs)) return t; var idx=parseInt((attrs.match(/localSheetId="(\d+)"/)||[])[1]); if(isNaN(idx)||!sheets[idx]) return t; sheets[idx].ranges=refRanges(unx(val)); return t; });
   for(var i=0;i<sheets.length;i++){ var p=relMap[sheets[i].rid]; if(!p) continue; var f=zip.file('xl/'+p)||zip.file(p); if(!f) continue; var x=await f.async('string'); sheets[i].landscape=/<pageSetup\b[^>]*orientation="landscape"/.test(x); }
   return sheets;
+}
+// 「'見積'!$A$1:$F$10,見積!$A$20:$F$30」→ ['A1:F10','A20:F30']（列だけ・行だけの指定も通す）
+function refRanges(ref){
+  var out=[]; String(ref||'').split(/,(?=(?:[^']*'[^']*')*[^']*$)/).forEach(function(part){
+    var m=part.match(/!\$?([A-Z]+)\$?(\d*):\$?([A-Z]+)\$?(\d*)\s*$/); if(m){ out.push(m[1]+m[2]+':'+m[3]+m[4]); return; }
+    var r=part.match(/!\$?(\d+):\$?(\d+)\s*$/); if(r){ out.push(r[1]+':'+r[2]); return; }
+    var one=part.match(/!\$?([A-Z]+)\$?(\d+)\s*$/); if(one) out.push(one[1]+one[2]+':'+one[1]+one[2]);
+  }); return out;
+}
+// SheetJS で読む（.xls はこれだけ。.xlsx は XML 読みの補い）: 名前・非表示・印刷範囲
+async function readSheetsJs(file){
+  for(var w=0; typeof XLSX==='undefined' && w<40; w++) await new Promise(function(res){ setTimeout(res,250); });
+  var wb=XLSX.read(await file.arrayBuffer(), { type:'array', cellFormula:false, cellHTML:false, cellText:false, cellStyles:false, sheetStubs:false, dense:true });
+  var meta=(wb.Workbook&&wb.Workbook.Sheets)||[], names=(wb.Workbook&&wb.Workbook.Names)||[];
+  return wb.SheetNames.map(function(nm,i){
+    var ranges=[]; names.forEach(function(n){ if(/Print_Area$/i.test(String(n.Name||'')) && n.Sheet===i && n.Ref) ranges=ranges.concat(refRanges(n.Ref)); });
+    return { name:nm, hidden:!!(meta[i]&&meta[i].Hidden), ranges:ranges, landscape:false };
+  });
+}
+// xlsx は XML 読み（向きも分かる）→ 印刷範囲が取れなければ SheetJS で補う。xls は SheetJS。印刷範囲が複数なら 1 範囲 1 札に分ける
+async function readSheetMeta(file){
+  var base=null;
+  if(/\.(xlsx|xlsm)$/i.test(file.name)){ try{ base=await readXlsxSheets(file); }catch(e){ base=null; } }
+  if(!base || !base.length || !base.some(function(x){ return x.ranges&&x.ranges.length; })){
+    var js=await readSheetsJs(file);
+    if(base && base.length===js.length) js.forEach(function(x,i){ base[i].ranges=(base[i].ranges&&base[i].ranges.length)?base[i].ranges:x.ranges; base[i].hidden=base[i].hidden||x.hidden; }); else base=js;
+  }
+  var out=[]; base.forEach(function(x){ var rs=x.ranges&&x.ranges.length?x.ranges:['']; rs.forEach(function(rg,k){ out.push({ name:x.name, label:x.name+(rs.length>1?' ('+(k+1)+'/'+rs.length+')':''), range:rg, landscape:!!x.landscape, hidden:!!x.hidden }); }); });
+  return out;
 }
 function unx(s){ return String(s||'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'"); }
 // 各シートの 1 ページ目を小さく描く（pdf.js）
