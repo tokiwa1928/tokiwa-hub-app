@@ -44,7 +44,16 @@
   code{ background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:12.5px; }
   .frow{ flex-wrap:wrap; }
   .sheets{ flex-basis:100%; display:flex; gap:10px; flex-wrap:wrap; padding:8px 0 2px; border-top:1px dashed var(--line); margin-top:6px; }
-  .sheet{ width:150px; border:1px solid var(--line); border-radius:6px; padding:6px; background:#fafaf8; cursor:pointer; font-size:12px; }
+  .sheet{ width:240px; border:2px solid var(--line); border-radius:6px; padding:6px; background:#fafaf8; cursor:pointer; font-size:12.5px; position:relative; }
+  .sheet .zoom{ position:absolute; right:8px; top:8px; background:#1a1a1a; color:#fff; border:0; border-radius:14px; padding:3px 9px; font-size:11.5px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .sheet .zoom:hover{ background:#0891b2; }
+  /* OFFICEPDF-6: 大きく見る（全ページを縦に並べる） */
+  #pv{ position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:50; display:none; overflow:auto; padding:18px; }
+  #pv .pv-head{ position:sticky; top:0; display:flex; gap:10px; align-items:center; background:#1a1a1a; color:#fff; padding:8px 14px; border-radius:8px; margin:0 auto 10px; max-width:1000px; font-weight:700; z-index:2; }
+  #pv .pv-head .btn{ padding:6px 12px; font-size:12.5px; }
+  #pv .pv-pages{ max-width:1000px; margin:0 auto; display:flex; flex-direction:column; gap:12px; align-items:center; }
+  #pv canvas{ max-width:100%; height:auto; background:#fff; box-shadow:0 2px 12px rgba(0,0,0,.4); }
+  #pv .pv-num{ color:#e2e8f0; font-size:12px; }
   .sheet.on{ border-color:var(--grn); background:#f0fdf4; }
   .sheet canvas{ width:100%; height:auto; display:block; border:1px solid #e5e7eb; background:#fff; margin-bottom:4px; }
   .sheet .nm2{ font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -103,6 +112,14 @@
   <div class="warn">Office を開かずに xlsx を描いて PDF にする（テキストボックスが印刷で消えるファイルの救済）は <a href="excel-pdf.html" style="color:#0369a1">📊 Excel→PDF（テキストボックス対応）</a>。</div>
 </main>
 <div id="toast"></div>
+<!-- OFFICEPDF-6: シートの全ページを大きく見る -->
+<div id="pv" onclick="if(event.target===this) closePv()">
+  <div class="pv-head"><span id="pv-title"></span><span class="pv-num" id="pv-num"></span><span style="flex:1"></span>
+    <button class="btn" id="pv-toggle" onclick="pvToggle()">☑ 入れる</button>
+    <button class="btn" onclick="pvStep(-1)">← 前のシート</button><button class="btn" onclick="pvStep(1)">次のシート →</button>
+    <button class="btn" onclick="closePv()">✕ 閉じる</button></div>
+  <div class="pv-pages" id="pv-pages"></div>
+</div>
 
 <script>
 function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.style.display='block'; clearTimeout(t._tm); t._tm=setTimeout(function(){t.style.display='none';},3000); }
@@ -176,12 +193,12 @@ function render(){
 function sheetPickHtml(r){
   return '<div class="sheets">' + r.pick.map(function(s,i){
     return '<div class="sheet'+(s.on?' on':'')+'" onclick="toggleSheet('+r.id+','+i+')" title="'+esc(s.name)+(s.range?'（印刷範囲 '+esc(s.range)+'）':'')+'">'
-      + (s.error ? '<div class="meta" style="color:#b91c1c">'+esc(s.error)+'</div>' : '<canvas id="cv-'+r.id+'-'+i+'"></canvas>')
-      + '<div class="nm2">'+(s.on?'☑ ':'☐ ')+esc(s.name)+'</div>'
+      + (s.error ? '<div class="meta" style="color:#b91c1c">'+esc(s.error)+'</div>' : '<canvas id="cv-'+r.id+'-'+i+'"></canvas><button class="zoom" onclick="event.stopPropagation();openPv('+r.id+','+i+')" title="全ページを大きく見る">🔍 大きく</button>')
+      + '<div class="nm2">'+(s.on?'☑ 入れる　':'☐ 入れない　')+esc(s.name)+'</div>'
       + '<div class="meta">'+(s.range?'印刷範囲 '+esc(s.range):'全体')+(s.landscape?'・横':'')+(s.hidden?'・非表示のシート':'')+(s.pages?'・'+s.pages+'p':'')+'</div></div>';
   }).join('')
   + '</div><div class="sheet-bar"><button class="btn btn-g" onclick="saveSheets('+r.id+')">⬇ この内容で保存（'+r.pick.filter(function(s){return s.on&&!s.error;}).length+' シート）</button>'
-  + '<button class="btn" onclick="setSheets('+r.id+',true)">全部</button><button class="btn" onclick="setSheets('+r.id+',false)">なし</button><span class="muted">シートの札を押して選ぶ。見本は各シートの 1 ページ目</span></div>';
+  + '<button class="btn" onclick="setSheets('+r.id+',true)">全部</button><button class="btn" onclick="setSheets('+r.id+',false)">なし</button><span class="muted">札を押すと 入れる／入れない が切り替わる。「🔍 大きく」で全ページを大きく見られます</span></div>';
 }
 function toggleSheet(id,i){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return; r.pick[i].on=!r.pick[i].on; render(); }
 function setSheets(id,on){ var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return; r.pick.forEach(function(s){ if(!s.error) s.on=on; }); render(); }
@@ -246,11 +263,39 @@ async function thumb(b64){
   pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   var bytes=Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); });
   var doc=await pdfjsLib.getDocument({data:bytes}).promise; var pg=await doc.getPage(1);
-  var vp=pg.getViewport({scale:1}); var sc=280/vp.width; vp=pg.getViewport({scale:sc});
+  var vp=pg.getViewport({scale:1}); var sc=460/vp.width; vp=pg.getViewport({scale:sc});   // 札は 240px 幅なので 2 倍で描いて文字を読めるように
   var cv=document.createElement('canvas'); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
   await pg.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
   return { canvas:cv, pages:doc.numPages };
 }
+// OFFICEPDF-6: 大きく見る。そのシートの PDF を全ページ（最大 30）描いて縦に並べる。前後のシートへ送れる・ここでも 入れる／入れない を変えられる
+var _pv={ id:null, i:-1 };
+async function openPv(id,i){
+  var r=rows.filter(function(x){return x.id===id;})[0]; if(!r || !r.pick || !r.pick[i] || !r.pick[i].b64) return;
+  _pv.id=id; _pv.i=i; var s=r.pick[i];
+  var pv=document.getElementById('pv'), box=document.getElementById('pv-pages'); pv.style.display='block'; pv.scrollTop=0;
+  document.getElementById('pv-title').textContent=s.name+(s.range?'（印刷範囲 '+s.range+'）':'')+(s.landscape?'・横':'');
+  document.getElementById('pv-toggle').textContent=s.on?'☑ 入れる（押すと外す）':'☐ 入れない（押すと入れる）';
+  document.getElementById('pv-num').textContent='描いています…'; box.innerHTML='';
+  try{
+    for(var w=0; typeof pdfjsLib==='undefined' && w<40; w++) await new Promise(function(res){ setTimeout(res,250); });
+    var bytes=Uint8Array.from(atob(s.b64), function(c){ return c.charCodeAt(0); });
+    var doc=await pdfjsLib.getDocument({data:bytes}).promise; var n=Math.min(doc.numPages,30);
+    for(var p=1;p<=n;p++){
+      if(_pv.id!==id || _pv.i!==i) return;   // 途中で別のシートに送られた
+      var pg=await doc.getPage(p); var vp=pg.getViewport({scale:1}); var sc=Math.min(1000, Math.max(300, (pv.clientWidth-40)))/vp.width*1.5; vp=pg.getViewport({scale:sc});
+      var cv=document.createElement('canvas'); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height); cv.style.width=Math.round(vp.width/1.5)+'px';
+      await pg.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
+      var lab=document.createElement('div'); lab.className='pv-num'; lab.textContent=p+' / '+doc.numPages+' ページ';
+      box.appendChild(lab); box.appendChild(cv);
+    }
+    document.getElementById('pv-num').textContent=doc.numPages+' ページ'+(doc.numPages>30?'（30 ページまで表示）':'');
+  }catch(e){ document.getElementById('pv-num').textContent='描けませんでした: '+(e && e.message || e); }
+}
+function closePv(){ document.getElementById('pv').style.display='none'; _pv.id=null; _pv.i=-1; }
+function pvToggle(){ var r=rows.filter(function(x){return x.id===_pv.id;})[0]; if(!r) return; var s=r.pick[_pv.i]; s.on=!s.on; document.getElementById('pv-toggle').textContent=s.on?'☑ 入れる（押すと外す）':'☐ 入れない（押すと入れる）'; render(); }
+function pvStep(d){ var r=rows.filter(function(x){return x.id===_pv.id;})[0]; if(!r) return; var j=_pv.i; do{ j+=d; }while(r.pick[j] && !r.pick[j].b64); if(!r.pick[j]){ toast(d>0?'最後のシートです':'最初のシートです'); return; } openPv(_pv.id,j); }
+document.addEventListener('keydown',function(e){ if(document.getElementById('pv').style.display!=='block') return; if(e.key==='Escape') closePv(); else if(e.key==='ArrowRight') pvStep(1); else if(e.key==='ArrowLeft') pvStep(-1); });
 // 選んだシートの PDF を 1 本につないで保存（pdf-lib）
 async function saveSheets(id){
   var r=rows.filter(function(x){return x.id===id;})[0]; if(!r) return;
