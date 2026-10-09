@@ -252,8 +252,8 @@ async function pump(){
       var sheets=null; if(/\.(xls|xlsx|xlsm)$/i.test(r.name)){ try{ sheets=await readSheetMeta(r.file); }catch(e){ sheets=null; } }
       if(sheets && sheets.length){
         r.b64=b64;
-        r.pick=sheets.map(function(m){ return { name:m.name, label:m.label||m.name, error:'', b64:'', range:m.range||'', landscape:!!m.landscape, hidden:!!m.hidden, on:!m.hidden, pending:true }; });
-        r.cls=''; r.status='入れるシートを選んで「見本を出す」か「保存」'; render();
+        r.pick=sheets.map(function(m){ return { name:m.name, label:m.label||m.name, error:'', b64:'', range:m.range||'', landscape:!!m.landscape, hidden:!!m.hidden, on:!m.hidden && (sheets.some(function(x){ return x.selected && !x.hidden; }) ? !!m.selected : true), pending:true }; });
+        r.cls=''; r.status='Excel で開いていたシートに印が付いています。入れるシートを選んで「見本を出す」か「保存」'; render();
         continue;
       }
       var res=await HubAPI.call('officeToPdf', {}, { name:r.name, base64:b64 });
@@ -279,7 +279,8 @@ async function readXlsxSheets(file){
   var relMap={}; rels.replace(/<Relationship\b[^>]*>/g,function(t){ var id=(t.match(/\bId="([^"]+)"/)||[])[1], tg=(t.match(/\bTarget="([^"]+)"/)||[])[1]; if(id&&tg) relMap[id]=tg.replace(/^\/?xl\//,'').replace(/^\//,''); return t; });
   var sheets=[]; wb.replace(/<sheet\b[^>]*>/g,function(t){ var nm=(t.match(/\bname="([^"]*)"/)||[])[1]||''; var st=(t.match(/\bstate="([^"]*)"/)||[])[1]||''; var rid=(t.match(/\br:id="([^"]+)"/)||[])[1]||''; sheets.push({ name:unx(nm), hidden:st==='hidden'||st==='veryHidden', rid:rid }); return t; });
   wb.replace(/<definedName\b([^>]*)>([^<]*)<\/definedName>/g,function(t,attrs,val){ if(!/name="_xlnm\.Print_Area"/.test(attrs)) return t; var idx=parseInt((attrs.match(/localSheetId="(\d+)"/)||[])[1]); if(isNaN(idx)||!sheets[idx]) return t; sheets[idx].ranges=refRanges(unx(val)); return t; });
-  for(var i=0;i<sheets.length;i++){ var p=relMap[sheets[i].rid]; if(!p) continue; var f=zip.file('xl/'+p)||zip.file(p); if(!f) continue; var x=await f.async('string'); sheets[i].landscape=/<pageSetup\b[^>]*orientation="landscape"/.test(x); }
+  for(var i=0;i<sheets.length;i++){ var p=relMap[sheets[i].rid]; if(!p) continue; var f=zip.file('xl/'+p)||zip.file(p); if(!f) continue; var x=await f.async('string'); sheets[i].landscape=/<pageSetup\b[^>]*orientation="landscape"/.test(x); sheets[i].selected=/<sheetView\b[^>]*tabSelected="(1|true)"/.test(x); }
+  var act=parseInt((wb.match(/<workbookView\b[^>]*activeTab="(\d+)"/)||[])[1]); if(!isNaN(act) && sheets[act] && !sheets.some(function(x){ return x.selected; })) sheets[act].selected=true;   // OFFICEPDF-16: Excel で選んでいたシートを既定で入れる（本多さん 10/9）
   return sheets;
 }
 // 「'見積'!$A$1:$F$10,見積!$A$20:$F$30」→ ['A1:F10','A20:F30']（列だけ・行だけの指定も通す）
@@ -295,9 +296,10 @@ async function readSheetsJs(file){
   for(var w=0; typeof XLSX==='undefined' && w<40; w++) await new Promise(function(res){ setTimeout(res,250); });
   var wb=XLSX.read(await file.arrayBuffer(), { type:'array', cellFormula:false, cellHTML:false, cellText:false, cellStyles:false, sheetStubs:false, dense:true });
   var meta=(wb.Workbook&&wb.Workbook.Sheets)||[], names=(wb.Workbook&&wb.Workbook.Names)||[];
+  var act=(wb.Workbook&&wb.Workbook.Views&&wb.Workbook.Views[0]&&wb.Workbook.Views[0].activeTab)||0;
   return wb.SheetNames.map(function(nm,i){
     var ranges=[]; names.forEach(function(n){ if(/Print_Area$/i.test(String(n.Name||'')) && n.Sheet===i && n.Ref) ranges=ranges.concat(refRanges(n.Ref)); });
-    return { name:nm, hidden:!!(meta[i]&&meta[i].Hidden), ranges:ranges, landscape:false };
+    return { name:nm, hidden:!!(meta[i]&&meta[i].Hidden), ranges:ranges, landscape:false, selected:i===act };
   });
 }
 // xlsx は XML 読み（向きも分かる）→ 印刷範囲が取れなければ SheetJS で補う。xls は SheetJS。印刷範囲が複数なら 1 範囲 1 札に分ける
@@ -306,9 +308,9 @@ async function readSheetMeta(file){
   if(/\.(xlsx|xlsm)$/i.test(file.name)){ try{ base=await readXlsxSheets(file); }catch(e){ base=null; } }
   if(!base || !base.length || !base.some(function(x){ return x.ranges&&x.ranges.length; })){
     var js=await readSheetsJs(file);
-    if(base && base.length===js.length) js.forEach(function(x,i){ base[i].ranges=(base[i].ranges&&base[i].ranges.length)?base[i].ranges:x.ranges; base[i].hidden=base[i].hidden||x.hidden; }); else base=js;
+    if(base && base.length===js.length) js.forEach(function(x,i){ base[i].ranges=(base[i].ranges&&base[i].ranges.length)?base[i].ranges:x.ranges; base[i].hidden=base[i].hidden||x.hidden; if(base[i].selected==null) base[i].selected=x.selected; }); else base=js;
   }
-  var out=[]; base.forEach(function(x){ var rs=x.ranges&&x.ranges.length?x.ranges:['']; rs.forEach(function(rg,k){ out.push({ name:x.name, label:x.name+(rs.length>1?' ('+(k+1)+'/'+rs.length+')':''), range:rg, landscape:!!x.landscape, hidden:!!x.hidden }); }); });
+  var out=[]; base.forEach(function(x){ var rs=x.ranges&&x.ranges.length?x.ranges:['']; rs.forEach(function(rg,k){ out.push({ name:x.name, label:x.name+(rs.length>1?' ('+(k+1)+'/'+rs.length+')':''), range:rg, landscape:!!x.landscape, hidden:!!x.hidden, selected:!!x.selected }); }); });
   return out;
 }
 function unx(s){ return String(s||'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'"); }
