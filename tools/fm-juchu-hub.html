@@ -2839,7 +2839,8 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       + rows.map(function (r) { var 未定 = 版モード === '未定'; return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + (未定 ? r.単価無 : r.単価) + '" title="' + esc(内訳文(r)) + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>¥' + 円整(r.原価) + '</td>' + (未定 ? '<td>¥' + 円整(r.売価無) + '</td>' : '') + '<td>¥' + 円整(r.売価) + (r.最低で ? ' <span style="background:#fef3c7;color:#92400e;font-size:10px;padding:0 4px;border-radius:3px" title="最低受注金額で止めています">最低</span>' : '') + '</td><td>' + (未定 ? r.単価無.toFixed(1) + ' <span style="color:#94a3b8">/ ' + r.単価.toFixed(1) + '</span>' : r.単価.toFixed(1)) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.前年比 >= 0 ? '+' : '') + r.前年比.toFixed(1) + '%</td>'
           + (内訳出す ? r.内訳.map(function (x) { return '<td style="font-size:11px;white-space:nowrap"' + (x.段 ? ' title="〜' + 円整(x.段) + ' の段"' : '') + '>' + 円整(x.原価) + '→' + (x.売価 != null ? 円整(x.売価) : '<span style="color:#94a3b8">率</span>') + (x.段 ? '<span style="color:#94a3b8;font-size:10px"> 〜' + 円整(x.段) + '</span>' : '') + '</td>'; }).join('') : '') + '</tr>'; }).join('')
       + '</tbody></table>';
-    $('pg-body').innerHTML = h + '<div id="pg-quotes" style="margin-top:6px;color:#475569">前回の見積書を探しています…</div>'; $('pg-src').textContent = '';
+    var 基準h = ''; try { 基準h = 基準の表(f, 階段, qNow, q0, 売価0, 原価0, 外注0); } catch (e) { 基準h = '<div style="color:#b91c1c;font-size:11px">基準の計算でつまずきました: ' + esc(e.message || e) + '</div>'; }   // KIJUN-1
+    $('pg-body').innerHTML = h + 基準h + '<div id="pg-quotes" style="margin-top:6px;color:#475569">前回の見積書を探しています…</div>'; $('pg-src').textContent = '';
     見積実績を出す(f);
     Array.prototype.forEach.call($('pg-body').querySelectorAll('tr.pick'), function (tr) {
       tr.onclick = function () {
@@ -2851,6 +2852,82 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
         ガイドを描く();
       };
     });
+  }
+  // -------------------------------------------------- KIJUN-1: 基準（前回の単価を守る・通しで原価・値上がり分だけ上げる）
+  //   過去 3 年: 同じ得意先・同じ品名・同じ数量の 83% は前回と同じ単価（数量違いでも 49%）。FileMaker の印刷代は 2016 年から 1 通し 1 面の単価が変わっていない（墨・特色・カラー）
+  function 基準_インキ率(ink, 色) {   // 原価テーブルの「基準_印刷」（条件: 墨／特色／カラー、千単価＝1,000 通し 1 面あたり）。行が無ければ null
+    var 表 = 原価表(); var 行 = {}; 表.forEach(function (r) { if (String(r.項目 || '').trim() === '基準_印刷' && !r.消) 行[String(r.条件 || '').trim()] = 数値(r.千単価) / 1000; });
+    if (!行['墨'] && !行['特色'] && !行['カラー']) return null;
+    var s0 = String(ink == null ? '' : ink).normalize('NFKC').trim().replace(/[ｰ\-]/g, 'ー');
+    var 種;
+    if (!s0 || /^(0|0\.0|なし|無)$/.test(s0)) 種 = !色 ? '' : (色 === 1 ? '墨' : 色 === 2 ? '特色' : 'カラー');
+    else if (/モノクロ/.test(s0)) 種 = '墨';
+    else if (/モノカラ/.test(s0)) 種 = '特色';
+    else if (/カラ/.test(s0) || /^(4C|CMYK)$/i.test(s0)) 種 = 色 === 2 ? '特色' : 'カラー';
+    else if (/^(墨|K|BK|スミ|黒|97(\.0)?)$/i.test(s0)) 種 = '墨';
+    else 種 = '特色';
+    return 種 ? (行[種] || 0) : 0;
+  }
+  function 基準_指数(日) {   // 原価テーブルの「指数_人件費」（条件＝改定日 YYYY-MM-DD、掛け率＝指数）。その日に効いている指数。行が無ければ 1
+    var best = null; 原価表().forEach(function (r) { if (String(r.項目 || '').trim() !== '指数_人件費' || r.消) return; var d = String(r.条件 || '').trim().replace(/\//g, '-'); if (!/^\d{4}-\d{1,2}-\d{1,2}$/.test(d)) return; var t = new Date(d.replace(/-(\d)(?!\d)/g, '-0$1') + 'T00:00:00').getTime(); if (!(t <= 日.getTime())) return; if (!best || t > best.t) best = { t: t, v: 数値(r.掛け率) || 1, d: d }; });
+    return best || { t: 0, v: 1, d: '' };
+  }
+  function 基準の表(f, 階段, qNow, q0, 売価0, 原価0, 外注0) {
+    var パーツ = [];
+    for (var i = 1; i <= 9; i++) {
+      var 合計 = 数値(f['合計数' + i]); if (!(合計 > 0)) continue;
+      var 実用 = 数値(f['実用数' + i]), 予備 = 数値(f['標準予備数_加減算済' + i]); if (!(実用 > 0)) { 実用 = 合計; 予備 = 0; } if (予備 < 0) 予備 = 0;
+      var 刷 = 数値(f['印刷代' + i]), 紙単 = 数値(f['用紙単価' + i]), 紙 = 数値(f['用紙代' + i]);
+      if (!紙単 && 紙) 紙単 = 紙 / 合計;
+      var r前 = 刷 / 合計;   // 前回の 1 通しあたり印刷代（表＋裏）
+      var 色 = 数値(f['色数' + i]);
+      var 表i = ($('k' + i + '-ink') || {}).value, 裏i = ($('k' + i + '-ura') || {}).value;
+      var r今 = r前, インキ変 = false;
+      if ((表i != null && String(表i).trim() !== String(f['インキ表' + i] == null ? '' : f['インキ表' + i]).trim()) || (裏i != null && String(裏i).trim() !== String(f['インキ裏' + i] == null ? '' : f['インキ裏' + i]).trim())) {
+        var c今 = 数値(($('k' + i + '-iro1') || {}).value) || 色;
+        var a = 基準_インキ率(表i, c今), b = 基準_インキ率(裏i, 0);
+        if (a != null && b != null && (表i || 裏i)) { r今 = a + b; インキ変 = true; }
+      }
+      var 紙今 = 数値(($('p' + i + '-up') || {}).value) || 紙単;
+      パーツ.push({ i: i, 実用: 実用, 予備: 予備, r前: r前, r今: r今, 紙前: 紙単, 紙今: 紙今, インキ変: インキ変 });
+    }
+    if (!パーツ.length) return '';
+    var 梱配 = 数値(f['梱包代']) + 数値(f['配送代']); var 梱配単 = 梱配 / Math.max(1, Math.ceil(q0 / 1000));
+    var 版 = 数値(f['版代']), 加工 = 数値(f['加工賃']), 人件 = 数値(f['人件費']);
+    var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(f['起票日'] || '')); var 前日 = m ? new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])) : new Date();
+    var 指前 = 基準_指数(前日), 指今 = 基準_指数(new Date()); var 指比 = 指前.v ? 指今.v / 指前.v : 1;
+    function 原価(n, 今) {
+      var 刷 = 0, 紙 = 0, 通し計 = 0;
+      パーツ.forEach(function (p) { var 通し = Math.ceil(p.実用 * n / q0) + p.予備; 通し計 += 通し; 刷 += 通し * (今 ? p.r今 : p.r前); 紙 += 通し * (今 ? p.紙今 : p.紙前); });
+      var 指 = 今 ? 指比 : 1;
+      var 梱 = 梱配単 * Math.ceil(n / 1000);
+      var 他 = 版 + (加工 + 人件) * n / q0;
+      var 外 = 外注0 * n / q0;
+      return { 計: (刷 + 梱 + 他) * 指 + 紙 + 外, 刷: 刷 * 指, 紙: 紙, 梱: 梱 * 指, 他: 他 * 指, 外: 外, 通し: 通し計 };
+    }
+    var 前q0 = 原価(q0, false).計;
+    if (!(売価0 > 0)) return '';
+    var 単価0 = 売価0 / q0;
+    var rows = 階段.map(function (n) {
+      var 前 = 原価(n, false), 今 = 原価(n, true);
+      var 売前 = 前q0 > 0 ? 売価0 * 前.計 / 前q0 : 単価0 * n;   // 前回の売価を、前回時点の原価の割合で数量に合わせる
+      var 上げ = 今.計 - 前.計;   // 値上がり分（用紙・人件費の指数・インキの変更）
+      var 売 = 売前 + Math.max(0, 上げ); var 単 = Math.round(売 / n * 10) / 10; 売 = 単 * n;
+      return { n: n, 通し: 今.通し, 前: 前.計, 今: 今.計, 上げ: 上げ, 売: 売, 単: 単, 粗利: 売 ? (1 - 今.計 / 売) * 100 : 0, 比: 単価0 ? (単 / 単価0 - 1) * 100 : 0, 内: 今 };
+    });
+    var 紙注 = パーツ.filter(function (p) { return p.紙今 && p.紙前 && Math.abs(p.紙今 / p.紙前 - 1) > 0.001; }).map(function (p) { return 'パーツ' + p.i + ' 用紙単価 ' + p.紙前.toFixed(2) + '→' + p.紙今.toFixed(2); });
+    var イ注 = パーツ.filter(function (p) { return p.インキ変; }).map(function (p) { return 'パーツ' + p.i + ' 印刷 1 通し ' + p.r前.toFixed(2) + '→' + p.r今.toFixed(2); });
+    var 注 = [];
+    if (指比 !== 1) 注.push('人件費の指数 ' + 指前.v + '（' + (指前.d || '既定') + '）→ ' + 指今.v + '（' + (指今.d || '既定') + '）');
+    if (紙注.length) 注.push(紙注.join('、'));
+    if (イ注.length) 注.push(イ注.join('、'));
+    var h = '<div style="margin-top:8px;border-top:1px dashed #cbd5e1;padding-top:6px"><b style="color:#1e3a8a">基準（前回の単価を守る）</b>'
+      + '<span style="color:#64748b;font-size:11px">　前回の単価 ' + 単価0.toFixed(1) + ' をもとに、数量が違うときは前回時点の原価の割合で合わせ、値上がり分（' + (注.length ? esc(注.join('／')) : 'いまは無し') + '）だけ足します。原価は通しで出しています（通し＝実用数×数量の比＋予備、印刷代＝通し×前回の 1 通しあたり、用紙代＝通し×用紙単価、梱包・配送は 1,000 ごと）</span></div>'
+      + '<table><thead><tr><th>数量</th><th>通し</th><th>原価（前回時点）</th><th>原価（いま）</th><th>値上がり分</th><th>売価（基準）</th><th>単価</th><th>粗利率</th><th>前回単価比</th></tr></thead><tbody>'
+      + rows.map(function (r) { return '<tr class="pick' + (r.n === qNow ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単 + '" title="印刷 ' + 円整(r.内.刷) + '／用紙 ' + 円整(r.内.紙) + '／梱包・配送 ' + 円整(r.内.梱) + '／版・加工・人件費 ' + 円整(r.内.他) + '／外注 ' + 円整(r.内.外) + '"><td>' + 円整(r.n) + (r.n === qNow ? ' ◀ 今回' : '') + '</td><td>' + 円整(r.通し) + '</td><td>¥' + 円整(r.前) + '</td><td>¥' + 円整(r.今) + '</td><td>' + (r.上げ > 0.5 ? '+¥' + 円整(r.上げ) : '—') + '</td><td><b>¥' + 円整(r.売) + '</b></td><td>' + r.単.toFixed(1) + '</td><td>' + r.粗利.toFixed(1) + '%</td><td>' + (r.比 >= 0 ? '+' : '') + r.比.toFixed(1) + '%</td></tr>'; }).join('')
+      + '</tbody></table>';
+    if (!原価表().some(function (r) { return String(r.項目 || '').trim() === '指数_人件費'; })) h += '<div style="color:#94a3b8;font-size:11px">人件費が上がったら、原価テーブルに 項目「指数_人件費」・条件＝改定日（2026-10-01 の形）・掛け率＝指数（今を 1 として 1.05 など）の行を足すと、次の金額から上がります</div>';
+    return h;
   }
   // ---- 前回の見積書（保管庫「見積実績」）: 得意先名＋品名で引いて、受注との突合結果を並べる
   var 得意先マスタ = null;
