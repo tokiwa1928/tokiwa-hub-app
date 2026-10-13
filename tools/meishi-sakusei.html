@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>名刺 差し替え作成 | Tokiwa Hub Tools</title>
+<!--
+  📇 名刺 差し替え作成（テンプレート方式）— どのPC・スマホからでも使える版
+  前回の名刺データ（.ai）を読み込み → 変わる所だけ直す → 旗艦PCの Illustrator が
+  .ai と校正PDF（トンボ無し・仕上がりサイズ）を作り、確認項目（共通部分・位置・入力値）を返す。
+
+  流れ: この画面 →（Google サインイン）→ 名刺中継（GAS・tools/meishi-relay）
+        → 共有ドライブ「トキワ印刷株式会社/50_メディア/DTP自動化/名刺」
+        → 旗艦PC の W: に同期 → ウォッチャーが run/*.jsx を Illustrator で実行 → 結果が同じフォルダに戻る
+  名刺マスタ（人ごとの前回値・履歴）も同じフォルダの records/<テンプレートID>.json（中継が読み書き）。
+-->
+<style>
+  :root{ --ink:#1a1a1a; --ink2:#46433d; --muted:#6f6c66; --line:#e0ddd6; --line2:#efece6; --bg:#f4f3f0; --surf:#faf9f6;
+         --acc:#0891b2; --acc-soft:#e0f2f7; --ok:#15803d; --ok-soft:#e8f6ec; --ng:#b3261e; --ng-soft:#fdecea; --chg:#c2410c; --chg-soft:#fff3e8; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Yu Gothic','Hiragino Kaku Gothic ProN','Meiryo',sans-serif; background:var(--bg); color:var(--ink); font-size:14px; }
+  header{ background:#1a1a1a; color:#fff; padding:10px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header .logo{ font-weight:800; letter-spacing:.04em; font-size:14px; } header .logo b{ color:#a3e635; }
+  header .tname{ font-size:16px; font-weight:800; }
+  header .conn{ margin-left:auto; font-size:12px; display:flex; gap:8px; align-items:center; }
+  .pill{ padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700; }
+  .pill.ok{ background:#14532d; color:#bbf7d0; } .pill.ng{ background:#7f1d1d; color:#fecaca; } .pill.wait{ background:#334155; color:#e2e8f0; }
+  main{ max-width:1280px; margin:16px auto; padding:0 14px; display:grid; grid-template-columns:300px 1fr; gap:14px; align-items:start; }
+  @media (max-width:900px){ main{ grid-template-columns:1fr; } }
+  .sec{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
+  .st{ font-size:10.5px; font-weight:800; color:#8d897f; letter-spacing:.1em; margin-bottom:8px; }
+  label{ font-size:11.5px; color:var(--muted); display:block; margin:0 0 3px; font-weight:600; }
+  input,select,textarea{ width:100%; padding:7px 9px; border:1px solid #d0cec8; border-radius:6px; font-size:14px; font-family:inherit; background:#fff; }
+  textarea{ resize:vertical; min-height:52px; line-height:1.5; }
+  input:focus,select:focus,textarea:focus{ outline:none; border-color:var(--acc); box-shadow:0 0 0 3px var(--acc-soft); }
+  .btn{ padding:8px 14px; border:1px solid #d0cec8; border-radius:7px; background:#fff; cursor:pointer; font-size:13.5px; font-family:inherit; font-weight:700; color:var(--ink); }
+  .btn:hover{ background:var(--surf); } .btn:disabled{ opacity:.45; cursor:default; }
+  .btn-p{ background:var(--acc); border-color:var(--acc); color:#fff; } .btn-p:hover{ background:#0e7490; }
+  .btn-ok{ background:var(--ok); border-color:var(--ok); color:#fff; } .btn-ok:hover{ background:#166534; }
+  .btn-s{ padding:5px 10px; font-size:12px; }
+  .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .muted{ font-size:11.5px; color:var(--muted); line-height:1.6; }
+  .plist{ list-style:none; margin:0; padding:0; }
+  .plist li{ padding:9px 10px; border-radius:8px; cursor:pointer; border:1px solid transparent; margin-bottom:4px; }
+  .plist li:hover{ background:var(--surf); }
+  .plist li.act{ background:var(--acc-soft); border-color:#a5dbe8; }
+  .plist .nm{ font-weight:800; } .plist .sub{ font-size:11px; color:var(--muted); margin-top:2px; }
+  .fgrid{ display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; }
+  @media (max-width:640px){ .fgrid{ grid-template-columns:1fr; } }
+  .fld.chg input,.fld.chg textarea{ border-color:var(--chg); background:var(--chg-soft); }
+  .prev{ font-size:11px; color:var(--muted); margin-top:3px; white-space:pre-wrap; }
+  .fld.chg .prev{ color:var(--chg); }
+  .chk{ list-style:none; margin:0; padding:0; }
+  .chk li{ padding:7px 10px; border-radius:7px; margin-bottom:5px; display:flex; gap:10px; font-size:13px; line-height:1.5; }
+  .chk li.ok{ background:var(--ok-soft); } .chk li.ng{ background:var(--ng-soft); }
+  .chk .mk{ font-weight:900; width:16px; flex-shrink:0; } .chk li.ok .mk{ color:var(--ok); } .chk li.ng .mk{ color:var(--ng); }
+  .chk .it{ font-weight:800; width:15em; flex-shrink:0; }
+  .banner{ padding:10px 14px; border-radius:8px; font-weight:800; margin-bottom:10px; }
+  .banner.ok{ background:var(--ok-soft); color:var(--ok); } .banner.ng{ background:var(--ng-soft); color:var(--ng); }
+  table.diff{ width:100%; border-collapse:collapse; font-size:13px; }
+  table.diff td,table.diff th{ border-bottom:1px solid var(--line2); padding:6px 8px; text-align:left; vertical-align:top; white-space:pre-wrap; }
+  table.diff th{ font-size:11px; color:var(--muted); }
+  table.diff tr.c td{ background:var(--chg-soft); } table.diff tr.c td:first-child{ color:var(--chg); font-weight:800; }
+  .pdfbox{ border:1px solid var(--line); border-radius:8px; overflow:hidden; background:#e7e5e0; }
+  .pdfbox iframe{ width:100%; height:520px; border:0; display:block; }
+  .spin{ display:inline-block; width:14px; height:14px; border:2px solid #cbd5e1; border-top-color:var(--acc); border-radius:50%; animation:sp 1s linear infinite; vertical-align:-2px; }
+  @keyframes sp{ to{ transform:rotate(360deg);} }
+  .hist{ font-size:12px; } .hist div{ padding:4px 0; border-bottom:1px dashed var(--line2); }
+  #toast{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1a1a1a; color:#fff; padding:9px 18px; border-radius:8px; font-size:13px; display:none; z-index:99; max-width:90vw; }
+  .setup{ max-width:640px; margin:30px auto; }
+  code{ background:var(--surf); padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="hub-nav.js"></script>
+</head>
+<body>
+<header>
+  <span class="logo">TOKIWA <b>HUB</b> 🧰</span>
+  <span class="tname">📇 名刺 差し替え作成</span>
+  <span class="conn"><span id="st-watch" class="pill wait">旗艦PC 未確認</span><span id="who" style="color:#cbd5e1"></span>
+    <span id="signin" style="display:none"></span></span>
+</header>
+
+<div id="setup" class="sec setup">
+  <div class="st">サインイン</div>
+  <p style="margin:0 0 10px" id="setup-msg">社内の Google アカウントでサインインしてください。</p>
+  <div id="signin2"></div>
+</div>
+
+<main id="app" style="display:none">
+  <aside>
+    <div class="sec">
+      <div class="st">得意先・テンプレート</div>
+      <select id="tpl"></select>
+      <div class="muted" id="tpl-info" style="margin-top:6px"></div>
+    </div>
+    <div class="sec">
+      <div class="st">名刺マスタ（人）</div>
+      <ul class="plist" id="plist"></ul>
+      <div class="row" style="margin-top:8px">
+        <button class="btn btn-s" id="b-extract-tpl" title="テンプレートの.aiに入っている人の値を読み込みます">⤓ テンプレートから読込</button>
+        <button class="btn btn-s" id="b-extract-ai" title="NAS などにある過去の.aiの場所を貼り付けて、その値を読み込みます">⤓ 前回の.aiから読込</button>
+        <button class="btn btn-s" id="b-new">＋ 新しい人</button>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="st">この人の履歴</div>
+      <div class="hist" id="hist"><span class="muted">—</span></div>
+    </div>
+  </aside>
+
+  <section>
+    <div class="sec" id="form-sec">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <div class="st" style="margin:0">変更内容（オレンジ＝前回から変わる所）</div>
+        <span class="muted" id="chg-count"></span>
+      </div>
+      <div class="fgrid" id="fields"></div>
+      <div class="fgrid" style="margin-top:12px;grid-template-columns:1fr 1fr 1fr">
+        <div><label>受注番号</label><input id="juchu" placeholder="例 107512（空なら000000）"></div>
+        <div><label>校</label><select id="kou"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></div>
+        <div><label>ファイル名</label><input id="outname" readonly style="font-size:11.5px;background:var(--surf)"></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-p" id="b-run">▶ 旗艦PCで作成（.ai＋校正PDF）</button>
+        <span id="run-st" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="sec" id="res-sec" style="display:none">
+      <div class="st">確認項目</div>
+      <div id="banner" class="banner"></div>
+      <ul class="chk" id="checks"></ul>
+      <div class="st" style="margin-top:14px">前回 → 今回</div>
+      <table class="diff"><thead><tr><th style="width:7em">項目</th><th>前回</th><th>今回</th></tr></thead><tbody id="diff"></tbody></table>
+      <div class="st" style="margin-top:14px">校正PDF（トンボ無し・仕上がりサイズ）</div>
+      <div class="pdfbox"><iframe id="pdf"></iframe></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-ok" id="b-save">✔ 校了：名刺マスタに保存（次回の「前回」になる）</button>
+        <a class="btn" id="b-dl" download>⬇ 校正PDFを保存</a>
+        <span class="muted" id="out-path"></span>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<div id="srcdlg" class="sec" style="display:none;position:fixed;left:50%;top:20%;transform:translateX(-50%);width:min(620px,92vw);z-index:50;box-shadow:0 18px 40px rgba(0,0,0,.25)">
+  <div class="st">前回の .ai の場所</div>
+  <p class="muted" style="margin:0 0 8px">NAS のファイルを右クリック →「パスのコピー」で貼り付けてください。例：<code>\\192.168.0.245\tokiwa printing\…\a107512_中村建設㈱_名刺_天野太一様_….ai</code></p>
+  <input id="srcpath" placeholder="\\192.168.0.245\tokiwa printing\...\xxx.ai">
+  <div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" id="src-cancel">やめる</button><button class="btn btn-p" id="src-ok">読み込む</button></div>
+</div>
+<script>
+// ───────── 設定 ─────────
+// 名刺中継（GAS）の URL。公開したらここに入れる（tools/meishi-relay/設置手順.md）。試すときは localStorage 'meishi_relay' で上書きできる。
+var RELAY_URL = 'https://script.google.com/macros/s/AKfycbyHvkRLokren7MkQZN2n7HCFsd3jwX6YOjBVCFB0gNqG3SJVpwPozXTrUma94NnuczT/exec';
+var CLIENT_ID = '301364298857-pmt4p3fq440fh6hct3m8avcnlf11jos7.apps.googleusercontent.com';   // FileMaker中継と同じ Hub のクライアントID
+try { RELAY_URL = localStorage.getItem('meishi_relay') || RELAY_URL; } catch(e){}
+
+// ───────── 基本 ─────────
+var $ = function(id){ return document.getElementById(id); };
+function toast(m, ms){ var t=$('toast'); t.innerHTML=m; t.style.display='block'; clearTimeout(t._t); t._t=setTimeout(function(){ t.style.display='none'; }, ms||3200); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+function lsGet(k,d){ try{ var v=localStorage.getItem(k); return v==null?d:v; }catch(e){ return d; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+function yymmdd(){ var d=new Date(), z=function(n){return ('0'+n).slice(-2);}; return String(d.getFullYear()).slice(-2)+z(d.getMonth()+1)+z(d.getDate()); }
+function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+function nameKey(s){ return String(s||'').replace(/\s|　/g,''); }
+
+// ───────── Google サインイン（ID トークンを中継へ渡す） ─────────
+var TOKEN='', TOKEN_EXP=0, waiting=null, gisReady=null;
+function jwtBody(t){ try{ return JSON.parse(decodeURIComponent(escape(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))))); }catch(e){ return {}; } }
+function useToken(t){ var b=jwtBody(t); TOKEN=t; TOKEN_EXP=(b.exp||0)*1000; lsSet('meishi_jwt', t);
+  $('who').textContent = b.email || ''; $('signin').style.display='none';
+  if (waiting){ var f=waiting; waiting=null; f(); } }
+function forget(){ TOKEN=''; TOKEN_EXP=0; try{ localStorage.removeItem('meishi_jwt'); }catch(e){} $('who').textContent=''; }
+function waitGis(){ return new Promise(function(ok,ng){ var n=100, t=setInterval(function(){ if (window.google&&google.accounts&&google.accounts.id){ clearInterval(t); ok(); } else if(--n<=0){ clearInterval(t); ng(new Error('Google のサインインを読み込めませんでした')); } },100); }); }
+function prepGis(){
+  if (gisReady) return gisReady;
+  gisReady = waitGis().then(function(){
+    google.accounts.id.initialize({ client_id: CLIENT_ID, auto_select: true, callback: function(r){ if (r && r.credential) useToken(r.credential); } });
+    ['signin','signin2'].forEach(function(id){ var b=$(id); if(b){ google.accounts.id.renderButton(b, {type:'standard', size: id==='signin'?'small':'large', text:'signin'}); } });
+    $('signin').style.display='inline-block';
+    google.accounts.id.prompt();
+  });
+  return gisReady;
+}
+function getToken(){
+  if (!TOKEN){ var j=lsGet('meishi_jwt',''); if (j && (jwtBody(j).exp||0)*1000-Date.now()>5*60*1000) useToken(j); }
+  if (TOKEN && TOKEN_EXP-Date.now()>5*60*1000) return Promise.resolve(TOKEN);
+  TOKEN='';
+  return prepGis().then(function(){
+    if (TOKEN) return TOKEN;
+    return new Promise(function(ok,ng){
+      var to=setTimeout(function(){ waiting=null; $('signin').style.display='inline-block'; ng(new Error('サインインしてください（右上の「ログイン」）')); }, 25000);
+      waiting=function(){ clearTimeout(to); ok(TOKEN); };
+      try{ google.accounts.id.prompt(); }catch(e){}
+    });
+  });
+}
+function call(action, args){
+  if (!RELAY_URL) return Promise.reject(new Error('名刺中継がまだ設置されていません（tools/meishi-relay/設置手順.md）'));
+  return getToken().then(function(jwt){
+    var body = Object.assign({ action: action, idToken: jwt }, args||{});
+    return fetch(RELAY_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(body), redirect:'follow' });
+  }).then(function(res){ return res.text().then(function(t){
+    var r; try{ r=JSON.parse(t); }catch(e){ throw new Error('中継の返事を読めませんでした（'+res.status+'）'); }
+    if (!r.ok){ if (/サインイン|この画面あて/.test(r.error||'')) forget(); throw new Error(r.error||'不明なエラー'); }
+    return r.data;
+  }); });
+}
+
+// ───────── 旗艦PCの稼働 ─────────
+function showAlive(iso){
+  var el=$('st-watch'); if (!iso){ el.className='pill ng'; el.textContent='🔴 旗艦PC 未確認'; return; }
+  var age=(Date.now()-Date.parse(iso))/1000;
+  if (age<240){ el.className='pill ok'; el.textContent='🟢 旗艦PC 稼働中'; }
+  else { el.className='pill ng'; el.textContent='🔴 旗艦PC 停止中（'+(age<3600?Math.round(age/60)+'分':Math.round(age/3600)+'時間')+'前）'; }
+}
+async function pollAlive(){ try{ var r=await call('status'); showAlive(r.alive); }catch(e){} setTimeout(pollAlive, 60000); }
+
+// ───────── テンプレート・名刺マスタ ─────────
+var TPLS=[], RECS={}, TPL=null, REC=null, PERSON=null, LAST=null;
+async function start(){
+  $('setup-msg').textContent='読み込み中…';
+  try{
+    var d = await call('init');
+    TPLS=d.templates||[]; RECS=d.records||{}; showAlive(d.alive);
+    $('setup').style.display='none'; $('app').style.display='';
+    $('tpl').innerHTML = TPLS.map(function(t,i){ return '<option value="'+i+'">'+esc(t.client)+'　'+esc(t.item)+'</option>'; }).join('') || '<option>テンプレートがありません</option>';
+    var last=lsGet('meishi_tpl',''), idx=Math.max(0, TPLS.findIndex(function(t){ return t.id===last; }));
+    $('tpl').value=String(idx); selectTpl(idx);
+    setTimeout(pollAlive, 60000);
+  }catch(e){ $('setup').style.display=''; $('setup-msg').innerHTML='<span style="color:var(--ng)">'+esc(e.message)+'</span>'; }
+}
+function selectTpl(i){
+  TPL=TPLS[i]; if(!TPL) return; lsSet('meishi_tpl', TPL.id);
+  $('tpl-info').innerHTML = esc((TPL.size_mm||[]).join('×'))+'mm ／ 差し替え '+TPL.fields.length+'項目';
+  REC = RECS[TPL.id] || {tpl:TPL.id, persons:[]}; RECS[TPL.id]=REC;
+  PERSON=null; renderPersons();
+  if (REC.persons.length) selectPerson(REC.persons[0].id);
+  else { renderForm(); $('hist').innerHTML='<span class="muted">まだ登録がありません。「テンプレートから読込」か「前回の.aiから読込」で最初の1人を作ってください。</span>'; }
+}
+async function savePerson(p){ var rec=await call('saveRecord', {tpl:TPL.id, person:p}); RECS[TPL.id]=REC=rec; PERSON=REC.persons.find(function(x){ return x.id===p.id; })||p; }
+function renderPersons(){
+  $('plist').innerHTML = REC.persons.map(function(p){
+    var h=p.history||[], last=h[h.length-1];
+    return '<li data-id="'+esc(p.id)+'" class="'+(PERSON&&PERSON.id===p.id?'act':'')+'"><div class="nm">'+esc(p.fields.name||'(氏名なし)')+'</div><div class="sub">'+esc(String(p.fields.busho||'').replace(/\r|\n/g,' '))+(last?'　／ 前回 '+esc(last.date):'')+'</div></li>';
+  }).join('') || '<li class="muted" style="cursor:default">—</li>';
+}
+function selectPerson(id){
+  PERSON = REC.persons.find(function(p){ return p.id===id; }) || null; renderPersons(); renderForm();
+  var h=(PERSON&&PERSON.history)||[];
+  $('hist').innerHTML = h.length ? h.slice().reverse().map(function(x){ return '<div><b>'+esc(x.date)+'</b>　'+esc(x.out_name)+(x.all_ok?'　<span style="color:var(--ok)">確認OK</span>':'　<span style="color:var(--ng)">要確認あり</span>')+(x.by?'<br><span class="muted">'+esc(x.by)+'</span>':'')+'</div>'; }).join('') : '<span class="muted">履歴なし（読み込んだ値のみ）</span>';
+  $('res-sec').style.display='none';
+}
+
+// ───────── 入力フォーム ─────────
+function curVal(k){ var el=$('f_'+k); return el ? el.value.replace(/\r\n|\r/g,'\n') : ''; }
+function renderForm(){
+  var prev = PERSON ? PERSON.fields : {};
+  $('fields').innerHTML = TPL.fields.map(function(fd){
+    var v = String(prev[fd.key]==null?'':prev[fd.key]).replace(/\r/g,'\n');
+    var multi = /改行/.test(fd.label) || v.indexOf('\n')>=0;
+    var inp = multi ? '<textarea id="f_'+fd.key+'" rows="2">'+esc(v)+'</textarea>' : '<input id="f_'+fd.key+'" value="'+esc(v)+'"'+(fd.key==='email'?' inputmode="email" autocapitalize="off"':'')+(fd.key==='tel_direct'?' inputmode="tel"':'')+'>';
+    return '<div class="fld" id="w_'+fd.key+'"><label>'+esc(fd.label)+'</label>'+inp+'<div class="prev" id="p_'+fd.key+'"></div></div>';
+  }).join('');
+  TPL.fields.forEach(function(fd){ $('f_'+fd.key).addEventListener('input', markChanges); });
+  markChanges();
+}
+function markChanges(){
+  var prev = PERSON ? PERSON.fields : {}, n=0;
+  TPL.fields.forEach(function(fd){
+    var a=String(prev[fd.key]==null?'':prev[fd.key]).replace(/\r/g,'\n'), b=curVal(fd.key), ch = PERSON && a!==b;
+    $('w_'+fd.key).className = 'fld'+(ch?' chg':''); if (ch) n++;
+    $('p_'+fd.key).textContent = ch ? '前回：'+(a||'（空）') : '';
+  });
+  $('chg-count').textContent = PERSON ? (n ? n+'項目を変更' : '変更なし（前回と同じ）') : '新しい人';
+  updOutName();
+}
+function updOutName(){
+  var nm = nameKey(curVal('name')) || '氏名';
+  $('outname').value = 'a'+($('juchu').value.trim()||'000000')+'_'+(TPL.client_short||TPL.client)+'_'+TPL.item+'_'+nm+'様_'+yymmdd()+'_'+$('kou').value+'校';
+}
+
+// ───────── 旗艦PCへ依頼 → 結果待ち ─────────
+var STATE_MSG = { 'wait-sync':'共有ドライブ経由で旗艦PCへ送っています', queued:'旗艦PCの順番待ち', running:'旗艦PCの Illustrator で作成中' };
+async function waitResult(id, onTick){
+  var t0=Date.now();
+  while (Date.now()-t0 < 6*60*1000){
+    await sleep(4000);
+    var r = await call('result', {id:id});
+    if (r.state==='done'){ if (r.pdf_pending && Date.now()-t0 < 5*60*1000){ onTick && onTick('校正PDFの同期待ち', t0); continue; } return r; }
+    if (r.state==='error') throw new Error('旗艦PCでエラー：'+r.error);
+    if (r.alive) showAlive(r.alive);
+    onTick && onTick(STATE_MSG[r.state]||r.state, t0);
+  }
+  throw new Error('6分待っても結果が来ません。旗艦PC（ウォッチャー・Google ドライブ）が動いているか確認してください');
+}
+function tick(msg, t0){ $('run-st').innerHTML='<span class="spin"></span> '+esc(msg)+'… '+Math.round((Date.now()-t0)/1000)+'秒'; }
+function relOut(p){ p=String(p||'').replace(/\\/g,'/'); var i=p.indexOf('/out/'); return i>=0 ? p.slice(i+1) : p; }
+
+async function runFill(){
+  if (!TPL) return;
+  var fields={}; TPL.fields.forEach(function(fd){ fields[fd.key]=curVal(fd.key); });
+  if (!fields.name){ toast('氏名が空です'); return; }
+  var job = { tpl:TPL.id, mode:'fill', fields:fields, out_name:$('outname').value };
+  if (PERSON && PERSON.last_ai && nameKey(PERSON.fields.name)===nameKey(fields.name)) job.source = PERSON.last_ai;   // 同じ人なら前回納品データを土台に
+  $('b-run').disabled=true; $('res-sec').style.display='none';
+  $('run-st').innerHTML='<span class="spin"></span> 依頼しています…';
+  try{
+    var s = await call('submit', {job:job}); if (s.alive) showAlive(s.alive);
+    var t0=Date.now(); tick(STATE_MSG['wait-sync'], t0);
+    var r = await waitResult(s.id, tick);
+    LAST={id:s.id, job:job, res:r}; showResult(r);
+    $('run-st').textContent='完了（'+new Date().toLocaleTimeString()+'）';
+  }catch(e){ $('run-st').innerHTML='<span style="color:var(--ng)">'+esc(e.message)+'</span>'; }
+  $('b-run').disabled=false;
+}
+var LBL={};
+function showResult(r){
+  TPL.fields.forEach(function(fd){ LBL[fd.key]=fd.label.replace(/（.*?）/,''); });
+  var ok = !!r.all_ok && r.ok!==false;
+  $('banner').className='banner '+(ok?'ok':'ng');
+  $('banner').textContent = ok ? '✔ 確認OK：共通部分・位置・入力値に問題はありません' : '✖ 要確認：下の × を見てください';
+  $('checks').innerHTML = (r.checks||[]).map(function(c){ return '<li class="'+(c.ok?'ok':'ng')+'"><span class="mk">'+(c.ok?'○':'×')+'</span><span class="it">'+esc(c.item)+'</span><span>'+esc(c.detail)+'</span></li>'; }).join('')
+    + (r.ok===false ? (r.warnings||[]).map(function(w){ return '<li class="ng"><span class="mk">×</span><span class="it">処理</span><span>'+esc(w)+'</span></li>'; }).join('') : '');
+  $('diff').innerHTML = TPL.fields.map(function(fd){
+    var a=String((r.previous||{})[fd.key]==null?'':r.previous[fd.key]).replace(/\r/g,'\n'), b=String((r.values||{})[fd.key]==null?'':r.values[fd.key]).replace(/\r/g,'\n');
+    return '<tr class="'+(a!==b?'c':'')+'"><td>'+esc(LBL[fd.key])+'</td><td>'+esc(a)+'</td><td>'+esc(b)+'</td></tr>';
+  }).join('');
+  if (r.pdf_b64){
+    var bin=atob(r.pdf_b64), u=new Uint8Array(bin.length); for (var i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
+    var url=URL.createObjectURL(new Blob([u],{type:'application/pdf'}));
+    $('pdf').src=url+'#view=FitH'; $('b-dl').href=url; $('b-dl').download=r.pdf_name||'校正.pdf'; $('b-dl').style.display='';
+  } else { $('pdf').srcdoc='<p style="font:13px sans-serif;padding:20px">校正PDFがまだ共有ドライブに上がっていません。少し待って開き直してください。</p>'; $('b-dl').style.display='none'; }
+  $('out-path').innerHTML = r.pdf_url ? '<a href="'+esc(r.pdf_url)+'" target="_blank" rel="noopener">共有ドライブで開く</a>' : '';
+  $('res-sec').style.display='';
+  $('res-sec').scrollIntoView({behavior:'smooth', block:'start'});
+}
+async function saveToMaster(){
+  if (!LAST) return; var r=LAST.res;
+  var ai=(r.files||[]).find(function(f){ return /\.ai$/.test(f); });
+  var vals={}; TPL.fields.forEach(function(fd){ vals[fd.key]=String((r.values||{})[fd.key]||'').replace(/\r/g,'\n'); });
+  // 氏名が変わった＝別の人の名刺（元の人の記録は残す）
+  var p = PERSON && nameKey(PERSON.fields.name)===nameKey(vals.name) ? PERSON
+        : (REC.persons.find(function(x){ return nameKey(x.fields.name)===nameKey(vals.name); }) || {id:'p'+Date.now().toString(36), fields:{}, history:[]});
+  p = JSON.parse(JSON.stringify(p));
+  p.fields=vals; if (ai) p.last_ai=relOut(ai);
+  (p.history=p.history||[]).push({date:new Date().toISOString().slice(0,10), out_name:(ai||'').split(/[\\\/]/).pop().replace(/\.ai$/,''), ai:relOut(ai), all_ok:!!r.all_ok, job:LAST.id, by:$('who').textContent});
+  $('b-save').disabled=true;
+  try{ await savePerson(p); selectPerson(p.id); toast('名刺マスタに保存しました。次回はこの内容が「前回」になります'); }
+  catch(e){ toast('保存できませんでした：'+esc(e.message), 6000); }
+  $('b-save').disabled=false;
+}
+
+// 前回データ（.ai）から値を読み込む
+async function extractFrom(source, label){
+  $('run-st').innerHTML='<span class="spin"></span> '+esc(label)+' を読み込み中…';
+  try{
+    var s = await call('submit', {job:{tpl:TPL.id, mode:'extract', source: source||undefined}});
+    var t0=Date.now();
+    var r = await waitResult(s.id, function(m){ $('run-st').innerHTML='<span class="spin"></span> '+esc(label)+'：'+esc(m)+'… '+Math.round((Date.now()-t0)/1000)+'秒'; });
+    var v={}; TPL.fields.forEach(function(fd){ v[fd.key]=String((r.values||{})[fd.key]==null?'':r.values[fd.key]).replace(/\r/g,'\n'); });
+    var hit = REC.persons.find(function(p){ return nameKey(p.fields.name)===nameKey(v.name); });
+    var p = hit ? JSON.parse(JSON.stringify(hit)) : {id:'p'+Date.now().toString(36), fields:{}, history:[]};
+    p.fields=v; if (source) p.last_ai=source;
+    await savePerson(p); selectPerson(p.id);
+    $('run-st').textContent='読み込みました：'+(v.name||'');
+  }catch(e){ $('run-st').innerHTML='<span style="color:var(--ng)">'+esc(e.message)+'</span>'; }
+}
+
+// ───────── 起動 ─────────
+$('tpl').onchange=function(){ selectTpl(+this.value); };
+$('plist').onclick=function(e){ var li=e.target.closest('li[data-id]'); if(li) selectPerson(li.dataset.id); };
+$('b-new').onclick=function(){ PERSON=null; renderPersons(); renderForm(); TPL.fields.forEach(function(fd){ $('f_'+fd.key).value=''; }); markChanges(); $('hist').innerHTML='<span class="muted">新しい人</span>'; $('res-sec').style.display='none'; };
+$('b-extract-tpl').onclick=function(){ extractFrom(null, 'テンプレート'); };
+$('b-extract-ai').onclick=function(){ $('srcdlg').style.display=''; $('srcpath').focus(); };
+$('src-cancel').onclick=function(){ $('srcdlg').style.display='none'; };
+$('src-ok').onclick=function(){
+  var p=$('srcpath').value.trim().replace(/^"|"$/g,'').replace(/\\/g,'/');
+  if (!/\.ai$/i.test(p)){ toast('.ai のファイルの場所を貼り付けてください'); return; }
+  $('srcdlg').style.display='none'; extractFrom(p, p.split('/').pop());
+};
+$('juchu').oninput=updOutName; $('kou').onchange=updOutName;
+$('b-run').onclick=runFill; $('b-save').onclick=saveToMaster;
+start();
+</script>
+</body>
+</html>
