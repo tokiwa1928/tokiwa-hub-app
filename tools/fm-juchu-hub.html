@@ -2702,7 +2702,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   var ガイド種 = null;   // 種にした前回伝票 { fields, 外注合計 }
   function 数値(v){ var x = Number(String(v == null ? '' : v).replace(/,/g, '')); return isNaN(x) ? 0 : x; }
   function 円整(v){ return Math.round(v).toLocaleString(); }
-  function ガイドを消す(){ ガイド種 = null; $('pg-body').innerHTML = '得意先と品名（か前回伝票番号）を入れると、昨年の伝票を種に数量ごとの金額が出ます'; $('pg-src').textContent = ''; }
+  function ガイドを消す(){ ガイド種 = null; $('pg-body').innerHTML = '得意先と品名（か前回伝票番号）を入れると、昨年の伝票を種に数量ごとの金額が出ます'; $('pg-src').textContent = ''; try { 新規を描く(); } catch (e) { console.warn('[新規の基準]', e); } }   // KIJUN-2
   // 種を決める: 前回伝票番号 → 無ければ手元の索引で 同じ得意先コード＋同じ製品名 の最新（自分以外）
   function 種の番号(){
     var no = $('pg-prev').value.trim() || ($('f-lotno') ? $('f-lotno').value.trim() : '');
@@ -2929,6 +2929,100 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     if (!原価表().some(function (r) { return String(r.項目 || '').trim() === '指数_人件費'; })) h += '<div style="color:#94a3b8;font-size:11px">人件費が上がったら、原価テーブルに 項目「指数_人件費」・条件＝改定日（2026-10-01 の形）・掛け率＝指数（今を 1 として 1.05 など）の行を足すと、次の金額から上がります</div>';
     return h;
   }
+  // -------------------------------------------------- KIJUN-2: 新規（前回の伝票が無い）の基準
+  //   原価＝いまの入力から通しで（印刷＝通し×面の単価×人件費の指数、用紙＝通し×用紙単価、梱包・配送＝単価×1,000 ごと×指数、版・加工・人件費はそのまま×指数、外注は数量に比例）
+  //   売価の目安＝原価×掛け率（原価テーブルの 基準_掛け率: 条件 社内／外注、数量上限＝原価の上限（円））。過去 3 年の中央値。同じ得意先の前回の単価があればそちらが本命
+  function 基準_行(項目, 条件, 値) {   // 数量上限の階段で引く（値 以下の一番小さい上限、無ければ上限なし、それも無ければ一番大きい段）
+    var c = 原価表().filter(function (r) { return String(r.項目 || '').trim() === 項目 && !r.消 && (条件 == null || String(r.条件 || '').trim() === 条件); });
+    if (!c.length) return null;
+    var 段 = c.filter(function (r) { return 数値(r.数量上限) > 0; }).sort(function (a, b) { return 数値(a.数量上限) - 数値(b.数量上限); });
+    for (var i = 0; i < 段.length; i++) if (値 <= 数値(段[i].数量上限)) return 段[i];
+    return c.filter(function (r) { return !(数値(r.数量上限) > 0); })[0] || 段[段.length - 1];
+  }
+  function 新規を描く() {
+    var box = $('pg-body'); if (!box || ガイド種) return;
+    var q = 数値(($('f-lotunit') || {}).value) || 数値(($('f-lotset') || {}).value);
+    var v = function (id) { return String(($(id) || {}).value || '').trim(); };
+    var パーツ = [], 率なし = false;
+    for (var i = 0; i <= 9; i++) {
+      var 実用 = 数値(v('p' + i + '-jit')), 予備欄 = v('p' + i + '-yob'), 合計 = 数値(v('p' + i + '-tot'));
+      if (!(実用 > 0) && 合計 > 0) 実用 = 合計 - (数値(予備欄) || 0);
+      if (!(実用 > 0)) continue;
+      var a = 基準_インキ率(v('k' + i + '-ink'), 数値(v('k' + i + '-iro1'))), b = 基準_インキ率(v('k' + i + '-ura'), 数値(v('k' + i + '-iro2')));
+      if (a == null) { 率なし = true; a = 0; b = 0; }
+      パーツ.push({ i: i, 実用: 実用, 予備欄: 予備欄, 率: a + (b || 0), 紙: 数値(v('p' + i + '-up')) });
+    }
+    if (!パーツ.length) return;
+    if (!(q > 0)) q = パーツ[0].実用;
+    var 予備 = function (実用n, 欄) { if (欄 !== '') return Math.max(0, 数値(欄)); var r = 基準_行('基準_予備', null, 実用n); return r ? 数値(r.固定) : 0; };
+    var 指 = 基準_指数(new Date());
+    var ラジオ = function (nm) { var el = document.querySelector('input[name="' + nm + '"]:checked'); return el ? 数値(el.value) : 0; };
+    var 梱配単 = ラジオ('pack') + ラジオ('ship');
+    var 他 = 数値(v('c-plate')) + 数値(v('c-work')) + 数値(v('c-labor'));
+    var 外 = 数値(String(($('gc-total') || {}).textContent || '').replace(/,/g, ''));
+    function 原価(n) {
+      var 刷 = 0, 紙 = 0, 通し計 = 0;
+      パーツ.forEach(function (p) { var 実 = Math.ceil(p.実用 * n / q); var 通し = 実 + 予備(実, n === q ? p.予備欄 : ''); 通し計 += 通し; 刷 += 通し * p.率; 紙 += 通し * p.紙; });
+      var 梱 = 梱配単 * Math.ceil(n / 1000); var 外n = 外 * n / q;
+      return { 計: (刷 + 梱 + 他) * 指.v + 紙 + 外n, 刷: 刷 * 指.v, 紙: 紙, 梱: 梱 * 指.v, 他: 他 * 指.v, 外: 外n, 通し: 通し計 };
+    }
+    var 階段 = [q, Math.round(q * 0.5), Math.round(q * 0.8), Math.round(q * 1.2), Math.round(q * 1.5), Math.round(q * 2), 500, 1000, 2000, 3000, 5000].filter(function (x, k, arr) { return x > 0 && arr.indexOf(x) === k; }).sort(function (a, b) { return a - b; });
+    var 掛けなし = false;
+    var rows = 階段.map(function (n) {
+      var c = 原価(n); var 種 = c.外 > 0.05 * c.計 ? '外注' : '社内';
+      var r = 基準_行('基準_掛け率', 種, c.計); var 掛 = r ? 数値(r.掛け率) : 0; if (!(掛 > 0)) { 掛けなし = true; 掛 = 0; }
+      var 売 = c.計 * 掛; var 単 = Math.round(売 / n * 10) / 10; 売 = 単 * n;
+      return { n: n, c: c, 種: 種, 掛: 掛, 備考: r ? String(r.備考 || '') : '', 売: 売, 単: 単 };
+    });
+    // 数量が増えて単価が上がる・合計が下がることは無いようにならす（掛け率の段の境目で起きる）
+    for (var k = 1; k < rows.length; k++) { var p0 = rows[k - 1], r1 = rows[k]; if (!r1.掛 || !p0.掛) continue;
+      if (r1.単 > p0.単) { r1.単 = p0.単; r1.売 = r1.単 * r1.n; r1.なら = true; }
+      if (r1.売 < p0.売) { r1.単 = Math.ceil(p0.売 / r1.n * 10) / 10; r1.売 = r1.単 * r1.n; r1.なら = true; } }
+    var h = '<div style="margin-top:8px;border-top:1px dashed #cbd5e1;padding-top:6px"><b style="color:#1e3a8a">新規の基準（前回の伝票なし）</b>'
+      + '<span style="color:#64748b;font-size:11px">　いまの入力から原価を通しで出し、売価の目安＝原価×過去の掛け率（原価の大きさ・社内／外注ごとの中央値）。人件費の指数 ' + 指.v + (指.d ? '（' + esc(指.d) + '〜）' : '') + '。行にマウスを置くと内訳</span></div>';
+    if (率なし) h += '<div style="color:#b45309;font-size:11px">原価テーブルに「基準_印刷」の行（墨・特色・カラー）が無いので、印刷代を 0 で出しています</div>';
+    if (掛けなし) h += '<div style="color:#b45309;font-size:11px">原価テーブルに「基準_掛け率」の行が無いので、売価の目安は出せません（原価だけ）</div>';
+    h += '<table><thead><tr><th>数量</th><th>通し</th><th>原価</th><th>掛け率</th><th>売価の目安</th><th>単価</th></tr></thead><tbody>'
+      + rows.map(function (r) { return '<tr class="pick' + (r.n === q ? ' now' : '') + '" data-n="' + r.n + '" data-u="' + r.単 + '" title="' + esc('印刷 ' + 円整(r.c.刷) + '／用紙 ' + 円整(r.c.紙) + '／梱包・配送 ' + 円整(r.c.梱) + '／版・加工・人件費 ' + 円整(r.c.他) + '／外注 ' + 円整(r.c.外) + (r.備考 ? '\n掛け率: ' + r.種 + '・' + r.備考 : '')) + '"><td>' + 円整(r.n) + (r.n === q ? ' ◀ 今回' : '') + '</td><td>' + 円整(r.c.通し) + '</td><td>¥' + 円整(r.c.計) + '</td><td>' + (r.掛 ? r.掛.toFixed(2) + ' <span style="color:#94a3b8;font-size:10px">' + r.種 + '</span>' : '—') + '</td><td><b>' + (r.掛 ? '¥' + 円整(r.売) : '—') + '</b>' + (r.なら ? ' <span style="color:#94a3b8;font-size:10px" title="掛け率の段の境目で単価が上がらないよう、少ない数量の単価に合わせました">ならし</span>' : '') + '</td><td>' + (r.掛 ? r.単.toFixed(1) : '—') + '</td></tr>'; }).join('')
+      + '</tbody></table>';
+    h += 似た伝票の表();
+    var old = $('pg-new'); if (old) old.remove();
+    var d = document.createElement('div'); d.id = 'pg-new'; d.innerHTML = h; box.appendChild(d);
+    Array.prototype.forEach.call(d.querySelectorAll('tr.pick'), function (tr) { tr.onclick = function () {
+      var n = Number(tr.getAttribute('data-n')), u2 = Number(tr.getAttribute('data-u'));
+      if ($('f-lotunit')) { $('f-lotunit').value = n; }
+      if (u2 > 0 && $('f-price')) { $('f-price').value = u2; $('f-price').dispatchEvent(new Event('input', { bubbles: true })); }
+      if (u2 > 0 && $('f-amt')) { $('f-amt').value = Math.round(u2 * n); }
+      try { if (typeof calc === 'function') calc(); } catch (e) {}
+      新規を描く(); }; });
+  }
+  // 似た過去の伝票: 手元の索引から、品名の近さ（括弧と数字を外した 2 文字ずつの重なり）。同じ得意先を先に。数量が 1/3〜3 倍のもの
+  function 似た伝票の表() {
+    if (!索引 || !索引.行) return '';
+    var 芯 = function (x) { return String(x || '').normalize('NFKC').replace(/[（(][^）)]*[）)]/g, '').replace(/[\d\s・\-ー_\/／.,、。]+/g, ''); };
+    var 字 = function (x) { var o = {}; for (var k = 0; k < x.length - 1; k++) o[x.substr(k, 2)] = 1; if (!x.length) return o; if (x.length === 1) o[x] = 1; return o; };
+    var item = 芯(($('f-item') || {}).value); if (!item) return '';
+    var g = 字(item), gn = Object.keys(g).length; if (!gn) return '';
+    var cust = String(($('f-custcd') || {}).value || '').trim(); var q = 数値(($('f-lotunit') || {}).value);
+    var P = 索引位置, me = 現在 ? String(現在.fields['伝票番号'] || '') : '';
+    var hits = [];
+    for (var i = 0; i < 索引.行.length; i++) { var r = 索引.行[i];
+      if (String(r[P['伝票番号']]) === me) continue;
+      if (String(r[P['案件区分']] || '') && String(r[P['案件区分']]) !== '受注') continue;
+      var 売 = 数値(r[P['売価金額']]), 数 = 数値(r[P['ロット契約単位']]) || 数値(r[P['合計数1']]); if (!(売 > 0) || !(数 > 0)) continue;
+      if (q > 0 && (数 > q * 3 || 数 < q / 3)) continue;
+      var h2 = 字(芯(r[P['製品名']])); var 共 = 0, n2 = 0; for (var k in h2) { n2++; if (g[k]) 共++; }
+      var j = 共 / (gn + n2 - 共); if (j < 0.4) continue;
+      var 同 = String(r[P['得意先コード']]) === cust;
+      hits.push({ r: r, s: j + (同 ? 1 : 0) - (q > 0 ? Math.abs(Math.log(数 / q)) * 0.1 : 0), 同: 同, 数: 数, 単: 売 / 数, 日: (索引日 && 索引日[i]) || 0 });
+    }
+    if (!hits.length) return '<div style="color:#94a3b8;font-size:11px;margin-top:4px">似た品名の過去の伝票は見つかりません</div>';
+    hits.sort(function (a, b) { return (b.s - a.s) || (b.日 - a.日); }); hits = hits.slice(0, 6);
+    return '<div style="margin-top:6px"><b style="color:#166534">似た過去の伝票</b><span style="color:#64748b;font-size:11px">　同じ得意先を先に、品名の近いもの。前回の単価がいちばん外さない目安です（同じ得意先・同じ品名・同じ数量の 83% が前回と同じ単価）</span></div>'
+      + '<table><thead><tr><th style="text-align:left">伝票</th><th style="text-align:left">起票日</th><th style="text-align:left">品名</th><th>数量</th><th>単価</th><th>売価</th></tr></thead><tbody>'
+      + hits.map(function (x) { var r = x.r; return '<tr' + (x.同 ? ' style="background:#f0fdf4"' : '') + '><td style="text-align:left">' + esc(r[P['伝票番号']]) + (x.同 ? ' <span style="color:#166534;font-size:10px">同じ得意先</span>' : '') + '</td><td style="text-align:left">' + esc(日付(r[P['起票日']])) + '</td><td style="text-align:left">' + esc(String(r[P['製品名']] || '').slice(0, 28)) + '</td><td>' + 円整(x.数) + '</td><td>' + x.単.toFixed(1) + '</td><td>¥' + 円整(数値(r[P['売価金額']])) + '</td></tr>'; }).join('')
+      + '</tbody></table>';
+  }
   // ---- 前回の見積書（保管庫「見積実績」）: 得意先名＋品名で引いて、受注との突合結果を並べる
   var 得意先マスタ = null;
   function 得意先マスタを用意() {
@@ -2966,6 +3060,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     }).catch(function (e) { if (box()) box().textContent = '前回の見積書: ' + String(e.message || e); });
   }
   ['f-custcd', 'f-item', 'f-lotno', 'f-lotunit'].forEach(function (id) { var el = $(id); if (!el) return; el.addEventListener('change', function () { if (id === 'f-lotunit' && ガイド種) ガイドを描く(); else ガイドを出す(); }); });
+  ['pane-A', 'pane-B', 'fmgaichu'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('change', function () { if (!ガイド種 && $('fmguide') && $('fmguide').style.display !== 'none') try { 新規を描く(); } catch (e) {} }); });   // KIJUN-2: 用紙・印刷・外注を直したら新規の基準を出し直す
   // KAKAKU-2: 原価テーブル（Hub マスタ）。取れたら描き直す。最低受注金額は PC に覚える
   var 原価表キャッシュ = null;
   function 原価表() { if (原価表キャッシュ) return 原価表キャッシュ; try { var c = JSON.parse(localStorage.getItem('fm_hubmaster_原価テーブル') || 'null'); if (c && c.行) return c.行; } catch (e) {} return []; }
@@ -2974,6 +3069,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   try { var pm = localStorage.getItem('pg_min'); if (pm !== null && $('pg-min')) $('pg-min').value = pm; } catch (e) {}
   if ($('pg-min')) $('pg-min').addEventListener('change', function () { try { localStorage.setItem('pg_min', $('pg-min').value.trim()); } catch (e) {} if (ガイド種) ガイドを描く(); });
   if ($('pg-detail')) $('pg-detail').onclick = function () { window.pg内訳 = !window.pg内訳; $('pg-detail').textContent = window.pg内訳 ? '内訳を隠す' : '内訳を出す'; if (ガイド種) ガイドを描く(); };
+  window.FM新規試す = function (j) { if (j) 索引を据える(j); ガイド種 = null; 新規を描く(); };   // KIJUN-2: 見本で確かめる用
   window.FMガイド試す = function (fields) { ガイド種 = { 番号: String(fields['伝票番号'] || 'test'), fields: fields }; ガイドを描く(); };   // 見本で確かめる用
   ['pg-pf', 'pg-eigyo'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', function () { if (ガイド種) ガイドを描く(); }); });
   if ($('pg-han')) $('pg-han').addEventListener('change', function () { if (ガイド種) ガイドを描く(); try { if (現在 && 手配の伝票) { 手配.事前 = 手配.事前 || {}; if ($('pg-han').value) 手配.事前.版 = $('pg-han').value; else delete 手配.事前.版; 手配が変わった.call($('pg-han')); } } catch (e) {} });   // HAN-1
