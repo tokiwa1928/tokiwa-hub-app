@@ -173,7 +173,9 @@ var TOKEN='', TOKEN_EXP=0, waiting=null, gisReady=null;
 function jwtBody(t){ try{ return JSON.parse(decodeURIComponent(escape(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))))); }catch(e){ return {}; } }
 function useToken(t){ var b=jwtBody(t); TOKEN=t; TOKEN_EXP=(b.exp||0)*1000; lsSet('meishi_jwt', t);
   $('who').textContent = b.email || ''; $('signin').style.display='none';
-  if (waiting){ var f=waiting; waiting=null; f(); } }
+  if (waiting){ var f=waiting; waiting=null; f(); }
+  else if ($('setup') && $('setup').style.display!=='none' && !_starting) start(); }   // MEISHI-SIGNIN: 時間切れの後にログインしても読み直す（本多さん 10/13「サインインができない」）
+try{ window.addEventListener('storage', function(e){ if (e && (e.key==='fm_id_token'||e.key==='meishi_jwt') && e.newValue && e.newValue!==TOKEN && (jwtBody(e.newValue).exp||0)*1000-Date.now()>5*60*1000) useToken(e.newValue); }); }catch(e){}
 function forget(){ TOKEN=''; TOKEN_EXP=0; try{ localStorage.removeItem('meishi_jwt'); }catch(e){} $('who').textContent=''; }
 function waitGis(){ return new Promise(function(ok,ng){ var n=100, t=setInterval(function(){ if (window.google&&google.accounts&&google.accounts.id){ clearInterval(t); ok(); } else if(--n<=0){ clearInterval(t); ng(new Error('Google のサインインを読み込めませんでした')); } },100); }); }
 function prepGis(){
@@ -187,7 +189,7 @@ function prepGis(){
   return gisReady;
 }
 function getToken(){
-  if (!TOKEN){ var j=lsGet('meishi_jwt',''); if (j && (jwtBody(j).exp||0)*1000-Date.now()>5*60*1000) useToken(j); }
+  if (!TOKEN){ [lsGet('meishi_jwt',''), lsGet('fm_id_token','')].some(function(j){ if (j && (jwtBody(j).exp||0)*1000-Date.now()>5*60*1000){ useToken(j); return true; } return false; }); }   // Hub（FileMaker 中継）でログイン済みならそれを使う（同じクライアントID）
   if (TOKEN && TOKEN_EXP-Date.now()>5*60*1000) return Promise.resolve(TOKEN);
   TOKEN='';
   return prepGis().then(function(){
@@ -222,8 +224,9 @@ async function pollAlive(){ try{ var r=await call('status'); showAlive(r.alive);
 
 // ───────── テンプレート・名刺マスタ ─────────
 var TPLS=[], RECS={}, TPL=null, REC=null, PERSON=null, LAST=null;
+var _starting=false;
 async function start(){
-  $('setup-msg').textContent='読み込み中…';
+  _starting=true; $('setup-msg').textContent='読み込み中…';
   try{
     var d = await call('init');
     TPLS=d.templates||[]; RECS=d.records||{}; showAlive(d.alive);
@@ -233,6 +236,7 @@ async function start(){
     $('tpl').value=String(idx); selectTpl(idx);
     setTimeout(pollAlive, 60000);
   }catch(e){ $('setup').style.display=''; $('setup-msg').innerHTML='<span style="color:var(--ng)">'+esc(e.message)+'</span>'; }
+  _starting=false;
 }
 function selectTpl(i){
   TPL=TPLS[i]; if(!TPL) return; lsSet('meishi_tpl', TPL.id);
