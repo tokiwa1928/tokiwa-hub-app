@@ -26687,7 +26687,8 @@ function _inqScopedAll_(){
 function _inqCanSwitchCompany_(){
   if(!currentAuth || !currentAuth.loggedIn) return false;
   var e = String(currentAuth.userEmail || currentAuth.email || '').toLowerCase();
-  return !!(e && SUPER_ADMINS.indexOf(e) >= 0);   // INQ-CO-2（本多さん 10/26）: 本多・福永 のアカウントだけ
+  if(e && SUPER_ADMINS.indexOf(e) >= 0) return true;   // INQ-CO-2: 本多・福永 のアカウント
+  return !e && (currentAuth.userName === '管理者' || !currentAuth.userId || currentAuth.userId === 'master');   // INQ-CO-4（本多さん 10/26）: 「会社を選んでログイン」の管理者も切り替えられる
 }
 function _inqIsTokiwaAcct_(){ return !!(currentAuth && (currentAuth.companyId === 'COMP002' || currentAuth.companyCode === 'TK')); }
 function _inqOwnKey_(){ var k = _coShortName_(currentAuth && (currentAuth.companyId || currentAuth.companyCode)); return (INQ_CO_COLORS || []).some(function(c){ return c.key === k; }) ? k : 'all'; }
@@ -27976,6 +27977,7 @@ function _applyDeepLink_(){
   try{
     var sp=new URLSearchParams(location.search); var f=sp.get('form'); var p=sp.get('page');
     if(sp.get('handoff')==='cal'){ _applyCalHandoff_(); return; }
+    var inqco=sp.get('inqco'); if(inqco){ try{ sessionStorage.setItem('inq_company_tab_tab', inqco); }catch(e){} window._inqCompanyTab_=inqco; window._inqTabMode_=true; if(!p) p='inquiry'; }   // INQ-CO-4: 別タブで会社ごとに開く
     if(f){ var fb=document.querySelector('.tb-btn[data-page="forms"]'); if(typeof swPage==='function') swPage('forms',fb); setTimeout(function(){ if(typeof openForm==='function') openForm(f); }, 300); return; }
     if(p){ var b=document.querySelector('.tb-btn[data-page="'+p+'"]'); if(typeof swPage==='function') swPage(p,b); if(/^fm(juchu|mitsu)$/.test(p)) _fmPageShow_(p); if(p==='teiki') _teikiOpen_(); }
     if(sp.get('tool')==='meishiprice'){
@@ -52012,7 +52014,7 @@ window._inqReadingPane_ = (function(){
   try { return localStorage.getItem('inq_reading_pane') || 'none'; } catch(e){ return 'none'; }
 })();
 window._inqCompanyTab_ = (function(){
-  try { return localStorage.getItem('inq_company_tab') || 'all'; } catch(e){ return 'all'; }
+  try { return sessionStorage.getItem('inq_company_tab_tab') || localStorage.getItem('inq_company_tab') || 'all'; } catch(e){ return 'all'; }   // INQ-CO-4: このタブで選んだ会社を優先（別タブごとに別の会社を出せる）
 })();
 
 function renderInquiryCompanyTabs(){
@@ -52022,7 +52024,7 @@ function renderInquiryCompanyTabs(){
   // INQ-CO-1: 切り替えられない人（本多・福永以外）は自社宛だけ → 会社タブは出さず、どこを見ているかを一言
   if(!_inqCanSwitchCompany_()){
     var ownName = (currentAuth && currentAuth.companyName) || _coShortName_(currentAuth && currentAuth.companyId) || '自社';
-    container.innerHTML='<div style="padding:7px 12px;font-size:13px;color:#334155;display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:10px;height:10px;background:'+_coColor_(currentAuth && currentAuth.companyId)+'"></span><b>'+ownName+'</b> 宛の連絡だけを表示しています'+((!(currentAuth&&(currentAuth.userEmail||currentAuth.email))&&_inqIsTokiwaAcct_())?'<span style="font-size:11px;color:#64748b;margin-left:6px">（会社を選んでログインしています。本多さん・福永さんは メールアドレスでログイン すると会社を切り替えられます）</span>':'')+'</div>';
+    container.innerHTML='<div style="padding:7px 12px;font-size:13px;color:#334155;display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:10px;height:10px;background:'+_coColor_(currentAuth && currentAuth.companyId)+'"></span><b>'+ownName+'</b> 宛の連絡だけを表示しています</div>';
     window._inqCompanyTab_='all';
     try{ _inqMobileBar_(); }catch(e){}   // スマホの [会社 ▾] も隠す
     var sw0=document.getElementById('inq-co-switch'); if(sw0){ sw0.style.display='none'; sw0.innerHTML=''; }
@@ -52031,7 +52033,7 @@ function renderInquiryCompanyTabs(){
 
   // INQ-CO-1: 入り口は自分の会社。並びは 自社 → 他社 → 全社（まとめて）。前の「全社」の覚えは 1 回だけ自社に戻す
   var ownKey = _inqOwnKey_();
-  try{ if(!localStorage.getItem('inq_company_tab_v2')){ localStorage.setItem('inq_company_tab_v2','1'); if(ownKey!=='all'){ window._inqCompanyTab_=ownKey; localStorage.setItem('inq_company_tab', ownKey); } } }catch(e){}
+  try{ if(!localStorage.getItem('inq_company_tab_v2') && !sessionStorage.getItem('inq_company_tab_tab')){ localStorage.setItem('inq_company_tab_v2','1'); if(ownKey!=='all'){ window._inqCompanyTab_=ownKey; localStorage.setItem('inq_company_tab', ownKey); } } }catch(e){}
   var companies = [
     { key:'トキワ',   label:'トキワ印刷',      color:'#65a30d' },
     { key:'村山',     label:'村山印刷',        color:'#6d28d9' },
@@ -52075,7 +52077,9 @@ function renderInquiryCompanyTabs(){
   if(sw){ sw.style.display='inline-flex'; sw.style.alignItems='center'; sw.style.gap='4px';
     sw.innerHTML='<label for="inq-co-sel" style="font-size:12px;color:#334155;font-weight:700;white-space:nowrap">表示する会社</label><select id="inq-co-sel" style="min-height:34px;font-size:14px;font-weight:700;padding:4px 8px;border:2px solid '+(_coColor_(current==='all'?'':current)||'#374151')+';background:#fff;max-width:230px">'
       + companies.map(function(c){ var n=counts[c.key]||0; return '<option value="'+c.key+'"'+(c.key===current?' selected':'')+'>'+c.label+(n?'（'+n+'）':'')+'</option>'; }).join('')+'</select>';
+    sw.innerHTML+='<button type="button" class="btn" style="font-size:12px;padding:5px 9px;white-space:nowrap" title="いま選んでいる会社の問い合わせを、別のブラウザのタブで開きます。タブごとに別の会社を出しておけます" onclick="_inqOpenCoTab_()">⧉ 別タブで開く</button>';
     var selEl=document.getElementById('inq-co-sel'); if(selEl) selEl.onchange=function(){ var v=this.value; if(v==='__teiki'){ if(typeof _teikiTab_==='function') _teikiTab_(); } else setInqCompanyTab(v); };
+    if(window._inqTabMode_){ var curC=companies.filter(function(c){ return c.key===current; })[0]; document.title=(curC?curC.label.replace(/^[^ぁ-んァ-ン一-龥A-Za-z]+/,''):'問い合わせ')+' の問い合わせ | Tokiwa Hub'; }
   }
 }
 
@@ -52227,9 +52231,10 @@ function _inqMobileBar_(){
   sel2.style.display = opts.length ? '' : 'none';   // INQ-CO-1: 切り替えられない人には会社の選択を出さない
   sel2.innerHTML=opts.map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+(o[2]?'（'+o[2]+'）':'')+'</option>'; }).join('');
 }
+function _inqOpenCoTab_(){ window.open(location.pathname+'?page=inquiry&inqco='+encodeURIComponent(window._inqCompanyTab_||'all'), '_blank'); }   // INQ-CO-4
 function setInqCompanyTab(key){
   window._inqCompanyTab_ = key;
-  try { localStorage.setItem('inq_company_tab', key); } catch(e){}
+  try { localStorage.setItem('inq_company_tab', key); sessionStorage.setItem('inq_company_tab_tab', key); } catch(e){}   // INQ-CO-4: タブごとにも覚える
   renderInquiryCompanyTabs();
   renderInquiryList();
   // OOOO-1: ステータス概要も選択中会社の件数に更新
