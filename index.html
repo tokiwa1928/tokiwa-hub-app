@@ -26661,7 +26661,7 @@ function _itemVisibleByCompany_(item){
 function _myInquiries_(){ return (DB.inquiries || []).filter(_inqVisibleByCompany_); }
 // 連絡(メール/LINE等)が見えてよいか。受信会社(channel_company等)が自社のものだけ (管理会社=全件)
 function _inqVisibleByCompany_(inq){
-  if(_canSeeAllCompanies_()) return true;
+  if(_inqCanSwitchCompany_()) return true;   // INQ-CO-1
   if(!inq) return true;
   // companyId が一致すればOK
   if(inq.companyId && inq.companyId === currentAuth.companyId) return true;
@@ -26670,17 +26670,28 @@ function _inqVisibleByCompany_(inq){
   var mineFull = (currentAuth && currentAuth.companyName) || '';
   var owner = String(inq.channel_company || inq.company || '');
   // 帰属不明の旧データは管理会社(トキワ)のみが見る。トキワ以外は自社に明確に紐づくものだけ。
-  if(!owner && !inq.companyId) return false;
+  if(!owner && !inq.companyId) return _inqIsTokiwaAcct_();   // INQ-CO-1
   if(mine && owner.indexOf(mine) >= 0) return true;
   if(mineFull && owner && (owner.indexOf(mineFull) >= 0 || mineFull.indexOf(owner) >= 0)) return true;
   return false;
 }
-// 会社スコープを反映した連絡一覧（管理会社=全件 / 他社=自社のみ）— 件数集計の基準
+// 会社スコープを反映した連絡一覧（切り替えられる人=全件 / ほか=自社のみ）— 件数集計の基準
 function _inqScopedAll_(){
   var all = DB.inquiries || [];
-  if(_canSeeAllCompanies_()) return all;
+  if(_inqCanSwitchCompany_()) return all;
   return all.filter(_inqVisibleByCompany_);
 }
+// INQ-CO-1: 問い合わせで会社を切り替えて見られる人。本多・福永（SUPER_ADMINS）か、ユーザー一覧の 閲覧範囲＝全社 を明示した人だけ。
+//   ログイン時の role/viewScope は PW_CHECK_DISABLED で全員 admin/'all' になるので使わない
+function _inqCanSwitchCompany_(){
+  if(!currentAuth || !currentAuth.loggedIn) return false;
+  var e = String(currentAuth.userEmail || currentAuth.email || '').toLowerCase();
+  if(e && SUPER_ADMINS.indexOf(e) >= 0) return true;
+  var u = e ? (DB.systemUsers || []).find(function(x){ return String(x.email || '').toLowerCase() === e; }) : null;
+  return !!(u && u.viewScope === 'all');
+}
+function _inqIsTokiwaAcct_(){ return !!(currentAuth && (currentAuth.companyId === 'COMP002' || currentAuth.companyCode === 'TK')); }
+function _inqOwnKey_(){ var k = _coShortName_(currentAuth && (currentAuth.companyId || currentAuth.companyCode)); return (INQ_CO_COLORS || []).some(function(c){ return c.key === k; }) ? k : 'all'; }
 // 会社別の表示設定 (TK役員が決める)。DB.companyVisibility['COMP004'] = 表示する機能キーの配列。
 // 未設定(配列でない)=全表示。配列がある場合、そこに無いページは非表示。
 function _pageHiddenForMe_(pageId){
@@ -52009,25 +52020,30 @@ function renderInquiryCompanyTabs(){
   var container = document.getElementById('inq-company-tabs');
   if(!container) return;
 
-  // トキワ以外（管理会社でない）は自社のみ → 会社タブ自体を非表示
-  if(typeof _canSeeAllCompanies_==='function' && !_canSeeAllCompanies_()){
-    container.innerHTML='';
+  // INQ-CO-1: 切り替えられない人（本多・福永以外）は自社宛だけ → 会社タブは出さず、どこを見ているかを一言
+  if(!_inqCanSwitchCompany_()){
+    var ownName = (currentAuth && currentAuth.companyName) || _coShortName_(currentAuth && currentAuth.companyId) || '自社';
+    container.innerHTML='<div style="padding:7px 12px;font-size:13px;color:#334155;display:flex;align-items:center;gap:8px"><span style="display:inline-block;width:10px;height:10px;background:'+_coColor_(currentAuth && currentAuth.companyId)+'"></span><b>'+ownName+'</b> 宛の連絡だけを表示しています</div>';
     window._inqCompanyTab_='all';
+    try{ _inqMobileBar_(); }catch(e){}   // スマホの [会社 ▾] も隠す
     return;
   }
 
-  // グループ7社 + 全社（管理会社=トキワのみ）
+  // INQ-CO-1: 入り口は自分の会社。並びは 自社 → 他社 → 全社（まとめて）。前の「全社」の覚えは 1 回だけ自社に戻す
+  var ownKey = _inqOwnKey_();
+  try{ if(!localStorage.getItem('inq_company_tab_v2')){ localStorage.setItem('inq_company_tab_v2','1'); if(ownKey!=='all'){ window._inqCompanyTab_=ownKey; localStorage.setItem('inq_company_tab', ownKey); } } }catch(e){}
   var companies = [
-    { key:'all',     label:'🏢 全社',         color:'#374151' },
     { key:'トキワ',   label:'トキワ印刷',      color:'#65a30d' },
     { key:'村山',     label:'村山印刷',        color:'#6d28d9' },
     { key:'北上',     label:'北上プリント',    color:'#ea580c' },
     { key:'アート',   label:'アート・エス',    color:'#1d4ed8' },
     { key:'津島',     label:'津島プリント',    color:'#78350f' },
     { key:'中尾',     label:'中尾印刷',        color:'#9f1239' },
-    { key:'ヤマウチ', label:'ヤマウチ印刷',    color:'#ca8a04' },
+    { key:'ヤマウチ', label:'ヤマウチ印刷',    color:'#ca8a04' }
+  ].sort(function(a,b){ return (a.key===ownKey?0:1)-(b.key===ownKey?0:1); }).concat([
+    { key:'all',     label:'🏢 全社（まとめて）', color:'#374151' },
     { key:'__teiki', label:'🔁 定期でやること', color:'#9a5b06', teiki:true }   // YARUKOTO-3: 問い合わせではないが、メールと同じようにここに入ってくる
-  ];
+  ]);
 
   // 各社の件数（管理会社スコープ＝全件）
   var base = (typeof _inqScopedAll_==='function') ? _inqScopedAll_() : (DB.inquiries||[]);
@@ -52201,7 +52217,7 @@ function _inqMobileBar_(){
     var oc=b.getAttribute('onclick')||''; var m=/setInqCompanyTab\('([^']*)'\)/.exec(oc); var key=m?m[1]:(/_teikiTab_/.test(oc)?'__teiki':''); if(!key) return;
     var sp=b.querySelector('span'); var n=sp?sp.textContent.trim():''; var label=b.textContent.replace(n,'').trim(); opts.push([key,label,n]);
   });
-  if(!opts.length) opts=INQ_CO_COLORS.map(function(c){ return [c.key,c.label,'']; });
+  sel2.style.display = opts.length ? '' : 'none';   // INQ-CO-1: 切り替えられない人には会社の選択を出さない
   sel2.innerHTML=opts.map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+(o[2]?'（'+o[2]+'）':'')+'</option>'; }).join('');
 }
 function setInqCompanyTab(key){
