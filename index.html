@@ -26637,8 +26637,13 @@ function _isSuperAdmin_(){
   return currentAuth.role === 'admin';
 }
 function _isMgmtCompany_(){
-  if(currentAuth && currentAuth.viewScope === 'all') return true; // 閲覧範囲=全社のユーザー
-  return !!(currentAuth && (currentAuth.companyId === 'COMP002' || currentAuth.companyCode === 'TK'));
+  if(!currentAuth || !currentAuth.loggedIn) return false;
+  if(currentAuth.companyId === 'COMP002' || currentAuth.companyCode === 'TK') return true;   // トキワ＝管理会社（FileMaker に登録されている全部が見える）
+  // COSCOPE-3（本多さん 10/26「案件管理は該当会社だけ」）: 閲覧範囲＝全社 は ユーザー一覧で明示した人だけ。ログイン時の viewScope は PW_CHECK_DISABLED で全員 'all' になるので見ない
+  var e = String(currentAuth.userEmail || currentAuth.email || '').toLowerCase();
+  if(e && SUPER_ADMINS.indexOf(e) >= 0) return true;
+  var u = e ? (DB.systemUsers || []).find(function(x){ return String(x.email || '').toLowerCase() === e; }) : null;
+  return !!(u && u.viewScope === 'all');
 }
 function _canSeeAllCompanies_(){ return _isMgmtCompany_(); }
 // 表示設定を変更できるのはトキワの役員2名 (TK admin または DB.conf.tkExecs に登録された氏名/メール)
@@ -26652,9 +26657,12 @@ function _isTkExec_(){
 // データが現在のユーザーに見えてよいか (管理会社=全件 / 他社=自社companyIdのみ)
 function _itemVisibleByCompany_(item){
   if(_canSeeAllCompanies_()) return true;
-  if(!item || !item.companyId) return true; // companyId 無し(旧データ)は自社扱い
-  // 閲覧範囲に指定会社がある場合はそれも許可
-  var sc = currentAuth && currentAuth.viewScope;
+  if(!item) return true;
+  if(!item.companyId) return currentAuth.companyId === 'COMP001';   // COSCOPE-3: companyId 無し(旧データ)は Hub の既定だった村山だけ（トキワは上で全件）。中尾などには出さない
+  // 閲覧範囲に指定会社がある場合はそれも許可（ユーザー一覧で明示したもの）
+  var e2 = String(currentAuth.userEmail || currentAuth.email || '').toLowerCase();
+  var u2 = e2 ? (DB.systemUsers || []).find(function(x){ return String(x.email || '').toLowerCase() === e2; }) : null;
+  var sc = u2 && u2.viewScope;
   if(Array.isArray(sc) && sc.indexOf(item.companyId) >= 0) return true;
   return item.companyId === currentAuth.companyId;
 }
@@ -47082,7 +47090,7 @@ function _projFmHits_(rows){
   var tbl = document.getElementById('proj-body'); tbl = tbl && tbl.closest('table'); if(!tbl) return;
   var box = document.getElementById('proj-fm-hits');
   var q = _projAnyQ_();
-  if(!q){ if(box) box.remove(); return; }
+  if(!q || (typeof _canSeeAllCompanies_==='function' && !_canSeeAllCompanies_())){ if(box) box.remove(); return; }   // COSCOPE-3: FileMaker の受注はトキワだけ
   if(!box){ box = document.createElement('div'); box.id = 'proj-fm-hits'; box.style.cssText = 'margin:10px 0 0;border:1px solid #cbd5e1;background:#fff'; tbl.parentNode.insertBefore(box, tbl.nextSibling); }
   var token = (window._projFmHitsToken_ = (window._projFmHitsToken_||0) + 1);
   box.innerHTML = '<div style="padding:6px 10px;font-size:12px;color:#64748b">🗄 FileMaker の受注から探しています…</div>';
