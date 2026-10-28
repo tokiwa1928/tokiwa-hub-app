@@ -54385,6 +54385,43 @@ function _inqKnownContacts_(){
 function _inqKnownContact_(inq){ var k=_inqKnownContacts_(); var e=String(inq.from_email||inq.email||'').toLowerCase(); if(!e) return false; return !!(k.emails[e]||k.domains[_inqDomain_(e)]); }
 function _inqBinRules_(){ DB.inqBinRules = DB.inqBinRules || { byEmail:{}, byDomain:{} }; if(!DB.inqBinRules.byEmail) DB.inqBinRules.byEmail={}; if(!DB.inqBinRules.byDomain) DB.inqBinRules.byDomain={}; return DB.inqBinRules; }
 // 自動仕分け。{ bin, reason }
+// AI-BIN-1: 取り込み側（メール振り分け）の AI 判定は kind に載って来る。kind ↔ 箱
+const _INQ_KIND_BIN_ = { quote_req:'見積', budget_quote:'予算見積', proof_return:'校正', order:'受注', question:'質問', mgmt:'経営', notice:'控え', junk:'ジャンク', schedule:'質問' };
+const _INQ_BIN_KIND_ = { '見積':'quote_req', '予算見積':'budget_quote', '校正':'proof_return', '受注':'order', '質問':'question', '経営':'mgmt', '控え':'notice', 'ジャンク':'junk', 'その他':'general' };
+// 振り分け前にたまっている分を 10 通ずつ Claude（会社 GAS claudeText）に聞いて kind に保存する
+async function _inqAiSortRun_(){
+  var list=(window._inqAllForCounts_||DB.inquiries||[]).filter(function(q){ if(!q || q.isSpam || q.status==='done' || q.outcome || q.bin || q._aiTried) return false; _inqBin_(q); return !/^(前に同じ|AI の判定|社間の発注|社内連絡)/.test(String(q.bin_reason||'')); })
+    .sort(function(a,b){ return new Date(b.received_at||b.createdAt||0)-new Date(a.received_at||a.createdAt||0); });   // 言葉の当たりで決めた分と振り分け前。新しい順
+  if(!list.length){ alert('AI で判定し直すものがありません（人が決めたもの・覚えている差出人・AI 済みは対象外）'); return; }
+  var n=Math.min(list.length, 200);
+  if(!confirm('言葉の当たりだけで自動に入っているもの＋振り分け前 '+list.length+' 件のうち、新しい '+n+' 件を AI（Claude）で判定し直します。10 通ずつまとめて聞くので '+Math.ceil(n/10)+' 回の呼び出しです（少額の利用料がかかります）。\n判定は「AI の判定」として振り分け後に入り、違えばボタンで直せます。\n\n始めますか？')) return;
+  var btn=document.getElementById('inq-ai-sort-btn'); var done=0, changed=0, fail=0; window._inqAiSortStop_=false;
+  var bins=['受注','見積','予算見積','校正','質問','経営','控え','ジャンク','その他'];
+  for(var i=0;i<n;i+=10){
+    if(window._inqAiSortStop_) break;
+    var chunk=list.slice(i,i+10);
+    if(btn) btn.textContent='🤖 判定中… '+done+' / '+n+'（押すと止める）';
+    var prompt='あなたは印刷会社の問い合わせ係です。次の各メールを 1 つの箱に振り分けてください。箱: '+bins.join('／')+'\n'
+      +'決まり: 受注＝注文・発注・進めてください（こちらが作る仕事の注文）／見積＝見積の依頼／予算見積＝来年度などの予算用の見積依頼／校正＝校正の戻り・赤字・校了／質問＝納期・仕様などの問い合わせで返事がいる／経営＝請求・支払・契約・行政・銀行など会社の事務／控え＝返事のいらない通知（受け付けました・出荷しました・自動送信・ログイン通知・利用明細・入札システムの通知）／ジャンク＝広告・メルマガ・営業の売り込み／その他＝どれでもない。\n'
+      +'社内（tokiwap.co.jp 等）からの転送 FAX で本文が無いものは その他。\n'
+      +'出力は JSON の配列だけ。各要素は {"i":番号,"bin":"箱","why":"10 字以内の理由"}。前置き不要。\n\n'
+      +chunk.map(function(q,k){ var body=String(q.body||q.summary||'').replace(/\s+/g,' ').slice(0,350); return '['+(k+1)+'] 差出人: '+String(q.from_email||'')+' / 件名: '+String(q.subject||'').slice(0,80)+' / 本文: '+body; }).join('\n');
+    try{
+      var r=await callCloudAPI('claudeText',{},{ prompt:prompt, maxTokens:600 });
+      var txt=(r&&r.success)?String(r.reply||r.text||''):''; if(!txt) throw new Error((r&&r.error)||'応答なし');
+      var m=txt.match(/\[[\s\S]*\]/); var arr=JSON.parse(m?m[0]:txt);
+      arr.forEach(function(x){ var q=chunk[(parseInt(x.i,10)||0)-1]; if(!q) return; var bin=bins.indexOf(String(x.bin||'').trim())>=0?String(x.bin).trim():'その他'; var kind=_INQ_BIN_KIND_[bin]||'general';
+        q._aiTried=true; if(q.kind!==kind){ q.kind=kind; changed++; try{ callCloudAPI('updateCommunication',{},{ id:q.id, patch:{ kind:kind } }); }catch(e){} }
+        delete q.bin_auto; delete q.bin_reason; if(kind!=='general'){ q.bin_auto=bin; q.bin_reason='AI の判定'+(x.why?'：'+String(x.why).slice(0,20):''); } });
+      chunk.forEach(function(q){ q._aiTried=true; });
+    }catch(e){ console.warn('[AI 振り分け]', e); fail++; chunk.forEach(function(q){ q._aiTried=true; }); if(/daily_limit|ai_disabled/.test(String(e&&e.message||e))){ alert('AI が止まっています: '+(e.message||e)); break; } }
+    done+=chunk.length; window._inqKnownCache_=null;
+    try{ renderInquiryList(); }catch(e){} btn=document.getElementById('inq-ai-sort-btn');
+  }
+  if(typeof saveDB==='function') try{ saveDB(); }catch(e){}
+  window._inqAiSortStop_=false; try{ renderInquiryList(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('🤖 AI 判定 '+done+' 件（振り分け後へ '+changed+' 件'+(fail?'・失敗 '+fail+' 回':'')+'）');
+}
 function _inqBinAuto_(inq){
   var subj=String(inq.subject||''), body=String(inq.body||inq.summary||'').slice(0,2000); var text=(subj+' '+body).toLowerCase(); var sl=subj.toLowerCase();
   var email=String(inq.from_email||inq.email||'').toLowerCase(); var dom=_inqDomain_(email); var src=inq.source_type||'manual';
@@ -54393,7 +54430,8 @@ function _inqBinAuto_(inq){
   if(dom && _inqOwnDomains_()[dom]) return { bin:'その他', reason:'社内の差出人（'+dom+'）' };   // INQ-SLACK-2
   // INQ-OUTCOME: 受付・確認の通知（受け付けました／受注しました／自動送信）は「控え」。ただし要対応の文言があれば控えにしない
   if(!_inqImportant_(inq) && /受け付けました|受付けました|受付いたしました|受付致しました|受注しました|受注いたしました|ご注文ありがとう|注文を承り|自動送信|自動配信|発注確認|注文確認|受領しました|受領いたしました|登録完了|お申し?込みありがとう|配送手配|出荷しました|発送しました/.test(subj+' '+body.slice(0,400)) && !/お願い|下さい|ください|でしょうか|ますか|いただけ/.test(subj+' '+body.slice(0,200))) return { bin:'控え', reason:'受付・確認の通知（発注の記録として残す）' };
-  var rules=_inqBinRules_(); if(email&&rules.byEmail[email]) return { bin:rules.byEmail[email], reason:'前に同じ差出人をそう仕分けた' }; if(dom&&rules.byDomain[dom]) return { bin:rules.byDomain[dom], reason:'前に同じ会社（ドメイン）をそう仕分けた' };
+  var rules=_inqBinRules_(); if(email&&rules.byEmail[email]) return { bin:rules.byEmail[email], reason:'前に同じ差出人をそう仕分けた' };
+  var kb=_INQ_KIND_BIN_[inq.kind]; if(kb && src!=='manual') return { bin:kb, reason:'AI の判定' };   // AI-BIN-1 if(dom&&rules.byDomain[dom]) return { bin:rules.byDomain[dom], reason:'前に同じ会社（ドメイン）をそう仕分けた' };
   var score={}; Object.keys(_INQ_BIN_WORDS).forEach(function(b){ var n=0, hit=[]; _INQ_BIN_WORDS[b].forEach(function(w){ var wl=w.toLowerCase(); if(sl.indexOf(wl)>=0){ n+=2; hit.push(w); } else if(text.indexOf(wl)>=0){ n+=1; hit.push(w); } }); score[b]={ n:n, hit:hit.slice(0,4) }; });
   var junk=0, jhit=[]; _INQ_JUNK_WORDS.forEach(function(w){ if(text.indexOf(w.toLowerCase())>=0||email.indexOf(w)>=0){ junk++; jhit.push(w); } });
   var biz=_INQ_BUSINESS_WORDS.some(function(w){ return text.indexOf(w)>=0; }); var known=_inqKnownContact_(inq);
@@ -54555,6 +54593,7 @@ function _renderInqBinTabs_(){
   // SORT-STAGE-1: 振り分け前 ｜ 振り分け後: 各箱 ｜ 待ち ｜ すべて
   var preOn=window._inqBinSel_==='__pre'&&!window._inqWaitSel_;
   var h='<button onclick="setInqBin(\'__pre\')" title="人がまだ振り分けを決めていないもの（自動の提案だけ）。札の「✔ この振り分けで OK」か振り分けのボタンで決めると、振り分け後へ移ります" style="font-size:13px;font-weight:900;padding:6px 14px;border:2px solid #b45309;background:'+(preOn?'#b45309':'#fffbeb')+';color:'+(preOn?'#fff':'#b45309')+';cursor:pointer">📥 振り分け前 <span style="font-size:15px">'+(cnt.pre||0)+'</span></button>'
+    +'<button id="inq-ai-sort-btn" onclick="if(window._inqAiSortStop_===false){window._inqAiSortStop_=true;return;}_inqAiSortRun_()" title="振り分け前と、言葉の当たりだけで自動に入っているものを Claude に 10 通ずつ聞いて判定し直します（新しい順に 200 件ずつ・少額の利用料）。人が決めたもの・覚えている差出人は触りません" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #7c3aed;background:#fff;color:#7c3aed;cursor:pointer;margin-left:6px">🤖 AI で判定</button>'
     +'<span style="font-size:11px;font-weight:700;color:#115e59;margin-left:10px">振り分け後:</span>';
   INQ_BINS.forEach(function(b){ h+=chip(b.icon+' '+esc(b.label), cnt[b.k]||0, window._inqBinSel_===b.k, b.color, "setInqBin('"+b.k+"')", b.label+'（人が決めたもの・覚えている差出人のもの）'); });
   h+=chip('⏳ 待ち', cnt.wait||0, !!window._inqWaitSel_, '#b45309', "_inqWaitToggle_()", '外注見積待ち・返事待ち・データ待ち などにしたもの');
