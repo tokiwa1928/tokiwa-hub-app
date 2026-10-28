@@ -54246,9 +54246,9 @@ function _inqRefMenu_(id){
 function _inqRefDo_(id, how){
   var inq = (DB.inquiries||[]).find(function(x){ return x.id === id; }); if(!inq) return;
   _inqSetOutcome_(id, 'archived', true);
-  if(how === 'sender'){ var e = String(inq.from_email || inq.email || '').trim().toLowerCase(); if(e){ var r = _inqBinRules_(); r.byEmail[e] = '控え'; if(typeof saveDB === 'function') try{ saveDB(); }catch(x){} } }
+  var moved = 0; if(how === 'sender' || how === 'domain'){ moved = _inqRememberRule_(inq, '控え', how); if(typeof saveDB === 'function') try{ saveDB(); }catch(x){} }   // RULE-MENU-1
   try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){}
-  if(typeof _toastMsg === 'function') _toastMsg('🗂 参考（控え）にしました' + (how === 'sender' ? '（この差出人は次から参考（控え）に）' : ''));
+  if(typeof _toastMsg === 'function') _toastMsg('🗂 参考（控え）にしました' + (how === 'sender' ? '（この差出人は次から参考（控え）に' + (moved ? '・ほか ' + moved + ' 通も' : '') + '）' : how === 'domain' ? '（この会社は次から参考（控え）に' + (moved ? '・ほか ' + moved + ' 通も' : '') + '）' : ''));
 }
 function _markInqSpam2_(id, how){
   var inq = (DB.inquiries||[]).find(function(x){ return x.id === id; }); if(!inq) return;
@@ -54479,16 +54479,46 @@ const INQ_RULES_V=5;   // AI-BIN-4: 規則を変えたら上げる → 端末に
 function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; if(!inq.bin_auto || inq.bin_auto_v!==INQ_RULES_V){ try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } inq.bin_auto_v=INQ_RULES_V; delete inq._impCache; } return inq.bin_auto; }
 function _inqBinMeta_(k){ return INQ_BINS.find(function(b){ return b.k===k; })||INQ_BINS[6]; }
 // 人が直す: 覚える（差出人のメール）。見積・受注・校正・経営・質問・ジャンク は覚え、その他は覚えない
-function _inqSetBin_(id, bin){
+function _inqSetBin_(id, bin, how){   // RULE-MENU-1: how = 'one'（この 1 通だけ・既定）／'sender'（この差出人は今後も）／'domain'（この会社は今後も）
   var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return;
   inq.bin=bin; inq.bin_by=(currentAuth&&currentAuth.userName)||''; inq.bin_at=new Date().toISOString();
   var m=_inqBinMeta_(bin); if(m.kind && !inq.kind) inq.kind=m.kind;
-  var email=String(inq.from_email||inq.email||'').toLowerCase(); if(email && bin!=='その他'){ var r=_inqBinRules_(); r.byEmail[email]=bin; }
+  var moved=0; if(how==='sender'||how==='domain') moved=_inqRememberRule_(inq, bin, how);
   window._inqKnownCache_=null;
   if(typeof saveDB==='function') try{ saveDB(); }catch(e){}
   if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ bin:bin, bin_by:inq.bin_by, bin_at:inq.bin_at, kind:inq.kind||'' } }); }catch(e){}
   try{ renderInquiryList(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg(m.icon+' '+m.label+' にしました'+(how==='sender'?'（この差出人は今後も同じ'+(moved?'・ほか '+moved+' 通も移しました':'')+'）':how==='domain'?'（この会社は今後も同じ'+(moved?'・ほか '+moved+' 通も移しました':'')+'）':''));
 }
+// RULE-MENU-1: 覚えに入れ、同じ差出人／会社の（人が決めていない）メールもその場で判定し直す。戻り値＝影響した通数
+function _inqRememberRule_(inq, bin, how){
+  var email=String(inq.from_email||inq.email||'').trim().toLowerCase(); var dom=_inqDomain_(email); if(!email) return 0;
+  var r=_inqBinRules_(); if(how==='domain'){ if(!dom) return 0; r.byDomain[dom]=bin; } else { r.byEmail[email]=bin; }
+  var n=0; (DB.inquiries||[]).forEach(function(q){ if(!q||q===inq||q.bin) return; var e2=String(q.from_email||q.email||'').trim().toLowerCase(); if(how==='domain' ? (_inqDomain_(e2)===dom) : (e2===email)){ delete q.bin_auto; delete q.bin_reason; n++; } });
+  return n;
+}
+// RULE-MENU-1: ▾ の選択（① この 1 通だけ ② この差出人は今後もすべて ③ この会社は今後もすべて）
+function _inqBinMenu_(id, bin){
+  var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return;
+  var esc=_inqEsc_; var email=String(inq.from_email||inq.email||'').trim().toLowerCase(); var dom=_inqDomain_(email); var m=_inqBinMeta_(bin)||{ icon:'', label:bin, color:'#334155' };
+  var label=bin==='控え'?'参考（控え）':bin==='ジャンク'?'迷惑':bin==='見積'?'見積依頼':m.label;
+  var same=(DB.inquiries||[]).filter(function(q){ return q&&q!==inq&&!q.bin&&String(q.from_email||q.email||'').trim().toLowerCase()===email; }).length;
+  var sameDom=dom?(DB.inquiries||[]).filter(function(q){ return q&&q!==inq&&!q.bin&&_inqDomain_(String(q.from_email||q.email||'').toLowerCase())===dom; }).length:0;
+  var act=function(how){ return bin==='控え' ? "_inqRefDo_('"+esc(id)+"','"+how+"')" : bin==='ジャンク' ? (how==='domain' ? "_inqJunkDomain_('"+esc(id)+"')" : "_markInqSpam2_('"+esc(id)+"','"+how+"')") : "_inqSetBin_('"+esc(id)+"','"+esc(bin)+"','"+how+"')"; };
+  var old=document.getElementById('inq-spam-menu'); if(old) old.remove();
+  var d=document.createElement('div'); d.id='inq-spam-menu'; d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px';
+  d.innerHTML='<div style="background:#fff;width:min(560px,96vw);padding:16px 18px;font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:15px;font-weight:900;color:'+m.color+'">'+m.icon+' '+esc(label)+' にする</div>'
+    +'<div style="color:#475569;margin:4px 0 10px">'+esc(inq.from_name||'')+(inq.from_company?'（'+esc(inq.from_company)+'）':'')+(email?'　<span style="font-family:monospace">'+esc(email)+'</span>':'')+'<br>「'+esc(String(inq.subject||'').slice(0,50))+'」</div>'
+    +'<div style="display:flex;flex-direction:column;gap:8px">'
+    +'<button class="btn" style="text-align:left;padding:10px 12px" onclick="document.getElementById(\'inq-spam-menu\').remove();'+act('one')+'"><b>① この 1 通だけ</b><div style="font-size:11.5px;color:#64748b">差出人は覚えません</div></button>'
+    +(email?'<button class="btn" style="text-align:left;padding:10px 12px;border-color:'+m.color+'" onclick="document.getElementById(\'inq-spam-menu\').remove();'+act('sender')+'"><b>② この差出人は今後もすべて '+esc(label)+'</b><div style="font-size:11.5px;color:#64748b">'+esc(email)+' を覚えて、次から自動でここに入れます'+(same?'。いま残っている '+same+' 通もここに移します':'')+'</div></button>':'')
+    +(dom?'<button class="btn" style="text-align:left;padding:10px 12px;border-color:'+m.color+';background:#f8fafc" onclick="document.getElementById(\'inq-spam-menu\').remove();'+act('domain')+'"><b>③ この会社（@'+esc(dom)+'）は今後もすべて '+esc(label)+'</b><div style="font-size:11.5px;color:#64748b">同じドメインの差出人を全部覚えます'+(sameDom?'。いま残っている '+sameDom+' 通もここに移します':'')+'</div></button>':'')
+    +'</div><div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="document.getElementById(\'inq-spam-menu\').remove()">やめる</button></div></div>';
+  document.body.appendChild(d);
+}
+// RULE-MENU-1: この会社（ドメイン）は今後も迷惑（Hub の中だけ。Gmail の受信拒否はしない）
+function _inqJunkDomain_(id){ var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return; var n=_inqRememberRule_(inq, 'ジャンク', 'domain'); _inqSetOutcome_(id, 'junk', true); if(typeof saveDB==='function') try{ saveDB(); }catch(e){} try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('🚫 この会社は今後も迷惑にします'+(n?'（ほか '+n+' 通も）':'')); }
 function _inqBinChip_(inq){
   var k=_inqBin_(inq), m=_inqBinMeta_(k); var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
   var auto=!inq.bin; var title=(auto?'自動の仕分け':'手で仕分け（'+(inq.bin_by||'')+'）')+(inq.bin_reason?'：'+inq.bin_reason:'');
@@ -54888,10 +54918,13 @@ function _inqOpenBody_(q){
 // 5 つの振り分け。いまの仕分けは塗りつぶし
 function _inqSortRow_(q){
   var id=_inqEsc_(q.id), cur=_inqBin_(q), sorted=_inqSorted_(q), manual=!!q.bin, cm=_inqBinMeta_(cur);
-  var b=function(label,icon,color,js,hit,tip){
-    if(hit && sorted) return '<button class="btn inq-sort-on" style="font-size:15px;font-weight:900;padding:8px 18px;min-height:44px;border:3px solid #0f172a;color:#fff;background:'+color+';box-shadow:0 3px 10px rgba(0,0,0,.28);transform:scale(1.04)" title="いまはここに振り分けられています。'+_inqEsc_(tip||'')+'" onclick="event.stopPropagation();'+js+'">'+icon+' '+label+' <span style="font-size:10.5px;font-weight:900;background:#fff;color:'+color+';padding:1px 7px;border-radius:9px;margin-left:6px;vertical-align:middle">選択中 ✓</span></button>';
-    if(hit) return '<button class="btn inq-sort-sug" style="font-size:15px;font-weight:900;padding:8px 18px;min-height:44px;border:3px dashed '+color+';color:'+color+';background:#fff" title="自動の提案です。押すとこの振り分けで決まります。'+_inqEsc_(tip||'')+'" onclick="event.stopPropagation();'+js+'">'+icon+' '+label+' <span style="font-size:10.5px;font-weight:900;background:'+color+';color:#fff;padding:1px 7px;border-radius:9px;margin-left:6px;vertical-align:middle">提案</span></button>';   // （いまは振り分け前＝その他だけなので通らない。残しておく）
-    return '<button class="btn" style="font-size:14px;font-weight:700;padding:8px 16px;min-height:40px;border:1.5px solid '+color+';color:'+color+';background:#fff;opacity:.62" title="'+_inqEsc_(tip||'')+'" onclick="event.stopPropagation();'+js+'" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.62">'+icon+' '+label+'</button>'; };
+  var b=function(label,icon,color,js,hit,tip,bin){
+    var caret='<button class="btn" style="font-size:13px;font-weight:900;padding:0 8px;min-height:'+(hit&&sorted?'44':'40')+'px;border:'+(hit&&sorted?'3px solid #0f172a':'1.5px solid '+color)+';border-left:0;color:'+(hit&&sorted?'#fff':color)+';background:'+(hit&&sorted?color:'#fff')+';margin-left:-8px" title="この差出人／この会社は今後もすべて '+_inqEsc_(label)+' にする" onclick="event.stopPropagation();_inqBinMenu_(\''+id+'\',\''+_inqEsc_(bin)+'\')">▾</button>';
+    var core;
+    if(hit && sorted) core='<button class="btn inq-sort-on" style="font-size:15px;font-weight:900;padding:8px 18px;min-height:44px;border:3px solid #0f172a;color:#fff;background:'+color+';box-shadow:0 3px 10px rgba(0,0,0,.28);transform:scale(1.04)" title="いまはここに振り分けられています。'+_inqEsc_(tip||'')+'" onclick="event.stopPropagation();'+js+'">'+icon+' '+label+' <span style="font-size:10.5px;font-weight:900;background:#fff;color:'+color+';padding:1px 7px;border-radius:9px;margin-left:6px;vertical-align:middle">選択中 ✓</span></button>';
+    else if(hit) core='<button class="btn inq-sort-sug" style="font-size:15px;font-weight:900;padding:8px 18px;min-height:44px;border:3px dashed '+color+';color:'+color+';background:#fff" title="自動の提案です。押すとこの振り分けで決まります。'+_inqEsc_(tip||'')+'" onclick="event.stopPropagation();'+js+'">'+icon+' '+label+' <span style="font-size:10.5px;font-weight:900;background:'+color+';color:#fff;padding:1px 7px;border-radius:9px;margin-left:6px;vertical-align:middle">提案</span></button>';
+    else core='<button class="btn" style="font-size:14px;font-weight:700;padding:8px 16px;min-height:40px;border:1.5px solid '+color+';color:'+color+';background:#fff;opacity:.62" title="この 1 通だけ。▾ で「今後もすべて」。'+_inqEsc_(tip||'')+'" onclick="event.stopPropagation();'+js+'" onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=.62">'+icon+' '+label+'</button>';
+    return '<span style="display:inline-flex;align-items:stretch">'+core+caret+'</span>'; };
   var reason=String(q.bin_reason||'').slice(0,40); var byRule=/^前に同じ/.test(String(q.bin_reason||''));
   var now;
   if(!sorted){
@@ -54906,11 +54939,11 @@ function _inqSortRow_(q){
       +'</span>';
   }
   return '<div class="inq-sortrow" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:6px 8px;background:#f8fafc;border:1px solid #e2e8f0"><span style="font-size:12px;color:#334155;font-weight:900;min-width:64px">振り分け</span>'
-    +b('見積依頼','📝','#1d4ed8',"_inqSetBin_('"+id+"','見積')",cur==='見積'||cur==='予算見積','見積書を作る仕事に入れます（差出人を覚えて次から同じ）')
-    +b('校正','🖍','#7c3aed',"_inqSetBin_('"+id+"','校正')",cur==='校正','校正の戻り・校了として扱います')
-    +b('受注','✅','#065f46',"_inqSetBin_('"+id+"','受注')",cur==='受注','受注入力に進める連絡にします')
-    +b('参考（控え）','🗂','#78716c',"_inqRefMenu_('"+id+"')",cur==='控え'||q.outcome==='archived','返事のいらない記録だけの連絡（受け付け・自動送信・注文の控え・出荷のお知らせ）。データは残り、今日やることから外れます')
-    +b('迷惑','🚫','#b91c1c',"_inqJunkConfirm_('"+id+"')",cur==='ジャンク'||q.outcome==='junk','広告など、業務と関係ないメール。押すと「本当にいいですか」と聞きます')
+    +b('見積依頼','📝','#1d4ed8',"_inqSetBin_('"+id+"','見積')",cur==='見積'||cur==='予算見積','見積書を作る仕事に入れます','見積')
+    +b('校正','🖍','#7c3aed',"_inqSetBin_('"+id+"','校正')",cur==='校正','校正の戻り・校了として扱います','校正')
+    +b('受注','✅','#065f46',"_inqSetBin_('"+id+"','受注')",cur==='受注','受注入力に進める連絡にします','受注')
+    +b('参考（控え）','🗂','#78716c',"_inqRefDo_('"+id+"','one')",cur==='控え'||q.outcome==='archived','返事のいらない記録だけの連絡（受け付け・自動送信・注文の控え・出荷のお知らせ）。データは残り、今日やることから外れます','控え')
+    +b('迷惑','🚫','#b91c1c',"_inqJunkConfirm_('"+id+"')",cur==='ジャンク'||q.outcome==='junk','広告など、業務と関係ないメール。押すと「本当にいいですか」と聞きます','ジャンク')
     +now+'</div>';
 }
 // SORT-STAGE-1: 振り分けが「決まっている」か。人が押したか、覚えている差出人（前に同じ差出人／会社をそう仕分けた）なら決まり。それ以外の自動は提案だけ
