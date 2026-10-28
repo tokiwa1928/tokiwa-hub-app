@@ -54422,16 +54422,42 @@ async function _inqAiSortRun_(){
   window._inqAiSortStop_=false; try{ renderInquiryList(); }catch(e){}
   if(typeof _toastMsg==='function') _toastMsg('🤖 AI 判定 '+done+' 件（振り分け後へ '+changed+' 件'+(fail?'・失敗 '+fail+' 回':'')+'）');
 }
+// AI-BIN-3: 自動送信の差出人・通知の件名 → 控え、売り込みの件名 → ジャンク（知らない差出人で、要対応の文言が無いとき）
+function _inqNoticeGuess_(inq, subj, body, email, dom){
+  var lp=String(email||'').split('@')[0]; var fromName=String(inq.from_name||'').toLowerCase(); var known=_inqKnownContact_(inq);
+  var noreply=/(^|[-_.])(no-?reply|noreply|do-?not-?reply|donotreply|notification|notifications|notify|mailer|auto|system|newsletter|news|magazine|mail-?news|billing|orders?|shop|store|support|service|alert|robot|bot|admin|info-?noreply|soreal-auto)([-_.]|$)/i.test(lp) || /no-?reply|自動送信|自動配信/.test(fromName);
+  var noticeSubj=/お知らせ|のご案内|ご案内|通知|完了|受付|発送|出荷|配送|お届け|集荷|ログイン|認証コード|明細|ご請求|請求書送付|帳票|更新|ご利用の確認|確認メール|パスワード|アカウント|登録|承認|公開通知|受付票|結果通知|リマインド|reminder|notice|notification|receipt|invoice|confirmation/i.test(subj);
+  var adSubj=/キャンペーン|セール|新発売|%\s*off|％\s*off|特価|割引|限定|プレゼント|無料|メルマガ|ニュース|new!|速報|最新情報|ご紹介|のご提案|売却|買収|M&A|補助金|助成金|融資|資金調達|求人|採用情報|セミナー|ウェビナー|展示会|フェア|アンケート|モニター|プラットフォーム/i.test(subj);
+  var important=_inqImportant_(inq); var isReply=/^\s*(re|fw|fwd|返信|転送)\s*[:：]/i.test(subj);
+  var shipSubj=/発送|出荷|お届け|配送|集荷|受付|完了|受領|領収|ご利用の確認|ご利用明細|お支払い|決済|自動更新|有効期限|期限が近|近づいて/.test(subj);
+  var shopDom=/(^|\.)(amazon\.(jp|co\.jp|com)|rakuten\.co\.jp|yahoo\.co\.jp|paypay|mercari|askul|monotaro|kakaku)/.test(dom);
+  var svcDom=/(^|\.)(onamae\.com|xserver|sakura\.(ad|ne)\.jp|lolipop|cybermail|google\.com|microsoft\.com|apple\.com|dropbox\.com|box\.com|zoom\.us|adobe\.com|canva\.com|chatwork\.com|slack\.com|github\.com|anthropic\.com|openai\.com|konicaminolta\.com|ricoh\.co\.jp|fujifilm\.com|kuronekoyamato\.co\.jp|sagawa-exp\.co\.jp|seino\.co\.jp|japanpost\.jp|e-aichi\.jp|lg\.jp-buppin)/.test(dom) || /^(buppin|bid|chotatsu)\./.test(dom);
+  if((shopDom||svcDom) && !isReply && (noticeSubj||shipSubj||noreply)) return { bin:'控え', reason:'通販・サービス・運送の通知（返事はいらない）' };   // 要対応の語があっても通知
+  if(!known && !isReply && adSubj) return { bin:'ジャンク', reason:'売り込みの件名・知らない差出人' };
+  if(!known && !important && !isReply){
+    if(shipSubj && (noreply||noticeSubj)) return { bin:'控え', reason:'出荷・受付などの通知（返事はいらない）' };
+    if(noreply && _INQ_JUNK_WORDS.some(function(w){ return (subj+' '+body).toLowerCase().indexOf(String(w).toLowerCase())>=0; })) return { bin:'ジャンク', reason:'自動送信・メルマガの語・知らない差出人' };
+    if(noreply) return { bin:'控え', reason:'自動送信の差出人（返事はいらない）' };
+    if(noticeSubj) return { bin:'控え', reason:'通知の件名（返事はいらない）' };
+  }
+  if(!isReply && !important && (shipSubj||noticeSubj) && (noreply||shopDom)) return { bin:'控え', reason:'取引先の自動通知' };
+  return null;
+}
+function _inqReAuto_(){ var n=0; (DB.inquiries||[]).forEach(function(q){ if(!q||q.bin) return; delete q.bin_auto; delete q.bin_reason; delete q._impCache; n++; }); window._inqKnownCache_=null; try{ renderInquiryList(); renderInquiryFolderList(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('↻ '+n+' 件の自動判定をやり直しました'); }
 function _inqBinAuto_(inq){
   var subj=String(inq.subject||''), body=String(inq.body||inq.summary||'').slice(0,2000); var text=(subj+' '+body).toLowerCase(); var sl=subj.toLowerCase();
   var email=String(inq.from_email||inq.email||'').toLowerCase(); var dom=_inqDomain_(email); var src=inq.source_type||'manual';
   if(src==='internal_msg') return { bin:'その他', reason:'社内連絡' };
-  if(src==='interco'||inq.kind==='order') return { bin:'受注', reason:'社間の発注' };
+  if(src==='interco') return { bin:'受注', reason:'社間の発注' };
+  if(/^(Message from\b|.*FAX image from)/i.test(subj)) return { bin:'その他', reason:'複合機・FAX の転送（中身を見て振り分け）' };   // AI-BIN-3
   if(dom && _inqOwnDomains_()[dom]) return { bin:'その他', reason:'社内の差出人（'+dom+'）' };   // INQ-SLACK-2
   // INQ-OUTCOME: 受付・確認の通知（受け付けました／受注しました／自動送信）は「控え」。ただし要対応の文言があれば控えにしない
   if(!_inqImportant_(inq) && /受け付けました|受付けました|受付いたしました|受付致しました|受注しました|受注いたしました|ご注文ありがとう|注文を承り|自動送信|自動配信|発注確認|注文確認|受領しました|受領いたしました|登録完了|お申し?込みありがとう|配送手配|出荷しました|発送しました/.test(subj+' '+body.slice(0,400)) && !/お願い|下さい|ください|でしょうか|ますか|いただけ/.test(subj+' '+body.slice(0,200))) return { bin:'控え', reason:'受付・確認の通知（発注の記録として残す）' };
   var rules=_inqBinRules_(); if(email&&rules.byEmail[email]) return { bin:rules.byEmail[email], reason:'前に同じ差出人をそう仕分けた' };
-  var kb=_INQ_KIND_BIN_[inq.kind]; if(kb && src!=='manual') return { bin:kb, reason:'AI の判定' };   // AI-BIN-1 if(dom&&rules.byDomain[dom]) return { bin:rules.byDomain[dom], reason:'前に同じ会社（ドメイン）をそう仕分けた' };
+  if(dom&&rules.byDomain[dom]) return { bin:rules.byDomain[dom], reason:'前に同じ会社（ドメイン）をそう仕分けた' };
+  // AI-BIN-3: 通知・売り込みの見分け（AI が止まっていても大きく外さない）
+  var _nz=_inqNoticeGuess_(inq, subj, body, email, dom); if(_nz) return _nz;
+  var kb=_INQ_KIND_BIN_[inq.kind]; if(kb && src!=='manual' && !(inq.kind==='order'||inq.kind==='schedule')){ if(kb==='見積' && /予算/.test(subj)) kb='予算見積'; return { bin:kb, reason:'AI の判定' }; }   // AI-BIN-1（order／schedule は件名の語だけで付くことがあるので言葉の判定に回す）
   var score={}; Object.keys(_INQ_BIN_WORDS).forEach(function(b){ var n=0, hit=[]; _INQ_BIN_WORDS[b].forEach(function(w){ var wl=w.toLowerCase(); if(sl.indexOf(wl)>=0){ n+=2; hit.push(w); } else if(text.indexOf(wl)>=0){ n+=1; hit.push(w); } }); score[b]={ n:n, hit:hit.slice(0,4) }; });
   var junk=0, jhit=[]; _INQ_JUNK_WORDS.forEach(function(w){ if(text.indexOf(w.toLowerCase())>=0||email.indexOf(w)>=0){ junk++; jhit.push(w); } });
   var biz=_INQ_BUSINESS_WORDS.some(function(w){ return text.indexOf(w)>=0; }); var known=_inqKnownContact_(inq);
@@ -54449,7 +54475,8 @@ function _inqBinAuto_(inq){
   if(junk>=3 && !known) return { bin:'ジャンク', reason:'「'+jhit.slice(0,3).join('」「')+'」' };
   return { bin:'その他', reason:known?'知っている相手（言葉では決められず）':'言葉では決められず' };
 }
-function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; if(!inq.bin_auto){ try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } } return inq.bin_auto; }
+const INQ_RULES_V=5;   // AI-BIN-4: 規則を変えたら上げる → 端末に残っている古い自動判定を捨てて全部やり直す
+function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; if(!inq.bin_auto || inq.bin_auto_v!==INQ_RULES_V){ try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } inq.bin_auto_v=INQ_RULES_V; delete inq._impCache; } return inq.bin_auto; }
 function _inqBinMeta_(k){ return INQ_BINS.find(function(b){ return b.k===k; })||INQ_BINS[6]; }
 // 人が直す: 覚える（差出人のメール）。見積・受注・校正・経営・質問・ジャンク は覚え、その他は覚えない
 function _inqSetBin_(id, bin){
@@ -54594,6 +54621,7 @@ function _renderInqBinTabs_(){
   var preOn=window._inqBinSel_==='__pre'&&!window._inqWaitSel_;
   var h='<button onclick="setInqBin(\'__pre\')" title="人がまだ振り分けを決めていないもの（自動の提案だけ）。札の「✔ この振り分けで OK」か振り分けのボタンで決めると、振り分け後へ移ります" style="font-size:13px;font-weight:900;padding:6px 14px;border:2px solid #b45309;background:'+(preOn?'#b45309':'#fffbeb')+';color:'+(preOn?'#fff':'#b45309')+';cursor:pointer">📥 振り分け前 <span style="font-size:15px">'+(cnt.pre||0)+'</span></button>'
     +'<button id="inq-ai-sort-btn" onclick="if(window._inqAiSortStop_===false){window._inqAiSortStop_=true;return;}_inqAiSortRun_()" title="振り分け前と、言葉の当たりだけで自動に入っているものを Claude に 10 通ずつ聞いて判定し直します（新しい順に 200 件ずつ・少額の利用料）。人が決めたもの・覚えている差出人は触りません" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #7c3aed;background:#fff;color:#7c3aed;cursor:pointer;margin-left:6px">🤖 AI で判定</button>'
+    +'<button onclick="_inqReAuto_()" title="自動の判定（AI 以外の規則の分）を全部やり直します。人が決めたもの・覚えている差出人はそのまま" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #64748b;background:#fff;color:#334155;cursor:pointer;margin-left:4px">↻ 自動を判定し直す</button>'
     +'<span style="font-size:11px;font-weight:700;color:#115e59;margin-left:10px">振り分け後:</span>';
   INQ_BINS.forEach(function(b){ h+=chip(b.icon+' '+esc(b.label), cnt[b.k]||0, window._inqBinSel_===b.k, b.color, "setInqBin('"+b.k+"')", b.label+'（人が決めたもの・覚えている差出人のもの）'); });
   h+=chip('⏳ 待ち', cnt.wait||0, !!window._inqWaitSel_, '#b45309', "_inqWaitToggle_()", '外注見積待ち・返事待ち・データ待ち などにしたもの');
