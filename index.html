@@ -21843,6 +21843,54 @@ function _proofAiStart_(id, on){
   showProofingDetail(id); if(typeof renderProofingList==='function') renderProofingList();
 }
 window._proofAiDraft_ = window._proofAiDraft_ || {};
+// AI-PROOF-2: 各 PC の Claude の作業記録（GAS のシート「校正AI作業」）。札・行ごとの結果・作業ログ
+window._proofAiEv_ = window._proofAiEv_ || {};
+var PROOF_AI_LOCK_MIN = 30;
+var PROOF_AI_ITEM_LABEL = { done:'済', failed:'できなかった', confirm:'確認待ち', todo:'未着手' };
+function _proofAiLoadEvents_(id, force){
+  var c=window._proofAiEv_[id];
+  if(!force && c && (Date.now()-c.fetchedAt)<60000) return;
+  if(typeof callCloudAPI!=='function') return;
+  window._proofAiEv_[id]={ fetchedAt:Date.now(), events:(c&&c.events)||[] };
+  Promise.resolve(callCloudAPI('proofAiEvents',{ id:id })).then(function(r){
+    if(!r || !r.success) return;
+    window._proofAiEv_[id]={ fetchedAt:Date.now(), events:r.events||[] };
+    if(window._proofSelId_===id || document.getElementById('proof-ai-src')){
+      if(document.getElementById('proof-ai-src')) _proofAiKeep_(id);
+      var box=document.getElementById('proof-ai-box'); if(box && box.getAttribute('data-pid')===id) showProofingDetail(id);
+    }
+  }).catch(function(e){ console.warn('[proofAiEvents]', e); });
+}
+// 札（最後の claim の後に release が無く、最後の動きから 30 分以内）・行ごとの最新状態・ログ
+function _proofAiEvState_(id){
+  var evs=((window._proofAiEv_[id]||{}).events)||[], lock=null, items={}, logs=[], lastRelease=null;
+  evs.forEach(function(ev){
+    if(ev.type==='claim') lock={ worker:ev.worker, since:ev.at, lastAt:ev.at };
+    else if(ev.type==='release'){ lock=null; lastRelease=ev; }
+    else if(lock && ev.worker===lock.worker) lock.lastAt=ev.at;
+    if(ev.type==='item') items[ev.entryId+'#'+ev.no]=ev; else logs.push(ev);
+  });
+  if(lock && (Date.now()-Date.parse(lock.lastAt))>PROOF_AI_LOCK_MIN*60000) lock=null;
+  return { lock:lock, items:items, logs:logs, lastRelease:lastRelease };
+}
+function _proofAiTime_(iso){ var d=new Date(iso); return isNaN(d) ? '' : ((d.getMonth()+1)+'/'+d.getDate()+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)); }
+function _proofAiWorkHtml_(p){
+  var esc=function(t){ return _escDiff(String(t==null?'':t)); };
+  var s=_proofAiEvState_(p.id), h='';
+  if(s.lock) h+='<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:6px 9px;font-size:12px;margin-bottom:6px">🔒 <b>'+esc(s.lock.worker)+'</b> が作業中（'+esc(_proofAiTime_(s.lock.since))+'〜・最後の動き '+esc(_proofAiTime_(s.lock.lastAt))+'）。ほかの PC は引き継ぐときだけ作業してください</div>';
+  else if(s.lastRelease && s.lastRelease.state==='review' && String(s.lastRelease.at)>String(p.lastMoveAt||''))
+    h+='<div style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:6px 9px;font-size:12px;margin-bottom:6px">✅ <b>'+esc(s.lastRelease.worker)+'</b> の作業が終わりました（'+esc(_proofAiTime_(s.lastRelease.at))+'）。<b>内校して、段階を進めてください</b>'+(s.lastRelease.note?'<div style="color:#166534;margin-top:2px;white-space:pre-wrap">'+esc(s.lastRelease.note)+'</div>':'')+'</div>';
+  if(s.logs.length){
+    h+='<details style="margin-bottom:6px;font-size:11.5px"'+(s.lock?' open':'')+'><summary style="cursor:pointer;color:#5b21b6;font-weight:700">🧾 作業ログ（'+s.logs.length+'）</summary><div style="max-height:220px;overflow:auto;margin-top:3px">'
+      + s.logs.slice().reverse().slice(0,30).map(function(ev){
+          var lbl=ev.type==='claim'?'🔒 作業開始':ev.type==='release'?(ev.state==='review'?'✅ 終了（内校待ち）':'⏸ 途中で止めた'):'📝';
+          var files=(ev.extra&&ev.extra.files)||[];
+          return '<div style="border-left:3px solid #c4b5fd;padding:2px 8px;margin-bottom:3px"><span style="color:#94a3b8">'+esc(_proofAiTime_(ev.at))+'</span> <b>'+esc(ev.worker)+'</b> '+lbl+(ev.note?' <span style="white-space:pre-wrap">'+esc(ev.note)+'</span>':'')
+            + files.map(function(u){ u=String(u); return ' <a href="'+esc(u).replace(/"/g,'&quot;')+'" target="_blank" style="color:#0369a1">📎 ファイル</a>'; }).join('')+'</div>';
+        }).join('')+'</div></details>';
+  }
+  return h;
+}
 function _proofAiKeep_(id){
   var g=function(k){ var el=document.getElementById(k); return el ? el.value : ''; };
   window._proofAiDraft_[id]={ round:g('proof-ai-round'), method:g('proof-ai-method'), src:g('proof-ai-src'), out:g('proof-ai-out') };
@@ -21901,16 +21949,19 @@ function _proofAiSheetRow_(id, eid){
 function _proofAiEntryHtml_(p, e){
   var esc=function(t){ return _escDiff(String(t==null?'':t)).replace(/"/g,'&quot;'); };
   var key=function(no){ return String(no).replace(/['"\\]/g,''); };
-  var pr=_proofAiParse_(e.result), done=e.done||{}, nDone=pr.items.filter(function(it){ return done[key(it.no)]; }).length;
+  var aiSt=_proofAiEvState_(p.id).items, aiOf=function(it){ return aiSt[e.id+'#'+it.no]; };
+  var isDone=function(it){ var a=aiOf(it); return a ? a.state==='done' : !!(e.done||{})[key(it.no)]; };
+  var pr=_proofAiParse_(e.result), done=e.done||{}, nDone=pr.items.filter(isDone).length;
   var d=new Date(e.at); var when=isNaN(d) ? '' : ((d.getMonth()+1)+'/'+d.getDate()+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2));
   var td='border:1px solid #ddd6fe;padding:3px 6px;vertical-align:top';
   var table=pr.items.length
     ? '<table style="border-collapse:collapse;width:100%;font-size:11.5px;background:#fff;margin-top:4px"><tr style="background:#ede9fe">'
-      + ['済','No.','ページ・面','場所','修正前','修正後','種別'].map(function(h){ return '<th style="'+td+';white-space:nowrap">'+h+'</th>'; }).join('') + '</tr>'
-      + pr.items.map(function(it){ var k=key(it.no), on=!!done[k]; return '<tr style="'+(on?'background:#f0fdf4;color:#64748b':'')+'">'
+      + ['済','No.','ページ・面','場所','修正前','修正後','種別','作業'].map(function(h){ return '<th style="'+td+';white-space:nowrap">'+h+'</th>'; }).join('') + '</tr>'
+      + pr.items.map(function(it){ var k=key(it.no), on=isDone(it), a=aiOf(it); return '<tr style="'+(on?'background:#f0fdf4;color:#64748b':'')+'">'
           + '<td style="'+td+';text-align:center"><input type="checkbox" '+(on?'checked':'')+' title="'+(on?esc(done[k])+' が済にしました':'直したらチェック')+'" onchange="_proofAiToggleDone_(\''+p.id+'\',\''+e.id+'\',\''+esc(k)+'\',this.checked)"></td>'
           + '<td style="'+td+'">'+esc(it.no)+'</td><td style="'+td+'">'+esc(it.page)+'</td><td style="'+td+'">'+esc(it.place)+'</td>'
-          + '<td style="'+td+';'+(on?'text-decoration:line-through':'')+'">'+esc(it.before)+'</td><td style="'+td+';font-weight:700">'+esc(it.after)+'</td><td style="'+td+';white-space:nowrap">'+esc(it.kind)+'</td></tr>'; }).join('')
+          + '<td style="'+td+';'+(on?'text-decoration:line-through':'')+'">'+esc(it.before)+'</td><td style="'+td+';font-weight:700">'+esc(it.after)+'</td><td style="'+td+';white-space:nowrap">'+esc(it.kind)+'</td>'
+          + '<td style="'+td+';font-size:10.5px">'+(a ? ('<b style="color:'+(a.state==='done'?'#166534':a.state==='todo'?'#64748b':'#b91c1c')+'">'+esc(PROOF_AI_ITEM_LABEL[a.state]||a.state)+'</b> '+esc(a.worker)+(a.note?'<div style="white-space:pre-wrap;color:#475569">'+esc(a.note)+'</div>':'')) : (done[k]?esc(done[k]):''))+'</td></tr>'; }).join('')
       + '</table>'
     : '<div style="white-space:pre-wrap;font-size:11.5px;background:#fff;border:1px solid #ddd6fe;padding:6px;margin-top:4px">'+esc(e.result)+'</div>';
   var bul=function(title, arr, col){ return arr.length ? '<div style="margin-top:5px;font-size:11.5px"><b style="color:'+col+'">'+title+'</b><ul style="margin:2px 0 0 18px;padding:0">'+arr.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul></div>' : ''; };
@@ -21940,10 +21991,12 @@ function _proofAiHtml_(p){
   var mopts=PROOF_AI_METHODS.map(function(m){ return '<option'+(dr.method===m?' selected':'')+'>'+m+'</option>'; }).join('');
   var list=(p.aiFix||[]).slice().sort(function(a,b){ return (Number(b.round)||1)-(Number(a.round)||1) || String(b.at||'').localeCompare(String(a.at||'')); });
   var keep='onchange="_proofAiKeep_(\''+p.id+'\')" oninput="_proofAiKeep_(\''+p.id+'\')"';
-  return '<div style="margin-bottom:.75rem;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px;padding:8px 10px">'
+  setTimeout(function(){ _proofAiLoadEvents_(p.id); }, 0);   // AI-PROOF-2: 各 PC の作業記録を読む（1 分に 1 回まで）
+  return '<div id="proof-ai-box" data-pid="'+p.id+'" style="margin-bottom:.75rem;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px;padding:8px 10px">'
     + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:12px;color:#5b21b6">🤖 AI 修正リスト（社内だけ・トライアル）</b>'
     + '<a href="'+PROOF_AI_SHEET_URL+'" target="_blank" style="font-size:11px;color:#0369a1">📊 校正ボックス一覧（仮運用）</a>'
     + '<button class="btn" style="font-size:10.5px;padding:1px 8px;margin-left:auto;color:#64748b" onclick="_proofAiStart_(\''+p.id+'\',false)">トライアルから外す</button></div>'
+    + _proofAiWorkHtml_(p)
     + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11.5px;margin-bottom:4px">'
     + '<label>校 <select id="proof-ai-round" style="font-size:12px" onchange="_proofAiRoundChange_(\''+p.id+'\')">'+opts+'</select></label>'
     + '<label>受付方法 <select id="proof-ai-method" style="font-size:12px" '+keep+'>'+mopts+'</select></label></div>'
