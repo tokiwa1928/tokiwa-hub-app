@@ -4886,7 +4886,12 @@ async function loadFromCloud() {
       // 版は両方の和集合（片方だけに入った校正データを落とさない）
       var vs=[], seen={}; (base.versions||[]).concat(other.versions||[]).forEach(function(v){ if(!v||!v.id||seen[v.id]) return; seen[v.id]=1; vs.push(v); });
       vs.sort(function(a,b){ return String(a.uploadedAt||'').localeCompare(String(b.uploadedAt||'')); });
-      var out=Object.assign({}, base); out.versions=vs; _pfById[p.id]=out; };
+      var out=Object.assign({}, base); out.versions=vs;
+      // AI-PROOF-1: AI 修正リストも id の和集合（消したものは除く）
+      var adel={}; (base.aiFixDel||[]).concat(other.aiFixDel||[]).forEach(function(id){ if(id) adel[id]=1; });
+      var af=[], aseen={}; (base.aiFix||[]).concat(other.aiFix||[]).forEach(function(e){ if(!e||!e.id||aseen[e.id]||adel[e.id]) return; aseen[e.id]=1; af.push(e); });
+      if(af.length || Object.keys(adel).length){ af.sort(function(a,b){ return String(a.at||'').localeCompare(String(b.at||'')); }); out.aiFix=af; out.aiFixDel=Object.keys(adel); }
+      _pfById[p.id]=out; };
     (Array.isArray(DB.proofings)?DB.proofings:[]).forEach(_pfTake);   // ローカル
     result.data.proofings.forEach(_pfTake);                            // クラウド（新しければ上書き）
     var _pfDel={}; (DB.proofingsDeleted||[]).forEach(function(id){ _pfDel[id]=1; });
@@ -21129,7 +21134,7 @@ function renderProofingList(){
       if(owner && owner !== myCompany && sharedWith.indexOf(myCompany) < 0) return false;
     }
     if(q){
-      const searchStr = `${p.custName||''} ${p.prodName||''} ${p.projectId||''}`.toLowerCase();
+      const searchStr = `${p.custName||''} ${p.prodName||''} ${p.projectId||''} ${p.fmNo||''}${p.aiTrial?' ai 🤖':''}`.toLowerCase();   // AI-PROOF-1: 「ai」でトライアルのカードだけ
       if(!_qMatch_(searchStr,q)) return false;
     }
     return true;
@@ -21213,6 +21218,7 @@ function renderProofingList(){
     + (vm==='list'?'<button class="btn" style="font-size:11px;background:#5b21b6;color:#fff;border-color:#4c1d95" onclick="_proofMergeSelected_()" title="一覧でチェックした校正を 1 枚にまとめます（名刺 4 件を一緒に校正するときなど）。伝票番号・校正データ・備考を合わせ、残りのカードは消えます">📎 選んだカードをまとめる</button>':'')
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#5b21b6" onclick="_proofAutoGroupSetting_()" title="同じ得意先・同じユーザー・同じ日に DTP有にした品目を自動で 1 枚にまとめる設定">📎 自動まとめ: '+_escDiff(_proofAutoGroupKinds_().join('、')||'なし')+'</button>':'')
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#b91c1c" onclick="_proofDeleteSelected_()" title="一覧でチェックした校正を消します（2 回確認）。基本的に削除はしません。同じ案件が 2 枚あるなら 📎 でまとめてください">🗑 選んだカードを削除</button>':'')
+    + '<button class="btn" style="font-size:11px;color:#b91c1c;border-color:#fca5a5" onclick="_proofClearAll_()" title="校正BOX のカードを全部消します（先にバックアップ JSON を保存。Drive のファイルは残ります）">🧹 全部消す（バックアップ付き）</button>'
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#64748b" onclick="_proofOpenColConfig_()">▦ 列の設定</button>':'')
     + '<button class="btn" style="font-size:11px;color:#64748b" onclick="openProofStatusEditor()">⚙ 状態を編集</button></span></div>';
 
@@ -21740,6 +21746,241 @@ function _proofTimelineHtml_(p){
   }).join('');
   return '<div style="margin-bottom:.75rem;background:#fff;border:1px solid #e0ddd6;border-radius:8px;padding:8px 10px"><div style="font-size:12px;font-weight:700;margin-bottom:4px">🔄 やり取り履歴</div>' + rows + '</div>';
 }
+// ═══ AI-PROOF-1: 校正BOX の AI 修正リスト（社内だけ・トライアル） ═══
+// 得意先の修正指示を「Claudeに渡す」でコピー → 各自の Claude に貼る → 返ってきた修正リストを貼り戻して校ごとに保存。
+// API は呼ばない（コピーと貼り戻しだけ）。AI を使う案件だけ「AI トライアル」に入れる。
+var PROOF_AI_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1APqJCocRMa6d3_q9Z4FK3wtalrk_G5AWWm5mr8CpJls/edit';
+var PROOF_AI_METHODS = ['メール','FAX','電話','LINE','持参・手渡し','その他'];
+function _proofAiRoundLabel_(n){ n=Number(n)||1; return n===1 ? '初校' : (n+'校'); }
+function _proofAiCurRound_(p){
+  var r=1; try{ r=_calcCurrentProofRound_(p,'instruction').round||1; }catch(e){}
+  return Math.max(r, p._proofRound||1);
+}
+function _proofAiProj_(p){ return p.projectId ? (DB.projects||[]).find(function(pr){ return pr && pr.id===p.projectId; }) : null; }
+function _proofAiNo_(p){ var pr=_proofAiProj_(p); return p.fmNo || (pr && pr.id) || p.projectId || p.id; }
+function _proofAiSpec_(p){
+  var pr=_proofAiProj_(p);
+  var a=[p.prodName||(pr&&pr.item)||'']; if(pr && pr.spec) a.push(pr.spec); if(pr && pr.qty) a.push(pr.qty+(pr.unit||'部'));
+  return a.filter(Boolean).join(' / ');
+}
+// この校の修正指示（コメント・メール）を原文として集める
+function _proofAiCollect_(p, round){
+  return (p.versions||[]).filter(function(v){ return v && v.kind==='instruction' && (Number(v.round)||1)===Number(round); }).map(function(v){
+    var inq=v.inqId ? (DB.inquiries||[]).find(function(i){ return i && i.id===v.inqId; }) : null;
+    var t=inq ? ((inq.subject?('件名: '+inq.subject+'\n'):'')+String(inq.body||'')) : String(v.feedback||'');
+    return t.trim();
+  }).filter(Boolean).join('\n\n―――――\n\n');
+}
+// 決まった形の返事を読む（■修正リスト の「｜」区切り、■確認事項 などの「・」）
+function _proofAiParse_(text){
+  var out={ items:[], confirm:[], carry:[], summary:'' }, sec='';
+  String(text||'').split(/\r?\n/).forEach(function(line){
+    var l=line.trim(); if(!l) return;
+    if(/^■\s*修正リスト/.test(l)){ sec='items'; return; }
+    if(/^■\s*確認事項/.test(l)){ sec='confirm'; return; }
+    if(/^■\s*前回からの持ち越し/.test(l)){ sec='carry'; return; }
+    if(/^■\s*要約/.test(l)){ sec='summary'; return; }
+    if(/^■/.test(l)){ sec=''; return; }
+    if(sec==='items'){
+      if(l.indexOf('｜')<0 && l.indexOf('|')<0) return;
+      var c=l.replace(/^\|/,'').replace(/\|$/,'').split(/[｜|]/).map(function(x){ return x.trim(); });
+      if(/^No\.?$/i.test(c[0]) || /^[-:\s]+$/.test(c.join(''))) return;
+      if(c.slice(1).join('')==='') return;
+      out.items.push({ no:c[0]||String(out.items.length+1), page:c[1]||'', place:c[2]||'', before:c[3]||'', after:c[4]||'', kind:c[5]||'' });
+    } else if(sec==='confirm' || sec==='carry'){
+      var b=l.replace(/^[・\-*●]\s*/,''); if(b && b!=='なし') out[sec].push(b);
+    } else if(sec==='summary'){
+      out.summary += (out.summary?'\n':'') + l;
+    }
+  });
+  return out;
+}
+function _proofAiPrompt_(p, round, src){
+  var prev=(p.aiFix||[]).filter(function(e){ return (Number(e.round)||1) < Number(round); }).map(function(e){
+    var pr=_proofAiParse_(e.result);
+    return '〈'+_proofAiRoundLabel_(e.round)+'戻り〉'+(pr.summary?('\n'+pr.summary):'')+(pr.items.length?('\n'+pr.items.map(function(it){ return it.no+'｜'+it.page+'｜'+it.place+'｜'+it.before+'｜'+it.after+'｜'+it.kind; }).join('\n')):'');
+  }).join('\n\n');
+  return [
+    'あなたは印刷会社のDTPオペレーターの補助です。',
+    '得意先からの修正指示を、作業者がそのまま作業できる修正リストに整理してください。',
+    '',
+    '【案件番号】'+_proofAiNo_(p),
+    '【得意先】'+(p.custName||'')+(p.endUser?(' / '+p.endUser):''),
+    '【品名・仕様】'+_proofAiSpec_(p),
+    '【今回の校】'+_proofAiRoundLabel_(round)+'戻り',
+    '【これまでの経緯】'+(prev?('\n'+prev):'なし'),
+    '【得意先からの修正指示（原文）】',
+    String(src||'').trim(),
+    '',
+    '■出力形式（この形式以外の文章は書かないこと）',
+    '【案件番号】／【校】',
+    '■修正リスト',
+    'No.｜ページ・面｜場所｜修正前｜修正後｜種別（文字・画像・レイアウト・色・その他）',
+    '1｜',
+    '2｜',
+    '■確認事項（指示があいまい・矛盾・判断が必要なもの）',
+    '・',
+    '■前回からの持ち越し（前回の修正が反映されていない可能性があるもの）',
+    '・',
+    '■要約（社内共有用・3行以内）',
+    '',
+    '■注意',
+    '・原文にない修正を推測で追加しない。判断が必要なものは確認事項に回す',
+    '・数字・固有名詞・電話番号・URL・住所は一字一句そのまま書き写す',
+    '・「修正前」がわからない場合は「（原稿確認）」と書く'
+  ].join('\n');
+}
+function _proofAiCopyText_(text, msg){
+  var done=function(){ if(typeof _toastMsg==='function') _toastMsg(msg||'📋 コピーしました'); };
+  var fallback=function(){ var ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;left:-9999px'; document.body.appendChild(ta); ta.select(); var ok=false; try{ ok=document.execCommand('copy'); }catch(e){} ta.remove(); if(ok) done(); else alert('コピーできませんでした。もう一度押してください。'); };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+}
+function _proofAiTouch_(p){ p.lastMoveAt=new Date().toISOString(); if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){} }
+function _proofAiStart_(id, on){
+  var p=(DB.proofings||[]).find(function(x){ return x && x.id===id; }); if(!p) return;
+  if(!on && (p.aiFix||[]).length && !confirm('AI トライアルから外します。保存した修正リストは残ります（もう一度入れると見えます）。よろしいですか？')) return;
+  p.aiTrial=!!on; _proofAiTouch_(p);
+  showProofingDetail(id); if(typeof renderProofingList==='function') renderProofingList();
+}
+window._proofAiDraft_ = window._proofAiDraft_ || {};
+function _proofAiKeep_(id){
+  var g=function(k){ var el=document.getElementById(k); return el ? el.value : ''; };
+  window._proofAiDraft_[id]={ round:g('proof-ai-round'), method:g('proof-ai-method'), src:g('proof-ai-src'), out:g('proof-ai-out') };
+}
+function _proofAiRoundChange_(id){
+  var p=(DB.proofings||[]).find(function(x){ return x && x.id===id; }); if(!p) return;
+  var r=document.getElementById('proof-ai-round').value;
+  var ta=document.getElementById('proof-ai-src'); if(ta) ta.value=_proofAiCollect_(p, r);
+  _proofAiKeep_(id);
+}
+function _proofAiCopyPrompt_(id){
+  var p=(DB.proofings||[]).find(function(x){ return x && x.id===id; }); if(!p) return;
+  var src=(document.getElementById('proof-ai-src')||{}).value||'';
+  if(!src.trim()){ alert('得意先からの修正指示（原文）を入れてください。\n電話のときは聞いた内容をメモで入れます。'); return; }
+  _proofAiKeep_(id);
+  _proofAiCopyText_(_proofAiPrompt_(p, document.getElementById('proof-ai-round').value, src), '📋 Claude への依頼文をコピーしました。Claude に貼ってください');
+}
+function _proofAiSave_(id){
+  var p=(DB.proofings||[]).find(function(x){ return x && x.id===id; }); if(!p) return;
+  var out=(document.getElementById('proof-ai-out')||{}).value||''; var src=(document.getElementById('proof-ai-src')||{}).value||'';
+  if(!out.trim()){ alert('Claude から返ってきた修正リストを貼ってください。'); return; }
+  var pr=_proofAiParse_(out);
+  if(!pr.items.length && !confirm('「■修正リスト」の行（No.｜ページ・面｜…）が読み取れませんでした。\nこのまま保存しますか？（キャンセルで貼り直し）')) return;
+  var who=(typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName)||'';
+  if(!Array.isArray(p.aiFix)) p.aiFix=[];
+  p.aiFix.push({ id:'AIF'+Date.now(), round:Number(document.getElementById('proof-ai-round').value)||1, method:(document.getElementById('proof-ai-method')||{}).value||'', at:new Date().toISOString(), by:who, source:src, result:out, done:{} });
+  p.aiTrial=true; delete window._proofAiDraft_[id];
+  _proofAiTouch_(p); showProofingDetail(id);
+  if(typeof _toastMsg==='function') _toastMsg('🤖 修正リストを保存しました（'+pr.items.length+' 件）');
+}
+function _proofAiToggleDone_(id, eid, no, on){
+  var p=(DB.proofings||[]).find(function(x){ return x && x.id===id; }); if(!p) return;
+  var e=(p.aiFix||[]).find(function(x){ return x.id===eid; }); if(!e) return;
+  e.done=e.done||{}; if(on) e.done[no]=(typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName)||'済'; else delete e.done[no];
+  _proofAiTouch_(p); showProofingDetail(id);
+}
+function _proofAiDelete_(id, eid){
+  var p=(DB.proofings||[]).find(function(x){ return x && x.id===id; }); if(!p) return;
+  if(!confirm('この修正リストを消しますか？（他の PC からも消えます）')) return;
+  p.aiFix=(p.aiFix||[]).filter(function(x){ return x.id!==eid; });
+  if(!Array.isArray(p.aiFixDel)) p.aiFixDel=[]; p.aiFixDel.push(eid);
+  _proofAiTouch_(p); showProofingDetail(id);
+}
+// スプレッドシート「校正ボックス一覧（仮運用）」の 1 行（タブ区切り）。列: 受付日〜更新日
+function _proofAiSheetRow_(id, eid){
+  var p=(DB.proofings||[]).find(function(x){ return x && x.id===id; }); if(!p) return;
+  var e=(p.aiFix||[]).find(function(x){ return x.id===eid; }); if(!e) return;
+  var pr=_proofAiParse_(e.result), nDone=Object.keys(e.done||{}).length;
+  var cell=function(t){ t=String(t==null?'':t); return /[\t\n"]/.test(t) ? '"'+t.replace(/"/g,'""')+'"' : t; };
+  var listTxt=pr.items.map(function(it){ return it.no+'｜'+it.page+'｜'+it.place+'｜'+it.before+'→'+it.after+'｜'+it.kind; }).join('\n') || e.result;
+  var doneBy=Object.keys(e.done||{}).map(function(k){ return e.done[k]; }).filter(function(v,i,a){ return v && a.indexOf(v)===i; }).join('・');
+  var row=[ String(e.at||'').slice(0,10), _proofAiNo_(p), p.custName||'', _proofAiSpec_(p), _proofAiRoundLabel_(e.round), e.by||'', e.method||'', e.source||'', listTxt, pr.confirm.join('\n'), pr.summary,
+    (pr.items.length && nDone>=pr.items.length) ? '修正済' : (nDone ? '修正中（'+nDone+'/'+pr.items.length+'）' : '未着手'), doneBy, new Date().toISOString().slice(0,10) ];
+  _proofAiCopyText_(row.map(cell).join('\t'), '📋 スプレッドシート用に 1 行コピーしました（A 列に貼ってください）');
+}
+function _proofAiEntryHtml_(p, e){
+  var esc=function(t){ return _escDiff(String(t==null?'':t)).replace(/"/g,'&quot;'); };
+  var key=function(no){ return String(no).replace(/['"\\]/g,''); };
+  var pr=_proofAiParse_(e.result), done=e.done||{}, nDone=pr.items.filter(function(it){ return done[key(it.no)]; }).length;
+  var d=new Date(e.at); var when=isNaN(d) ? '' : ((d.getMonth()+1)+'/'+d.getDate()+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2));
+  var td='border:1px solid #ddd6fe;padding:3px 6px;vertical-align:top';
+  var table=pr.items.length
+    ? '<table style="border-collapse:collapse;width:100%;font-size:11.5px;background:#fff;margin-top:4px"><tr style="background:#ede9fe">'
+      + ['済','No.','ページ・面','場所','修正前','修正後','種別'].map(function(h){ return '<th style="'+td+';white-space:nowrap">'+h+'</th>'; }).join('') + '</tr>'
+      + pr.items.map(function(it){ var k=key(it.no), on=!!done[k]; return '<tr style="'+(on?'background:#f0fdf4;color:#64748b':'')+'">'
+          + '<td style="'+td+';text-align:center"><input type="checkbox" '+(on?'checked':'')+' title="'+(on?esc(done[k])+' が済にしました':'直したらチェック')+'" onchange="_proofAiToggleDone_(\''+p.id+'\',\''+e.id+'\',\''+esc(k)+'\',this.checked)"></td>'
+          + '<td style="'+td+'">'+esc(it.no)+'</td><td style="'+td+'">'+esc(it.page)+'</td><td style="'+td+'">'+esc(it.place)+'</td>'
+          + '<td style="'+td+';'+(on?'text-decoration:line-through':'')+'">'+esc(it.before)+'</td><td style="'+td+';font-weight:700">'+esc(it.after)+'</td><td style="'+td+';white-space:nowrap">'+esc(it.kind)+'</td></tr>'; }).join('')
+      + '</table>'
+    : '<div style="white-space:pre-wrap;font-size:11.5px;background:#fff;border:1px solid #ddd6fe;padding:6px;margin-top:4px">'+esc(e.result)+'</div>';
+  var bul=function(title, arr, col){ return arr.length ? '<div style="margin-top:5px;font-size:11.5px"><b style="color:'+col+'">'+title+'</b><ul style="margin:2px 0 0 18px;padding:0">'+arr.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul></div>' : ''; };
+  return '<div style="border:1px solid #c4b5fd;border-radius:6px;padding:7px 9px;margin-top:6px;background:#faf5ff">'
+    + '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b style="color:#5b21b6">'+_proofAiRoundLabel_(e.round)+'戻り</b>'
+    + '<span style="font-size:11px;color:#64748b">'+esc(when)+(e.by?' '+esc(e.by):'')+(e.method?' ・'+esc(e.method):'')+'</span>'
+    + (pr.items.length ? '<span style="font-size:11px;color:'+(nDone>=pr.items.length?'#166534':'#92400e')+';font-weight:700">'+nDone+'/'+pr.items.length+' 済</span>' : '')
+    + '<span style="margin-left:auto;display:flex;gap:4px">'
+    + '<button class="btn" style="font-size:10.5px;padding:1px 8px" onclick="_proofAiCopyText_(((DB.proofings||[]).find(function(x){return x.id===\''+p.id+'\'})||{}).aiFix.find(function(x){return x.id===\''+e.id+'\'}).result,\'📋 修正リストをコピーしました\')">📋 コピー</button>'
+    + '<button class="btn" style="font-size:10.5px;padding:1px 8px" onclick="_proofAiSheetRow_(\''+p.id+'\',\''+e.id+'\')" title="校正ボックス一覧（仮運用）に貼る 1 行">📊 一覧用 1 行</button>'
+    + '<button class="btn" style="font-size:10.5px;padding:1px 8px;color:#b91c1c" onclick="_proofAiDelete_(\''+p.id+'\',\''+e.id+'\')">🗑</button></span></div>'
+    + (pr.summary ? '<div style="font-size:11.5px;margin-top:3px;white-space:pre-wrap">'+esc(pr.summary)+'</div>' : '')
+    + table + bul('❓ 確認事項', pr.confirm, '#b91c1c') + bul('↩ 前回からの持ち越し', pr.carry, '#92400e')
+    + '<details style="margin-top:4px;font-size:11px"><summary style="cursor:pointer;color:#64748b">原文と Claude の返事（そのまま）</summary>'
+    + '<div style="white-space:pre-wrap;background:#fff;border:1px dashed #ddd6fe;padding:5px;margin-top:3px"><b>原文</b>\n'+esc(e.source)+'</div>'
+    + '<div style="white-space:pre-wrap;background:#fff;border:1px dashed #ddd6fe;padding:5px;margin-top:3px"><b>返事</b>\n'+esc(e.result)+'</div></details>'
+    + '</div>';
+}
+function _proofAiHtml_(p){
+  if(!p.aiTrial){
+    return '<div style="margin-bottom:.75rem;font-size:11.5px;color:#5b21b6"><button class="btn" style="font-size:11.5px;padding:4px 12px;color:#5b21b6;border-color:#c4b5fd;background:#faf5ff" onclick="_proofAiStart_(\''+p.id+'\',true)" title="この案件だけ AI（Claude）で修正リストを作ります。社内だけの枠です">🤖 AI で修正リストを作る（トライアル）</button></div>';
+  }
+  var cur=_proofAiCurRound_(p), dr=window._proofAiDraft_[p.id]||{};
+  var round=Number(dr.round)||cur, maxR=Math.max(3, cur+1, round);
+  var src=(dr.src!=null) ? dr.src : _proofAiCollect_(p, round);
+  var opts=''; for(var i=1;i<=maxR;i++) opts+='<option value="'+i+'"'+(i===round?' selected':'')+'>'+_proofAiRoundLabel_(i)+'戻り</option>';
+  var mopts=PROOF_AI_METHODS.map(function(m){ return '<option'+(dr.method===m?' selected':'')+'>'+m+'</option>'; }).join('');
+  var list=(p.aiFix||[]).slice().sort(function(a,b){ return (Number(b.round)||1)-(Number(a.round)||1) || String(b.at||'').localeCompare(String(a.at||'')); });
+  var keep='onchange="_proofAiKeep_(\''+p.id+'\')" oninput="_proofAiKeep_(\''+p.id+'\')"';
+  return '<div style="margin-bottom:.75rem;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px;padding:8px 10px">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:12px;color:#5b21b6">🤖 AI 修正リスト（社内だけ・トライアル）</b>'
+    + '<a href="'+PROOF_AI_SHEET_URL+'" target="_blank" style="font-size:11px;color:#0369a1">📊 校正ボックス一覧（仮運用）</a>'
+    + '<button class="btn" style="font-size:10.5px;padding:1px 8px;margin-left:auto;color:#64748b" onclick="_proofAiStart_(\''+p.id+'\',false)">トライアルから外す</button></div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11.5px;margin-bottom:4px">'
+    + '<label>校 <select id="proof-ai-round" style="font-size:12px" onchange="_proofAiRoundChange_(\''+p.id+'\')">'+opts+'</select></label>'
+    + '<label>受付方法 <select id="proof-ai-method" style="font-size:12px" '+keep+'>'+mopts+'</select></label></div>'
+    + '<div style="font-size:11px;color:#5b21b6;margin:4px 0 2px">① 得意先からの修正指示（原文のまま。電話は聞いた内容をメモで）</div>'
+    + '<textarea id="proof-ai-src" rows="4" '+keep+' style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #c4b5fd;border-radius:6px" placeholder="この校の修正指示（コメント・メール）があれば自動で入ります">'+_escDiff(src)+'</textarea>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0">'
+    + '<button class="btn btn-p" style="font-size:12px;padding:6px 12px;background:#6d28d9;border-color:#6d28d9" onclick="_proofAiCopyPrompt_(\''+p.id+'\')">② 📋 Claude に渡す（依頼文をコピー）</button>'
+    + '<a href="https://claude.ai/new" target="_blank" style="font-size:11.5px;color:#6d28d9">Claude を開く ↗</a></div>'
+    + '<div style="font-size:11px;color:#5b21b6;margin:6px 0 2px">③ Claude の返事（修正リスト）をそのまま貼る</div>'
+    + '<textarea id="proof-ai-out" rows="4" '+keep+' style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #c4b5fd;border-radius:6px" placeholder="【案件番号】／【校】\n■修正リスト\nNo.｜ページ・面｜場所｜修正前｜修正後｜種別 …">'+_escDiff(dr.out||'')+'</textarea>'
+    + '<div style="margin-top:4px"><button class="btn btn-p" style="font-size:12px;padding:6px 12px;background:#6d28d9;border-color:#6d28d9" onclick="_proofAiSave_(\''+p.id+'\')">④ 貼り戻して保存</button>'
+    + '<span style="font-size:10.5px;color:#7c3aed;margin-left:6px">得意先には見えません。校ごとに残ります。</span></div>'
+    + (list.length ? list.map(function(e){ return _proofAiEntryHtml_(p, e); }).join('') : '')
+    + '</div>';
+}
+// AI-PROOF-1: 校正BOX を空にする（先にバックアップ JSON を保存。他の PC からも消える）
+function _proofClearAll_(){
+  var myCompany=(typeof getCurrentCompanyCode==='function') ? getCurrentCompanyCode() : '';
+  var cards=(DB.proofings||[]).filter(function(p){ if(!p) return false; if(!myCompany) return true; var o=p.companyCode||''; return !o || o===myCompany; });
+  if(!cards.length){ alert('消すカードはありません。'); return; }
+  if(!confirm('校正BOX のカード '+cards.length+' 枚を全部消します。\n\n先にバックアップ（JSON）をダウンロードします。\nDrive の校正ファイルは消えません。')) return;
+  try{
+    var blob=new Blob([JSON.stringify({ savedAt:new Date().toISOString(), by:(currentAuth&&currentAuth.userName)||'', proofings:cards }, null, 1)], { type:'application/json' });
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='校正BOX_バックアップ_'+new Date().toISOString().slice(0,10)+'.json'; document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }catch(e){ alert('バックアップを保存できなかったので、消すのをやめました。\n'+e); return; }
+  if(prompt('本当に消しますか？　他の PC からも消えて、Hub の中では元に戻せません。\n\n消すときは「削除」と入れてください。')!=='削除') return;
+  if(!Array.isArray(DB.proofingsDeleted)) DB.proofingsDeleted=[];
+  var gone={}; cards.forEach(function(p){ gone[p.id]=1; if(DB.proofingsDeleted.indexOf(p.id)<0) DB.proofingsDeleted.push(p.id); });
+  DB.proofings=(DB.proofings||[]).filter(function(p){ return !(p && gone[p.id]); });
+  (DB.projects||[]).forEach(function(pr){ if(pr&&pr.proofingIds) pr.proofingIds=pr.proofingIds.filter(function(x){ return !gone[x]; }); });
+  window._proofSelId_=null;
+  if(typeof _addAuditLog_==='function') try{ _addAuditLog_('delete','proofing:all','校正BOX を空にした（'+cards.length+' 枚）'); }catch(e){}
+  saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
+  renderProofingList();
+  var dt=document.getElementById('proofing-detail'); if(dt) dt.innerHTML='<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正を選択してください</div>';
+  if(typeof _toastMsg==='function') _toastMsg('🧹 校正BOX のカード '+cards.length+' 枚を消しました（バックアップはダウンロードに保存）');
+}
 // ═══ STALE-1: 停滞・要注意リスト (N日動いていない / 納期接近・超過) ═══
 function _alertDays_(){
   var d = (DB.conf && DB.conf.alertDays) || {};
@@ -22080,6 +22321,7 @@ function showProofingDetail(proofingId){
       </div>
       <div style="font-size:10px;color:#a16207;margin-top:4px">※ 付けると校正履歴に「戻り（指示）」として残り、状態が「修正依頼あり」になります。</div>
     </div>
+    ${(typeof _proofAiHtml_==='function') ? _proofAiHtml_(p) : ''}
     ${_proofTimelineHtml_(p)}
     <!-- KOSEI-MAIL-2: やり取り通知（受領・受取・修正完了・再アップ）の枠は外した（分かりにくい。履歴と状態で足りる） -->
     ${_proofSentLogHtml_(p)}
