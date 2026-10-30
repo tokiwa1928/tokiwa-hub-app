@@ -113,16 +113,27 @@
   function $(id) { return document.getElementById(id); }
   function close() { var m = $('lwn-modal'); if (m) m.remove(); S = null; }
 
-  function open(inqId) {
-    var inq = ((typeof DB !== 'undefined' && DB.inquiries) || []).find(function (i) { return i.id === inqId; });
+  // KOSEI-LW-1（本多さん 10/30）: 校正BOX のカードからも開ける。opts: { proofId, kind, stage }
+  //   カードに覚えたノート（card.lwNote）があれば、そのグループ・ノートをはじめから選ぶ。入れたらカードにノートを覚える
+  function open(inqId, opts) {
+    opts = opts || {};
+    var card = opts.proofId ? (((typeof DB !== 'undefined' && DB.proofings) || []).find(function (p) { return p && p.id === opts.proofId; }) || null) : null;
+    var inq = inqId ? ((typeof DB !== 'undefined' && DB.inquiries) || []).find(function (i) { return i.id === inqId; }) : null;
+    if (!inq && card) {   // メールが無いとき（校正BOX から直接）: カードの今の校のファイルを添付の候補にする
+      var vs = (card.versions || []).filter(function (v) { return v && v.driveFileId; }), last = vs.length ? (Number(vs[vs.length - 1].round) || 1) : 0;
+      inq = { id: '', subject: card.prodName || '', from_company: card.custName || '', from_name: card.endUser || '', body: '', attachments: vs.filter(function (v) { return (Number(v.round) || 1) === last; }).map(function (v) { return { driveFileId: v.driveFileId, name: v.fileName || '' }; }) };
+    }
     if (!inq) { alert('問い合わせが見つかりません'); return; }
     close();
-    var st = null; try { if (typeof _inqActionState_ === 'function') st = _inqActionState_(inq); } catch (e) { }
-    var fmNo = (st && st.fmNo) || '';
+    var st = null; try { if (inq.id && typeof _inqActionState_ === 'function') st = _inqActionState_(inq); } catch (e) { }
+    var fmNo = (card && card.fmNo) || (st && st.fmNo) || '';
     var subj = String(inq.subject || '').replace(/^(\s*(re|fw|fwd)\s*[:：]\s*)+/i, '').trim();
     var files = (inq.attachments || []).filter(function (a) { return a && !a.expanded; }).map(function (a, i) { return { id: a.driveFileId || '', name: a.name || a.filename || ('添付' + (i + 1)), size: a.size || 0, on: !!a.driveFileId }; });
     var gk = guessKind(inq, files.length > 0);
+    if (opts.kind) gk.kind = opts.kind; if (opts.stage) gk.stage = opts.stage;
     S = { inq: inq, fmNo: fmNo, files: files, local: [], kind: gk.kind, stage: gk.stage, autoText: '', label: labelFor(gk.kind), labelTouched: false, groups: [], group: null, posts: [], nextCursor: '', postId: '', newTitle: ((fmNo ? fmNo + ' ' : '') + (st && st.proj ? (st.proj.item || st.proj.prod || subj) : subj)).slice(0, 190), busy: false };
+    S.card = card; S.preGroup = (card && card.lwNote && card.lwNote.groupId) || ''; S.prePost = (card && card.lwNote && card.lwNote.postId) || '';
+    if (card && !card.lwNote) S.newTitle = ((card.fmNo ? card.fmNo + ' ' : '') + (card.custName ? card.custName + ' ' : '') + (card.prodName || '')).trim().slice(0, 190);
     var m = document.createElement('div'); m.id = 'lwn-modal'; m.className = 'proof-modal';
     m.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(23,33,26,.45);display:flex;align-items:center;justify-content:center';
     m.innerHTML = '<style>#lwn-modal input[type=radio],#lwn-modal input[type=checkbox]{width:auto!important;min-width:0!important;min-height:0!important;flex:none!important;margin:0}#lwn-modal label{font-weight:400}</style>'
@@ -219,6 +230,7 @@
     body.ondrop = function (ev) { body.style.outline = ''; if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length) { ev.preventDefault(); addLocal(ev.dataTransfer.files); } };
     $('lwn-comment').value = S.autoText = kindText();
     paintFiles(); paintKind(); paintLabel(); paintGroups();
+    if (S.preGroup) { var pg = S.groups.filter(function (x) { return x.id === S.preGroup; })[0]; S.preGroup = ''; if (pg) { S.group = pg; paintGroups(); loadPosts(false); } }   // KOSEI-LW-1
   }
   // ③ メールの添付（Drive にあるもの）＋ PC から足したもの
   function paintFiles() {
@@ -282,6 +294,7 @@
       if (!S || !S.group || S.group.id !== gid) return;
       if (!r.success) { if (r.error === 'lw_not_connected') { showConnect('つなぎ直しが要ります'); return; } $('lwn-pwrap').innerHTML = '<span style="color:#B42318">' + esc(why(r)) + '</span>'; return; }
       S.posts = (more ? S.posts : []).concat(r.posts || []); S.nextCursor = r.nextCursor || '';
+      if (!more && !S.postId && S.prePost) { S.postId = String(S.prePost); S.prePost = ''; }   // KOSEI-LW-1: カードに覚えたノート
       if (!more && !S.postId) {   // 伝票番号が題に入っているノートがあれば、はじめから選ぶ
         var hit = S.fmNo ? S.posts.filter(function (p) { return String(p.title).indexOf(S.fmNo) >= 0; })[0] : null;
         S.postId = hit ? String(hit.postId) : 'new';
@@ -322,7 +335,7 @@
     var bad = mismatch(comment, kind);   // LWNOTE-7
     if (bad.length && !confirm('文に「' + bad.join('」「') + '」とありますが、選んだ種類は「' + (kind || 'その他') + '」です。\n\nこのまま送りますか？\n（種類を直すときは「キャンセル」を押して、④ で選び直してください）')) { msg.style.color = '#B42318'; msg.textContent = '④ の種類を確かめてください'; return; }
     var post = isNew ? null : S.posts.filter(function (p) { return String(p.postId) === S.postId; })[0];
-    var title = isNew ? S.newTitle.trim() : (post ? post.title : '');
+    var title = isNew ? S.newTitle.trim() : (post ? post.title : ((S.card && S.card.lwNote && String(S.card.lwNote.postId) === S.postId && S.card.lwNote.title) || ''));
     var lwTab = null, chNo = channelNoFor(S.group);
     if (label && extVersion() && chNo) { try { lwTab = window.open('about:blank', '_blank'); if (lwTab && lwTab.document) { lwTab.document.title = 'LINE WORKS へ送っています…'; lwTab.document.body.innerHTML = '<p style="font:15px system-ui;padding:24px">Tokiwa Hub: LINE WORKS へ送っています… 送り終わると、このタブでノートを開いてカテゴリーを付け替えます。</p>'; } } catch (e) { lwTab = null; } }
     S.busy = true; msg.style.color = '#4A574E'; msg.textContent = 'LINE WORKS へ送っています…（ファイルが大きいと 1〜2 分かかります）';
@@ -338,6 +351,8 @@
         msg.style.color = '#B42318'; msg.textContent = why(r); $('lwn-go').disabled = false; $('lwn-cancel').disabled = false; try { if (lwTab) lwTab.close(); } catch (e) { } return;
       }
       pushRecent(group);
+      // KOSEI-LW-1: 校正BOX のカードにノートを覚える（次からはこのノートに書き足す）
+      try { if (S.card) { var cd = S.card; cd.lwNote = { groupId: group.id, groupName: group.name, postId: String(r.postId), title: title }; cd.lwLog = (cd.lwLog || []).concat([{ at: new Date().toISOString(), by: me().name || '', kind: kind || '', created: !!r.created }]).slice(-50); cd.lastMoveAt = new Date().toISOString(); if (typeof saveDB === 'function') saveDB(); if (typeof saveToCloud === 'function') saveToCloud(); try { if (typeof showProofingDetail === 'function' && document.getElementById('proof-lw-box')) showProofingDetail(cd.id); } catch (e) { } } } catch (e) { }
       // LWNOTE-11: 校正に関わる連絡なら、問い合わせの結果を「校正に回した」に（今日やることから外れる）
       try { if (/^(shikyu|dashi|modori|koryo|sekiryo)$/.test(S.kind) && typeof _inqSetOutcome_ === 'function' && !inq.outcome) _inqSetOutcome_(inq.id, 'proofing', true); } catch (e) { }
       var auto = false;   // LWCAT-1: 拡張機能に付け替えてもらう

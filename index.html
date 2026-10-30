@@ -22036,6 +22036,26 @@ function _proofClearAll_(){
   var dt=document.getElementById('proofing-detail'); if(dt) dt.innerHTML='<div style="text-align:center;color:#888;padding:2rem;font-size:12px">校正を選択してください</div>';
   if(typeof _toastMsg==='function') _toastMsg('🧹 校正BOX のカード '+cards.length+' 枚を消しました（バックアップはダウンロードに保存）');
 }
+// ═══ KOSEI-LW-1（本多さん 10/30）: 校正BOX と LINE WORKS のノートの両方に依頼を届ける ═══
+//   カードを作ったら LW にも登録、問い合わせ（校正戻りのメール）を校正BOX に入れたら、そのカードのノートに書き足す（種類【2校戻り】など・カテゴリーも付け替え）
+//   中身は tools/lw-note.js（LWNOTE-1）の窓。カードは card.lwNote にノートを覚える
+var PROOF_LW_KIND = { manuscript:'shikyu', proof:'dashi', instruction:'modori', final:'koryo' };
+function _proofLwOpen_(proofId, slotK, round, inqId){
+  if(typeof lwNoteOpen!=='function') return;
+  var st=(PROOF_STAGE_FOLDERS[Number(round)||1]||{}).label||'';
+  var o={ proofId:proofId }; if(slotK && PROOF_LW_KIND[slotK]) o.kind=PROOF_LW_KIND[slotK]; if(st && /校/.test(st)) o.stage=st;
+  try{ lwNoteOpen(inqId||null, o); }catch(e){ console.warn('[KOSEI-LW-1]', e); }
+}
+function _proofLwHtml_(p){
+  if(typeof lwNoteOpen!=='function') return '';
+  var n=p.lwNote, last=(p.lwLog||[]).slice(-1)[0];
+  var t=function(iso){ var d=new Date(iso); return isNaN(d)?'':(d.getMonth()+1)+'/'+d.getDate()+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); };
+  return '<div id="proof-lw-box" style="margin-bottom:.75rem;background:#f4f7f3;border:1px solid #d6ded2;border-radius:8px;padding:7px 10px;font-size:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    +'<b style="color:#2e3d35">💼 LINE WORKS ノート</b>'
+    +(n ? '<span>'+_escDiff(n.groupName||'')+' ／ '+_escDiff(n.title||'')+'</span>'+(last?'<span style="color:#64748b">最後に入れた '+_escDiff(t(last.at))+(last.kind?' 【'+_escDiff(last.kind)+'】':'')+(last.by?' '+_escDiff(last.by):'')+'</span>':'')
+       : '<span style="color:#b45309;font-weight:700">まだ登録していません</span>')
+    +'<button class="btn" style="font-size:11.5px;padding:3px 10px;margin-left:auto" onclick="_proofLwOpen_(\''+p.id+'\', null, '+(Number(p._proofRound)||1)+')">'+(n?'💼 ノートに書き足す':'💼 LW にも登録')+'</button></div>';
+}
 // ═══ STALE-1: 停滞・要注意リスト (N日動いていない / 納期接近・超過) ═══
 function _alertDays_(){
   var d = (DB.conf && DB.conf.alertDays) || {};
@@ -22376,6 +22396,7 @@ function showProofingDetail(proofingId){
       </div>
       <div style="font-size:10px;color:#a16207;margin-top:4px">※ 付けると校正履歴に「戻り（指示）」として残り、状態が「修正依頼あり」になります。</div>
     </div>
+    ${(typeof _proofLwHtml_==='function') ? _proofLwHtml_(p) : ''}
     ${(typeof _proofAiHtml_==='function') ? _proofAiHtml_(p) : ''}
     ${_proofTimelineHtml_(p)}
     <!-- KOSEI-MAIL-2: やり取り通知（受領・受取・修正完了・再アップ）の枠は外した（分かりにくい。履歴と状態で足りる） -->
@@ -22516,6 +22537,7 @@ function _doCreateProofingManual_(){
   saveDB();
   renderProofingList();
   showProofingDetail(proofing.id);
+  setTimeout(function(){ _proofLwOpen_(proofing.id, null, 1, null); }, 300);   // KOSEI-LW-1: LW にも登録
 }
 
 // 校正ステータスを更新
@@ -23295,7 +23317,8 @@ function createProofingFromProjectId(projectId){
   const project = (DB.projects||[]).find(p => p.id === projectId);
   if(!project){ alert('案件が見つかりません'); return; }
   if(!confirm(`案件 ${project.id} 「${project.item}」の校正セッションを作成しますか?`)) return;
-  createProofingFromProject(project, true);
+  var _pf = createProofingFromProject(project, true);
+  if(_pf && _pf.id) setTimeout(function(){ _proofLwOpen_(_pf.id, null, 1, null); }, 300);   // KOSEI-LW-1: LW にも登録
 }
 
 // 🆕 問い合わせ管理から校正BOX へ転送 (新規校正セッション作成 + 連絡をリンク)
@@ -23361,6 +23384,7 @@ function forwardInquiryToProofing(inqId){
   alert('✅ 校正BOX に転送しました\n\nセッション: ' + proofId + '\n' + (_attN ? '添付 ' + _attN + ' 件を原稿として登録\n' : '') + (linkedProj ? '案件 ' + linkedProj.id + ' にも紐付け済み' : '案件は未リンク (校正BOX で手動設定可)'));
   closeInquiryDetail();
   jumpToProofing(proofId);
+  setTimeout(function(){ _proofLwOpen_(proofId, null, 1, inqId); }, 300);   // KOSEI-LW-1: LW にも登録
 }
 
 // PPPPPP-17: 問い合わせを「既存の校正案件」に修正指示として挿入 (新規作成ではない)
@@ -23545,6 +23569,7 @@ function _doInsertInquiryToProofing0_(inqId, proofId, slot){
   if(typeof closeInquiryDetail==='function') closeInquiryDetail();
   alert('✅ 校正BOX '+(p.fmNo||proofId)+' の「'+KLABEL+'」に入れました ('+added+'件)');
   if(typeof jumpToProofing==='function') jumpToProofing(proofId);
+  setTimeout(function(){ _proofLwOpen_(proofId, K, (slot&&slot.round)||p._proofRound||1, inqId); }, 300);   // KOSEI-LW-1: 同じ依頼を LW のノートにも（覚えたノートに【N校戻り】で書き足す）
 }
 
 // 校正セッションへジャンプ (案件画面ボタンから)
