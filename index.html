@@ -21854,7 +21854,11 @@ function _proofAiLoadEvents_(id, force){
   if(!force && c && (Date.now()-c.fetchedAt)<60000) return;
   if(typeof callCloudAPI!=='function') return;
   window._proofAiEv_[id]={ fetchedAt:Date.now(), events:(c&&c.events)||[] };
-  Promise.resolve(callCloudAPI('proofAiEvents',{ id:id })).then(function(r){
+  // 同期の表示（☁）を動かさないよう、callCloudAPI を通さずに読む。会社 GAS がまだ古い（窓口が無い）ときは以後呼ばない
+  if(window._proofAiNoApi_) return;
+  var u=new URL(CLOUD_CONFIG.GAS_URL); u.searchParams.set('action','proofAiEvents'); u.searchParams.set('apiKey',CLOUD_CONFIG.API_KEY); u.searchParams.set('id',id);
+  fetch(u.toString(),{ method:'GET', redirect:'follow' }).then(function(x){ return x.json(); }).then(function(r){
+    if(r && !r.success && /unknown_action/.test(String(r.error||''))){ window._proofAiNoApi_=true; return; }
     if(!r || !r.success) return;
     window._proofAiEv_[id]={ fetchedAt:Date.now(), events:r.events||[] };
     if(window._proofSelId_===id || document.getElementById('proof-ai-src')){
@@ -47426,6 +47430,10 @@ function _fmIdxDate_(v){ v=String(v||''); var m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})$
 // HOME-JUCHU-1（本多さん 10/30）: ホームに 受注の金額・件数 を月別で 3 年分くらべる（週次の請求の代わり）
 //   元は FileMaker の受注（受注入力が同じブラウザに置いた索引・全年。受注の伝票＝案件）。索引が無いとき・トキワ以外の会社は Hub の案件カード
 window._nsOrdView_ = window._nsOrdView_ || 'amt';
+// 数え方（FileMaker の集計と合わせるために切り替えられる）。kubun: juchu=受注だけ／blank=受注＋区分空欄／all=失注・見積以外すべて、kin: 売価金額／合計金額、dup: one=伝票ごと1回／all=行ごと
+window._nsOrdOpt_ = window._nsOrdOpt_ || (function(){ try{ return JSON.parse(localStorage.getItem('ns_ord_opt')||'null')||{}; }catch(e){ return {}; } })();
+function _nsOrdOptGet_(){ var o=window._nsOrdOpt_||{}; return { kubun:o.kubun||'blank', kin:o.kin||'売価金額', dup:o.dup||'one' }; }
+function _nsOrdOptSet_(k,v){ var o=_nsOrdOptGet_(); o[k]=v; window._nsOrdOpt_=o; try{ localStorage.setItem('ns_ord_opt', JSON.stringify(o)); }catch(e){} _nsOrdFill_(); }
 function _nsOrdData_(){
   var now=new Date(), Y=now.getFullYear(), years=[Y-2,Y-1,Y];
   var blank=function(){ var o={}; years.forEach(function(y){ o[y]=[0,0,0,0,0,0,0,0,0,0,0,0]; }); return o; };
@@ -47443,11 +47451,19 @@ function _nsOrdData_(){
   return _fmIdxLoad_().then(function(idx){
     if(!idx||!idx.列||!idx.行||!idx.行.length) return fromHub();
     var P={}; idx.列.forEach(function(c,i){ P[c]=i; }); if(P['起票日']==null||P['売価金額']==null) return fromHub();
-    var seen={};
-    idx.行.forEach(function(r){ var kb=String(r[P['案件区分']]==null?'':r[P['案件区分']]); if(kb && kb!=='受注') return;
-      var no=String(r[P['伝票番号']]||''); if(!no||seen[no]||/^hub:/.test(String(r[P['recordId']]||''))) return; seen[no]=1;
-      add(_fmIdxDate_(r[P['起票日']]), Number(String(r[P['売価金額']]==null?'':r[P['売価金額']]).replace(/[^\d.-]/g,''))||0); });
-    return { years:years, amt:amt, cnt:cnt, src:'FileMaker の受注（起票日・売価金額）' };
+    var opt=_nsOrdOptGet_(), kinCol=(P[opt.kin]!=null)?opt.kin:'売価金額', seen={};
+    var num=function(r,c){ return P[c]==null?0:(Number(String(r[P[c]]==null?'':r[P[c]]).replace(/[^\d.-]/g,''))||0); };
+    // 内訳: 今年 1 月〜今日の 区分ごとの 行数・伝票数・売価金額・合計金額（FileMaker と合わせる手がかり）
+    var Y=years[2], bd={}, rowsY=0, dupRows=0, seenY={}, last='';
+    idx.行.forEach(function(r){ var ds=_fmIdxDate_(r[P['起票日']]); if(ds>last) last=ds; if(String(ds).slice(0,4)!==String(Y)) return; if(/^hub:/.test(String(r[P['recordId']]||''))) return;
+      rowsY++; var kb=String(r[P['案件区分']]==null?'':r[P['案件区分']])||'（空欄）', no=String(r[P['伝票番号']]||''); var b=bd[kb]=bd[kb]||{ rows:0, nos:{}, uri:0, gokei:0 };
+      b.rows++; if(no){ if(seenY[no]) dupRows++; seenY[no]=1; b.nos[no]=1; } b.uri+=num(r,'売価金額'); b.gokei+=num(r,'合計金額'); });
+    idx.行.forEach(function(r){ var kb=String(r[P['案件区分']]==null?'':r[P['案件区分']]);
+      if(opt.kubun==='juchu'){ if(kb!=='受注') return; } else if(opt.kubun==='blank'){ if(kb && kb!=='受注') return; } else { if(/失注|見積/.test(kb)) return; }
+      if(/^hub:/.test(String(r[P['recordId']]||''))) return;
+      var no=String(r[P['伝票番号']]||''); if(opt.dup==='one'){ if(!no||seen[no]) return; seen[no]=1; }
+      add(_fmIdxDate_(r[P['起票日']]), num(r,kinCol)); });
+    return { years:years, amt:amt, cnt:cnt, src:'FileMaker の受注（起票日・'+kinCol+'・'+({juchu:'区分＝受注',blank:'区分＝受注か空欄',all:'失注・見積以外'})[opt.kubun]+'・'+(opt.dup==='one'?'伝票ごと 1 回':'行ごと')+'）', fm:true, bd:bd, rowsY:rowsY, dupRows:dupRows, total:idx.行.length, last:last, made:idx.作った||idx.取った||'' };
   }).catch(function(){ return fromHub(); });
 }
 function _nsOrdFill_(){
@@ -47479,13 +47495,21 @@ function _nsOrdFill_(){
       var pct=function(a,b){ if(!b) return ''; var p=Math.round(a/b*100), up=a>=b; return '<span style="color:'+(up?'var(--ord-up)':'var(--ord-down)')+';font-weight:700">'+(up?'▲':'▼')+' 前年比 '+p+'%</span>'; };
       return '<div class="ns-ord-t"><div class="k"><i style="background:'+COL[yr]+'"></i>'+yr+'年 1〜'+(curM+1)+'月</div><div class="v">'+yen(ytdA)+'</div><div class="s">'+ytdC.toLocaleString()+'件 '+(i?pct(ytdA,prevA):'')+'</div>'+full+'</div>'; }).join('');
     var rows=''; for(var m2=0;m2<12;m2++){ rows+='<tr'+(m2===curM?' style="font-weight:700"':'')+'><td>'+(m2+1)+'月</td>'+ys.map(function(yr,i){ var fut=(yr===Y&&m2>curM); var a=d.amt[yr][m2], c=d.cnt[yr][m2], pa=i?d.amt[ys[i-1]][m2]:0; return '<td>'+(fut?'':yen(a))+'</td><td>'+(fut?'':c)+'</td>'+(i?'<td>'+(fut||!pa?'':Math.round(a/pa*100)+'%')+'</td>':''); }).join('')+'</tr>'; }
+    // 数え方と内訳（FileMaker の集計と合わないとき用）
+    var how='';
+    if(d.fm){ var op=_nsOrdOptGet_(); var sel=function(k,list){ return '<select onchange="_nsOrdOptSet_(\''+k+'\',this.value)" style="font-size:11.5px;padding:1px 4px">'+list.map(function(x){ return '<option value="'+x[0]+'"'+(op[k]===x[0]?' selected':'')+'>'+x[1]+'</option>'; }).join('')+'</select>'; };
+      var bdRows=Object.keys(d.bd).sort().map(function(k){ var b=d.bd[k]; return '<tr><td>'+_escDiff(k)+'</td><td>'+b.rows.toLocaleString()+'</td><td>'+Object.keys(b.nos).length.toLocaleString()+'</td><td>'+yen(b.uri)+'</td><td>'+yen(b.gokei)+'</td></tr>'; }).join('');
+      how='<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--ord-mute)">数え方と内訳（FileMaker と合わないとき）</summary><div style="font-size:11.5px;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+        +'区分 '+sel('kubun',[['juchu','受注だけ'],['blank','受注＋空欄'],['all','失注・見積以外すべて']])+' 金額 '+sel('kin',[['売価金額','売価金額'],['合計金額','合計金額']])+' 同じ伝票 '+sel('dup',[['one','1 回だけ'],['all','行ごとに全部']])+'</div>'
+        +'<div style="overflow-x:auto"><table class="ns-ord-tbl"><tr><th>'+Y+'年の区分</th><th>行</th><th>伝票</th><th>売価金額</th><th>合計金額</th></tr>'+bdRows+'</table></div>'
+        +'<div style="font-size:10.5px;color:var(--ord-mute);margin-top:3px">索引 '+Number(d.total).toLocaleString()+' 行・いちばん新しい起票日 '+_escDiff(d.last)+(d.dupRows?'・同じ伝票番号の行 '+d.dupRows+' 行':'')+'</div></details>'; }
     var tbl='<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--ord-mute)">表で見る</summary><div style="overflow-x:auto"><table class="ns-ord-tbl"><tr><th>月</th>'+ys.map(function(yr,i){ return '<th>'+yr+' 金額</th><th>件数</th>'+(i?'<th>前年比</th>':''); }).join('')+'</tr>'+rows+'</table></div></details>';
     var btn=function(k,l){ return '<button onclick="window._nsOrdView_=\''+k+'\';_nsOrdFill_()" style="font:inherit;font-size:11.5px;font-weight:700;padding:2px 10px;border:1px solid var(--ord-ink);background:'+(view===k?'var(--ord-ink)':'transparent')+';color:'+(view===k?'#fff':'var(--ord-ink)')+';cursor:pointer">'+l+'</button>'; };
     box.innerHTML='<h3>受注の推移（月別・'+ys[0]+'〜'+ys[2]+'年）<span style="display:flex;gap:0">'+btn('amt','金額')+btn('cnt','件数')+'</span></h3>'
       +'<div class="ns-ord-tiles">'+tiles+'</div>'
       +'<div style="font-size:10.5px;color:var(--ord-mute);margin:-2px 0 6px">どの年も 1 月〜'+(curM+1)+'月で比べています（'+Y+'年 '+(curM+1)+'月は途中）</div>'
       +'<div class="ns-ord-leg">'+ys.map(function(yr){ return '<span><i style="background:'+COL[yr]+'"></i>'+yr+'年</span>'; }).join('')+'<span style="margin-left:auto;color:var(--ord-mute)">棒に触れると数字が出ます</span></div>'
-      +svg+tbl+'<div style="font-size:10.5px;color:var(--ord-mute);margin-top:4px">元: '+d.src+'</div>';
+      +svg+tbl+how+'<div style="font-size:10.5px;color:var(--ord-mute);margin-top:4px">元: '+d.src+'</div>';
   });
 }
 function _projFmHits_(rows){
