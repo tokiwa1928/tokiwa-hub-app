@@ -55034,6 +55034,56 @@ function _inqPickCase_(id, kind){
   try{ if(typeof closeInquiryDetail==='function') closeInquiryDetail(); }catch(e){}   // PICK-CLOSE（本多さん 10/2「押しても切り替わらない」）: 詳細がかぶさったままだと入力画面が見えない
   if(typeof _toastMsg==='function') _toastMsg((kind==='受注'?'受注入力':kind==='予算見積'?'予算見積書入力':'見積書入力')+'の「探す」に「'+q+'」を入れて開きました。伝票を選んで、上の '+(kind==='受注'?'受注':kind==='予算見積'?'予算見積':'見積')+' で起こしてください');
 }
+// AI-KIHYO-3（本多さん 10/30）: 問い合わせ（メール・FAX）から AI で受注／見積を起こす。
+//   本文＋添付の文字（Drive の OCR・AI の費用はかからない）を受注入力／見積入力の「🤖 AIで起こす」に渡して、そのまま読み取りまで進める
+function _inqAiOrder_(id, kind){
+  var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
+  kind=kind||'受注'; var page=(kind==='受注')?'fmjuchu':'fmmitsu';
+  if(!document.getElementById('fm-frame-'+page)){ if(typeof _toastMsg==='function') _toastMsg((kind==='受注'?'受注入力':'見積入力')+'の画面が、この会社の使用範囲に入っていません'); return; }
+  var atts=(inq.attachments||[]).filter(function(a){ return a && a.driveFileId && /pdf|image|tif|png|jpe?g|gif|bmp/i.test(String(a.mimeType||a.type||'')+' '+String(a.name||a.filename||'')); }).slice(0,3);
+  if(typeof _toastMsg==='function') _toastMsg('📄 本文'+(atts.length?'と添付 '+atts.length+' 件（FAX など）':'')+'を読んでいます…');
+  Promise.all(atts.map(function(a){ return Promise.resolve(callCloudAPI('extractPdfText',{ fileId:a.driveFileId })).then(function(r){ return (r&&r.success&&r.text)?('【添付: '+(a.name||a.filename||'')+'】\n'+String(r.text).slice(0,6000)):''; }).catch(function(){ return ''; }); }))
+  .then(function(texts){
+    var head=['件名: '+String(inq.subject||''), '差出人: '+[inq.from_company||inq.custName||'', inq.from_name||'', inq.from_email||''].filter(Boolean).join(' ')].join('\n');
+    var seed=[head, String(inq.body||'').slice(0,4000)].concat(texts.filter(Boolean)).join('\n\n');
+    try{ localStorage.setItem('fm_ai_seed_'+id, JSON.stringify({ text:seed, at:Date.now() })); }catch(e){}
+    _fmOpenNo_(page, '', '&inq='+encodeURIComponent(id)+'&ai=1&t='+Date.now());
+    try{ if(typeof closeInquiryDetail==='function') closeInquiryDetail(); }catch(e){}
+  });
+}
+// 受注入力／見積入力で AI から伝票を起こしたら呼ばれる: メールを案件に結ぶ・添付を案件フォルダへ・振り分け済み（受注なら「受注に進んだ」で済み）
+window._inqOrderCreated_=function(id, info){
+  var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq||!info||!info.no) return;
+  var now=new Date().toISOString(), who=(currentAuth&&currentAuth.userName)||'';
+  var 受注=(info.kind==='受注');
+  var patch={ bin:(受注?'受注':info.kind==='予算見積'?'予算見積':'見積'), bin_by:who, bin_at:now, linked_fm_no:info.no };
+  if(受注){ patch.linked_project_id=inq.linked_project_id&&!/^→/.test(inq.linked_project_id)?inq.linked_project_id:info.no; patch.outcome='ordered'; patch.outcomeAt=now; patch.outcomeBy=who; patch.status='done'; }
+  else { patch.linked_quote_id=info.no; if(inq.status==='new') patch.status='progress'; }
+  var P=String(info.P||'').replace(/^P/i,''); if(Number(P)){ P=String(parseInt(P,10)).padStart(4,'0'); patch.master_no=P; } else P='';
+  Object.keys(patch).forEach(function(k){ inq[k]=patch[k]; }); window._inqKnownCache_=null;
+  if(!inq.timeline) inq.timeline=[]; inq.timeline.push({ at:now, by:who, type:(受注?'order':'quote'), text:'🤖 AI で'+info.kind+' '+info.no+' を起こしました'+(info.how?'（'+info.how+'）':'')+(P?'・P'+P:'') });
+  try{ saveDB(); }catch(e){}
+  try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:patch }); }catch(e){}
+  // 添付: P番号の案件フォルダ「01_問い合わせ」へ（1 件目は移す・2 件目以降は写し。ATTACH-ALL と同じ）
+  var ids=(inq.attachments||[]).filter(function(a){ return a && a.driveFileId; }).map(function(a){ return a.driveFileId; });
+  if(P && ids.length){ inq.caseFiles=inq.caseFiles||{};
+    if(!inq.caseFiles[P]){ inq.caseFiles[P]='pending';
+      var firstCase=!(inq.attachments||[]).some(function(a){ return a && a.movedToCase; });
+      callCloudAPI('ensureCaseFolder',{},{ pno:P, ankenName:String(info.item||''), orgCode:String(info.custcd||''), org:String(info.cust||''), denpyos:[info.no] }).then(function(cf){
+        var sub=cf&&cf.success&&cf.subFolders&&cf.subFolders['01_問い合わせ']; if(!sub||!sub.id) throw new Error((cf&&cf.error)||'案件フォルダがありません');
+        return callCloudAPI(firstCase?'moveFilesToFolder':'copyFilesToFolder',{},{ fileIds:ids, folderId:sub.id });
+      }).then(function(x){ if(!x||!x.success) throw new Error((x&&x.error)||'置けませんでした');
+        inq.caseFiles[P]='done'; if(firstCase) (inq.attachments||[]).forEach(function(a){ if(a && ids.indexOf(a.driveFileId)>=0) a.movedToCase=true; });
+        inq.timeline.push({ at:new Date().toISOString(), by:who, type:'note', text:'📎 添付 '+ids.length+' 件を案件 P'+P+' のフォルダ（01_問い合わせ）に'+(firstCase?'移しました':'写しました') });
+        try{ saveDB(); }catch(e){}
+      }).catch(function(e){ try{ delete inq.caseFiles[P]; }catch(_){} console.warn('[AI-KIHYO-3 添付]', e); if(typeof _toastMsg==='function') _toastMsg('⚠ 添付を案件フォルダに置けませんでした: '+String(e.message||e)); });
+    }
+  }
+  // 受注なら案件カードを FileMaker と合わせて作り、メールを結ぶ
+  if(受注 && typeof _fmAutoSync_==='function') setTimeout(function(){ Promise.resolve(_fmAutoSync_()).then(function(){ var pr=(DB.projects||[]).find(function(p){ return p && (p.id===info.no || (p.fm&&String(p.fm['fm-denpyo']||'')===String(info.no))); }); if(pr){ if(!pr.fromInquiryId) pr.fromInquiryId=inq.id; if(pr.id!==inq.linked_project_id){ inq.linked_project_id=pr.id; try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ linked_project_id:pr.id } }); }catch(e){} } try{ saveDB(); }catch(e){} } }); }, 3000);
+  try{ renderInquiryList(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('📨 メールを'+info.kind+' '+info.no+' に結びました'+(受注?'（受注に進んだ・済み）':'')+(P&&ids.length?'。添付は案件フォルダへ':''));
+};
 function _inqPickCaseOld_(id, kind){
   var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return;
   var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
@@ -57191,7 +57241,8 @@ function _inqDetailTopBar_(inq){
   return '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:.8rem;padding:10px 12px;background:#f0fdfa;border:1px solid #99f6e4">'
     +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%">'+chip+dl+(typeof _inqFlags_==='function'?_inqFlags_(inq):'')+(typeof _inqWaitChip_==='function'?_inqWaitChip_(inq):'')+(inq.linked_project_id?'<span style="font-size:11px;color:#15803d">✅ 案件 '+esc(inq.linked_project_id)+' に転記済</span>':'')+'</div>'
     +((bin==='受注'||bin==='見積'||bin==='予算見積')?'':b(esc(na.label), na.js, true))
-    +ent('受注','受注入力へ')+ent('見積','見積書入力へ')+ent('予算見積','予算見積書入力へ')   // PICK-3（本多さん 10/2）: 仕分けに関係なく 3 つとも押せる。仕分けと同じものが濃い色
+    +ent('受注','受注入力へ')+ent('見積','見積書入力へ')+ent('予算見積','予算見積書入力へ')
+    +b('🤖 AIで受注', "_inqAiOrder_('"+esc(inq.id)+"','受注')", false)+b('🤖 AIで見積', "_inqAiOrder_('"+esc(inq.id)+"','見積')", false)   // AI-KIHYO-3: 本文＋添付（FAX）から、リピートを探して起こす   // PICK-3（本多さん 10/2）: 仕分けに関係なく 3 つとも押せる。仕分けと同じものが濃い色
     +(bin!=='校正'?b('🖍 校正BOXへ', "_inqInsertToProofing_('"+esc(inq.id)+"')", false):'')
     +((typeof lwNoteOpen==='function'&&typeof _isSuperAdmin_==='function'&&_isSuperAdmin_())?b('💼 LW ノートへ', "lwNoteOpen('"+esc(inq.id)+"')", false):'')   // LWNOTE-1（本多さん 10/2）: グループ → ノート → ファイルとコメント。試し中は 本多・福永 だけ（本物の LINE WORKS で確かめたら全員に開ける）
     +(typeof _inqOutcomeSelect_==='function'?_inqOutcomeSelect_(inq,true):'')

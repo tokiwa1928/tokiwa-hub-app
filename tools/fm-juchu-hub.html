@@ -4292,7 +4292,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     var src = i >= 0 ? row.候補[i] : null, o = row.依頼, 種別 = 起こす種別;
     var how = !src ? '新規' : src.段 === 1 ? 'リピート' : src.段 === 2 ? '同じ商品を流用' : '近いものを流用';
     if (row.候補.length && row.候補[0].段 === 1 && (!src || src.段 !== 1) && !confirm('リピート（' + (row.候補[0]['伝票番号'] || row.候補[0]['見積番号']) + '）があります。決まりではリピートを元にします。それでも別のものから起こしますか？')) return;
-    var ロット = !src ? '新規' : src.段 === 1 ? 'リピート' : src.段 === 3 ? '新規' : '';
+    var ロット = src && src.段 === 1 ? 'リピート' : '新規';   // ②③・新規は「新規」（本多さん 10/30）
     if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて起こしますか？')) return;
     if (!confirm(種別 + 'を起こします（' + how + (src ? '・元 ' + (src['伝票番号'] || src['見積番号']) : '') + '）。\nFileMaker に新しい伝票ができます。読み取った品名・数量などを入れるので、確かめてから「保存」してください。')) return;
     var m = $('fm-ai-kihyo'); if (m) m.remove();
@@ -4306,6 +4306,8 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '');
       受け取る(r, '🤖 ' + how + 'で' + 作成した文(種別) + n2 + (src ? '（元 ' + (src['伝票番号'] || src['見積番号']) + '）' : ''), Date.now() - t0);
       setTimeout(function () { AIの値を入れる(o, !src, ロット); }, 400);
+      // AI-KIHYO-3: 問い合わせから来たら、メールをこの伝票に結ぶ（添付は案件フォルダへ・振り分け済み・受注なら「受注に進んだ」）
+      if (問い合わせ予約) { try { var rf = r.record.fields || {}; if (window.parent && window.parent !== window && window.parent._inqOrderCreated_) window.parent._inqOrderCreated_(問い合わせ予約, { no: n2, kind: 種別, how: how, P: rf['P番号'] || rf['案件ID'] || '', custcd: rf['得意先コード'] || '', item: o.品名 || rf['製品名'] || '', cust: o.得意先 || '' }); } catch (e) { console.warn('[AI-KIHYO-3]', e); } }
     }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }
   // 読み取った値を欄に入れる（変わった欄は「保存」で FileMaker に書かれる）。得意先は新規のときだけ
@@ -4318,6 +4320,13 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     if (新規 && o.得意先) { var cs = 得意先コードを名前で(o.得意先) || {}, ks = Object.keys(cs); if (ks.length === 1) put('f-custcd', ks[0], '得意先'); }
     状態(stat.textContent + (入れた.length ? '　AI が入れた欄: ' + 入れた.join('・') + '（オレンジ枠）。仕様「' + (o.仕様 || '—') + '」を確かめて保存' : '　仕様「' + (o.仕様 || '—') + '」を確かめて保存'), 'ok');
   }
+  (function () {   // AI-KIHYO-3: Hub の問い合わせから ?ai=1&inq=… で来たら、本文＋添付の文字を入れて読み取りまで進める
+    var ai = ''; try { ai = new URLSearchParams(location.search).get('ai') || ''; } catch (e) {}
+    if (ai !== '1' || !問い合わせ予約) return;
+    var seed = null; try { seed = JSON.parse(localStorage.getItem('fm_ai_seed_' + 問い合わせ予約) || 'null'); localStorage.removeItem('fm_ai_seed_' + 問い合わせ予約); } catch (e) {}
+    if (!seed || !seed.text) return;
+    var n = 0, t = setInterval(function () { n++; if (!索引 && n < 60) return; clearInterval(t); AI起票を開く(); $('aik-in').value = seed.text; $('aik-go').click(); }, 500);
+  })();
   (function () {
     var b = document.createElement('button'); b.textContent = '🤖 AIで起こす'; b.title = '依頼の文から、前回の伝票（リピート）を探して起こす';
     b.style.cssText = 'background:#5b21b6;color:#fff;border:0;border-radius:4px;padding:4px 10px;font-weight:700';
