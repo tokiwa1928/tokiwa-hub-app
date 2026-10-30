@@ -47423,6 +47423,70 @@ function _fmIdxLoad_(){
     .then(function(idx){ window._fmIdxCache_ = { at: Date.now(), idx: idx }; return idx; });
 }
 function _fmIdxDate_(v){ v=String(v||''); var m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v); if(m) return m[3]+'-'+('0'+m[1]).slice(-2)+'-'+('0'+m[2]).slice(-2); return v; }
+// HOME-JUCHU-1（本多さん 10/30）: ホームに 受注の金額・件数 を月別で 3 年分くらべる（週次の請求の代わり）
+//   元は FileMaker の受注（受注入力が同じブラウザに置いた索引・全年。受注の伝票＝案件）。索引が無いとき・トキワ以外の会社は Hub の案件カード
+window._nsOrdView_ = window._nsOrdView_ || 'amt';
+function _nsOrdData_(){
+  var now=new Date(), Y=now.getFullYear(), years=[Y-2,Y-1,Y];
+  var blank=function(){ var o={}; years.forEach(function(y){ o[y]=[0,0,0,0,0,0,0,0,0,0,0,0]; }); return o; };
+  var amt=blank(), cnt=blank();
+  var add=function(ds, v){ var m=/^(\d{4})-(\d\d)/.exec(String(ds||'')); if(!m) return; var y=+m[1], mo=+m[2]-1; if(!amt[y]||mo<0||mo>11) return; amt[y][mo]+=v; cnt[y][mo]+=1; };
+  var fromHub=function(){
+    var my=(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'';
+    (DB.projects||[]).forEach(function(p){ if(!p||/キャンセル|失注/.test(p.status||'')) return;
+      if(my && typeof _canSeeAllCompanies_==='function' && !_canSeeAllCompanies_() && p.companyCode && p.companyCode!==my) return;
+      add(p.orderDate||String(p.createdAt||'').slice(0,10), Number(p.exTax||p.grand||0)||0); });
+    return { years:years, amt:amt, cnt:cnt, src:'Hub の案件（受注日・税抜金額）' };
+  };
+  var all=(typeof _canSeeAllCompanies_!=='function')||_canSeeAllCompanies_();
+  if(!all || typeof _fmIdxLoad_!=='function') return Promise.resolve(fromHub());
+  return _fmIdxLoad_().then(function(idx){
+    if(!idx||!idx.列||!idx.行||!idx.行.length) return fromHub();
+    var P={}; idx.列.forEach(function(c,i){ P[c]=i; }); if(P['起票日']==null||P['売価金額']==null) return fromHub();
+    var seen={};
+    idx.行.forEach(function(r){ var kb=String(r[P['案件区分']]==null?'':r[P['案件区分']]); if(kb && kb!=='受注') return;
+      var no=String(r[P['伝票番号']]||''); if(!no||seen[no]||/^hub:/.test(String(r[P['recordId']]||''))) return; seen[no]=1;
+      add(_fmIdxDate_(r[P['起票日']]), Number(String(r[P['売価金額']]==null?'':r[P['売価金額']]).replace(/[^\d.-]/g,''))||0); });
+    return { years:years, amt:amt, cnt:cnt, src:'FileMaker の受注（起票日・売価金額）' };
+  }).catch(function(){ return fromHub(); });
+}
+function _nsOrdFill_(){
+  var box=document.getElementById('ns-orders'); if(!box) return;
+  _nsOrdData_().then(function(d){
+    box=document.getElementById('ns-orders'); if(!box) return; window._nsOrdLast_=d;
+    var view=window._nsOrdView_, src=view==='cnt'?d.cnt:d.amt, ys=d.years, now=new Date(), curM=now.getMonth(), Y=ys[2];
+    var yen=function(v){ return '¥'+Math.round(v).toLocaleString(); }, man=function(v){ return v>=1e8?(v/1e8).toFixed(1)+'億':v>=1e4?Math.round(v/1e4).toLocaleString()+'万':Math.round(v).toLocaleString(); };
+    var fmt=function(v){ return view==='cnt'?Math.round(v).toLocaleString()+'件':yen(v); };
+    var COL={}; COL[ys[0]]='var(--ord-y0)'; COL[ys[1]]='var(--ord-y1)'; COL[ys[2]]='var(--ord-y2)';
+    var mx=1; ys.forEach(function(y){ src[y].forEach(function(v,m){ if(y===Y&&m>curM) return; if(v>mx) mx=v; }); });
+    var nice=function(v){ var p=Math.pow(10,Math.floor(Math.log10(v))); var f=v/p; return (f<=1?1:f<=2?2:f<=5?5:10)*p; }; var top=nice(mx);
+    var W=620,H=210,L=44,R=6,T=8,B=22, cw=(W-L-R)/12, bw=Math.max(4,Math.min(12,(cw-8)/3)), gap=2;
+    var y=function(v){ return T+(H-T-B)*(1-v/top); };
+    var svg='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block" role="img" aria-label="受注の'+(view==='cnt'?'件数':'金額')+'（月別・'+ys[0]+'〜'+ys[2]+'年）">';
+    [0,0.5,1].forEach(function(f){ var v=top*f, yy=y(v); svg+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+yy+'" y2="'+yy+'" stroke="var(--ord-grid)" stroke-width="1"/><text x="'+(L-6)+'" y="'+(yy+4)+'" text-anchor="end" font-size="10" fill="var(--ord-mute)">'+(view==='cnt'?Math.round(v):man(v))+'</text>'; });
+    for(var m=0;m<12;m++){
+      var x0=L+m*cw+(cw-(3*bw+2*gap))/2;
+      ys.forEach(function(yr,i){ if(yr===Y&&m>curM) return; var v=src[yr][m], yy=y(v), h=Math.max(0,(H-B)-yy), x=x0+i*(bw+gap);
+        var lastY=src[ys[i-1]]?src[ys[i-1]][m]:0;
+        svg+='<rect x="'+x.toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+h.toFixed(1)+'" rx="2" fill="'+COL[yr]+'"><title>'+yr+'年'+(m+1)+'月　'+fmt(v)+(view==='amt'?'（'+d.cnt[yr][m]+'件）':'（'+yen(d.amt[yr][m])+'）')+(i>0&&lastY?'　前年比 '+Math.round(v/lastY*100)+'%':'')+'</title></rect>'; });
+      svg+='<text x="'+(L+m*cw+cw/2).toFixed(1)+'" y="'+(H-6)+'" text-anchor="middle" font-size="10" fill="'+(m===curM?'var(--ord-ink)':'var(--ord-mute)')+'"'+(m===curM?' font-weight="700"':'')+'>'+(m+1)+'月</text>';
+    }
+    svg+='</svg>';
+    // 年の合計と、今年と同じ期間（1 月〜今月）の比較
+    var sum=function(arr,to){ var s=0; for(var i=0;i<=to;i++) s+=arr[i]; return s; };
+    var tiles=ys.map(function(yr,i){ var ytdA=sum(d.amt[yr],curM), ytdC=sum(d.cnt[yr],curM), prevA=i?sum(d.amt[ys[i-1]],curM):0, prevC=i?sum(d.cnt[ys[i-1]],curM):0;
+      var full=yr<Y?('<div class="s">年間 '+yen(sum(d.amt[yr],11))+'・'+sum(d.cnt[yr],11).toLocaleString()+'件</div>'):'';
+      var pct=function(a,b){ if(!b) return ''; var p=Math.round(a/b*100); return '<span style="color:'+(p>=100?'var(--ord-up)':'var(--ord-down)')+';font-weight:700">'+(p>=100?'▲':'▼')+' 前年比 '+p+'%</span>'; };
+      return '<div class="ns-ord-t"><div class="k"><i style="background:'+COL[yr]+'"></i>'+yr+'年 1〜'+(curM+1)+'月</div><div class="v">'+yen(ytdA)+'</div><div class="s">'+ytdC.toLocaleString()+'件 '+(i?pct(ytdA,prevA):'')+'</div>'+full+'</div>'; }).join('');
+    var rows=''; for(var m2=0;m2<12;m2++){ rows+='<tr'+(m2===curM?' style="font-weight:700"':'')+'><td>'+(m2+1)+'月</td>'+ys.map(function(yr,i){ var fut=(yr===Y&&m2>curM); var a=d.amt[yr][m2], c=d.cnt[yr][m2], pa=i?d.amt[ys[i-1]][m2]:0; return '<td>'+(fut?'':yen(a))+'</td><td>'+(fut?'':c)+'</td>'+(i?'<td>'+(fut||!pa?'':Math.round(a/pa*100)+'%')+'</td>':''); }).join('')+'</tr>'; }
+    var tbl='<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--ord-mute)">表で見る</summary><div style="overflow-x:auto"><table class="ns-ord-tbl"><tr><th>月</th>'+ys.map(function(yr,i){ return '<th>'+yr+' 金額</th><th>件数</th>'+(i?'<th>前年比</th>':''); }).join('')+'</tr>'+rows+'</table></div></details>';
+    var btn=function(k,l){ return '<button onclick="window._nsOrdView_=\''+k+'\';_nsOrdFill_()" style="font:inherit;font-size:11.5px;font-weight:700;padding:2px 10px;border:1px solid var(--ord-ink);background:'+(view===k?'var(--ord-ink)':'transparent')+';color:'+(view===k?'#fff':'var(--ord-ink)')+';cursor:pointer">'+l+'</button>'; };
+    box.innerHTML='<h3>受注の推移（月別・'+ys[0]+'〜'+ys[2]+'年）<span style="display:flex;gap:0">'+btn('amt','金額')+btn('cnt','件数')+'</span></h3>'
+      +'<div class="ns-ord-tiles">'+tiles+'</div>'
+      +'<div class="ns-ord-leg">'+ys.map(function(yr){ return '<span><i style="background:'+COL[yr]+'"></i>'+yr+'年</span>'; }).join('')+'<span style="margin-left:auto;color:var(--ord-mute)">棒に触れると数字が出ます</span></div>'
+      +svg+tbl+'<div style="font-size:10.5px;color:var(--ord-mute);margin-top:4px">元: '+d.src+'</div>';
+  });
+}
 function _projFmHits_(rows){
   var tbl = document.getElementById('proj-body'); tbl = tbl && tbl.closest('table'); if(!tbl) return;
   var box = document.getElementById('proj-fm-hits');
@@ -59771,6 +59835,19 @@ body.new-shell #page-realtime > *:not(#ns-home){ display:none !important; }
 #ns-home .ns-bar i{ display:block; height:100%; background:var(--hub-a); border-radius:6px; }
 #ns-home .ns-pct{ font-size:10px; color:#8d897f; width:32px; text-align:right; }
 #ns-home .ns-badge{ display:inline-flex; align-items:center; font-size:11px; font-weight:700; padding:4px 11px; border-radius:20px; white-space:nowrap; background:#e8f0fe; color:#1b4fc0; }
+#ns-home{ --ord-y0:#b9d6c2; --ord-y1:#6aa781; --ord-y2:#1f5c3a; --ord-grid:#eeece6; --ord-mute:#8d897f; --ord-ink:#1c1b18; --ord-up:#1f6e43; --ord-down:#b3261e; }
+#ns-home .ns-ord-tiles{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-bottom:8px; }
+#ns-home .ns-ord-t{ border:1px solid #eeece6; border-radius:10px; padding:7px 10px; min-width:0; }
+#ns-home .ns-ord-t .k{ font-size:11px; color:#8d897f; display:flex; align-items:center; gap:5px; }
+#ns-home .ns-ord-t .v{ font-size:17px; font-weight:800; font-variant-numeric:tabular-nums; }
+#ns-home .ns-ord-t .s{ font-size:11px; color:#5f5b52; font-variant-numeric:tabular-nums; }
+#ns-home .ns-ord-t i, #ns-home .ns-ord-leg i{ display:inline-block; width:10px; height:10px; border-radius:2px; }
+#ns-home .ns-ord-leg{ display:flex; gap:12px; align-items:center; font-size:11.5px; margin:2px 0 4px; flex-wrap:wrap; }
+#ns-home .ns-ord-leg span{ display:inline-flex; align-items:center; gap:5px; }
+#ns-home .ns-ord-tbl{ border-collapse:collapse; font-size:11.5px; font-variant-numeric:tabular-nums; margin-top:4px; white-space:nowrap; }
+#ns-home .ns-ord-tbl th, #ns-home .ns-ord-tbl td{ border:1px solid #eeece6; padding:2px 7px; text-align:right; }
+#ns-home .ns-ord-tbl th:first-child, #ns-home .ns-ord-tbl td:first-child{ text-align:left; }
+@media (max-width:640px){ #ns-home .ns-ord-tiles{ grid-template-columns:1fr; } }
 #ns-home .ns-week{ display:flex; align-items:flex-end; gap:10px; height:120px; margin-top:6px; }
 #ns-home .ns-week .col{ flex:1; display:flex; flex-direction:column; justify-content:flex-end; height:100%; }
 #ns-home .ns-week .bar{ width:100%; background:var(--hub-a); border-radius:6px 6px 0 0; min-height:2px; }
@@ -59975,13 +60052,14 @@ body.new-shell [style*="color:#999"], body.new-shell [style*="color:#aaa"]{ colo
       +'<div class="ns-grid">'
         +'<div style="display:flex;flex-direction:column;gap:16px">'
           +'<div class="ns-card"><h3>進行中の案件<a onclick="var b=document.querySelector(\'#tb-scroll .tb-btn[data-page=&quot;project&quot;]\');if(b)b.click()">すべて見る →</a></h3>'+projRows+'</div>'
-          +'<div class="ns-card"><h3>週次の請求<span style="font-size:12px;color:#8d897f;font-weight:700">今週 '+yen(wsum)+'</span></h3><div class="ns-week">'+bars+'</div><div class="ns-week-lb">'+lbs+'</div></div>'
+          +'<div class="ns-card" id="ns-orders"><h3>受注の推移（月別・3年）</h3><div style="color:#a39f97;font-size:12px;padding:8px 0">読み込み中…</div></div>'   // HOME-JUCHU-1: 週次の請求の代わり
         +'</div>'
         +'<div class="ns-card"><h3>本日の予定・期限</h3>'+evRows+'</div>'
       +'</div>';
     var host=document.getElementById('ns-home');
     if(!host){ host=document.createElement('div'); host.id='ns-home'; pg.appendChild(host); }
     host.innerHTML=html;
+    try{ setTimeout(_nsOrdFill_, 0); }catch(e){}   // HOME-JUCHU-1
   }
   function buildSidebar(){
     if(document.getElementById('hub-sidebar')) return;
