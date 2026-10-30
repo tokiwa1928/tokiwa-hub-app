@@ -4173,6 +4173,140 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     out.sort(function (a, b) { return 日(b.起票日).localeCompare(日(a.起票日)) || b.no.localeCompare(a.no); });
     return out;
   }
+  // ================================================================ AI-KIHYO-1（本多さん 10/30）
+  // 依頼の文（メール・表計算からの貼り付け）を AI で読み、得意先・ユーザー・品名・仕様・数量に分ける →
+  // 索引から前回の伝票を探す → 同じもの（リピート）があればそれを元に、無ければ似たものを流用して起こす。
+  // 起こしたあと、読み取った品名・数量などを欄に入れるだけ（保存は人が押す）。AI は会社 GAS の claudeText（使用量の上限つき）
+  var AI_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
+  var AI_GAS_KEY = 'mitsumori-2024';
+  var AI起票 = { 行: [] };
+  function AI文字(s) { return String(s == null ? '' : s).normalize('NFKC').toLowerCase().replace(/[\s　・,，、()（）「」『』【】\[\]"'_\-－ー]/g, ''); }
+  function AIに読ませる(文) {
+    var prompt = '印刷会社の受注・見積の依頼です。次の文から、注文を 1 件ずつ取り出して JSON の配列だけを返してください（説明文は書かない）。\n'
+      + '各要素: {"得意先":"","ユーザー":"","品名":"","仕様":"","数量":0,"単位":"","納期":""}\n'
+      + '・得意先＝注文してきた会社（印刷会社から見たお客様）。ユーザー＝その先の使う人・会社（エンドユーザー）。分からなければ空\n'
+      + '・品名は「名刺（吉岡大輝）」のように、人名や版の違いも含めてそのまま\n'
+      + '・仕様は「4/0 レーザーハイマット9」のような色数・用紙・加工をそのまま\n'
+      + '・数量は数字だけ。単位は 枚・部・冊・箱 など。納期は書いてあれば YYYY-MM-DD\n'
+      + '・表計算から貼った文はタブ区切りで、"" で囲まれた欄の中は改行を含む 1 つの欄\n'
+      + '・書いていないことは推測で埋めない\n\n文:\n' + String(文).slice(0, 8000);
+    var u = new URL(AI_GAS_URL); u.searchParams.set('action', 'claudeText'); u.searchParams.set('apiKey', AI_GAS_KEY);
+    return fetch(u.toString(), { method: 'POST', redirect: 'follow', body: JSON.stringify({ prompt: prompt, maxTokens: 2000 }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || !j.success) { var m = (j && j.error) || '応答なし'; if (/daily_limit/.test(m)) m = '今日の AI の上限に達しました（明日 0 時に戻ります）'; if (/ai_disabled/.test(m)) m = 'AI が止められています（設定で AI_ENABLED）'; throw new Error(m); }
+        var t = String(j.reply || ''), a = t.indexOf('['), b = t.lastIndexOf(']');
+        if (a < 0 || b < a) throw new Error('AI の返事を読めませんでした: ' + t.slice(0, 120));
+        var arr = JSON.parse(t.slice(a, b + 1));
+        return (Array.isArray(arr) ? arr : []).filter(function (x) { return x && (x.品名 || x.ユーザー || x.得意先); });
+      });
+  }
+  // 索引から候補を探す。点: 得意先 3・ユーザー 3・品名が同じ 6／人名など（ ）の中が同じ 4／品名の元（名刺 など）が同じ 1
+  function AI候補(o) {
+    if (!索引) return [];
+    var P = 索引位置, 行 = 索引.行;
+    var custSet = o.得意先 ? (得意先コードを名前で(o.得意先) || {}) : {};
+    var user = AI文字(o.ユーザー), item = AI文字(o.品名);
+    var 括弧 = (/[（(]([^）)]+)[）)]/.exec(String(o.品名 || '')) || [])[1]; 括弧 = 括弧 ? AI文字(括弧) : '';
+    var 元 = AI文字(String(o.品名 || '').replace(/[（(][^）)]*[）)]/g, ''));
+    var out = [];
+    for (var i = 0; i < 行.length; i++) {
+      var r = 行[i];
+      if (!段階が合う(r[P['案件区分']]) && String(r[P['案件区分']] || '') !== '受注') continue;
+      var s = 0, why = [];
+      var rc = String(r[P['得意先コード']] || ''), ru = AI文字(r[P['ユーザー名']]), ri = AI文字(r[P['製品名']]);
+      if (custSet[rc]) { s += 3; why.push('得意先'); }
+      if (user && ru && (ru.indexOf(user) >= 0 || user.indexOf(ru) >= 0)) { s += 3; why.push('ユーザー'); }
+      if (item && ri === item) { s += 6; why.push('品名が同じ'); }
+      else if (括弧 && ri.indexOf(括弧) >= 0) { s += 4; why.push('（' + 括弧 + '）'); }
+      else if (元 && ri.indexOf(元) >= 0) { s += 1; why.push('品名の元'); }
+      if (s < 4) continue;
+      out.push({ i: i, 点: s, わけ: why.join('・'), 同じ: !!(custSet[rc] && item && ri === item && (!user || why.indexOf('ユーザー') >= 0)) });
+    }
+    out.sort(function (a, b) { return (b.点 - a.点) || (索引日[b.i] - 索引日[a.i]); });
+    return out.slice(0, 8).map(function (c) { var o2 = { 点: c.点, わけ: c.わけ, 同じ: c.同じ }; 索引.列.forEach(function (col, ci) { o2[col] = 行[c.i][ci]; }); o2.recordId = String(o2.recordId); return o2; });
+  }
+  function AI起票を開く() {
+    var old = $('fm-ai-kihyo'); if (old) old.remove();
+    var m = document.createElement('div'); m.id = 'fm-ai-kihyo';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:4vh 8px';
+    m.innerHTML = '<div style="background:#fff;border-radius:8px;padding:16px 18px;width:min(900px,98vw);font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
+      + '<div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">🤖 AI で' + 起こす種別 + 'を起こす</b><button id="aik-x" style="margin-left:auto;padding:3px 12px">閉じる</button></div>'
+      + '<div style="color:#475569;margin:4px 0 6px">メールの文や表計算の行をそのまま貼ってください。AI が 得意先・ユーザー・品名・仕様・数量 に分け、前回の伝票（リピート）を探します。<b>同じものがあればそれを元に、無ければ似たものを流用</b>して起こします。最後の「保存」はご自身で。</div>'
+      + '<textarea id="aik-in" rows="5" style="width:100%;box-sizing:border-box;font-size:13px;padding:6px 8px" placeholder="例）トゥワイス	&quot;キンダイメンテナンス&#10;名刺（吉岡大輝）&quot;	4/0　レーザーハイマット9	100	枚"></textarea>'
+      + '<div style="margin:6px 0;display:flex;gap:8px;align-items:center"><button id="aik-go" style="padding:5px 16px;background:#1a1a1a;color:#fff;border:0;border-radius:4px">読み取って探す</button><span id="aik-msg" style="color:#475569"></span></div>'
+      + '<div id="aik-out"></div></div>';
+    document.body.appendChild(m);
+    $('aik-x').onclick = function () { m.remove(); };
+    $('aik-go').onclick = function () {
+      var t = $('aik-in').value.trim(); if (!t) { $('aik-in').focus(); return; }
+      $('aik-go').disabled = true; $('aik-msg').textContent = 'AI が読んでいます…'; $('aik-out').innerHTML = '';
+      var 準備 = 得意先マスタ ? Promise.resolve() : 得意先マスタを用意();
+      Promise.all([AIに読ませる(t), 準備]).then(function (res) {
+        var list = res[0];
+        if (!索引) { $('aik-msg').textContent = '索引（過去の伝票）を待っています。少し待ってからもう一度押してください'; return; }
+        AI起票.行 = list.map(function (o) { return { 依頼: o, 候補: AI候補(o) }; });
+        $('aik-msg').textContent = list.length + ' 件を読み取りました';
+        AI起票の表();
+      }).catch(function (e) { $('aik-msg').textContent = String(e.message || e); })
+        .then(function () { $('aik-go').disabled = false; });
+    };
+    setTimeout(function () { $('aik-in').focus(); }, 0);
+  }
+  function AIエスケープ(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function AI起票の表() {
+    var e = AIエスケープ;
+    $('aik-out').innerHTML = AI起票.行.map(function (row, k) {
+      var o = row.依頼, c = row.候補, 同じ = c.filter(function (x) { return x.同じ; })[0];
+      var 既定 = 同じ ? c.indexOf(同じ) : (c.length ? 0 : -1);
+      return '<div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;margin-top:8px">'
+        + '<div style="display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline"><b>' + (k + 1) + '.</b>'
+        + ['得意先', 'ユーザー', '品名', '仕様', '数量', '単位', '納期'].map(function (f) { return o[f] ? '<span><span style="color:#64748b;font-size:11px">' + f + '</span> <b>' + e(o[f]) + '</b></span>' : ''; }).join('') + '</div>'
+        + '<div style="margin-top:4px;font-size:12px;color:' + (同じ ? '#166534' : c.length ? '#92400e' : '#b91c1c') + ';font-weight:700">'
+        + (同じ ? '✅ リピートがあります（同じ得意先・品名）。これを元に起こします' : c.length ? '⚠ 同じものは見つかりません。似たものを流用して起こします（元を選べます）' : '✖ 似たものもありません。新しく起こします') + '</div>'
+        + (c.length ? '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px"><tr style="background:#f1f5f9"><th></th><th style="text-align:left;padding:2px 6px">伝票</th><th style="text-align:left;padding:2px 6px">段階</th><th style="text-align:left;padding:2px 6px">起票日</th><th style="text-align:left;padding:2px 6px">ユーザー</th><th style="text-align:left;padding:2px 6px">製品名</th><th style="padding:2px 6px">数量</th><th style="text-align:left;padding:2px 6px">合ったところ</th></tr>'
+          + c.map(function (x, i) { return '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:2px 6px"><input type="radio" name="aik-src-' + k + '" value="' + i + '"' + (i === 既定 ? ' checked' : '') + '></td><td style="padding:2px 6px"><b>' + e(x['伝票番号'] || x['見積番号']) + '</b></td><td style="padding:2px 6px">' + e(x['案件区分']) + '</td><td style="padding:2px 6px">' + e(x['起票日']) + '</td><td style="padding:2px 6px">' + e(x['ユーザー名']) + '</td><td style="padding:2px 6px">' + e(x['製品名']) + '</td><td style="padding:2px 6px;text-align:right">' + e(x['合計数1']) + '</td><td style="padding:2px 6px;color:#475569">' + e(x.わけ) + (x.同じ ? ' <b style="color:#166534">リピート</b>' : '') + '</td></tr>'; }).join('')
+          + '<tr><td style="padding:2px 6px"><input type="radio" name="aik-src-' + k + '" value="-1"' + (既定 < 0 ? ' checked' : '') + '></td><td colspan="7" style="padding:2px 6px;color:#475569">どれも使わず、新しく起こす</td></tr></table>' : '')
+        + '<div style="margin-top:6px"><button data-k="' + k + '" class="aik-make" style="padding:4px 14px;background:#166534;color:#fff;border:0;border-radius:4px">この内容で' + 起こす種別 + 'を起こす</button></div></div>';
+    }).join('') || '<div style="color:#b91c1c;margin-top:6px">注文を読み取れませんでした。文を見直してください</div>';
+    Array.prototype.forEach.call(document.querySelectorAll('.aik-make'), function (b) { b.onclick = function () { AIで起こす(Number(b.getAttribute('data-k'))); }; });
+  }
+  function AIで起こす(k) {
+    var row = AI起票.行[k]; if (!row) return;
+    var sel = document.querySelector('input[name="aik-src-' + k + '"]:checked'), i = sel ? Number(sel.value) : -1;
+    var src = i >= 0 ? row.候補[i] : null, o = row.依頼, 種別 = 起こす種別;
+    var how = !src ? '新規' : (src.同じ ? 'リピート' : '流用');
+    if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて起こしますか？')) return;
+    if (!confirm(種別 + 'を起こします（' + how + (src ? '・元 ' + (src['伝票番号'] || src['見積番号']) : '') + '）。\nFileMaker に新しい伝票ができます。読み取った品名・数量などを入れるので、確かめてから「保存」してください。')) return;
+    var m = $('fm-ai-kihyo'); if (m) m.remove();
+    待機(true); 失敗(''); diff.style.display = 'none'; 状態(作成中の文(種別) + (src ? '元 ' + (src['伝票番号'] || src['見積番号']) : '新規')); var t0 = Date.now();
+    var p = Hub初期値(src ? String(src['伝票番号'] || '') : '').then(function (初期値) {
+      if (!src) return 呼ぶ('画面_新規案件', [種別, 初期値]);
+      if (how === 'リピート' && 種別 === '受注') return 呼ぶ('画面_Repeat登録', [src.recordId]);
+      return 呼ぶ('画面_流用新規', [src.recordId, 種別, how === 'リピート', 初期値]);
+    });
+    p.then(function (r) {
+      var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '');
+      受け取る(r, '🤖 ' + how + 'で' + 作成した文(種別) + n2 + (src ? '（元 ' + (src['伝票番号'] || src['見積番号']) + '）' : ''), Date.now() - t0);
+      setTimeout(function () { AIの値を入れる(o, !src); }, 400);
+    }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
+  }
+  // 読み取った値を欄に入れる（変わった欄は「保存」で FileMaker に書かれる）。得意先は新規のときだけ
+  function AIの値を入れる(o, 新規) {
+    var 入れた = [];
+    var put = function (id, v, 名) { var el = $(id); if (!el || v == null || v === '') return; v = String(v); if (String(el.value) === v) return; el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.style.outline = '2px solid #f59e0b'; 入れた.push(名); };
+    put('f-item', o.品名, '品名'); put('f-user', o.ユーザー, 'ユーザー'); put('p1-tot', o.数量, '数量'); put('f-unit', o.単位, '単位');
+    if (o.納期 && /^\d{4}-\d\d-\d\d$/.test(o.納期)) put('f-due', o.納期, '納期');
+    if (新規 && o.得意先) { var cs = 得意先コードを名前で(o.得意先) || {}, ks = Object.keys(cs); if (ks.length === 1) put('f-custcd', ks[0], '得意先'); }
+    状態(stat.textContent + (入れた.length ? '　AI が入れた欄: ' + 入れた.join('・') + '（オレンジ枠）。仕様「' + (o.仕様 || '—') + '」を確かめて保存' : '　仕様「' + (o.仕様 || '—') + '」を確かめて保存'), 'ok');
+  }
+  (function () {
+    var b = document.createElement('button'); b.textContent = '🤖 AIで起こす'; b.title = '依頼の文から、前回の伝票（リピート）を探して起こす';
+    b.style.cssText = 'background:#5b21b6;color:#fff;border:0;border-radius:4px;padding:4px 10px;font-weight:700';
+    b.onclick = AI起票を開く;
+    var last = bar.querySelectorAll('button.new'); last = last[last.length - 1];
+    if (last && last.parentNode) last.parentNode.insertBefore(b, last.nextSibling); else bar.appendChild(b);
+  })();
   function リピートを選ぶ(種別) {
     if (!現在) { alert('先に元にする伝票を読み込んでください'); return; }
     種別 = 種別 || (モード === 'mitsu' ? '' : '受注');
