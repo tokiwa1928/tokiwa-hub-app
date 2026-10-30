@@ -2426,7 +2426,7 @@ setTimeout(_removeBootLoader_, 5000);
   <div style="background:#ecfdf5;border:1px solid #86efac;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#065f46;line-height:1.6">
     <strong>📸 校正BOX とは:</strong> お客様への校正データの提出と修正やり取りを管理する場所です。校正版が複数になったら自動で新旧比較・差分検出ができます。<br>
     <strong>使い方の流れ:</strong>
-    <span style="background:#fff;padding:2px 8px;border-radius:4px;margin:0 4px">① ＋新規校正</span>
+    <span style="background:#fff;padding:2px 8px;border-radius:4px;margin:0 4px">① 案件管理で案件を開いて「📐 校正」</span>
     <span style="background:#fff;padding:2px 8px;border-radius:4px;margin:0 4px">② 案件を選択</span>
     <span style="background:#fff;padding:2px 8px;border-radius:4px;margin:0 4px">③ 初回 PDF を Google Drive アップ → URL 貼付</span>
     <span style="background:#fff;padding:2px 8px;border-radius:4px;margin:0 4px">④ 修正版が来たら追加アップ</span>
@@ -2443,7 +2443,8 @@ setTimeout(_removeBootLoader_, 5000);
         <div style="display:flex;gap:8px;align-items:center">
           <input id="proof-q" placeholder="案件・得意先で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderProofingList()">
           <button class="btn" data-hide-attn="1" style="display:none;background:#fef2f2;border-color:#fca5a5;color:#b91c1c;font-weight:700;position:relative" onclick="showAttentionPanel()" title="N日動いていない校正・案件 / 納期が近い案件をまとめてチェック">🚨 要注意・停滞 <span class="attention-badge" style="display:none;background:#dc2626;color:#fff;border-radius:9px;padding:0 6px;font-size:10px;margin-left:2px"></span></button>
-          <button class="btn btn-p" onclick="createProofing()">＋ 新規校正</button>
+          <button class="btn" style="font-size:11px" onclick="showMorningReport()" title="要注意（返信待ち・動いていない・納期が近い）を確認して、返信／待つ／納期をずらす で片づける">☀ 朝のレポート</button>
+          <!-- PROOF-FROMCASE-1（本多さん 10/30「校正BOX内で新規校正は不要。必ず案件から」）: 校正カードは案件（案件管理・案件の詳細の「📐 校正」）から作る -->
           <span id="lw-sync-state" style="font-size:11px;color:#475569"></span>
           <button class="btn" style="font-size:11px;color:#2e3d35;border-color:#9fb3a5" onclick="if(typeof lwNoteImport==='function')lwNoteImport()" title="LINE WORKS のノート（メディアのグループなど）にいまあるものを、校正BOX のカードとして取り込みます">💼 LW ノートから取り込む</button>
           <button class="btn" style="font-size:11px" onclick="_hubSampleCreate_()" title="初校 PDF つきの校正カードと、添付つきの問い合わせを 1 件ずつ作ります（Drive に本物のファイルを置きます）">🧪 サンプルを入れる</button>
@@ -4892,6 +4893,7 @@ async function loadFromCloud() {
       var vs=[], seen={}; (base.versions||[]).concat(other.versions||[]).forEach(function(v){ if(!v||!v.id||seen[v.id]) return; seen[v.id]=1; vs.push(v); });
       vs.sort(function(a,b){ return String(a.uploadedAt||'').localeCompare(String(b.uploadedAt||'')); });
       var out=Object.assign({}, base); out.versions=vs;
+      ['snoozeUntil','replyDoneAt'].forEach(function(k){ var a=String(base[k]||''), b=String(other[k]||''); if(a||b) out[k]=a>b?a:b; });   // MORNING-1: 「待つ」「返信した」は新しい方
       // AI-PROOF-1: AI 修正リストも id の和集合（消したものは除く）
       var adel={}; (base.aiFixDel||[]).concat(other.aiFixDel||[]).forEach(function(id){ if(id) adel[id]=1; });
       var af=[], aseen={}; (base.aiFix||[]).concat(other.aiFix||[]).forEach(function(e){ if(!e||!e.id||aseen[e.id]||adel[e.id]) return; aseen[e.id]=1; af.push(e); });
@@ -21321,7 +21323,7 @@ function renderProofingList(){
         + '</div>';
     }
   } catch(e){}
-  var catchupHtml = ((typeof _proofReplyBanner_==='function') ? _proofReplyBanner_() : '') + ((typeof _proofCatchupBanner_==='function') ? _proofCatchupBanner_() : '') + ((typeof _proofDraftBanner_==='function') ? _proofDraftBanner_() : '');
+  var catchupHtml = ((typeof _proofCatchupBanner_==='function') ? _proofCatchupBanner_() : '') + ((typeof _proofDraftBanner_==='function') ? _proofDraftBanner_() : '');
   container.innerHTML = toggleHtml + catchupHtml + returnsHtml + metricsHtml + bodyHtml;
   if(typeof _updateAttentionBadge_ === 'function') try { _updateAttentionBadge_(); } catch(e){}
 }
@@ -21399,7 +21401,8 @@ function _proofFlags_(p){
   return out;
 }
 function _proofFlagsHtml_(p){ return _proofFlags_(p).map(function(f){ return '<span title="'+_escDiff(f.title||'')+'" style="display:inline-block;font-size:10px;background:'+f.bg+';color:'+f.fg+';padding:1px 6px;border-radius:8px;margin:1px 2px 1px 0;font-weight:600;white-space:nowrap">'+f.label+'</span>'; }).join(''); }
-function _replyWaitProofings_(){ return (DB.proofings||[]).map(function(p){ return { p:p, rw:_proofReplyWait_(p) }; }).filter(function(x){ return x.rw; }).sort(function(a,b){ return b.rw.days-a.rw.days; }); }
+function _snoozed_(o){ return !!(o && o.snoozeUntil && new Date(o.snoozeUntil) > new Date()); }   // MORNING-1: 「待つ」にしたものは、その日まで出さない
+function _replyWaitProofings_(){ return (DB.proofings||[]).filter(function(p){ return !_snoozed_(p); }).map(function(p){ return { p:p, rw:_proofReplyWait_(p) }; }).filter(function(x){ return x.rw; }).sort(function(a,b){ return b.rw.days-a.rw.days; }); }
 function _proofReplyDone_(id){ var p=(DB.proofings||[]).find(function(x){ return x.id===id; }); if(!p) return; p.replyDoneAt=new Date().toISOString(); if(typeof saveDB==='function') saveDB(); renderProofingList(); showProofingDetail(id); }
 function _proofNoFileOk_(id,on){ var p=(DB.proofings||[]).find(function(x){ return x.id===id; }); if(!p) return; p.noFileOk=!!on; if(typeof saveDB==='function') saveDB(); renderProofingList(); showProofingDetail(id); }
 // 前回データ: 前回伝票番号の校正（Drive）か、受注入力
@@ -22079,6 +22082,25 @@ function _proofLwOpen_(proofId, slotK, round, inqId){
 // LWNOTE-IMPORT-1（本多さん 10/30）: LW のノート 1 件から校正BOX のカード 1 枚を作る（tools/lw-note.js の取り込みから呼ぶ）
 //   題の伝票番号で案件とつなぐ。本文の【M/d HH:mm 名前】【2校戻り】の書き込みを 1 つずつ校正の履歴に、見出しの無い本文は「LW ノート本文」として 1 件
 function _proofLwText_(html){ var t=String(html||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li|h\d)>/gi,'\n').replace(/<[^>]+>/g,''); var el=document.createElement('textarea'); el.innerHTML=t; return el.value.replace(/\n{3,}/g,'\n\n').trim(); }
+// LWSYNC-CAT（本多さん 10/30「状態はノートのタグ、ラベルからもってきて」）: ノートのカテゴリー → 校正BOX の状態
+//   1-x（メディア部作業待ち・確認事項返信待ち）→ 校正依頼待ち ／ 2（校正依頼 メディア部→営業）→ 校正待ち ／ 3-x（校正中）→ 校正中 ／ 4〜（校了・印刷・納品）→ 校了
+function _proofStatusFromLwCat_(cat){
+  cat=String(cat||'').replace(/[０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); }).trim(); if(!cat) return '';
+  var n=+((/^(\d+)/.exec(cat)||[])[1]||0);
+  var want=/メディア部作業待ち|確認事項返信待ち/.test(cat)?'校正依頼待ち':/校正依頼/.test(cat)?'校正待ち':/校正中/.test(cat)?'校正中':/校了|印刷|納品|データ移動|アップロード/.test(cat)?'校了'
+    :n===1?'校正依頼待ち':n===2?'校正待ち':n===3?'校正中':n>=4?'校了':'';
+  if(!want) return '';
+  var list=_proofStatuses_(), hit=list.filter(function(s){ return s.label===want; })[0];
+  if(hit) return hit.key;
+  var fb={ '校正依頼待ち':'s_ask_wait', '校正待ち':'s_wait', '校正中':'s_proof', '校了':'s_done' }[want];
+  if(want==='校了'){ var d=list.filter(function(s){ return s.done; })[0]; if(d) return d.key; }
+  return list.some(function(s){ return s.key===fb; })?fb:'';
+}
+function _proofApplyLwCat_(p, cat){
+  if(!p || !cat) return false; p.lwCategory=cat;
+  var k=_proofStatusFromLwCat_(cat); if(!k || p.status===k) return false;
+  p.status=k; p.lastMoveAt=new Date().toISOString(); p.isDraft=false; return true;
+}
 function _proofFromLwNote_(group, post, rd){
   var postId=String((rd&&rd.postId)||post.postId||''); if(!postId) return null;
   if((DB.proofings||[]).some(function(p){ return p && p.lwNote && String(p.lwNote.postId)===postId; })) return null;
@@ -22095,6 +22117,7 @@ function _proofFromLwNote_(group, post, rd){
     createdAt:(rd&&rd.created)||new Date().toISOString(), lastMoveAt:new Date().toISOString(), fromLw:true,
     lwNote:{ groupId:group.id, groupName:group.name, postId:postId, title:title }, lwLog:[{ at:new Date().toISOString(), by:(currentAuth&&currentAuth.userName)||'', kind:'LW から取り込み' }],
     lwCategory:(rd&&rd.category)||'' };
+  try{ var _cs=_proofStatusFromLwCat_(card.lwCategory); if(_cs) card.status=_cs; }catch(e){}   // LWSYNC-CAT: カテゴリーがあれば状態はそれに合わせる
   if(!DB.proofings) DB.proofings=[]; DB.proofings.push(card);
   if(proj){ proj.proofingIds=proj.proofingIds||[]; if(proj.proofingIds.indexOf(card.id)<0) proj.proofingIds.push(card.id); }
   return card;
@@ -22144,7 +22167,7 @@ function _proofLwChunks_(html, year, by, idPrefix, at0){
 }
 function _proofLwApplyKind_(p, r){
   if(r.maxR && r.maxR>(p._proofRound||1)) p._proofRound=r.maxR;
-  if(r.lastKind){ var st=(typeof _proofStatuses_==='function')?_proofStatuses_():[]; var doneKey=(st.filter(function(s){ return s.done; })[0]||{}).key||'approved';
+  if(r.lastKind && !p.lwCategory){ var st=(typeof _proofStatuses_==='function')?_proofStatuses_():[]; var doneKey=(st.filter(function(s){ return s.done; })[0]||{}).key||'approved';
     p.status = r.lastKind==='final'?doneKey:(r.lastKind==='instruction'?'feedback':r.lastKind==='proof'?'waiting':p.status); }
   p.lastMoveAt=new Date().toISOString();
 }
@@ -22155,9 +22178,11 @@ function _lwSyncApply_(events, group){
     var card=(DB.proofings||[]).find(function(p){ return p && p.lwNote && String(p.lwNote.postId)===pid; });
     var del=(DB.proofingsDeleted||[]).indexOf('PRFLW'+pid)>=0; if(del && !card) return;
     var has=function(id){ return card && (card.versions||[]).some(function(v){ return v && v.id===id; }); };
+    if(card && e.cat && _proofApplyLwCat_(card, e.cat)) n++;   // LWSYNC-CAT
+    if(e.type==='cat') return;
     if(card && e.type==='new') return;   // すでに取り込んだノート（手で取り込んだ分）には、裏の全部取り込みの添付を重ねない
     if(!card){
-      card=_proofFromLwNote_(group||{ id:'', name:'' }, { postId:pid, title:e.title, by:e.by }, { postId:pid, title:e.title, body:(e.type==='new'?e.html:''), created:e.at, by:e.by });
+      card=_proofFromLwNote_(group||{ id:'', name:'' }, { postId:pid, title:e.title, by:e.by }, { postId:pid, title:e.title, body:(e.type==='new'?e.html:''), created:e.at, by:e.by, category:e.cat||'' });
       if(!card) return; n++;
     } else if(e.type==='append' && !(card.versions||[]).some(function(v){ return v && String(v.id).indexOf('VLW'+e.id+'-')===0; })){
       var r=_proofLwChunks_(e.html, String(e.at||'').slice(0,4)||String(new Date().getFullYear()), e.by, 'VLW'+e.id, e.at);
@@ -22180,7 +22205,21 @@ function _lwSyncPoll_(){
     if(n){ try{ saveDB(); if(typeof saveToCloud==='function') saveToCloud(); renderProofingList(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('💼 LW ノートの更新を校正BOX に入れました（'+n+' 件）'); }
   }).catch(function(){});
 }
-setTimeout(_lwSyncPoll_, 15000); setInterval(_lwSyncPoll_, 60000); setTimeout(function(){ try{ _lwSyncPanel_(); }catch(e){} }, 9000);
+setTimeout(_lwSyncPoll_, 15000); setInterval(_lwSyncPoll_, 60000);
+// LWSYNC-CAT: LW から来たカード（校了以外）の今のカテゴリーを 5 分ごとに聞いて、状態を合わせる
+function _lwSyncCatsPoll_(){
+  try{ var _ln=0; (DB.proofings||[]).forEach(function(p){ if(p && p.lwCategory && _proofApplyLwCat_(p, p.lwCategory)) _ln++; }); if(_ln){ saveDB(); renderProofingList(); } }catch(e){}   // 取り込んだときのカテゴリーで、まず合わせる（GAS の更新前でも）
+  if(window._lwSyncNoApi_ || window._lwCatsNoApi_ || document.hidden || !(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn) || !CLOUD_CONFIG || !CLOUD_CONFIG.GAS_URL) return;
+  var g=window._lwSyncGroup_; var cards=(DB.proofings||[]).filter(function(p){ return p && p.lwNote && p.lwNote.postId && (!g || !p.lwNote.groupId || p.lwNote.groupId===g.id) && !_proofStatusMeta_(_normProofStatus_(p.status)).done; });
+  if(!cards.length) return;
+  var ids=cards.map(function(p){ return String(p.lwNote.postId); }), n=0, chain=Promise.resolve();
+  for(var i=0;i<ids.length;i+=30) (function(part){ chain=chain.then(function(){ return _lwGas_({ action:'lwSyncCats', ids:part.join(',') }).then(function(r){
+    if(r && !r.success && /unknown_action/.test(String(r.error||''))){ window._lwCatsNoApi_=true; return; }
+    var cats=(r&&r.cats)||{}; cards.forEach(function(p){ var c=cats[String(p.lwNote.postId)]; if(c && _proofApplyLwCat_(p, c)) n++; });
+  }); }); })(ids.slice(i,i+30));
+  chain.then(function(){ if(n){ try{ saveDB(); if(typeof saveToCloud==='function') saveToCloud(); renderProofingList(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('💼 LW ノートのカテゴリーから状態を合わせました（'+n+' 件）'); } }).catch(function(){});
+}
+setTimeout(_lwSyncCatsPoll_, 25000); setInterval(_lwSyncCatsPoll_, 5*60000); setTimeout(function(){ try{ _lwSyncPanel_(); }catch(e){} }, 9000);
 // 校正BOX の上: 自動連携の状態と、はじめる／止める
 function _lwSyncPanel_(){
   var el=document.getElementById('lw-sync-state'); if(!el) return;
@@ -22240,7 +22279,7 @@ function _staleProofings_(){
   return (DB.proofings || []).filter(function(p){
     if(myCompany){ var o = p.companyCode || ''; if(o && o !== myCompany && (p.sharedWithCompanies||[]).indexOf(myCompany) < 0) return false; }
     var meta = _proofStatusMeta_(_normProofStatus_(p.status));
-    if(meta.done || meta.wait) return false;   // 校了・待ち放題は対象外
+    if(meta.done || meta.wait || _snoozed_(p)) return false;   // 校了・待ち放題・「待つ」中は対象外
     var last = p.lastMoveAt || (p.versions && p.versions.length ? p.versions[p.versions.length-1].uploadedAt : p.createdAt);
     return _daysSince_(last) >= th;
   }).map(function(p){ var last = p.lastMoveAt || (p.versions && p.versions.length ? p.versions[p.versions.length-1].uploadedAt : p.createdAt); return { p:p, days:_daysSince_(last) }; })
@@ -22251,7 +22290,7 @@ function _staleProjects_(){
   var th = _alertDays_().project;
   var done = function(s){ return s === '完了' || s === '納品済' || s === '失注'; };
   return (DB.projects || []).filter(function(p){
-    if(done(p.status)) return false;
+    if(done(p.status) || _snoozed_(p)) return false;
     if(p._provisional) { /* 未確定は校正先行なので緩めるが一応含める */ }
     var last = p.updatedAt || p.orderDate || p.createdAt;
     return _daysSince_(last) >= th;
@@ -22264,7 +22303,7 @@ function _dueSoonProjects_(){
   var done = function(s){ return s === '完了' || s === '納品済' || s === '失注'; };
   var now = Date.now();
   return (DB.projects || []).filter(function(p){
-    if(!p.dueDate || done(p.status)) return false;
+    if(!p.dueDate || done(p.status) || _snoozed_(p)) return false;
     var left = Math.ceil((new Date(p.dueDate).getTime() - now) / 86400000);
     return left <= th;
   }).map(function(p){ var left = Math.ceil((new Date(p.dueDate).getTime() - now) / 86400000); return { p:p, left:left }; })
@@ -22297,7 +22336,7 @@ function showAttentionPanel(){
   m.className = 'proof-modal'; m.id = 'attention-modal';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem;overflow:auto';
   m.innerHTML = '<div style="background:#fff;border-radius:10px;max-width:640px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">'
-    + '<div style="padding:12px 18px;background:#b91c1c;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🚨 要注意・停滞 (' + (sp.length+pj.length+du.length+rw.length) + '件)</b><button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
+    + '<div style="padding:12px 18px;background:#b91c1c;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>' + '🚨 要注意・停滞 (' + (sp.length+pj.length+du.length+rw.length) + '件)</b><button onclick="this.closest(\'.proof-modal\').remove()" style="font-size:22px;border:none;background:none;color:#fff;cursor:pointer">×</button></div>'
     + '<div style="overflow-y:auto;padding:14px 18px;flex:1">'
     + card('💬 返信できていない校正 (' + rw.length + ')', '#b45309', rwRows)
     + card('📸 ' + th.proof + '日以上動いていない校正 (' + sp.length + ')', '#dc2626', proofRows)
@@ -22306,6 +22345,90 @@ function showAttentionPanel(){
     + '<div style="font-size:11px;color:#64748b;border-top:1px solid #eee;padding-top:8px;margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">しきい値: 校正<input id="al-proof" type="number" value="' + th.proof + '" style="width:45px;font-size:11px"> 案件<input id="al-project" type="number" value="' + th.project + '" style="width:45px;font-size:11px"> 納期<input id="al-due" type="number" value="' + th.due + '" style="width:45px;font-size:11px">日 <button class="btn" style="font-size:10px;padding:2px 8px" onclick="_saveAlertDays_()">保存</button> <span style="color:#94a3b8">※「待ち放題」ステータスの校正は停滞に出ません</span></div>'
     + '</div></div>';
   document.body.appendChild(m);
+}
+// MORNING-1（本多さん 10/30「返信できていませんはいらない。朝に要注意項目をレポートとして出したい」）: その日はじめて Hub を開いたとき（5 時以降）に 1 回だけ要注意レポートを出す
+function _morningReport_(force){
+  try{
+    if(!(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn) || !Array.isArray(DB.proofings)) return false;
+    var d=new Date(), today=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+    if(!force){ if(d.getHours()<5) return false; var last=''; try{ last=localStorage.getItem('hub_morning_report')||''; }catch(e){} if(last===today) return true; }
+    try{ localStorage.setItem('hub_morning_report', today); }catch(e){}
+    var n=_staleProofings_().length+_staleProjects_().length+_dueSoonProjects_().length+((typeof _replyWaitProofings_==='function')?_replyWaitProofings_().length:0);
+    if(!n && !force) return true;
+    showMorningReport();
+    return true;
+  }catch(e){ console.warn('[MORNING]', e); return false; }
+}
+(function(){ var tries=0, t=setInterval(function(){ if(_morningReport_() || ++tries>30) clearInterval(t); }, 20000); setInterval(function(){ _morningReport_(); }, 30*60000); })();
+// 朝のレポート: 1 件ずつ「返信を入力」「待つ（○日）」「納期をずらす」で片づける。片づけたものは消える
+function _mrItems_(){
+  var seen={}, out=[];
+  var add=function(kind, o, txt){ var k=((kind==='due'||kind==='project')?'j':'p')+o.id; if(seen[k]) return; seen[k]=1; out.push({ kind:kind, o:o, txt:txt }); };   // 同じカード・案件は 1 回だけ（返信待ち・納期を先に）
+  ((typeof _replyWaitProofings_==='function')?_replyWaitProofings_():[]).forEach(function(x){ add('reply', x.p, '💬 返信待ち '+x.rw.days+'日'+(x.rw.who?'（'+x.rw.who+'）':'')+'：'+x.rw.text); });
+  _staleProofings_().forEach(function(x){ add('proof', x.p, '📸 '+x.days+'日 動いていない（'+_proofStatusMeta_(_normProofStatus_(x.p.status)).label+'）'); });
+  _dueSoonProjects_().forEach(function(x){ add('due', x.p, (x.left<0?'🚨 納期 '+(-x.left)+'日 超過':x.left===0?'🚨 納期 今日':'⏰ 納期まで あと'+x.left+'日')+'（'+x.p.dueDate+'）'); });
+  _staleProjects_().forEach(function(x){ add('project', x.p, '📁 '+x.days+'日 進みがない（'+(x.p.status||'')+'）'); });
+  return out;
+}
+function showMorningReport(){
+  var old=document.getElementById('morning-modal'); if(old) old.remove();
+  var items=_mrItems_(), d=new Date();
+  var esc=function(s){ return _escDiff(String(s==null?'':s)); };
+  var rows=items.map(function(it, i){
+    var o=it.o, isP=(it.kind==='reply'||it.kind==='proof');
+    var name=isP ? ((o.fmNo?o.fmNo+' ':'')+(o.custName||'')+' '+(o.prodName||'')) : ((o.id||'')+' '+(o.cust||'')+' '+(o.item||''));
+    var open=isP ? "swPage('proofing',document.querySelector('.tb-btn[data-page=proofing]'));setTimeout(function(){showProofingDetail('"+o.id+"')},200)" : "jumpToProject('"+o.id+"')";
+    var wait=function(n,l){ return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="_mrWait_('+i+','+n+')">'+l+'</button>'; };
+    return '<div id="mr-row-'+i+'" style="border:1px solid #e5e7eb;border-left:4px solid '+(it.kind==='due'?'#d97706':it.kind==='reply'?'#b45309':'#dc2626')+';border-radius:6px;padding:8px 10px;margin-bottom:7px;background:#fff">'
+      +'<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><a href="#" onclick="document.getElementById(\'morning-modal\').remove();'+open+';return false" style="font-weight:700;font-size:12.5px;color:#0f172a">'+esc(name.trim())+'</a></div>'
+      +'<div style="font-size:11.5px;color:#475569;margin:3px 0 6px">'+esc(it.txt)+'</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+        +(isP?'<button class="btn btn-p" style="font-size:11px;padding:2px 10px" onclick="var b=document.getElementById(\'mr-rbox-'+i+'\');b.style.display=b.style.display===\'none\'?\'flex\':\'none\';var t=b.querySelector(\'textarea\');if(t)t.focus()">✏ 返信を入力</button>':'')
+        +(it.kind==='due'||it.kind==='project'?'<span style="font-size:11px;color:#475569;margin-left:4px">納期</span><input type="date" id="mr-due-'+i+'" value="'+esc(o.dueDate||'')+'" style="font-size:11px;padding:1px 4px"><button class="btn" style="font-size:11px;padding:2px 8px" onclick="_mrDue_('+i+')">📅 納期をずらす</button>':'')
+        +'<span style="font-size:11px;color:#475569;margin-left:6px">待つ</span>'+wait(2,'2日')+wait(3,'3日')+wait(7,'1週間')
+      +'</div>'
+      +(isP?'<div id="mr-rbox-'+i+'" style="display:none;gap:6px;margin-top:6px;align-items:flex-end"><textarea rows="2" style="flex:1;font-size:12px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px" placeholder="返信（校正BOX のコメントと LW ノートに入ります）"></textarea><button class="btn btn-p" style="font-size:11px" onclick="_mrReply_('+i+')">送る</button></div>':'')
+    +'</div>';
+  }).join('');
+  window._mrList_=items;
+  var m=document.createElement('div'); m.id='morning-modal'; m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem 1rem;overflow:auto';
+  m.innerHTML='<div style="background:#f8fafc;border-radius:10px;max-width:700px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>☀ 今朝の要注意レポート（'+(d.getMonth()+1)+'/'+d.getDate()+'）<span id="mr-count">'+items.length+'</span>件</b><button onclick="document.getElementById(\'morning-modal\').remove()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div>'
+    +'<div style="font-size:11px;color:#475569;padding:8px 18px 0">1 件ずつ確認して、<b>返信を入力</b>／<b>待つ</b>（その日数はレポートに出ない）／<b>納期をずらす</b> で片づけます。</div>'
+    +'<div style="overflow-y:auto;padding:10px 18px 16px;flex:1">'+(rows||'<div style="padding:20px;text-align:center;color:#64748b">要注意はありません 👍</div>')+'</div></div>';
+  document.body.appendChild(m);
+}
+function _mrDone_(i, msg){
+  var r=document.getElementById('mr-row-'+i); if(r) r.remove();
+  var c=document.getElementById('mr-count'); if(c) c.textContent=Math.max(0,(+c.textContent||1)-1);
+  try{ if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') saveToCloud(); }catch(e){}
+  try{ if(typeof renderProofingList==='function') renderProofingList(); }catch(e){}
+  if(msg && typeof _toastMsg==='function') _toastMsg(msg);
+}
+function _mrWait_(i, n){
+  var it=(window._mrList_||[])[i]; if(!it) return;
+  var u=new Date(); u.setHours(0,0,0,0); u.setDate(u.getDate()+n); it.o.snoozeUntil=u.toISOString();
+  if(it.kind==='due' || it.kind==='project') it.o.updatedAt=new Date().toISOString();   // 案件は更新時刻の新しい方が同期で残る
+  _mrDone_(i, '⏸ '+(u.getMonth()+1)+'/'+u.getDate()+' まで待ちます');
+}
+function _mrDue_(i){
+  var it=(window._mrList_||[])[i]; if(!it) return; var v=(document.getElementById('mr-due-'+i)||{}).value||'';
+  if(!v){ alert('新しい納期を選んでください'); return; }
+  var prev=it.o.dueDate||''; it.o.dueDate=v; it.o.updatedAt=new Date().toISOString();
+  it.o.dueLog=(it.o.dueLog||[]).concat([{ at:new Date().toISOString(), by:(currentAuth&&currentAuth.userName)||'', from:prev, to:v, why:'朝のレポート' }]).slice(-20);
+  _mrDone_(i, '📅 納期を '+v+' にしました');
+}
+function _mrReply_(i){
+  var it=(window._mrList_||[])[i]; if(!it) return; var p=it.o;
+  var ta=document.querySelector('#mr-rbox-'+i+' textarea'); var t=(ta&&ta.value||'').trim(); if(!t){ if(ta) ta.focus(); return; }
+  var who=(currentAuth&&currentAuth.userName)||'', now=new Date().toISOString(), r;
+  try{ r=_calcCurrentProofRound_(p,'instruction'); }catch(e){ r={round:1,subVersion:1}; }
+  p.versions=p.versions||[];
+  p.versions.push({ id:'VER'+Date.now(), fileName:'返信', kind:'instruction', round:r.round, subVersion:r.subVersion, uploadedAt:now, feedback:'【'+(who||'社内')+'】\n'+t, annotations:[], manual:true });
+  p.replyDoneAt=now; p.lastMoveAt=now;
+  try{ _lwAutoPost_(p, { kind:'返信', comment:t }); }catch(e){}
+  _mrDone_(i, '💬 返信を入れました（LW ノートにも）');
 }
 function _saveAlertDays_(){
   DB.conf = DB.conf || {};
@@ -22650,11 +22773,6 @@ function createProofing(){
       '<div style="overflow-y:auto;flex:1;padding:14px 20px">' +
         '<div style="font-size:12px;font-weight:700;margin-bottom:8px">📋 案件から作成 (推奨)</div>' +
         projectListHtml +
-        '<div style="margin:18px 0 8px;border-top:1px solid #e5e7eb;padding-top:14px;font-size:12px;font-weight:700;color:#888">— または —</div>' +
-        '<div style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;font-size:11px;color:#78350f">' +
-          '案件無しで作成すると、ファイル名は手入力になり、得意先別の集計にも乗りません。' +
-        '</div>' +
-        '<button class="btn" style="margin-top:8px;width:100%;font-size:12px" onclick="_doCreateProofingManual_()">📝 案件無しで手動作成</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
