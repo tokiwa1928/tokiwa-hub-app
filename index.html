@@ -2443,6 +2443,7 @@ setTimeout(_removeBootLoader_, 5000);
           <input id="proof-q" placeholder="案件・得意先で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderProofingList()">
           <button class="btn" data-hide-attn="1" style="display:none;background:#fef2f2;border-color:#fca5a5;color:#b91c1c;font-weight:700;position:relative" onclick="showAttentionPanel()" title="N日動いていない校正・案件 / 納期が近い案件をまとめてチェック">🚨 要注意・停滞 <span class="attention-badge" style="display:none;background:#dc2626;color:#fff;border-radius:9px;padding:0 6px;font-size:10px;margin-left:2px"></span></button>
           <button class="btn btn-p" onclick="createProofing()">＋ 新規校正</button>
+          <span id="lw-sync-state" style="font-size:11px;color:#475569"></span>
           <button class="btn" style="font-size:11px;color:#2e3d35;border-color:#9fb3a5" onclick="if(typeof lwNoteImport==='function')lwNoteImport()" title="LINE WORKS のノート（メディアのグループなど）にいまあるものを、校正BOX のカードとして取り込みます">💼 LW ノートから取り込む</button>
           <button class="btn" style="font-size:11px" onclick="_hubSampleCreate_()" title="初校 PDF つきの校正カードと、添付つきの問い合わせを 1 件ずつ作ります（Drive に本物のファイルを置きます）">🧪 サンプルを入れる</button>
         </div>
@@ -21530,6 +21531,7 @@ function _proofAddComment_(id){
   var who=(typeof currentAuth!=='undefined' && currentAuth && currentAuth.userName)||'';
   p.versions.push({ id:'VER'+Date.now(), fileName:'コメント/修正指示', kind:'instruction', round:r.round, subVersion:r.subVersion, uploadedAt:new Date().toISOString(), feedback:'【'+(who||'社内')+'】\n'+t, annotations:[], manual:true });
   var _st=_proofStatusForText_(t); p.status=_st||'s_wait'; p.lastMoveAt=new Date().toISOString();   // KOSEI-CHAT-1: 定型文なら状態も進める
+  try{ _lwAutoPost_(p, { kind:'コメント', comment:t }); }catch(e){}   // LWSYNC-1
   if(typeof saveDB==='function') saveDB(); if(typeof saveToCloud==='function') try{ saveToCloud(); }catch(e){}
   showProofingDetail(id); if(typeof renderProofingList==='function') renderProofingList();
   if(typeof _toastMsg==='function') _toastMsg('💬 コメントを追加しました' + (_st ? '（状態: ' + _proofStatusMeta_(_st).label + '）' : ''));
@@ -22064,17 +22066,9 @@ function _proofFromLwNote_(group, post, rd){
   var proj=fmNo?(DB.projects||[]).find(function(x){ return x && (x.id===fmNo || (x.fm&&String(x.fm['fm-denpyo']||'')===fmNo)); }):null;
   var rest=title.replace(fmNo,'').replace(/^[\s_　・-]+|[\s_　・-]+$/g,'');
   var year=String((rd&&(rd.created||rd.modified))||new Date().toISOString()).slice(0,4);
-  var text=_proofLwText_(rd&&rd.body), chunks=text.split(/[―ー─—-]{6,}/), vs=[], maxR=1, lastKind='';
-  var kindOf=function(lb){ lb=String(lb||''); if(/支給/.test(lb)) return 'manuscript'; if(/校了|責了/.test(lb)) return 'final'; if(/戻/.test(lb)) return 'instruction'; if(/出/.test(lb)) return 'proof'; return 'instruction'; };
-  var roundOf=function(lb){ var r=/(\d)\s*校/.exec(String(lb||'').replace(/[０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })); return /初校/.test(lb)?1:(r?+r[1]:1); };
-  chunks.forEach(function(c, i){ c=c.trim(); if(!c) return;
-    var h=/^【(\d{1,2})\/(\d{1,2})\s+(\d{1,2}:\d\d)\s*([^】]*)】(?:【([^】]+)】)?/.exec(c);
-    var lb=h?(h[5]||''):'', kd=h?kindOf(lb):'instruction', rd2=h?roundOf(lb):1; if(rd2>maxR) maxR=rd2; if(h&&lb) lastKind=kd;
-    var at=h?(year+'-'+('0'+h[1]).slice(-2)+'-'+('0'+h[2]).slice(-2)+'T'+('0'+h[3]).slice(-5)+':00+09:00'):((rd&&rd.created)||new Date().toISOString());
-    vs.push({ id:'VER'+Date.now()+'-'+i, fileName:h?(lb||'LW ノート'):'LW ノート本文', kind:kd, round:rd2, subVersion:1, uploadedAt:at, feedback:'【LW '+(h?(h[4]||''):((rd&&rd.by)||post.by||''))+'】\n'+c.replace(/^【[^】]*】(【[^】]*】)?\s*/,''), annotations:[], manual:true, fromLw:true });
-  });
+  var _ck=_proofLwChunks_(rd&&rd.body, year, (rd&&rd.by)||post.by||'', 'VLW'+postId+'-n', (rd&&rd.created)||''), vs=_ck.versions, maxR=_ck.maxR||1, lastKind=_ck.lastKind;   // LWSYNC-1: 履歴の ID はノート番号から（どの PC でも同じ）
   var st=_proofStatuses_?_proofStatuses_():[]; var doneKey=(st.filter(function(s){ return s.done; })[0]||{}).key||'approved';
-  var card={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), fmNo:fmNo, projectId:proj?proj.id:null, custName:(proj&&proj.cust)||'', endUser:(proj&&proj.endUser)||'', prodName:(proj&&proj.item)||rest||title,
+  var card={ id:'PRFLW'+postId, fmNo:fmNo, projectId:proj?proj.id:null, custName:(proj&&proj.cust)||'', endUser:(proj&&proj.endUser)||'', prodName:(proj&&proj.item)||rest||title,
     status: lastKind==='final'?doneKey:(lastKind==='instruction'?'feedback':'waiting'), versions:vs, _proofRound:maxR, _lwFileKind:(lastKind==='instruction'?'instruction':lastKind==='manuscript'?'manuscript':'proof'),
     companyCode:(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'', sharedWithCompanies:[], notifyOnUpdate:true,
     createdAt:(rd&&rd.created)||new Date().toISOString(), lastMoveAt:new Date().toISOString(), fromLw:true,
@@ -22083,6 +22077,101 @@ function _proofFromLwNote_(group, post, rd){
   if(!DB.proofings) DB.proofings=[]; DB.proofings.push(card);
   if(proj){ proj.proofingIds=proj.proofingIds||[]; if(proj.proofingIds.indexOf(card.id)<0) proj.proofingIds.push(card.id); }
   return card;
+}
+// ═══ LWSYNC-1（本多さん 10/30）: メディアのノート ⇄ 校正BOX を両方向に自動で合わせる ═══
+//   Hub → ノート: 段階の変更・コメント・校正のアップロード・問い合わせからの戻り・カードを作った とき、覚えたノートに自動で書き足す（無ければメディアに新しく作る）
+//   ノート → Hub: 会社 GAS が 1 分ごとに見た変更（シート「LWノート変更」）を、画面を開いている間 1 分ごとに読んでカードに入れる
+//   どの PC が入れても同じになるよう、カードは PRFLW＋ノート番号、履歴は VLW＋変更の番号 で作る（同期で 1 つにまとまる）
+window._lwQ_ = window._lwQ_ || {};
+function _lwGas_(data){ var d=Object.assign({ apiKey:CLOUD_CONFIG.API_KEY }, data); return fetch(CLOUD_CONFIG.GAS_URL,{ method:'POST', redirect:'follow', body:JSON.stringify(d) }).then(function(r){ return r.json(); }); }
+function _lwAutoPost_(p, o){
+  if(!p || window._lwSyncOff_ || !(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn)) return;
+  o=o||{}; var who=(currentAuth&&currentAuth.userName)||'';
+  var q=window._lwQ_[p.id]||Promise.resolve();
+  window._lwQ_[p.id]=q.then(function(){
+    var title=(((p.fmNo?p.fmNo+' ':'')+(p.custName?p.custName+' ':'')+(p.prodName||'')).trim())||'校正';
+    var data={ action:'lwSyncInsert', postId:(p.lwNote&&p.lwNote.postId)||'', groupId:(p.lwNote&&p.lwNote.groupId)||'', title:p.lwNote?'':title, kind:o.kind||'',
+      comment:(o.comment?String(o.comment)+'\n':'')+'🔗 Tokiwa Hub で詳細: '+_hubLink_('proof', p.id), by:who, fileIds:(o.fileIds||[]).filter(Boolean),
+      mailSubject:o.mailSubject||'', mailFrom:o.mailFrom||'', mailBody:o.mailBody||'', notify:true };
+    return _lwGas_(data).then(function(r){
+      if(r && !r.success && /lw_sync_not_setup|unknown_action/.test(String(r.error||''))){ window._lwSyncOff_=true; return; }
+      if(!r || !r.success){ if(typeof _toastMsg==='function') _toastMsg('⚠ LW ノートに書けませんでした（'+String((r&&r.error)||'応答なし')+'）'); return; }
+      if(!p.lwNote) p.lwNote={ groupId:r.groupId||'', groupName:r.groupName||'', postId:String(r.postId), title:title };
+      p.lwLog=(p.lwLog||[]).concat([{ at:new Date().toISOString(), by:who, kind:o.kind||'', auto:true }]).slice(-50);
+      try{ saveDB(); }catch(e){}
+      try{ if(document.getElementById('proof-lw-box')) showProofingDetail(p.id); }catch(e){}
+    });
+  }).catch(function(e){ console.warn('[LWSYNC]', e); });
+}
+// ノートの本文（HTML）→ 校正の履歴。見出し【M/d HH:mm 名前】【2校戻り】ごとに 1 件、見出しの無いものは 1 件
+function _proofLwChunks_(html, year, by, idPrefix, at0){
+  var text=_proofLwText_(html), out=[], maxR=0, lastKind='';
+  var kindOf=function(lb){ lb=String(lb||''); if(/支給/.test(lb)) return 'manuscript'; if(/校了|責了/.test(lb)) return 'final'; if(/戻/.test(lb)) return 'instruction'; if(/出/.test(lb)) return 'proof'; return 'instruction'; };
+  var roundOf=function(lb){ lb=String(lb||'').replace(/[０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); }); var r=/(\d)\s*校/.exec(lb); return /初校/.test(lb)?1:(r?+r[1]:0); };
+  text.split(/[―ー─—-]{6,}/).forEach(function(c, i){ c=c.trim(); if(!c) return;
+    var h=/^【(\d{1,2})\/(\d{1,2})\s+(\d{1,2}:\d\d)\s*([^】]*)】(?:【([^】]+)】)?/.exec(c);
+    var lb=h?(h[5]||''):'', kd=h?kindOf(lb):'instruction', rr=h?roundOf(lb):0; if(rr>maxR) maxR=rr; if(h&&lb) lastKind=kd;
+    var at=h?(year+'-'+('0'+h[1]).slice(-2)+'-'+('0'+h[2]).slice(-2)+'T'+('0'+h[3]).slice(-5)+':00+09:00'):(at0||new Date().toISOString());
+    out.push({ id:idPrefix+'-'+i, fileName:h?(lb||'LW ノート'):'LW ノート', kind:kd, round:rr||1, subVersion:1, uploadedAt:at, feedback:'【LW '+(h?(h[4]||''):(by||''))+'】\n'+c.replace(/^【[^】]*】(【[^】]*】)?\s*/,''), annotations:[], manual:true, fromLw:true });
+  });
+  return { versions:out, maxR:maxR, lastKind:lastKind };
+}
+function _proofLwApplyKind_(p, r){
+  if(r.maxR && r.maxR>(p._proofRound||1)) p._proofRound=r.maxR;
+  if(r.lastKind){ var st=(typeof _proofStatuses_==='function')?_proofStatuses_():[]; var doneKey=(st.filter(function(s){ return s.done; })[0]||{}).key||'approved';
+    p.status = r.lastKind==='final'?doneKey:(r.lastKind==='instruction'?'feedback':r.lastKind==='proof'?'waiting':p.status); }
+  p.lastMoveAt=new Date().toISOString();
+}
+function _lwSyncApply_(events, group){
+  var n=0;
+  (events||[]).forEach(function(e){
+    var pid=String(e.postId||''); if(!pid) return;
+    var card=(DB.proofings||[]).find(function(p){ return p && p.lwNote && String(p.lwNote.postId)===pid; });
+    var del=(DB.proofingsDeleted||[]).indexOf('PRFLW'+pid)>=0; if(del && !card) return;
+    var has=function(id){ return card && (card.versions||[]).some(function(v){ return v && v.id===id; }); };
+    if(!card){
+      card=_proofFromLwNote_(group||{ id:'', name:'' }, { postId:pid, title:e.title, by:e.by }, { postId:pid, title:e.title, body:(e.type==='new'?e.html:''), created:e.at, by:e.by });
+      if(!card) return; n++;
+    } else if(e.type==='append' && !(card.versions||[]).some(function(v){ return v && String(v.id).indexOf('VLW'+e.id+'-')===0; })){
+      var r=_proofLwChunks_(e.html, String(e.at||'').slice(0,4)||String(new Date().getFullYear()), e.by, 'VLW'+e.id, e.at);
+      r.versions.forEach(function(v){ if(!has(v.id)) card.versions.push(v); }); _proofLwApplyKind_(card, r); n++;
+    }
+    (e.files||[]).forEach(function(f, i){ if(!f||!f.fileId) return; if((card.versions||[]).some(function(v){ return v && v.driveFileId===f.fileId; })) return;
+      card.versions.push({ id:'VLW'+e.id+'-f'+i, fileName:f.name||'添付', kind:card._lwFileKind||'proof', round:card._proofRound||1, subVersion:1, uploadedAt:e.at||new Date().toISOString(), driveFileId:f.fileId, driveUrl:f.url||'', annotations:[], fromLw:true }); n++; });
+  });
+  return n;
+}
+function _lwSyncPoll_(){
+  if(window._lwSyncNoApi_ || document.hidden || !(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn) || !CLOUD_CONFIG || !CLOUD_CONFIG.GAS_URL) return;
+  var since=''; try{ since=localStorage.getItem('lw_sync_since')||''; }catch(e){}
+  _lwGas_({ action:'lwSyncEvents', since:since }).then(function(r){
+    if(r && !r.success && /unknown_action/.test(String(r.error||''))){ window._lwSyncNoApi_=true; return; }
+    if(!r || !r.success) return;
+    window._lwSyncGroup_=r.group||null;
+    var n=_lwSyncApply_(r.events||[], r.group);
+    var last=(r.events||[]).reduce(function(m,e){ return e.at>m?e.at:m; }, since); try{ if(last) localStorage.setItem('lw_sync_since', last); }catch(e){}
+    if(n){ try{ saveDB(); if(typeof saveToCloud==='function') saveToCloud(); renderProofingList(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('💼 LW ノートの更新を校正BOX に入れました（'+n+' 件）'); }
+  }).catch(function(){});
+}
+setTimeout(_lwSyncPoll_, 15000); setInterval(_lwSyncPoll_, 60000); setTimeout(function(){ try{ _lwSyncPanel_(); }catch(e){} }, 9000);
+// 校正BOX の上: 自動連携の状態と、はじめる／止める
+function _lwSyncPanel_(){
+  var el=document.getElementById('lw-sync-state'); if(!el) return;
+  _lwGas_({ action:'lwSyncStatus' }).then(function(r){
+    if(!r || !r.success){ el.textContent=''; return; }
+    el.innerHTML=r.on?('🔁 LW 自動連携: <b style="color:#166534">オン</b>（'+_escDiff((r.group&&r.group.name)||'')+'・'+_escDiff(r.email||'')+'）'+(r.lastError?' <span style="color:#b91c1c" title="'+_escDiff(r.lastError)+'">⚠ エラーあり</span>':'')+' <a href="#" onclick="if(confirm(\'LW との自動連携を止めますか？\'))_lwGas_({action:\'lwSyncStop\'}).then(_lwSyncPanel_);return false" style="color:#64748b">止める</a>')
+      :('🔁 LW 自動連携: <b style="color:#b45309">オフ</b> <a href="#" onclick="_lwSyncStart_();return false" style="color:#0369a1">はじめる（本多さんの LW・メディア）</a>');
+  }).catch(function(){ el.textContent=''; });
+}
+function _lwSyncStart_(){
+  if(!confirm('本多さんの LINE WORKS の許可で、メディアのグループのノートと校正BOX を 1 分ごとに合わせます。\n（今あるノートは「LW ノートから取り込む」で入れてください。ここからは新しい変更だけを入れます）\n\nはじめますか？')) return;
+  var el=document.getElementById('lw-sync-state'); if(el) el.textContent='設定しています…';
+  _lwGas_({ action:'lwSyncSetup', email:'honda@tokiwap.co.jp', groupName:'メディア' }).then(function(r){
+    if(!r || !r.success){ alert('はじめられませんでした: '+String((r&&r.error)||'応答なし')+(String((r&&r.error)||'')==='lw_not_connected'?'\n\n本多さんが一度「💼 LW ノートへ」で LINE WORKS とつないでから、もう一度押してください。':'')); _lwSyncPanel_(); return; }
+    try{ localStorage.setItem('lw_sync_since', new Date().toISOString()); }catch(e){}
+    window._lwSyncOff_=false; window._lwSyncNoApi_=false; _lwSyncPanel_();
+    if(typeof _toastMsg==='function') _toastMsg('🔁 LW 自動連携をはじめました（'+((r.group&&r.group.name)||'')+'）');
+  });
 }
 // HUBLINK-1: Hub の詳細を開くリンク（GitHub Pages でも、アプリとして入れた Hub でも同じ所を指す）
 function _hubLink_(key, val){ return location.origin+location.pathname.replace(/[^/]*$/,'')+'?'+key+'='+encodeURIComponent(String(val||'')); }
@@ -22577,7 +22666,7 @@ function _doCreateProofingManual_(){
   saveDB();
   renderProofingList();
   showProofingDetail(proofing.id);
-  setTimeout(function(){ _proofLwOpen_(proofing.id, null, 1, null); }, 300);   // KOSEI-LW-1: LW にも登録
+  try{ _lwAutoPost_(proofing, { kind:'登録', comment:'校正BOX に登録しました' }); }catch(e){}   // LWSYNC-1: LW にも登録
 }
 
 // 校正ステータスを更新
@@ -22596,6 +22685,7 @@ async function updateProofingStatus(proofingId, status){
     saveDB();
     // 🔔 NOTIFY-1: ステータス変更を通知 (トースト + ブラウザ通知 + 共有先へLW)
     try { _notifyProofStatusChange_(p, _prev, status); } catch(e){}
+    try { var _lm=_proofStatusMeta_(status); _lwAutoPost_(p, { kind:_lm.label||status, comment:'段階を「'+(_lm.label||status)+'」にしました' }); } catch(e){}   // LWSYNC-1
     renderProofingList();
     if(typeof showProofingDetail === 'function' && document.getElementById('proofing-detail')) try { showProofingDetail(proofingId); } catch(e){}
     // 🆕 GGG-E: 校了(done)になったら最新校正データを自動で 05_校了 に格納
@@ -22651,6 +22741,7 @@ async function uploadProofVersion(proofingId){
   p.versions.push(version);
   p.status = 'waiting';
   p.lastMoveAt = new Date().toISOString();  // STALE-1: アップロードも活動として記録
+  try{ _lwAutoPost_(p, { kind:(_proofRoundLabel_?_proofRoundLabel_(version.round||1, version.kind):'')||'校正', comment:'校正データ「'+(version.fileName||'')+'」を上げました', fileIds:[version.driveFileId] }); }catch(e){}   // LWSYNC-1
   saveDB();
 
   // 🆕 GGG-E: バージョン番号 / 種類に応じて Drive サブフォルダに自動振り分け
@@ -23358,7 +23449,7 @@ function createProofingFromProjectId(projectId){
   if(!project){ alert('案件が見つかりません'); return; }
   if(!confirm(`案件 ${project.id} 「${project.item}」の校正セッションを作成しますか?`)) return;
   var _pf = createProofingFromProject(project, true);
-  if(_pf && _pf.id) setTimeout(function(){ _proofLwOpen_(_pf.id, null, 1, null); }, 300);   // KOSEI-LW-1: LW にも登録
+  if(_pf && _pf.id) try{ _lwAutoPost_(_pf, { kind:'登録', comment:'校正BOX に登録しました' }); }catch(e){}   // LWSYNC-1: LW にも登録
 }
 
 // 🆕 問い合わせ管理から校正BOX へ転送 (新規校正セッション作成 + 連絡をリンク)
@@ -23424,7 +23515,7 @@ function forwardInquiryToProofing(inqId){
   alert('✅ 校正BOX に転送しました\n\nセッション: ' + proofId + '\n' + (_attN ? '添付 ' + _attN + ' 件を原稿として登録\n' : '') + (linkedProj ? '案件 ' + linkedProj.id + ' にも紐付け済み' : '案件は未リンク (校正BOX で手動設定可)'));
   closeInquiryDetail();
   jumpToProofing(proofId);
-  setTimeout(function(){ _proofLwOpen_(proofId, null, 1, inqId); }, 300);   // KOSEI-LW-1: LW にも登録
+  try{ var _np=(DB.proofings||[]).find(function(x){ return x.id===proofId; }); if(_np) _lwAutoPost_(_np, { kind:'登録', comment:'校正BOX に登録しました（問い合わせから）', fileIds:(inq.attachments||[]).map(function(a){ return a&&a.driveFileId; }), mailSubject:String(inq.subject||''), mailFrom:[inq.from_company, inq.from_name].filter(Boolean).join(' ') }); }catch(e){}   // LWSYNC-1: LW にも登録
 }
 
 // PPPPPP-17: 問い合わせを「既存の校正案件」に修正指示として挿入 (新規作成ではない)
@@ -23609,7 +23700,7 @@ function _doInsertInquiryToProofing0_(inqId, proofId, slot){
   if(typeof closeInquiryDetail==='function') closeInquiryDetail();
   alert('✅ 校正BOX '+(p.fmNo||proofId)+' の「'+KLABEL+'」に入れました ('+added+'件)');
   if(typeof jumpToProofing==='function') jumpToProofing(proofId);
-  setTimeout(function(){ _proofLwOpen_(proofId, K, (slot&&slot.round)||p._proofRound||1, inqId); }, 300);   // KOSEI-LW-1: 同じ依頼を LW のノートにも（覚えたノートに【N校戻り】で書き足す）
+  try{ _lwAutoPost_(p, { kind:KLABEL, comment:'メールを校正BOX に入れました', fileIds:(inq.attachments||[]).map(function(a){ return a&&a.driveFileId; }), mailSubject:String(inq.subject||''), mailFrom:[inq.from_company, inq.from_name].filter(Boolean).join(' '), mailBody:String(inq.body||'').slice(0,800) }); }catch(e){}   // LWSYNC-1: 同じ依頼を LW のノートにも自動で
 }
 
 // 校正セッションへジャンプ (案件画面ボタンから)
