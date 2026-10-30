@@ -33,6 +33,7 @@ if ('serviceWorker' in navigator) {
     if (_swReloaded) return;
     _swReloaded = true;
     console.log('[PWA] 新バージョンを反映するため再読み込みします');
+    try{ sessionStorage.setItem('hubSwReload','1'); }catch(e){}   // STAYPAGE-1: 更新のあとも同じ画面に戻る
     window.location.reload();
   });
   window.addEventListener('load', function() {
@@ -6022,6 +6023,24 @@ function _goHome_(){
   if(btn && typeof swPage === 'function') swPage('realtime', btn);
 }
 
+// STAYPAGE-1（本多さん 10/30「更新したら別の画面に行くのはやめて」）: 起動時に出す画面。
+//   再読み込み・アプリの更新・30 分以内に開いていた画面があれば、その画面に戻る。それ以外（久しぶりに開いた・ログインし直した）はホーム
+function _startPage_(){
+  try{
+    var last=localStorage.getItem('tokiwa_last_page'), at=Number(localStorage.getItem('tokiwa_last_page_at')||0);
+    var nav=((performance.getEntriesByType&&performance.getEntriesByType('navigation')[0])||{}).type;
+    var again=nav==='reload'||sessionStorage.getItem('hubJustUpdated')==='1'||sessionStorage.getItem('hubSwReload')==='1';
+    if(last && last!=='realtime' && document.getElementById('page-'+last) && (again || (Date.now()-at)<30*60000) && (typeof _releaseAllows_!=='function'||_releaseAllows_(last))) return last;
+  }catch(e){}
+  return 'realtime';
+}
+function _goStartPage_(){
+  var sp=_startPage_(); var b=document.querySelector('.tb-btn[data-page="'+sp+'"]')||document.querySelector('.tb-btn[data-page="realtime"]');
+  if(typeof swPage!=='function') return false;
+  swPage(sp, b); try{ if(/^fm(juchu|mitsu)$/.test(sp) && typeof _fmPageShow_==='function') _fmPageShow_(sp); }catch(e){}
+  try{ sessionStorage.removeItem('hubSwReload'); }catch(e){}
+  return true;
+}
 // 📍 LASTPG-1: 起動・リロード時に「最後に開いていたページ」を復元
 // (アップデートやタブ破棄のたびに毎回ホームから始まる問題の対策)
 function _restoreLastPage_(){
@@ -6612,9 +6631,10 @@ function swPage(id,btn){
   if(typeof applyReleaseConfig === 'function') applyReleaseConfig();
 
   // 履歴記録 (エラーで止まらないよう try)
+  var _reRender = !!window._navIgnore;   // STAYPAGE-1: 今の画面を描き直すだけ（起動時など）のときは「最後に開いた画面」を上書きしない
   try { _recordNav_(id); } catch(e){ console.warn('nav record failed:', e); }
   // 📍 最後に開いたページを記録 → リロード/再起動時に復元 (毎回ホームから始まる問題の対策)
-  try { localStorage.setItem('tokiwa_last_page', id); } catch(e){}
+  try { if(!_reRender) localStorage.setItem('tokiwa_last_page', id); if(!_reRender) localStorage.setItem('tokiwa_last_page_at', String(Date.now())); } catch(e){}
 
   // ★ 表示切替 (これは絶対に成功させる)
   try {
@@ -49967,7 +49987,7 @@ function showMainScreen(){
     try {
       var rtBtn = document.querySelector('.tb-btn[data-page="realtime"]');
       if(rtBtn && typeof swPage === 'function'){
-        swPage('realtime', rtBtn);
+        _goStartPage_();   // STAYPAGE-1: 再読み込みなら前の画面に戻る
       } else {
         // swPage がまだ無い時は CSS だけ手動で
         document.querySelectorAll('.page').forEach(function(p){ p.classList.remove('act'); });
@@ -52265,7 +52285,7 @@ if(currentAuth.loggedIn && currentAuth.companyId){
     try {
       var rtBtn = document.querySelector('.tb-btn[data-page="realtime"]');
       if(rtBtn && typeof swPage === 'function'){
-        swPage('realtime', rtBtn);
+        _goStartPage_();   // STAYPAGE-1: 再読み込みなら前の画面に戻る
       }
     } catch(e){ console.warn('initial swPage failed:', e); }
   }, 200);
