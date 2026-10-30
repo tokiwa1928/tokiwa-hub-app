@@ -400,12 +400,12 @@
           <div style="grid-column:span 3;display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-right:10px;border-right:1px dashed #e0dcd2">
             <div class="mini" style="grid-column:span 2">自社</div>
             <div><label>単価</label><input id="f-unitSelf" type="number" step="any" oninput="calcFromSelf()"></div>
-            <div><label>税抜金額</label><input id="f-amtSelf" type="number" oninput="calcProfit()"></div>
+            <div><label>金額 <select id="f-taxSelf" onchange="calcProfit()" title="入れた金額が税抜か税込か（税込なら一覧・合計・利益・帳票は税抜に直して使う）" style="font-size:11px;padding:0 2px;margin-left:4px"><option value="">税抜</option><option value="税込">税込</option></select></label><input id="f-amtSelf" type="number" oninput="calcProfit()"></div>
           </div>
           <div style="grid-column:span 3;display:grid;grid-template-columns:1fr 1fr;gap:8px 10px">
             <div class="mini" style="grid-column:span 2">トキワ</div>
             <div><label>単価</label><input id="f-unitTokiwa" type="number" step="any" oninput="calcAmt()"></div>
-            <div><label>税抜金額</label><input id="f-amtTokiwa" type="number" oninput="calcProfit()"></div>
+            <div><label>金額 <select id="f-taxTokiwa" onchange="calcProfit()" title="入れた金額が税抜か税込か（税込なら一覧・合計・利益は税抜に直して使う）" style="font-size:11px;padding:0 2px;margin-left:4px"><option value="">税抜</option><option value="税込">税込</option></select></label><input id="f-amtTokiwa" type="number" oninput="calcProfit()"></div>
           </div>
         </div>
         <div class="calcbar">
@@ -530,7 +530,7 @@ function _memoHtml_(c){
   var raw=String(c.memo||'');
   if(!raw) return '';
   // 見積日は専用列で出すので、備考のタグ表示からは外す（二重に見えるため）
-  var body=raw.replace(/【複数梱包】|【複数納品先】/g,'').replace(/【見積日[:：][^】]*】/g,'');
+  var body=raw.replace(/【複数梱包】|【複数納品先】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/【税込[:：][^】]*】/g,'');
   var tags=[];
   body=body.replace(/【([^】]{1,30})】/g, function(_,t){ tags.push(t); return ' '; }).replace(/\s+/g,' ').trim();
   var html=tags.map(function(t){
@@ -671,6 +671,13 @@ function getColVal(c,k){
 function esc(s){ s=(s==null?'':String(s)); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function yen(n){ n=Math.round(Number(n)||0); return (n<0?'−¥'+Math.abs(n).toLocaleString():'¥'+n.toLocaleString()); }
 function toNum(v){ var n=Number(String(v==null?'':v).replace(/[,¥]/g,'')); return isNaN(n)?0:n; }
+// TAXKUBUN-1（本多さん 10/30「税込と税抜が混ざる」）: 金額ごとに税込／税抜を選べる。シートに専用列が無いので備考に【税込:自社】【税込:トキワ】で残す
+//   一覧の合計・利益・帳票は、税込の金額を税抜（÷1.1・四捨五入）に直して使う。シートの金額そのものは入れたまま
+var TAX_RATE=0.1;
+function _taxTag_(memo){ var m=String(memo==null?'':memo).match(/【税込[:：]([^】]*)】/); var t=m?m[1]:''; return { self:/自社/.test(t), tok:/トキワ/.test(t) }; }
+function _isIncl_(c,f){ var t=_taxTag_(c&&c.memo); return f==='amtSelf'?t.self:f==='amtTokiwa'?t.tok:false; }
+function exT(c,f){ var v=toNum(c&&c[f]); return _isIncl_(c,f)?Math.round(v/(1+TAX_RATE)):v; }
+function _formEx_(id){ var v=toNum(document.getElementById(id).value), sel=document.getElementById(id==='f-amtSelf'?'f-taxSelf':'f-taxTokiwa'); return (sel&&sel.value==='税込')?Math.round(v/(1+TAX_RATE)):v; }
 function parseD(v){ if(!v)return null; var s=String(v).trim(); var m=s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); return m?new Date(+m[1],+m[2]-1,+m[3]):null; }
 function ymd(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
 function weekRange(){ var t=new Date();t.setHours(0,0,0,0); var dow=(t.getDay()+6)%7; var mon=new Date(t);mon.setDate(t.getDate()-dow); var sun=new Date(mon);sun.setDate(mon.getDate()+6); return [mon,sun]; }
@@ -1225,6 +1232,7 @@ function render(){
       if(k==='orderQty' && v===''){ cell='<span style="color:#b6b1a6;font-size:9.5px" title="受注数量が未入力のため、納品書・請求書・領収書は製造数量で発行されます">=製造数量</span>'; }
       // 金額未入力(空/0)は赤セル：金額(トキワ)=全社、金額(自社)=自社金額列を持つ会社のみ
       if((k==='amtTokiwa' || (k==='amtSelf' && SELF_AMT_KEYS[c._key])) && !(toNum(v)>0)){ cls=' class="num" style="background:#fde8e4"'; cell=''; }
+      if((k==='amtSelf'||k==='amtTokiwa') && cell!=='' && _isIncl_(c,k)){ cell+=' <span title="税込で入っています。合計・利益・帳票は税抜 '+yen(exT(c,k))+' で計算" style="font-size:9.5px;color:#b45309;border:1px solid #f59e0b;border-radius:3px;padding:0 3px">込</span>'; }   // TAXKUBUN-1
       if(k==='memo'){ cell=_memoHtml_(c); }
       // 伝票番号の頭に「見積」の印を出して、案件（受注）と見分けやすくする。
       // 仮番号（見積-…）は番号自体に「見積」と入っているので印は付けない
@@ -1326,9 +1334,9 @@ function renderKpis(V){
   CASES.forEach(function(c){ var d=parseD(c.deliveryDate); if(!d)return; if(ymd(d)===today)tN++; if(d>=wk[0]&&d<=wk[1])wN++; });
   var now=new Date(), curK=now.getFullYear()+'-'+(now.getMonth()+1);
   var pm=new Date(now.getFullYear(),now.getMonth()-1,1), pmK=pm.getFullYear()+'-'+(pm.getMonth()+1);
-  var agg={}; CASES.forEach(function(c){ var d=parseD(c.orderDate); if(!d)return; var k=d.getFullYear()+'-'+(d.getMonth()+1); agg[k]=agg[k]||{n:0,a:0}; agg[k].n++; agg[k].a+=toNum(c.amtSelf); });
+  var agg={}; CASES.forEach(function(c){ var d=parseD(c.orderDate); if(!d)return; var k=d.getFullYear()+'-'+(d.getMonth()+1); agg[k]=agg[k]||{n:0,a:0}; agg[k].n++; agg[k].a+=exT(c,'amtSelf'); });
   var cur=agg[curK]||{n:0,a:0}, prev=agg[pmK]||{n:0,a:0};
-  var sumSelf=V.reduce(function(s,c){return s+toNum(c.amtSelf);},0), sumTok=V.reduce(function(s,c){return s+toNum(c.amtTokiwa);},0), sumP=V.reduce(function(s,c){return s+toNum(c.profit);},0);
+  var sumSelf=V.reduce(function(s,c){return s+exT(c,'amtSelf');},0), sumTok=V.reduce(function(s,c){return s+exT(c,'amtTokiwa');},0), sumP=V.reduce(function(s,c){return s+toNum(c.profit);},0);
   document.getElementById('kpis').innerHTML=
     '<div class="kpi"><div class="k">件数（絞込）</div><div class="v">'+V.length+'</div></div>'+
     '<div class="kpi"><div class="k">金額(自社) 計</div><div class="v" style="font-size:15px">'+yen(sumSelf)+'</div></div>'+
@@ -1354,8 +1362,9 @@ function openForm(id, asCopy){
   document.getElementById('f-id').value=editing?editing.id:'';
   ['denpyo','customer','item','qty','unit','orderDate','hopeDate','deliveryDate','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','memo','billMonth'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=g(f); });
   document.getElementById('f-status2').value=g('status');
-  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
+  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【税込[:：][^】]*】/g,'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
   var _oqEl=document.getElementById('f-orderQty'); if(_oqEl) _oqEl.value=_orderQtyTag_(src&&src.memo);
+  var _tx=_taxTag_(src&&src.memo); if(document.getElementById('f-taxSelf')) document.getElementById('f-taxSelf').value=_tx.self?'税込':''; if(document.getElementById('f-taxTokiwa')) document.getElementById('f-taxTokiwa').value=_tx.tok?'税込':'';   // TAXKUBUN-1
   var _qdEl=document.getElementById('f-quoteDate'); if(_qdEl) _qdEl.value=_quoteDateTag_(src&&src.memo);
   var _oqCk=document.getElementById('f-oqSame'); if(_oqCk){ _oqCk.checked=!(_oqEl&&_oqEl.value&&toNum(_oqEl.value)>0); if(_oqEl) _oqEl.disabled=_oqCk.checked; }
   ['f-amtSelf','f-amtTokiwa','f-profit'].forEach(function(x){ var el=document.getElementById(x); if(el) delete el.dataset.auto; }); // 復元値は手入力扱い（自動クリア対象外）
@@ -1464,7 +1473,7 @@ function calcAmt(){ var q=toNum(document.getElementById('f-qty').value); var us=
   if(q&&us){ as.value=Math.round(q*us); as.dataset.auto='1'; } else if(as.dataset.auto){ as.value=''; }
   if(q&&ut){ at.value=Math.round(q*ut); at.dataset.auto='1'; } else if(at.dataset.auto){ at.value=''; }
   calcProfit(); }
-function calcProfit(){ var a=toNum(document.getElementById('f-amtSelf').value), b=toNum(document.getElementById('f-amtTokiwa').value);
+function calcProfit(){ var a=_formEx_('f-amtSelf'), b=_formEx_('f-amtTokiwa');
   var pf=document.getElementById('f-profit');
   if(a||b){ pf.value=a-b; pf.dataset.auto='1'; } else if(pf.dataset.auto){ pf.value=''; }
   updateCalcBar(); }
@@ -1475,7 +1484,7 @@ function _oqInput_(){ var ck=document.getElementById('f-oqSame'), oq=document.ge
   if(ck) ck.checked=!(oq.value&&toNum(oq.value)>0); }
 // 黒メトリクスバー（金額・利益のライブ表示）
 function updateCalcBar(){
-  var a=toNum(document.getElementById('f-amtSelf').value), b=toNum(document.getElementById('f-amtTokiwa').value);
+  var a=_formEx_('f-amtSelf'), b=_formEx_('f-amtTokiwa');
   var set=function(id,v,show){ var el=document.getElementById(id); if(el) el.textContent=show?yen(v):'—'; };
   set('cb-self',a,!!document.getElementById('f-amtSelf').value);
   set('cb-tok',b,!!document.getElementById('f-amtTokiwa').value);
@@ -1514,11 +1523,12 @@ async function saveCase(){
     billMonth:document.getElementById('f-billMonth').value };
   // 複数梱包・納品先はシートに専用列が無いため備考に畳んで保存（情報を失わない・重複防止）
   var mp=document.getElementById('f-multiPack').checked, md=document.getElementById('f-multiDest').checked;
-  var memo=(document.getElementById('f-memo').value||'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
+  var memo=(document.getElementById('f-memo').value||'').replace(/【税込[:：][^】]*】/g,'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
   var oq=(document.getElementById('f-orderQty').value||'').trim().replace(/,/g,'');
   if(document.getElementById('f-oqSame').checked || !(toNum(oq)>0)) oq='';   // チェックON・空・0は「製造数量と同じ」＝タグ保存しない
   var qd=(document.getElementById('f-quoteDate').value||'').trim();
-  var pre=''; if(qd) pre+='【見積日:'+qd+'】'; if(oq) pre+='【受注数:'+oq+'】'; if(mp) pre+='【複数梱包】'; if(md) pre+='【複数納品先】';
+  var pre=''; var _ts=[]; if((document.getElementById('f-taxSelf')||{}).value==='税込') _ts.push('自社'); if((document.getElementById('f-taxTokiwa')||{}).value==='税込') _ts.push('トキワ'); if(_ts.length) pre+='【税込:'+_ts.join('・')+'】';   // TAXKUBUN-1
+  if(qd) pre+='【見積日:'+qd+'】'; if(oq) pre+='【受注数:'+oq+'】'; if(mp) pre+='【複数梱包】'; if(md) pre+='【複数納品先】';
   c.memo=(pre?pre+' ':'')+memo;
   // 対象会社キー（編集時は元レコードの会社、新規時は選択中の会社）
   var key = (editing && editing._key) ? editing._key : NAMEKEY[COMPANY];
@@ -1985,8 +1995,8 @@ function _qtyDisp_(c){ var q=_docQty_(c); var n=Number(String(q).replace(/,/g,''
 function _docAmt_(c){
   var oq=_orderQtyTag_(c&&c.memo);
   var u=toNum(c.unitSelf)||0;
-  if(oq!==''){ return u? Math.round(u*toNum(oq)) : (toNum(c.amtSelf)||0); }
-  var a=toNum(c.amtSelf)||0;
+  if(oq!==''){ return u? Math.round(u*toNum(oq)) : (exT(c,'amtSelf')||0); }
+  var a=exT(c,'amtSelf')||0;
   if(!a){ a=u*(toNum(c.qty)||0); }
   return a;
 }
