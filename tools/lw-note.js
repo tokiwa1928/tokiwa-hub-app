@@ -330,6 +330,8 @@
     var ids = [], names = [];
     S.files.forEach(function (f) { if (f.on && f.id) { ids.push(f.id); names.push(f.name); } });
     var comment = $('lwn-comment').value.trim(), kind = kindLabel(), local = S.local.slice();
+    // HUBLINK-1: Hub で詳細を見るリンク（校正BOX のカード＞案件＞問い合わせ の順）
+    try { if (typeof _hubLink_ === 'function') { var hl = S.card ? _hubLink_('proof', S.card.id) : (S.inq && S.inq.linked_project_id && !/^→/.test(S.inq.linked_project_id)) ? _hubLink_('case', S.inq.linked_project_id) : (S.inq && S.inq.id) ? _hubLink_('inq', S.inq.id) : ''; if (hl && comment.indexOf(hl) < 0) comment = (comment ? comment + '\n' : '') + '🔗 Tokiwa Hub で詳細: ' + hl; } } catch (e) { }
     if (!ids.length && !local.length && !comment && !kind) { msg.style.color = '#B42318'; msg.textContent = 'ファイルか文のどちらかを入れてください'; return; }
     var label = S.label || '';
     var bad = mismatch(comment, kind);   // LWNOTE-7
