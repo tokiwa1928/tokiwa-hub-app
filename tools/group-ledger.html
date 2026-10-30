@@ -873,6 +873,19 @@ function stEdit(el){
   sel.onchange=function(){ closed=true; chgStatus(id, sel.value, sel); };
   sel.onblur=function(){ if(!closed) render(); };   // 変えずに離れたら元の表示に戻す
 }
+// TAXKUBUN-1: 一覧の「抜／込」を押したら、備考のタグ【税込:自社・トキワ】を入れ替えてシートに保存
+async function chgTax(id, f){
+  var c=(CASES||[]).find(function(x){ return x.id===id; }); if(!c) return;
+  if(!c._row || !c._key){ alert('この行はシート更新に未対応です'); return; }
+  var t=_taxTag_(c.memo), on={ self:t.self, tok:t.tok }; if(f==='amtSelf') on.self=!on.self; else on.tok=!on.tok;
+  var parts=[]; if(on.self) parts.push('自社'); if(on.tok) parts.push('トキワ');
+  var prev=c.memo||'', body=prev.replace(/【税込[:：][^】]*】/g,'').trim();
+  var newMemo=(parts.length?'【税込:'+parts.join('・')+'】':'')+(body?(parts.length?' ':'')+body:'');
+  c.memo=newMemo; render();
+  try{ var r=await _apiT_('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{memo:newMemo}},20000);
+    if(!(r&&r.success)) throw new Error((r&&r.error)||'保存できませんでした'); }
+  catch(e){ c.memo=prev; render(); alert('税込・税抜を保存できませんでした：\n'+e.message+'\n\n（🔄で読み直してからやり直してください）'); }
+}
 // 一覧の状況欄で選んだら、その場でシートに保存する。
 // 失敗したら元に戻す（画面だけ変わってシートが変わっていない、を防ぐ）
 async function chgStatus(id, v, el){
@@ -1232,7 +1245,9 @@ function render(){
       if(k==='orderQty' && v===''){ cell='<span style="color:#b6b1a6;font-size:9.5px" title="受注数量が未入力のため、納品書・請求書・領収書は製造数量で発行されます">=製造数量</span>'; }
       // 金額未入力(空/0)は赤セル：金額(トキワ)=全社、金額(自社)=自社金額列を持つ会社のみ
       if((k==='amtTokiwa' || (k==='amtSelf' && SELF_AMT_KEYS[c._key])) && !(toNum(v)>0)){ cls=' class="num" style="background:#fde8e4"'; cell=''; }
-      if((k==='amtSelf'||k==='amtTokiwa') && cell!=='' && _isIncl_(c,k)){ cell+=' <span title="税込で入っています。合計・利益・帳票は税抜 '+yen(exT(c,k))+' で計算" style="font-size:9.5px;color:#b45309;border:1px solid #f59e0b;border-radius:3px;padding:0 3px">込</span>'; }   // TAXKUBUN-1
+      if((k==='amtSelf'||k==='amtTokiwa') && cell!==''){   // TAXKUBUN-1: 一覧で押すと 税抜⇄税込 を切り替えてシートに保存
+        var _inc=_isIncl_(c,k);
+        cell+=' <button onclick="event.stopPropagation();chgTax(\''+esc(c.id)+'\',\''+k+'\')" title="'+(_inc?'税込で入っています（合計・利益・帳票は税抜 '+yen(exT(c,k))+' で計算）。押すと税抜に':'税抜で入っています。押すと税込に（合計・利益・帳票は ÷1.1 で計算）')+'" style="font-size:9.5px;cursor:pointer;border-radius:3px;padding:0 4px;'+(_inc?'color:#fff;background:#d97706;border:1px solid #d97706':'color:#64748b;background:#fff;border:1px solid #cbd5e1')+'">'+(_inc?'込':'抜')+'</button>'; }
       if(k==='memo'){ cell=_memoHtml_(c); }
       // 伝票番号の頭に「見積」の印を出して、案件（受注）と見分けやすくする。
       // 仮番号（見積-…）は番号自体に「見積」と入っているので印は付けない
