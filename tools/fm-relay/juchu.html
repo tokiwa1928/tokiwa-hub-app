@@ -2780,8 +2780,19 @@ window.FM見た目 = function () {};
     $('dtp-msg').textContent = DTP送信(現在.fields, $('dtp-yn').value, $('dtp-note').value.trim());
   }
   $('dtp-go').onclick = DTPを送る;
-  // 有 を選んだ瞬間に送る（押し忘れで校正BOXに入らない、を無くす）。内容は後から入れて「校正BOXへ」で送り直せる
-  $('dtp-yn').addEventListener('change', function () { DTPを送る(); if ($('dtp-yn').value === '有') $('dtp-note').focus(); });
+  // KOSEI-DTP-3（本多さん 10/30「DTP有で校正ボックスに飛ぶのではなく、この案件を保存した際に」）: 有 を選んでも、まだ送らない。保存したときに校正BOXへ送って開く
+  //   無 にしたときは今までどおりすぐ記録を消す。「校正BOXへ」ボタンは手で今すぐ送る
+  $('dtp-yn').addEventListener('change', function () {
+    if ($('dtp-yn').value === '有') { $('dtp-msg').textContent = '保存すると校正BOXへ入ります'; $('dtp-note').focus(); }
+    else DTPを送る();
+  });
+  window.DTP保存のあと = function () {
+    if (!現在 || $('dtp-yn').value !== '有') return;
+    var no = String(現在.fields['伝票番号'] || ''); if (!no) return;
+    var m = DTP記録()[no] || {}, note = $('dtp-note').value.trim();
+    if (!m.at || m.dtp !== '有' || (m.note || '') !== note) $('dtp-msg').textContent = DTP送信(現在.fields, '有', note);
+    try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'dtp-open', 伝票番号: no }); } catch (e) {}   // Hub で校正BOX のカードを開く
+  };
   window.DTP送信 = DTP送信; window.DTP状態 = DTP状態;
   $('hs-go').onclick = function () {
     if (!現在) return;
@@ -3129,7 +3140,7 @@ window.FM見た目 = function () {};
   function 保存() {
     if (!現在) { 空から起こして保存(); return; }
     var 差 = 関連会社の差を絞る(変更分()), n = Object.keys(差).length;   // GRP-2: 関連会社はトキワの金額を送らない
-    if (!n) { 状態('変更はありません', ''); return; }
+    if (!n) { 状態('変更はありません', ''); try { if (window.DTP保存のあと) window.DTP保存のあと(); } catch (e) {} return; }
     var 消す = 空にする項目(差);
     var 文 = n + ' 項目を ' + (現在はHub() ? 'Hub の見積（' + 現在の番号() + '）' : 'FileMaker') + ' に保存します。よろしいですか？\n\n'
           + Object.keys(差).slice(0, 30).join('、')
@@ -3161,6 +3172,7 @@ window.FM見た目 = function () {};
         return;
       }
       流し込む({ recordId: r.recordId, modId: r.modId, fields: r.fields });
+      try { if (window.DTP保存のあと) setTimeout(window.DTP保存のあと, 50); } catch (e) {}   // KOSEI-DTP-3
       状態(r.saved.length + ' 項目を保存しました' + (現在はHub() ? '（Hub の見積）' : '（金額は再計算済み）') + (r.合流 ? '　※別の人の変更の上に重ねました' : ''), 'ok');
       try { 先方担当を覚える(); } catch (e) {}   // TANTO-1
       待機(false);

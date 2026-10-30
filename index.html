@@ -21037,7 +21037,7 @@ setTimeout(function(){ try{ _sagyoProcessPending_(); }catch(e){ console.warn('[s
 setInterval(function(){ try{ _sagyoProcessPending_(); }catch(e){} }, 60*1000);
 try{
   var _dtpBC=new BroadcastChannel('tokiwa-hub-tools');
-  _dtpBC.onmessage=function(ev){ if(ev.data&&ev.data.type==='dtp'){ setTimeout(_dtpProcessPending_, 200); } if(ev.data&&ev.data.type==='sagyo'){ setTimeout(_sagyoProcessPending_, 200); } };
+  _dtpBC.onmessage=function(ev){ if(ev.data&&ev.data.type==='dtp'){ setTimeout(_dtpProcessPending_, 200); } if(ev.data&&ev.data.type==='dtp-open'){ setTimeout(function(){ try{ _dtpProcessPending_(); var no=String(ev.data.伝票番号||''); var p=(DB.proofings||[]).find(function(x){ return x && (String(x.fmNo||'')===no || (x.fmNos||[]).map(String).indexOf(no)>=0); }); if(p){ swPage('proofing', document.querySelector('.tb-btn[data-page=proofing]')); setTimeout(function(){ showProofingDetail(p.id); }, 250); } }catch(e){ console.warn('[dtp-open]', e); } }, 400); }   /* KOSEI-DTP-3: 受注入力で保存したら校正BOX のカードを開く */ if(ev.data&&ev.data.type==='sagyo'){ setTimeout(_sagyoProcessPending_, 200); } };
 }catch(e){}
 setTimeout(function(){ try{ _dtpProcessPending_(); }catch(e){ console.warn('[dtp]', e); } }, 4000);
 setTimeout(function(){ try{ var rs=_replyWaitProofings_(); if(rs.length && typeof _toastMsg==='function') _toastMsg('💬 返信できていない校正が '+rs.length+' 件あります（🚨 要注意 から開けます）'); }catch(e){} }, 7000);
@@ -22261,7 +22261,8 @@ function _proofLwHtml_(p){
     +'<b style="color:#2e3d35">💼 LINE WORKS ノート</b>'
     +(n ? '<span>'+_escDiff(n.groupName||'')+' ／ '+_escDiff(n.title||'')+'</span>'+(last?'<span style="color:#64748b">最後に入れた '+_escDiff(t(last.at))+(last.kind?' 【'+_escDiff(last.kind)+'】':'')+(last.by?' '+_escDiff(last.by):'')+'</span>':'')
        : '<span style="color:#b45309;font-weight:700">まだ登録していません</span>')
-    +'<button class="btn" style="font-size:11.5px;padding:3px 10px;margin-left:auto" onclick="_proofLwOpen_(\''+p.id+'\', null, '+(Number(p._proofRound)||1)+')">'+(n?'💼 ノートに書き足す':'💼 LW にも登録')+'</button></div>';
+    +'<button class="btn" style="font-size:11.5px;padding:3px 10px;margin-left:auto" onclick="_proofPickInquiry_(\''+p.id+'\')" title="メール・FAX の問い合わせを選んで、本文＋添付をこのカードに入れる（メールの側にもつながる）">📨 メールから入れる</button>'
+    +'<button class="btn" style="font-size:11.5px;padding:3px 10px" onclick="_proofLwOpen_(\''+p.id+'\', null, '+(Number(p._proofRound)||1)+')">'+(n?'💼 ノートに書き足す':'💼 LW にも登録')+'</button></div>';
 }
 // ═══ STALE-1: 停滞・要注意リスト (N日動いていない / 納期接近・超過) ═══
 function _alertDays_(){
@@ -23611,6 +23612,7 @@ function createProofingFromProjectId(projectId){
 
 // 🆕 問い合わせ管理から校正BOX へ転送 (新規校正セッション作成 + 連絡をリンク)
 function forwardInquiryToProofing(inqId){
+  return _inqProofViaProject_(inqId);   // MAIL-LINK-1: 案件の無い校正カードは作らない（案件を選ぶ／作る）
   const inq = (DB.inquiries||[]).find(i => i.id === inqId);
   if(!inq){ alert('連絡が見つかりません'); return; }
   // KOSEI-CHAT-1: 同じ問い合わせから 2 回作らない（3 件入ってしまう不具合）。二重押しも 5 秒は無視
@@ -23675,13 +23677,134 @@ function forwardInquiryToProofing(inqId){
   try{ var _np=(DB.proofings||[]).find(function(x){ return x.id===proofId; }); if(_np) _lwAutoPost_(_np, { kind:'登録', comment:'校正BOX に登録しました（問い合わせから）', fileIds:(inq.attachments||[]).map(function(a){ return a&&a.driveFileId; }), mailSubject:String(inq.subject||''), mailFrom:[inq.from_company, inq.from_name].filter(Boolean).join(' ') }); }catch(e){}   // LWSYNC-1: LW にも登録
 }
 
+// ═══ MAIL-LINK-1（本多さん 10/30「校正内容はメールで来るので、メールから入れると同時に案件作成もしくはメール問い合わせ側につながるように」「問い合わせのメール＋添付を外注にスライドして入れたい」） ═══
+// メール → 校正BOX: 校正カードは必ず案件から。案件を選ぶ（その案件の校正カードが無ければ作る）→ 支給データ／N校 出／戻り を選んで入れる。案件が無ければ 🤖 AIで受注
+function _inqProofViaProject_(inqId){
+  var inq=(DB.inquiries||[]).find(function(i){ return i.id===inqId; }); if(!inq){ alert('問い合わせが見つかりません'); return; }
+  var esc=function(v){ return _escDiff(String(v==null?'':v)); };
+  var pid=inq.linked_project_id||'', txt=((inq.subject||'')+' '+(inq.body||'')).slice(0,3000);
+  var nos={}; (txt.match(/[a-zA-Z]\d{5,7}/g)||[]).forEach(function(n){ nos[n.toLowerCase()]=1; });
+  var co=String(inq.from_company||'').replace(/株式会社|有限会社|\s/g,'');
+  var score=function(p){ var no=String((p.fm&&p.fm['fm-denpyo'])||p.id||'').toLowerCase(); return (p.id===pid?100:0)+(nos[no]?50:0)+(co&&String(p.cust||'').replace(/株式会社|有限会社|\s/g,'').indexOf(co)>=0?10:0); };
+  var list=(DB.projects||[]).filter(function(p){ return p && p.status!=='キャンセル' && p.status!=='失注'; })
+    .map(function(p){ return { p:p, s:score(p) }; })
+    .sort(function(a,b){ return (b.s-a.s) || String(b.p.orderDate||b.p.createdAt||'').localeCompare(String(a.p.orderDate||a.p.createdAt||'')); }).slice(0,120);
+  var rows=list.map(function(x){ var p=x.p, no=(p.fm&&p.fm['fm-denpyo'])||p.id, has=(DB.proofings||[]).some(function(q){ return q && q.projectId===p.id; });
+    return '<div class="inq-pj-pick" data-text="'+esc((no+' '+p.id+' '+(p.cust||'')+' '+(p.item||'')).toLowerCase())+'" onclick="_inqProofFromProject_(\''+inqId+'\',\''+p.id+'\')" style="cursor:pointer;padding:9px 12px;border:1px solid '+(x.s>=50?'#67e8f9':'#e5e7eb')+';border-radius:6px;margin-bottom:6px;background:#fff">'
+      +'<div style="font-weight:700;font-size:12px">'+(x.s>=50?'⭐ ':'')+'<span style="font-family:monospace;background:#1a1a1a;color:#fff;border-radius:4px;padding:0 6px;margin-right:6px">'+esc(no)+'</span>'+esc(p.item||'')+'</div>'
+      +'<div style="font-size:11px;color:#555;margin-top:2px">'+esc(p.cust||'')+' · '+esc(p.orderDate||'')+' · '+(has?'校正カードあり':'<span style="color:#0369a1">校正カードを作る</span>')+'</div></div>'; }).join('');
+  var old=document.querySelector('.proof-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  m.innerHTML='<div style="background:#fff;width:100%;max-width:640px;max-height:88vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:14px 20px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center"><div><strong>📐 このメールを入れる案件を選ぶ</strong><div style="font-size:11px;opacity:.85;margin-top:2px">案件の校正カードに入れます（無ければ作ります）。メールと案件もつながります</div></div><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>'
+    +'<div style="padding:12px 20px 0"><input placeholder="🔍 伝票番号・得意先・品名" oninput="var q=this.value.toLowerCase();document.querySelectorAll(\'.inq-pj-pick\').forEach(function(el){el.style.display=(!q||el.dataset.text.indexOf(q)>=0)?\'\':\'none\'})" style="width:100%;padding:8px 12px;font-size:12px;border:1px solid #ccc;border-radius:6px"></div>'
+    +'<div style="overflow-y:auto;flex:1;padding:12px 20px">'+(rows||'<div style="color:#888;font-size:12px">案件がありません</div>')+'</div>'
+    +'<div style="padding:10px 20px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><span style="font-size:11px;color:#64748b;margin-right:auto;align-self:center">案件がまだ無いときは</span>'
+    +'<button class="btn" style="font-size:12px" onclick="this.closest(\'.proof-modal\').remove();_inqAiOrder_(\''+inqId+'\',\'受注\')">🤖 AIで受注して案件を作る</button>'
+    +'<button class="btn" style="font-size:12px" onclick="this.closest(\'.proof-modal\').remove();_inqPickCase_(\''+inqId+'\',\'受注\')">受注入力へ</button></div></div>';
+  document.body.appendChild(m);
+}
+function _inqProofFromProject_(inqId, projectId){
+  var inq=(DB.inquiries||[]).find(function(i){ return i.id===inqId; }), proj=(DB.projects||[]).find(function(p){ return p.id===projectId; });
+  if(!inq||!proj) return;
+  var p=(DB.proofings||[]).filter(function(q){ return q && q.projectId===projectId; }).sort(function(a,b){ return String(b.createdAt||'').localeCompare(String(a.createdAt||'')); })[0];
+  if(!p){ p=createProofingFromProject(proj, false); if(!p||!p.id){ alert('校正カードを作れませんでした'); return; } try{ _lwAutoPost_(p, { kind:'登録', comment:'校正BOX に登録しました（メールから）' }); }catch(e){} }
+  if(!p.fmNo && proj.fm && proj.fm['fm-denpyo']) p.fmNo=String(proj.fm['fm-denpyo']);
+  if(!inq.linked_project_id) inq.linked_project_id=projectId;
+  if(!inq.linked_proofing_id) inq.linked_proofing_id=p.id;
+  if(!p.fromInquiryId) p.fromInquiryId=inqId;
+  (inq.timeline=inq.timeline||[]).push({ type:'link', date:new Date().toISOString(), text:'案件 '+((proj.fm&&proj.fm['fm-denpyo'])||proj.id)+' の校正 '+p.id+' につなぎました', by:(currentAuth&&currentAuth.userName)||'' });
+  try{ saveDB(); }catch(e){}
+  var old=document.querySelector('.proof-modal'); if(old) old.remove();
+  _inqPickProofSlot_(inqId, p.id);   // 支給データ／N校 出／戻り を選んで入れる
+}
+// 校正BOX → メール: カードから問い合わせ（メール・FAX）を選んで入れる。メールの側にもこのカード・案件がつく
+function _proofPickInquiry_(proofId){
+  var p=(DB.proofings||[]).find(function(x){ return x.id===proofId; }); if(!p) return;
+  var esc=function(v){ return _escDiff(String(v==null?'':v)); };
+  var no=String(p.fmNo||'').toLowerCase(), cust=String(p.custName||'').replace(/株式会社|有限会社|\s/g,'');
+  var score=function(i){ var t=((i.subject||'')+' '+(i.body||'')).toLowerCase(); return (i.linked_proofing_id===p.id?100:0)+(p.projectId&&i.linked_project_id===p.projectId?60:0)+(no&&t.indexOf(no)>=0?50:0)+(cust&&String(i.from_company||'').replace(/株式会社|有限会社|\s/g,'').indexOf(cust)>=0?10:0); };
+  var list=(DB.inquiries||[]).filter(function(i){ return i && !i.isSpam; }).map(function(i){ return { i:i, s:score(i) }; })
+    .sort(function(a,b){ return (b.s-a.s) || String(b.i.received_at||'').localeCompare(String(a.i.received_at||'')); }).slice(0,150);
+  var rows=list.map(function(x){ var i=x.i, d=i.received_at?new Date(i.received_at):null;
+    return '<div class="prf-inq-pick" data-text="'+esc(((i.subject||'')+' '+(i.from_company||'')+' '+(i.from_name||'')+' '+String(i.body||'').slice(0,300)).toLowerCase())+'" onclick="this.closest(\'.proof-modal\').remove();_proofLinkInquiry_(\''+proofId+'\',\''+i.id+'\')" style="cursor:pointer;padding:9px 12px;border:1px solid '+(x.s>=50?'#67e8f9':'#e5e7eb')+';border-radius:6px;margin-bottom:6px;background:#fff">'
+      +'<div style="font-weight:700;font-size:12px">'+(x.s>=50?'⭐ ':'')+esc(i.subject||'（件名なし）')+'</div>'
+      +'<div style="font-size:11px;color:#555;margin-top:2px">'+(d?(d.getMonth()+1)+'/'+d.getDate()+' ':'')+esc(i.from_company||i.from_name||'')+' · '+esc(i.source_type||'')+((i.attachments||[]).length?' · 📎'+(i.attachments||[]).length:'')+'</div></div>'; }).join('');
+  var old=document.querySelector('.proof-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  m.innerHTML='<div style="background:#fff;width:100%;max-width:640px;max-height:88vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:14px 20px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center"><div><strong>📨 メール（問い合わせ）から入れる</strong><div style="font-size:11px;opacity:.85;margin-top:2px">選んだメールの本文＋添付をこのカードに入れ、メールの側にもこのカード・案件をつなぎます</div></div><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>'
+    +'<div style="padding:12px 20px 0"><input placeholder="🔍 件名・会社・本文" oninput="var q=this.value.toLowerCase();document.querySelectorAll(\'.prf-inq-pick\').forEach(function(el){el.style.display=(!q||el.dataset.text.indexOf(q)>=0)?\'\':\'none\'})" style="width:100%;padding:8px 12px;font-size:12px;border:1px solid #ccc;border-radius:6px"></div>'
+    +'<div style="overflow-y:auto;flex:1;padding:12px 20px">'+(rows||'<div style="color:#888;font-size:12px">問い合わせがありません</div>')+'</div></div>';
+  document.body.appendChild(m);
+}
+function _proofLinkInquiry_(proofId, inqId){
+  var p=(DB.proofings||[]).find(function(x){ return x.id===proofId; }), inq=(DB.inquiries||[]).find(function(i){ return i.id===inqId; }); if(!p||!inq) return;
+  if(!inq.linked_proofing_id) inq.linked_proofing_id=p.id;
+  if(p.projectId && !inq.linked_project_id) inq.linked_project_id=p.projectId;
+  if(!p.fromInquiryId) p.fromInquiryId=inqId;
+  (inq.timeline=inq.timeline||[]).push({ type:'link', date:new Date().toISOString(), text:'校正BOX の '+(p.fmNo||p.id)+' につなぎました', by:(currentAuth&&currentAuth.userName)||'' });
+  try{ saveDB(); }catch(e){}
+  _inqPickProofSlot_(inqId, proofId);
+}
+// メール → 外注発注: 本文＋添付を、外注発注（発注待ち）に入れる。あるものに足す／新しく作る
+function _inqToOutsource_(inqId){
+  var inq=(DB.inquiries||[]).find(function(i){ return i.id===inqId; }); if(!inq) return;
+  var esc=function(v){ return _escDiff(String(v==null?'':v)); };
+  var proj=inq.linked_project_id?(DB.projects||[]).find(function(p){ return p.id===inq.linked_project_id; }):null;
+  var jno=String((proj&&proj.fm&&proj.fm['fm-denpyo'])||'');
+  var txt=((inq.subject||'')+' '+(inq.body||'')).toLowerCase();
+  var score=function(o){ return (jno&&String(o.juchuNo||'')===jno?100:0)+(proj&&o.projectId===proj.id?80:0)+(o.juchuNo&&txt.indexOf(String(o.juchuNo).toLowerCase())>=0?50:0)+(o.vendor&&txt.indexOf(String(o.vendor).toLowerCase().replace(/株式会社|有限会社/g,''))>=0?20:0); };
+  var list=(DB.outsourceOrders||[]).filter(function(o){ return o && (typeof _outSt_!=='function' || _outSt_(o)!=='done'); }).map(function(o){ return { o:o, s:score(o) }; })
+    .sort(function(a,b){ return (b.s-a.s) || String(b.o.createdAt||'').localeCompare(String(a.o.createdAt||'')); }).slice(0,120);
+  var rows=list.map(function(x){ var o=x.o;
+    return '<div class="inq-out-pick" data-text="'+esc(((o.juchuNo||'')+' '+(o.vendor||'')+' '+(o.item||'')+' '+(o.poNo||'')).toLowerCase())+'" onclick="this.closest(\'.proof-modal\').remove();_inqOutsourceApply_(\''+inqId+'\',\''+o.id+'\')" style="cursor:pointer;padding:9px 12px;border:1px solid '+(x.s>=50?'#c4b5fd':'#e5e7eb')+';border-radius:6px;margin-bottom:6px;background:#fff">'
+      +'<div style="font-weight:700;font-size:12px">'+(x.s>=50?'⭐ ':'')+(o.juchuNo?'<span style="font-family:monospace;background:#1a1a1a;color:#fff;border-radius:4px;padding:0 6px;margin-right:6px">'+esc(o.juchuNo)+'</span>':'')+esc(o.vendor||'（外注先未定）')+'</div>'
+      +'<div style="font-size:11px;color:#555;margin-top:2px">'+esc(o.gaichuKind||o.kind||'')+' · '+esc(o.item||'')+(o.qty?' · '+esc(o.qty)+esc(o.unit||''):'')+'</div></div>'; }).join('');
+  var old=document.querySelector('.proof-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  m.innerHTML='<div style="background:#fff;width:100%;max-width:640px;max-height:88vh;border-radius:10px;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:14px 20px;background:#7c3aed;color:#fff;display:flex;justify-content:space-between;align-items:center"><div><strong>🤝 このメール（本文＋添付 '+(inq.attachments||[]).length+' 件）を外注発注へ</strong><div style="font-size:11px;opacity:.85;margin-top:2px">入れる外注発注を選ぶか、新しく作ります。添付は外注先に渡すデータとして付きます</div></div><button onclick="this.closest(\'.proof-modal\').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer">×</button></div>'
+    +'<div style="padding:12px 20px 0"><input placeholder="🔍 伝票番号・外注先・内容" oninput="var q=this.value.toLowerCase();document.querySelectorAll(\'.inq-out-pick\').forEach(function(el){el.style.display=(!q||el.dataset.text.indexOf(q)>=0)?\'\':\'none\'})" style="width:100%;padding:8px 12px;font-size:12px;border:1px solid #ccc;border-radius:6px"></div>'
+    +'<div style="overflow-y:auto;flex:1;padding:12px 20px">'+(rows||'<div style="color:#888;font-size:12px">発注待ち・発注中の外注はありません</div>')+'</div>'
+    +'<div style="padding:10px 20px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">'
+    +'<button class="btn" style="font-size:12px" onclick="this.closest(\'.proof-modal\').remove();_inqOutsourceApply_(\''+inqId+'\',\'\',\'部分外注\')">＋ 新しく部分外注</button>'
+    +'<button class="btn btn-p" style="font-size:12px" onclick="this.closest(\'.proof-modal\').remove();_inqOutsourceApply_(\''+inqId+'\',\'\',\'完全外注\')">＋ 新しく完全外注</button></div></div>';
+  document.body.appendChild(m);
+}
+function _inqOutsourceApply_(inqId, outId, kind){
+  var inq=(DB.inquiries||[]).find(function(i){ return i.id===inqId; }); if(!inq) return;
+  if(!DB.outsourceOrders) DB.outsourceOrders=[];
+  var o=outId?(DB.outsourceOrders||[]).find(function(x){ return x.id===outId; }):null;
+  var proj=inq.linked_project_id?(DB.projects||[]).find(function(p){ return p.id===inq.linked_project_id; }):null;
+  if(!o){
+    o={ id:'OUT-'+Date.now()+'-'+Math.floor(Math.random()*1000), status:'planned', prep:_prepDefault_(false), createdAt:new Date().toISOString(),
+        gaichuKind:kind||'部分外注', kind:kind==='完全外注'?'完全外製':'加工', vendor:'（外注先未定）', item:(kind==='完全外注'?'製品 ':'')+((proj&&proj.item)||inq.subject||''),
+        juchuNo:String((proj&&proj.fm&&proj.fm['fm-denpyo'])||''), projectId:proj?proj.id:'', qty:0, unitPrice:0, amount:0, poNo:(typeof _nextPoNo_==='function'?_nextPoNo_():'') };
+    DB.outsourceOrders.push(o);
+  }
+  var atts=(inq.attachments||[]).map(function(a){ return { name:a.name||a.fileName||'添付', driveFileId:a.driveFileId||a.fileId||'', url:a.driveUrl||a.url||a.shareLink||a.link||'', fromInquiry:inqId }; });
+  var seen={}; o.files=(o.files||[]).concat(atts).filter(function(f){ var k=f.driveFileId||f.url||f.name; if(seen[k]) return false; seen[k]=1; return true; });
+  o.mails=(o.mails||[]).filter(function(x){ return x.inqId!==inqId; }).concat([{ inqId:inqId, subject:inq.subject||'', from:inq.from_company||inq.from_name||'', at:inq.received_at||'', body:String(inq.body||'').slice(0,2000) }]);
+  if(atts.length){ o.prep=o.prep||_prepDefault_(false); if(o.prep.データ===false) o.prep.データ=true; }
+  if(!o.projectId && proj) o.projectId=proj.id;
+  inq.linked_outsource_id=o.id;
+  (inq.timeline=inq.timeline||[]).push({ type:'forward', date:new Date().toISOString(), text:'外注発注 '+(o.poNo||o.id)+' に入れました（添付 '+atts.length+' 件）', by:(currentAuth&&currentAuth.userName)||'' });
+  try{ saveDB(); if(typeof saveToCloud==='function') saveToCloud(); }catch(e){}
+  if(typeof _toastMsg==='function') _toastMsg('🤝 外注発注 '+(o.poNo||'')+' に入れました（添付 '+atts.length+' 件）');
+  try{ if(typeof closeInquiryDetail==='function') closeInquiryDetail(); }catch(e){}
+  try{ _navAdmin_('outsource'); }catch(e){}
+}
 // PPPPPP-17: 問い合わせを「既存の校正案件」に修正指示として挿入 (新規作成ではない)
 function _inqInsertToProofing_(inqId){
   var inq = (DB.inquiries||[]).find(function(i){ return i.id===inqId; });
   if(!inq){ alert('問い合わせが見つかりません'); return; }
   var proofs = (DB.proofings||[]).slice();
   if(!proofs.length){
-    if(confirm('既存の校正案件がありません。\n新しい校正セッションを作成して転記しますか?')){ forwardInquiryToProofing(inqId); }
+    _inqProofViaProject_(inqId);   // MAIL-LINK-1: 校正カードは案件から
     return;
   }
   // 紐づく案件の校正を優先表示
@@ -23719,7 +23842,7 @@ function _inqInsertToProofing_(inqId){
       '<div style="padding:12px 20px 0"><input id="inq-proof-search" placeholder="🔍 伝票番号（a1xxxxx）・得意先・品名で絞り込み" oninput="document.querySelectorAll(\'.inq-proof-pick\').forEach(function(el){el.style.display=(!this.value||el.dataset.text.indexOf(this.value.toLowerCase())>=0)?\'\':\'none\'}.bind(this))" style="width:100%;font-size:12px;padding:8px 10px;border:1px solid #ccc;border-radius:6px"></div>'+
       '<div style="overflow-y:auto;flex:1;padding:12px 20px">'+rows+'</div>'+
       '<div style="padding:10px 20px;border-top:1px solid #eee;text-align:right">'+
-        '<button class="btn" onclick="var id=\''+inqId+'\';this.closest(\'.proof-modal\').remove();forwardInquiryToProofing(id)" style="font-size:12px">＋ 新規校正として作成</button>'+
+        '<button class="btn" onclick="var id=\''+inqId+'\';this.closest(\'.proof-modal\').remove();_inqProofViaProject_(id)" style="font-size:12px">＋ 案件を選んで校正カードを作る（無ければ案件も）</button>'+
       '</div>'+
     '</div>';
   document.body.appendChild(modal);
@@ -31404,6 +31527,8 @@ function renderOutsource(){
       return '<div style="padding:8px 14px;font-size:12px">'
         +'<div><span style="font-family:monospace;color:#8d897f">'+esc(o.id||'')+'</span>'+(o.projectId?('　紐付け案件: '+_ledgerProjLink_(o.projectId)):'')+'</div>'
         +(o.memo?('<div style="margin-top:2px;color:#6b6a63">備考: '+esc(o.memo)+'</div>'):'')
+        +((o.mails||[]).length?('<div style="margin-top:4px">'+(o.mails||[]).map(function(x){ return '📨 <a href="#" onclick="event.stopPropagation();openInquiryDetail(\''+esc(x.inqId)+'\');return false" style="color:#0369a1">'+esc(x.subject||'メール')+'</a> <span style="color:#8d897f">'+esc(x.from||'')+'</span>'; }).join('<br>')+'</div>'):'')
+        +((o.files||[]).length?('<div style="margin-top:3px">'+(o.files||[]).map(function(f){ var u=f.url||(f.driveFileId?'https://drive.google.com/file/d/'+f.driveFileId+'/view':''); return u?'📎 <a href="'+esc(u)+'" target="_blank" onclick="event.stopPropagation()" style="color:#0369a1">'+esc(f.name)+'</a>':'📎 '+esc(f.name); }).join('　')+'</div>'):'')
         +'</div>';
     },
     emptyIcon:'🤝', emptyMsg:'外注発注はありません（「＋外注発注」から作成）'
@@ -57650,6 +57775,7 @@ function _inqDetailTopBar_(inq){
     +ent('受注','受注入力へ')+ent('見積','見積書入力へ')+ent('予算見積','予算見積書入力へ')
     +b('🤖 AIで受注', "_inqAiOrder_('"+esc(inq.id)+"','受注')", false)+b('🤖 AIで見積', "_inqAiOrder_('"+esc(inq.id)+"','見積')", false)   // AI-KIHYO-3: 本文＋添付（FAX）から、リピートを探して起こす   // PICK-3（本多さん 10/2）: 仕分けに関係なく 3 つとも押せる。仕分けと同じものが濃い色
     +(bin!=='校正'?b('🖍 校正BOXへ', "_inqInsertToProofing_('"+esc(inq.id)+"')", false):'')
+    +b('🤝 外注へ', "_inqToOutsource_('"+esc(inq.id)+"')", false)   // MAIL-LINK-1: 本文＋添付を外注発注へ
     +((typeof lwNoteOpen==='function'&&typeof _isSuperAdmin_==='function'&&_isSuperAdmin_())?b('💼 LW ノートへ', "lwNoteOpen('"+esc(inq.id)+"')", false):'')   // LWNOTE-1（本多さん 10/2）: グループ → ノート → ファイルとコメント。試し中は 本多・福永 だけ（本物の LINE WORKS で確かめたら全員に開ける）
     +(typeof _inqOutcomeSelect_==='function'?_inqOutcomeSelect_(inq,true):'')
     +(typeof _inqWaitSelect_==='function'?_inqWaitSelect_(inq,true):'')
