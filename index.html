@@ -22135,6 +22135,7 @@ function _lwSyncApply_(events, group){
     var card=(DB.proofings||[]).find(function(p){ return p && p.lwNote && String(p.lwNote.postId)===pid; });
     var del=(DB.proofingsDeleted||[]).indexOf('PRFLW'+pid)>=0; if(del && !card) return;
     var has=function(id){ return card && (card.versions||[]).some(function(v){ return v && v.id===id; }); };
+    if(card && e.type==='new') return;   // すでに取り込んだノート（手で取り込んだ分）には、裏の全部取り込みの添付を重ねない
     if(!card){
       card=_proofFromLwNote_(group||{ id:'', name:'' }, { postId:pid, title:e.title, by:e.by }, { postId:pid, title:e.title, body:(e.type==='new'?e.html:''), created:e.at, by:e.by });
       if(!card) return; n++;
@@ -22165,9 +22166,21 @@ function _lwSyncPanel_(){
   var el=document.getElementById('lw-sync-state'); if(!el) return;
   _lwGas_({ action:'lwSyncStatus' }).then(function(r){
     if(!r || !r.success){ el.innerHTML='🔁 LW 自動連携: <a href="#" onclick="_lwSyncStart_();return false" style="color:#0369a1">はじめる</a>'; return; }
-    el.innerHTML=r.on?('🔁 LW 自動連携: <b style="color:#166534">オン</b>（'+_escDiff((r.group&&r.group.name)||'')+'・'+_escDiff(r.email||'')+'）'+(r.lastError?' <span style="color:#b91c1c" title="'+_escDiff(r.lastError)+'">⚠ エラーあり</span>':'')+' <a href="#" onclick="if(confirm(\'LW との自動連携を止めますか？\'))_lwGas_({action:\'lwSyncStop\'}).then(_lwSyncPanel_);return false" style="color:#64748b">止める</a>')
-      :('🔁 LW 自動連携: <b style="color:#b45309">オフ</b> <a href="#" onclick="_lwSyncStart_();return false" style="color:#0369a1">はじめる（本多さんの LW・メディア）</a>');
+    var bf=r.backfill; var bfHtml=(bf&&!bf.finished)?(' <b style="color:#0369a1">⏳ ノートを全部取り込み中（'+(bf.done||0)+' 件目まで・裏で進みます）</b>'):(bf&&bf.finished?' <span style="color:#166534">✅ 全部取り込み済み（'+(bf.sent||0)+' 件）</span>':'');
+    if(bf&&!bf.finished) setTimeout(_lwSyncPanel_, 60000);
+    el.innerHTML=bfHtml+' '+(r.on?('🔁 LW 自動連携: <b style="color:#166534">オン</b>（'+_escDiff((r.group&&r.group.name)||'')+'・'+_escDiff(r.email||'')+'）'+(r.lastError?' <span style="color:#b91c1c" title="'+_escDiff(r.lastError)+'">⚠ エラーあり</span>':'')+' <a href="#" onclick="if(confirm(\'LW との自動連携を止めますか？\'))_lwGas_({action:\'lwSyncStop\'}).then(_lwSyncPanel_);return false" style="color:#64748b">止める</a>')
+      :('🔁 LW 自動連携: <b style="color:#b45309">オフ</b> <a href="#" onclick="_lwSyncStart_();return false" style="color:#0369a1">はじめる（本多さんの LW・メディア）</a>'));
   }).catch(function(){ el.innerHTML='🔁 LW 自動連携: <a href="#" onclick="_lwSyncPanel_();return false" style="color:#0369a1">状態を読み直す</a>'; });
+}
+// LWSYNC-BACKFILL: いまあるノートを全部、会社 GAS が裏で送る（画面を閉じてよい）。Hub は届いた分から 1 分ごとにカードにする
+function _lwSyncBackfill_(){
+  if(!confirm('メディアのノートを全部、校正BOX に取り込みます。\n会社の GAS が裏で 1 分ごとに少しずつ進めるので、この画面は閉じてかまいません。\nHub を開いているあいだ、届いた分から順にカードになります。\n\nはじめますか？')) return;
+  _lwGas_({ action:'lwSyncBackfill' }).then(function(r){
+    if(!r||!r.success){ alert('はじめられませんでした: '+String((r&&r.error)||'応答なし')); return; }
+    try{ var m=document.getElementById('lwn-modal'); if(m) m.remove(); }catch(e){}
+    if(typeof _toastMsg==='function') _toastMsg('⏳ ノートの全部取り込みを、裏ではじめました（閉じてかまいません）');
+    _lwSyncPanel_();
+  }).catch(function(e){ alert('はじめられませんでした: '+String(e&&e.message||e)); });
 }
 function _lwSyncStart_(){
   if(!confirm('本多さんの LINE WORKS の許可で、メディアのグループのノートと校正BOX を 1 分ごとに合わせます。\n（今あるノートは「LW ノートから取り込む」で入れてください。ここからは新しい変更だけを入れます）\n\nはじめますか？')) return;

@@ -430,7 +430,8 @@
   function impFoot() {
     var k = Object.keys(IMP.pick).length;
     $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#4A574E">ノート 1 件 = カード 1 枚。題の伝票番号（a108393 など）で案件とつなぎ、本文の書き込みは履歴に、添付は Drive へ</span><button class="btn" id="lwn-cancel">閉じる</button>'
-      + (IMP.group ? '<button class="btn" id="lwn-goall" style="font-weight:700;border-color:#15743A;color:#15743A" title="いちばん古いノートまで読んで、まだ取り込んでいないものを全部取り込みます">全部読んで全部取り込む</button>' : '')
+      + ((IMP.group && typeof _lwSyncBackfill_ === 'function') ? '<button class="btn" onclick="_lwSyncBackfill_()" style="font-weight:700;border-color:#0369a1;color:#0369a1" title="会社の GAS が裏で全部取り込みます。この画面は閉じてかまいません（メディアのグループ）">裏で全部取り込む（閉じてよい）</button>' : '')
+      + (IMP.group ? '<button class="btn" id="lwn-goall" style="font-weight:700;border-color:#15743A;color:#15743A" title="いちばん古いノートまで読んで、まだ取り込んでいないものを全部取り込みます（この画面で待つ）">全部読んで全部取り込む</button>' : '')
       + '<button class="btn btn-p" id="lwn-go" style="font-weight:700"' + (k ? '' : ' disabled') + '>' + k + ' 件を取り込む</button>';
     $('lwn-cancel').onclick = function () { if (!IMP.busy) { IMP = null; close(); } }; $('lwn-go').onclick = impGo;
     if ($('lwn-goall')) $('lwn-goall').onclick = impAll;
