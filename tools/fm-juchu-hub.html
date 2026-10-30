@@ -4201,11 +4201,15 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
         return (Array.isArray(arr) ? arr : []).filter(function (x) { return x && (x.品名 || x.ユーザー || x.得意先); });
       });
   }
-  // 索引から候補を探す。点: 得意先 3・ユーザー 3・品名が同じ 6／人名など（ ）の中が同じ 4／品名の元（名刺 など）が同じ 1
+  // 索引から候補を探す（本多さん 10/30 の決まり）
+  //   ① リピート＝得意先・ユーザー・品名が同じ → 必ずこれを元にする（ロット区分 リピート）
+  //   ② 同じ会社の同じ商品＝同じユーザー（無ければ同じ得意先）で、品名の元（「名刺」など）が同じ → 流用
+  //   ③ 近いもの＝それ以外で一部が合うもの → 流用（ロット区分 新規）
+  var AI段 = { 1: 'リピート', 2: '同じ会社の同じ商品', 3: '近いもの' };
   function AI候補(o) {
     if (!索引) return [];
     var P = 索引位置, 行 = 索引.行;
-    var custSet = o.得意先 ? (得意先コードを名前で(o.得意先) || {}) : {};
+    var custSet = o.得意先 ? (得意先コードを名前で(o.得意先) || {}) : {}, cust有 = Object.keys(custSet).length > 0;
     var user = AI文字(o.ユーザー), item = AI文字(o.品名);
     var 括弧 = (/[（(]([^）)]+)[）)]/.exec(String(o.品名 || '')) || [])[1]; 括弧 = 括弧 ? AI文字(括弧) : '';
     var 元 = AI文字(String(o.品名 || '').replace(/[（(][^）)]*[）)]/g, ''));
@@ -4213,18 +4217,26 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     for (var i = 0; i < 行.length; i++) {
       var r = 行[i];
       if (!段階が合う(r[P['案件区分']]) && String(r[P['案件区分']] || '') !== '受注') continue;
-      var s = 0, why = [];
       var rc = String(r[P['得意先コード']] || ''), ru = AI文字(r[P['ユーザー名']]), ri = AI文字(r[P['製品名']]);
-      if (custSet[rc]) { s += 3; why.push('得意先'); }
-      if (user && ru && (ru.indexOf(user) >= 0 || user.indexOf(ru) >= 0)) { s += 3; why.push('ユーザー'); }
-      if (item && ri === item) { s += 6; why.push('品名が同じ'); }
-      else if (括弧 && ri.indexOf(括弧) >= 0) { s += 4; why.push('（' + 括弧 + '）'); }
-      else if (元 && ri.indexOf(元) >= 0) { s += 1; why.push('品名の元'); }
-      if (s < 4) continue;
-      out.push({ i: i, 点: s, わけ: why.join('・'), 同じ: !!(custSet[rc] && item && ri === item && (!user || why.indexOf('ユーザー') >= 0)) });
+      var ri元 = AI文字(String(r[P['製品名']] || '').replace(/[（(][^）)]*[）)]/g, ''));
+      var 得意先が合う = cust有 && !!custSet[rc];
+      var ユーザーが合う = !!(user && ru && (ru === user || ru.indexOf(user) >= 0 || user.indexOf(ru) >= 0));
+      var 会社が合う = user ? ユーザーが合う : 得意先が合う;
+      var 品名が同じ = !!(item && ri === item), 元が同じ = !!(元 && ri元 && (ri元 === 元 || ri元.indexOf(元) >= 0 || 元.indexOf(ri元) >= 0));
+      var 段 = 0, why = [];
+      if (得意先が合う) why.push('得意先'); if (ユーザーが合う) why.push('ユーザー');
+      if (品名が同じ) why.push('品名が同じ'); else if (元が同じ) why.push('品名の元（' + (String(o.品名 || '').replace(/[（(][^）)]*[）)]/g, '').trim()) + '）');
+      if (品名が同じ && 会社が合う && (!cust有 || 得意先が合う)) 段 = 1;
+      else if (会社が合う && 元が同じ) 段 = 2;
+      else {
+        var 点 = (得意先が合う ? 2 : 0) + (ユーザーが合う ? 2 : 0) + (品名が同じ ? 3 : 元が同じ ? 2 : 0) + (括弧 && ri.indexOf(括弧) >= 0 ? 2 : 0);
+        if (括弧 && ri.indexOf(括弧) >= 0 && !品名が同じ) why.push('（' + 括弧 + '）');
+        if (品名が同じ || 元が同じ || (括弧 && ri.indexOf(括弧) >= 0)) 段 = 3; else continue;   // 近いもの＝品名のどこかが合うもの（得意先だけ合っても別の商品）
+      }
+      out.push({ i: i, 段: 段, 点: 段 === 3 ? 点 : 99, わけ: why.join('・') });
     }
-    out.sort(function (a, b) { return (b.点 - a.点) || (索引日[b.i] - 索引日[a.i]); });
-    return out.slice(0, 8).map(function (c) { var o2 = { 点: c.点, わけ: c.わけ, 同じ: c.同じ }; 索引.列.forEach(function (col, ci) { o2[col] = 行[c.i][ci]; }); o2.recordId = String(o2.recordId); return o2; });
+    out.sort(function (a, b) { return (a.段 - b.段) || (b.点 - a.点) || (索引日[b.i] - 索引日[a.i]); });
+    return out.slice(0, 8).map(function (c) { var o2 = { 段: c.段, わけ: c.わけ }; 索引.列.forEach(function (col, ci) { o2[col] = 行[c.i][ci]; }); o2.recordId = String(o2.recordId); return o2; });
   }
   function AI起票を開く() {
     var old = $('fm-ai-kihyo'); if (old) old.remove();
@@ -4257,15 +4269,18 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   function AI起票の表() {
     var e = AIエスケープ;
     $('aik-out').innerHTML = AI起票.行.map(function (row, k) {
-      var o = row.依頼, c = row.候補, 同じ = c.filter(function (x) { return x.同じ; })[0];
-      var 既定 = 同じ ? c.indexOf(同じ) : (c.length ? 0 : -1);
+      var o = row.依頼, c = row.候補, 段 = c.length ? c[0].段 : 0;
+      var 既定 = c.length ? 0 : -1;
       return '<div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;margin-top:8px">'
         + '<div style="display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline"><b>' + (k + 1) + '.</b>'
         + ['得意先', 'ユーザー', '品名', '仕様', '数量', '単位', '納期'].map(function (f) { return o[f] ? '<span><span style="color:#64748b;font-size:11px">' + f + '</span> <b>' + e(o[f]) + '</b></span>' : ''; }).join('') + '</div>'
-        + '<div style="margin-top:4px;font-size:12px;color:' + (同じ ? '#166534' : c.length ? '#92400e' : '#b91c1c') + ';font-weight:700">'
-        + (同じ ? '✅ リピートがあります（同じ得意先・品名）。これを元に起こします' : c.length ? '⚠ 同じものは見つかりません。似たものを流用して起こします（元を選べます）' : '✖ 似たものもありません。新しく起こします') + '</div>'
+        + '<div style="margin-top:4px;font-size:12px;color:' + (段 === 1 ? '#166534' : 段 === 2 ? '#1d4ed8' : 段 === 3 ? '#92400e' : '#b91c1c') + ';font-weight:700">'
+        + (段 === 1 ? '① リピートがあります（同じ得意先・ユーザー・品名）。必ずこれを元に起こします（ロット区分 リピート）'
+          : 段 === 2 ? '② リピートはありません。同じ会社の同じ商品を元に起こします'
+          : 段 === 3 ? '③ 同じ会社の同じ商品もありません。近いものを元に起こします（ロット区分 新規）'
+          : '✖ 近いものもありません。新しく起こします（ロット区分 新規）') + '</div>'
         + (c.length ? '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px"><tr style="background:#f1f5f9"><th></th><th style="text-align:left;padding:2px 6px">伝票</th><th style="text-align:left;padding:2px 6px">段階</th><th style="text-align:left;padding:2px 6px">起票日</th><th style="text-align:left;padding:2px 6px">ユーザー</th><th style="text-align:left;padding:2px 6px">製品名</th><th style="padding:2px 6px">数量</th><th style="text-align:left;padding:2px 6px">合ったところ</th></tr>'
-          + c.map(function (x, i) { return '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:2px 6px"><input type="radio" name="aik-src-' + k + '" value="' + i + '"' + (i === 既定 ? ' checked' : '') + '></td><td style="padding:2px 6px"><b>' + e(x['伝票番号'] || x['見積番号']) + '</b></td><td style="padding:2px 6px">' + e(x['案件区分']) + '</td><td style="padding:2px 6px">' + e(x['起票日']) + '</td><td style="padding:2px 6px">' + e(x['ユーザー名']) + '</td><td style="padding:2px 6px">' + e(x['製品名']) + '</td><td style="padding:2px 6px;text-align:right">' + e(x['合計数1']) + '</td><td style="padding:2px 6px;color:#475569">' + e(x.わけ) + (x.同じ ? ' <b style="color:#166534">リピート</b>' : '') + '</td></tr>'; }).join('')
+          + c.map(function (x, i) { return '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:2px 6px"><input type="radio" name="aik-src-' + k + '" value="' + i + '"' + (i === 既定 ? ' checked' : '') + '></td><td style="padding:2px 6px"><b>' + e(x['伝票番号'] || x['見積番号']) + '</b></td><td style="padding:2px 6px">' + e(x['案件区分']) + '</td><td style="padding:2px 6px">' + e(x['起票日']) + '</td><td style="padding:2px 6px">' + e(x['ユーザー名']) + '</td><td style="padding:2px 6px">' + e(x['製品名']) + '</td><td style="padding:2px 6px;text-align:right">' + e(x['合計数1']) + '</td><td style="padding:2px 6px;color:#475569">' + e(x.わけ) + ' <b style="color:' + (x.段 === 1 ? '#166534' : x.段 === 2 ? '#1d4ed8' : '#92400e') + '">' + (x.段 === 1 ? '①' : x.段 === 2 ? '②' : '③') + AI段[x.段] + '</b></td></tr>'; }).join('')
           + '<tr><td style="padding:2px 6px"><input type="radio" name="aik-src-' + k + '" value="-1"' + (既定 < 0 ? ' checked' : '') + '></td><td colspan="7" style="padding:2px 6px;color:#475569">どれも使わず、新しく起こす</td></tr></table>' : '')
         + '<div style="margin-top:6px"><button data-k="' + k + '" class="aik-make" style="padding:4px 14px;background:#166534;color:#fff;border:0;border-radius:4px">この内容で' + 起こす種別 + 'を起こす</button></div></div>';
     }).join('') || '<div style="color:#b91c1c;margin-top:6px">注文を読み取れませんでした。文を見直してください</div>';
@@ -4275,7 +4290,9 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     var row = AI起票.行[k]; if (!row) return;
     var sel = document.querySelector('input[name="aik-src-' + k + '"]:checked'), i = sel ? Number(sel.value) : -1;
     var src = i >= 0 ? row.候補[i] : null, o = row.依頼, 種別 = 起こす種別;
-    var how = !src ? '新規' : (src.同じ ? 'リピート' : '流用');
+    var how = !src ? '新規' : src.段 === 1 ? 'リピート' : src.段 === 2 ? '同じ商品を流用' : '近いものを流用';
+    if (row.候補.length && row.候補[0].段 === 1 && (!src || src.段 !== 1) && !confirm('リピート（' + (row.候補[0]['伝票番号'] || row.候補[0]['見積番号']) + '）があります。決まりではリピートを元にします。それでも別のものから起こしますか？')) return;
+    var ロット = !src ? '新規' : src.段 === 1 ? 'リピート' : src.段 === 3 ? '新規' : '';
     if (Object.keys(変更分()).length && !confirm('保存していない編集があります。捨てて起こしますか？')) return;
     if (!confirm(種別 + 'を起こします（' + how + (src ? '・元 ' + (src['伝票番号'] || src['見積番号']) : '') + '）。\nFileMaker に新しい伝票ができます。読み取った品名・数量などを入れるので、確かめてから「保存」してください。')) return;
     var m = $('fm-ai-kihyo'); if (m) m.remove();
@@ -4288,15 +4305,16 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     p.then(function (r) {
       var n2 = String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '');
       受け取る(r, '🤖 ' + how + 'で' + 作成した文(種別) + n2 + (src ? '（元 ' + (src['伝票番号'] || src['見積番号']) + '）' : ''), Date.now() - t0);
-      setTimeout(function () { AIの値を入れる(o, !src); }, 400);
+      setTimeout(function () { AIの値を入れる(o, !src, ロット); }, 400);
     }).catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }
   // 読み取った値を欄に入れる（変わった欄は「保存」で FileMaker に書かれる）。得意先は新規のときだけ
-  function AIの値を入れる(o, 新規) {
+  function AIの値を入れる(o, 新規, ロット) {
     var 入れた = [];
     var put = function (id, v, 名) { var el = $(id); if (!el || v == null || v === '') return; v = String(v); if (String(el.value) === v) return; el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.style.outline = '2px solid #f59e0b'; 入れた.push(名); };
     put('f-item', o.品名, '品名'); put('f-user', o.ユーザー, 'ユーザー'); put('p1-tot', o.数量, '数量'); put('f-unit', o.単位, '単位');
     if (o.納期 && /^\d{4}-\d\d-\d\d$/.test(o.納期)) put('f-due', o.納期, '納期');
+    if (ロット) put('f-lotkind', ロット, 'ロット区分（' + ロット + '）');
     if (新規 && o.得意先) { var cs = 得意先コードを名前で(o.得意先) || {}, ks = Object.keys(cs); if (ks.length === 1) put('f-custcd', ks[0], '得意先'); }
     状態(stat.textContent + (入れた.length ? '　AI が入れた欄: ' + 入れた.join('・') + '（オレンジ枠）。仕様「' + (o.仕様 || '—') + '」を確かめて保存' : '　仕様「' + (o.仕様 || '—') + '」を確かめて保存'), 'ok');
   }
