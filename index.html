@@ -2443,6 +2443,7 @@ setTimeout(_removeBootLoader_, 5000);
           <input id="proof-q" placeholder="案件・得意先で検索…" style="width:180px;font-size:12px;padding:4px 8px" oninput="renderProofingList()">
           <button class="btn" style="background:#fef2f2;border-color:#fca5a5;color:#b91c1c;font-weight:700;position:relative" onclick="showAttentionPanel()" title="N日動いていない校正・案件 / 納期が近い案件をまとめてチェック">🚨 要注意・停滞 <span class="attention-badge" style="display:none;background:#dc2626;color:#fff;border-radius:9px;padding:0 6px;font-size:10px;margin-left:2px"></span></button>
           <button class="btn btn-p" onclick="createProofing()">＋ 新規校正</button>
+          <button class="btn" style="font-size:11px;color:#2e3d35;border-color:#9fb3a5" onclick="if(typeof lwNoteImport==='function')lwNoteImport()" title="LINE WORKS のノート（メディアのグループなど）にいまあるものを、校正BOX のカードとして取り込みます">💼 LW ノートから取り込む</button>
           <button class="btn" style="font-size:11px" onclick="_hubSampleCreate_()" title="初校 PDF つきの校正カードと、添付つきの問い合わせを 1 件ずつ作ります（Drive に本物のファイルを置きます）">🧪 サンプルを入れる</button>
         </div>
       </div>
@@ -22049,6 +22050,37 @@ function _proofLwOpen_(proofId, slotK, round, inqId){
   var st=(PROOF_STAGE_FOLDERS[Number(round)||1]||{}).label||'';
   var o={ proofId:proofId }; if(slotK && PROOF_LW_KIND[slotK]) o.kind=PROOF_LW_KIND[slotK]; if(st && /校/.test(st)) o.stage=st;
   try{ lwNoteOpen(inqId||null, o); }catch(e){ console.warn('[KOSEI-LW-1]', e); }
+}
+// LWNOTE-IMPORT-1（本多さん 10/30）: LW のノート 1 件から校正BOX のカード 1 枚を作る（tools/lw-note.js の取り込みから呼ぶ）
+//   題の伝票番号で案件とつなぐ。本文の【M/d HH:mm 名前】【2校戻り】の書き込みを 1 つずつ校正の履歴に、見出しの無い本文は「LW ノート本文」として 1 件
+function _proofLwText_(html){ var t=String(html||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li|h\d)>/gi,'\n').replace(/<[^>]+>/g,''); var el=document.createElement('textarea'); el.innerHTML=t; return el.value.replace(/\n{3,}/g,'\n\n').trim(); }
+function _proofFromLwNote_(group, post, rd){
+  var postId=String((rd&&rd.postId)||post.postId||''); if(!postId) return null;
+  if((DB.proofings||[]).some(function(p){ return p && p.lwNote && String(p.lwNote.postId)===postId; })) return null;
+  var title=String((rd&&rd.title)||post.title||'').trim();
+  var m=/([a-zA-Z]\d{5,7})/.exec(title), fmNo=m?m[1]:'';
+  var proj=fmNo?(DB.projects||[]).find(function(x){ return x && (x.id===fmNo || (x.fm&&String(x.fm['fm-denpyo']||'')===fmNo)); }):null;
+  var rest=title.replace(fmNo,'').replace(/^[\s_　・-]+|[\s_　・-]+$/g,'');
+  var year=String((rd&&(rd.created||rd.modified))||new Date().toISOString()).slice(0,4);
+  var text=_proofLwText_(rd&&rd.body), chunks=text.split(/[―ー─—-]{6,}/), vs=[], maxR=1, lastKind='';
+  var kindOf=function(lb){ lb=String(lb||''); if(/支給/.test(lb)) return 'manuscript'; if(/校了|責了/.test(lb)) return 'final'; if(/戻/.test(lb)) return 'instruction'; if(/出/.test(lb)) return 'proof'; return 'instruction'; };
+  var roundOf=function(lb){ var r=/(\d)\s*校/.exec(String(lb||'').replace(/[０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })); return /初校/.test(lb)?1:(r?+r[1]:1); };
+  chunks.forEach(function(c, i){ c=c.trim(); if(!c) return;
+    var h=/^【(\d{1,2})\/(\d{1,2})\s+(\d{1,2}:\d\d)\s*([^】]*)】(?:【([^】]+)】)?/.exec(c);
+    var lb=h?(h[5]||''):'', kd=h?kindOf(lb):'instruction', rd2=h?roundOf(lb):1; if(rd2>maxR) maxR=rd2; if(h&&lb) lastKind=kd;
+    var at=h?(year+'-'+('0'+h[1]).slice(-2)+'-'+('0'+h[2]).slice(-2)+'T'+('0'+h[3]).slice(-5)+':00+09:00'):((rd&&rd.created)||new Date().toISOString());
+    vs.push({ id:'VER'+Date.now()+'-'+i, fileName:h?(lb||'LW ノート'):'LW ノート本文', kind:kd, round:rd2, subVersion:1, uploadedAt:at, feedback:'【LW '+(h?(h[4]||''):((rd&&rd.by)||post.by||''))+'】\n'+c.replace(/^【[^】]*】(【[^】]*】)?\s*/,''), annotations:[], manual:true, fromLw:true });
+  });
+  var st=_proofStatuses_?_proofStatuses_():[]; var doneKey=(st.filter(function(s){ return s.done; })[0]||{}).key||'approved';
+  var card={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), fmNo:fmNo, projectId:proj?proj.id:null, custName:(proj&&proj.cust)||'', endUser:(proj&&proj.endUser)||'', prodName:(proj&&proj.item)||rest||title,
+    status: lastKind==='final'?doneKey:(lastKind==='instruction'?'feedback':'waiting'), versions:vs, _proofRound:maxR, _lwFileKind:(lastKind==='instruction'?'instruction':lastKind==='manuscript'?'manuscript':'proof'),
+    companyCode:(typeof getCurrentCompanyCode==='function')?getCurrentCompanyCode():'', sharedWithCompanies:[], notifyOnUpdate:true,
+    createdAt:(rd&&rd.created)||new Date().toISOString(), lastMoveAt:new Date().toISOString(), fromLw:true,
+    lwNote:{ groupId:group.id, groupName:group.name, postId:postId, title:title }, lwLog:[{ at:new Date().toISOString(), by:(currentAuth&&currentAuth.userName)||'', kind:'LW から取り込み' }],
+    lwCategory:(rd&&rd.category)||'' };
+  if(!DB.proofings) DB.proofings=[]; DB.proofings.push(card);
+  if(proj){ proj.proofingIds=proj.proofingIds||[]; if(proj.proofingIds.indexOf(card.id)<0) proj.proofingIds.push(card.id); }
+  return card;
 }
 // HUBLINK-1: Hub の詳細を開くリンク（GitHub Pages でも、アプリとして入れた Hub でも同じ所を指す）
 function _hubLink_(key, val){ return location.origin+location.pathname.replace(/[^/]*$/,'')+'?'+key+'='+encodeURIComponent(String(val||'')); }

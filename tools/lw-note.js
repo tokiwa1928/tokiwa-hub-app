@@ -381,5 +381,97 @@
     });
   }
 
+  // ================================================================ LWNOTE-IMPORT-1（本多さん 10/30）
+  // いま LW のノート（メディアのグループなど）にあるものを校正BOX に取り込む。ノート 1 件 = カード 1 枚
+  //   本文の【日時 名前】【2校戻り】の書き込みを校正の履歴に、添付は Drive のカードのフォルダへ。カードはそのノートを覚える
+  var IMP = null;
+  function impDone() { var m = {}; (((typeof DB !== 'undefined' && DB.proofings) || [])).forEach(function (p) { if (p && p.lwNote && p.lwNote.postId) m[String(p.lwNote.postId)] = p; }); return m; }
+  function importOpen() {
+    close(); IMP = { groups: [], group: null, posts: [], next: '', pick: {}, busy: false };
+    var m = document.createElement('div'); m.id = 'lwn-modal'; m.className = 'proof-modal';
+    m.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(23,33,26,.45);display:flex;align-items:center;justify-content:center';
+    m.innerHTML = '<div style="background:#fff;width:760px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;border:1px solid #2E3D35">'
+      + '<div style="padding:12px 16px;background:#2E3D35;color:#fff;display:flex;justify-content:space-between;align-items:center"><div style="font-weight:700;font-size:15px">💼 LINE WORKS のノートから校正BOX に取り込む</div><button id="lwn-x" style="background:none;border:0;color:#fff;font-size:20px;cursor:pointer;line-height:1">×</button></div>'
+      + '<div id="lwn-body" style="padding:14px 16px;overflow:auto;font-size:13px;color:#17211A;line-height:1.7">読み込み中…</div>'
+      + '<div id="lwn-foot" style="padding:10px 16px;border-top:1px solid #D6DED2;display:flex;gap:8px;justify-content:flex-end;align-items:center"></div></div>';
+    document.body.appendChild(m);
+    $('lwn-x').onclick = function () { if (!(IMP && IMP.busy)) { IMP = null; close(); } };
+    if (!me().email) { $('lwn-body').innerHTML = '<div style="color:#B42318">書く人（LINE WORKS のメール）が分かりません。先に問い合わせか校正BOX の「💼 LW ノートへ」で 1 回つないでください。</div>'; return; }
+    api('lwNoteStatus').then(function (r) {
+      if (!IMP) return;
+      if (!(r.success && r.connected)) { $('lwn-body').innerHTML = '<div style="color:#B42318">' + esc(r.success ? 'まだ LINE WORKS とつながっていません。先に「💼 LW ノートへ」で 1 回つないでから、もう一度開いてください。' : why(r)) + '</div>'; return; }
+      return api('lwNoteGroups').then(function (g) {
+        if (!IMP) return; if (!g.success) { $('lwn-body').innerHTML = '<div style="color:#B42318">' + esc(why(g)) + '</div>'; return; }
+        IMP.groups = g.groups || [];
+        IMP.group = IMP.groups.filter(function (x) { return /メディア/.test(x.name); })[0] || null;   // 本多さん: メディアのグループ
+        impRender(); if (IMP.group) impPosts(false);
+      });
+    });
+  }
+  function impRender() {
+    var done = impDone();
+    $('lwn-body').innerHTML = '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><b>グループ</b><select id="lwn-ig" style="flex:1;padding:4px 6px;font-size:13px"><option value="">— 選ぶ —</option>'
+      + IMP.groups.map(function (g) { return '<option value="' + esc(g.id) + '"' + (IMP.group && IMP.group.id === g.id ? ' selected' : '') + '>' + esc(g.name) + '</option>'; }).join('') + '</select></div>'
+      + '<div id="lwn-ip">' + (IMP.group ? (IMP.posts.length ? '' : 'ノートを読んでいます…') : 'グループを選んでください') + '</div>';
+    $('lwn-ig').onchange = function () { IMP.group = IMP.groups.filter(function (x) { return x.id === $('lwn-ig').value; })[0] || null; IMP.posts = []; IMP.next = ''; IMP.pick = {}; impRender(); if (IMP.group) impPosts(false); };
+    if (IMP.posts.length) {
+      var n = IMP.posts.filter(function (p) { return !done[String(p.postId)]; }).length;
+      $('lwn-ip').innerHTML = '<div style="display:flex;gap:10px;align-items:center;margin-bottom:4px;font-size:12px"><label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="lwn-iall"' + (n && IMP.posts.every(function (p) { return done[String(p.postId)] || IMP.pick[String(p.postId)]; }) ? ' checked' : '') + '> まだ取り込んでいないものを全部選ぶ（' + n + ' 件）</label><span style="margin-left:auto;color:#4A574E">' + IMP.posts.length + ' 件を表示</span></div>'
+        + '<div style="border:1px solid #D6DED2;max-height:52vh;overflow:auto">' + IMP.posts.map(function (p) {
+          var id = String(p.postId), had = done[id];
+          return '<label style="display:flex;gap:8px;align-items:flex-start;padding:5px 10px;border-bottom:1px solid #EEF2EC;' + (had ? 'color:#9aa59d' : 'cursor:pointer') + '"><input type="checkbox" class="lwn-ipk" data-id="' + esc(id) + '"' + (had ? ' disabled' : (IMP.pick[id] ? ' checked' : '')) + ' style="margin-top:4px"><span>' + esc(p.title || '(題なし)') + '<br><span style="font-size:11px;color:#4A574E">' + esc(String(p.modified).slice(0, 10)) + '　' + esc(p.by) + (p.files ? '　📎' + p.files : '') + (had ? '　✅ 取り込み済み（' + esc(had.fmNo || had.id) + '）' : '') + '</span></span></label>';
+        }).join('') + (IMP.next ? '<div style="padding:6px 10px"><a href="#" id="lwn-imore" style="color:#15743A">もっと前のノートを読む</a></div>' : '') + '</div>';
+      $('lwn-iall').onchange = function () { var on = this.checked; IMP.posts.forEach(function (p) { if (!done[String(p.postId)]) { if (on) IMP.pick[String(p.postId)] = 1; else delete IMP.pick[String(p.postId)]; } }); impRender(); };
+      Array.prototype.forEach.call(document.querySelectorAll('.lwn-ipk'), function (c) { c.onchange = function () { if (c.checked) IMP.pick[c.dataset.id] = 1; else delete IMP.pick[c.dataset.id]; impFoot(); }; });
+      if ($('lwn-imore')) $('lwn-imore').onclick = function (ev) { ev.preventDefault(); this.textContent = '読んでいます…'; impPosts(true); };
+    }
+    impFoot();
+  }
+  function impFoot() {
+    var k = Object.keys(IMP.pick).length;
+    $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#4A574E">ノート 1 件 = カード 1 枚。題の伝票番号（a108393 など）で案件とつなぎ、本文の書き込みは履歴に、添付は Drive へ</span><button class="btn" id="lwn-cancel">閉じる</button><button class="btn btn-p" id="lwn-go" style="font-weight:700"' + (k ? '' : ' disabled') + '>' + k + ' 件を取り込む</button>';
+    $('lwn-cancel').onclick = function () { if (!IMP.busy) { IMP = null; close(); } }; $('lwn-go').onclick = impGo;
+  }
+  function impPosts(more) {
+    var gid = IMP.group.id;
+    api('lwNotePosts', more ? { groupId: gid, cursor: IMP.next } : { groupId: gid }).then(function (r) {
+      if (!IMP || !IMP.group || IMP.group.id !== gid) return;
+      if (!r.success) { $('lwn-ip').innerHTML = '<span style="color:#B42318">' + esc(why(r)) + '</span>'; return; }
+      IMP.posts = (more ? IMP.posts : []).concat(r.posts || []); IMP.next = r.nextCursor || ''; impRender();
+    });
+  }
+  function impGo() {
+    var ids = Object.keys(IMP.pick); if (!ids.length || IMP.busy) return;
+    if (typeof _proofFromLwNote_ !== 'function') { alert('校正BOX の取り込みが使えません（Hub を読み直してください）'); return; }
+    IMP.busy = true; var group = IMP.group, i = 0, ok = 0, ng = [], files = 0;
+    $('lwn-go').disabled = true; $('lwn-cancel').disabled = true;
+    var msg = function (t) { var el = $('lwn-msg'); if (el) { el.style.color = '#4A574E'; el.textContent = t; } };
+    var step = function () {
+      if (i >= ids.length) {
+        IMP.busy = false; IMP.pick = {};
+        try { if (typeof saveDB === 'function') saveDB(); if (typeof saveToCloud === 'function') saveToCloud(); if (typeof renderProofingList === 'function') renderProofingList(); } catch (e) { }
+        impRender(); var el = $('lwn-msg'); if (el) { el.style.color = ng.length ? '#B42318' : '#15743A'; el.textContent = 'カード ' + ok + ' 枚を作りました' + (files ? '・添付 ' + files + ' 件を Drive へ' : '') + (ng.length ? '。うまくいかなかったもの: ' + ng.join('、') : ''); }
+        if (typeof _toastMsg === 'function') _toastMsg('💼 LW ノートから校正BOX にカード ' + ok + ' 枚を取り込みました');
+        return;
+      }
+      var id = ids[i++], post = IMP.posts.filter(function (p) { return String(p.postId) === id; })[0] || { postId: id, title: '' };
+      msg('取り込んでいます… ' + i + ' / ' + ids.length + '　' + (post.title || ''));
+      api('lwNoteRead', { groupId: group.id, postId: id }).then(function (rd) {
+        if (!rd.success) { ng.push((post.title || id) + '（' + why(rd) + '）'); return; }
+        var card = _proofFromLwNote_(group, post, rd); if (!card) { ng.push(post.title || id); return; } ok++;
+        var atts = rd.attachments || []; if (!atts.length || typeof ensureProofDriveFolder !== 'function') return;
+        return Promise.resolve(ensureProofDriveFolder(card.id, true)).then(function (pp) {
+          var fid = pp && pp.driveFolderId; if (!fid) { ng.push((post.title || id) + ' の添付（Drive のフォルダを作れません）'); return; }
+          return atts.reduce(function (pr, a) { return pr.then(function () {
+            return api('lwNoteFileToDrive', { groupId: group.id, postId: id, attachmentId: a.id, folderId: fid, name: a.name }).then(function (f) {
+              if (!f.success) { ng.push((a.name || '添付') + '（' + why(f) + '）'); return; } files++;
+              card.versions.push({ id: 'VER' + Date.now() + '-' + files, fileName: f.name || a.name, kind: card._lwFileKind || 'proof', round: card._proofRound || 1, subVersion: 1, uploadedAt: rd.modified || new Date().toISOString(), driveFileId: f.fileId, driveUrl: f.url, annotations: [], fromLw: true });
+            }); }); }, Promise.resolve());
+        });
+      }).catch(function (e) { ng.push((post.title || id) + '（' + String(e && e.message || e) + '）'); }).then(step);
+    };
+    step();
+  }
+  window.lwNoteImport = importOpen;
   window.lwNoteOpen = open;
 })();
