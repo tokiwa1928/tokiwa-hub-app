@@ -400,12 +400,12 @@
           <div style="grid-column:span 3;display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding-right:10px;border-right:1px dashed #e0dcd2">
             <div class="mini" style="grid-column:span 2">自社</div>
             <div><label>単価</label><input id="f-unitSelf" type="number" step="any" oninput="calcFromSelf()"></div>
-            <div><label>金額 <select id="f-taxSelf" onchange="calcProfit()" title="入れた金額が税抜か税込か（税込なら一覧・合計・利益・帳票は税抜に直して使う）" style="font-size:11px;padding:0 2px;margin-left:4px"><option value="">税抜</option><option value="税込">税込</option></select></label><input id="f-amtSelf" type="number" oninput="calcProfit()"></div>
+            <div><label>金額 <select id="f-taxSelf" onchange="calcProfit()" title="入れた金額が税抜か税込か（税込なら一覧・合計・利益・帳票は税抜に直して使う）" style="font-size:11px;padding:0 2px;margin-left:4px"><option value="">税抜</option><option value="税込">税込</option><option value="非課税">非課税</option></select></label><input id="f-amtSelf" type="number" oninput="calcProfit()"></div>
           </div>
           <div style="grid-column:span 3;display:grid;grid-template-columns:1fr 1fr;gap:8px 10px">
             <div class="mini" style="grid-column:span 2">トキワ</div>
             <div><label>単価</label><input id="f-unitTokiwa" type="number" step="any" oninput="calcAmt()"></div>
-            <div><label>金額 <select id="f-taxTokiwa" onchange="calcProfit()" title="入れた金額が税抜か税込か（税込なら一覧・合計・利益は税抜に直して使う）" style="font-size:11px;padding:0 2px;margin-left:4px"><option value="">税抜</option><option value="税込">税込</option></select></label><input id="f-amtTokiwa" type="number" oninput="calcProfit()"></div>
+            <div><label>金額 <select id="f-taxTokiwa" onchange="calcProfit()" title="入れた金額が税抜か税込か（税込なら一覧・合計・利益は税抜に直して使う）" style="font-size:11px;padding:0 2px;margin-left:4px"><option value="">税抜</option><option value="税込">税込</option><option value="非課税">非課税</option></select></label><input id="f-amtTokiwa" type="number" oninput="calcProfit()"></div>
           </div>
         </div>
         <div class="calcbar">
@@ -530,7 +530,7 @@ function _memoHtml_(c){
   var raw=String(c.memo||'');
   if(!raw) return '';
   // 見積日は専用列で出すので、備考のタグ表示からは外す（二重に見えるため）
-  var body=raw.replace(/【複数梱包】|【複数納品先】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/【税込[:：][^】]*】/g,'');
+  var body=raw.replace(/【複数梱包】|【複数納品先】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/【税込[:：][^】]*】/g,'').replace(/【非課税[:：][^】]*】/g,'');
   var tags=[];
   body=body.replace(/【([^】]{1,30})】/g, function(_,t){ tags.push(t); return ' '; }).replace(/\s+/g,' ').trim();
   var html=tags.map(function(t){
@@ -674,8 +674,15 @@ function toNum(v){ var n=Number(String(v==null?'':v).replace(/[,¥]/g,'')); retu
 // TAXKUBUN-1（本多さん 10/30「税込と税抜が混ざる」）: 金額ごとに税込／税抜を選べる。シートに専用列が無いので備考に【税込:自社】【税込:トキワ】で残す
 //   一覧の合計・利益・帳票は、税込の金額を税抜（÷1.1・四捨五入）に直して使う。シートの金額そのものは入れたまま
 var TAX_RATE=0.1;
-function _taxTag_(memo){ var m=String(memo==null?'':memo).match(/【税込[:：]([^】]*)】/); var t=m?m[1]:''; return { self:/自社/.test(t), tok:/トキワ/.test(t) }; }
-function _isIncl_(c,f){ var t=_taxTag_(c&&c.memo); return f==='amtSelf'?t.self:f==='amtTokiwa'?t.tok:false; }
+// TAXKUBUN-4（本多さん 10/30「官製はがきは税込だが消費税が入ってしまう」）: 非課税（官製はがき・切手など、消費税がかからない品）も選べる。備考に【非課税:自社】
+function _taxTag_(memo){ var m=String(memo==null?'':memo), a=m.match(/【税込[:：]([^】]*)】/), b=m.match(/【非課税[:：]([^】]*)】/); var ta=a?a[1]:'', tb=b?b[1]:'';
+  return { self:/自社/.test(ta), tok:/トキワ/.test(ta), selfEx:/自社/.test(tb), tokEx:/トキワ/.test(tb) }; }
+function _taxKind_(c,f){ var t=_taxTag_(c&&c.memo); if(f==='amtSelf') return t.selfEx?'非課税':t.self?'税込':''; if(f==='amtTokiwa') return t.tokEx?'非課税':t.tok?'税込':''; return ''; }
+function _isIncl_(c,f){ return _taxKind_(c,f)==='税込'; }
+function _isExempt_(c,f){ return _taxKind_(c,f)==='非課税'; }
+function _taxStrip_(memo){ return String(memo==null?'':memo).replace(/【税込[:：][^】]*】/g,'').replace(/【非課税[:：][^】]*】/g,'').replace(/【非課税[:：][^】]*】/g,''); }
+function _taxTags_(kSelf,kTok){ var inc=[],ex=[]; if(kSelf==='税込') inc.push('自社'); if(kTok==='税込') inc.push('トキワ'); if(kSelf==='非課税') ex.push('自社'); if(kTok==='非課税') ex.push('トキワ');
+  return (inc.length?'【税込:'+inc.join('・')+'】':'')+(ex.length?'【非課税:'+ex.join('・')+'】':''); }
 function exT(c,f){ var v=toNum(c&&c[f]); return _isIncl_(c,f)?Math.round(v/(1+TAX_RATE)):v; }
 function _formEx_(id){ var v=toNum(document.getElementById(id).value), sel=document.getElementById(id==='f-amtSelf'?'f-taxSelf':'f-taxTokiwa'); return (sel&&sel.value==='税込')?Math.round(v/(1+TAX_RATE)):v; }
 function parseD(v){ if(!v)return null; var s=String(v).trim(); var m=s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); return m?new Date(+m[1],+m[2]-1,+m[3]):null; }
@@ -874,17 +881,17 @@ function stEdit(el){
   sel.onblur=function(){ if(!closed) render(); };   // 変えずに離れたら元の表示に戻す
 }
 // TAXKUBUN-1: 一覧の「抜／込」を押したら、備考のタグ【税込:自社・トキワ】を入れ替えてシートに保存
-async function chgTax(id, f){
+async function chgTax(id, f){   // 押すたびに 税抜 → 税込 → 非課税 → 税抜
   var c=(CASES||[]).find(function(x){ return x.id===id; }); if(!c) return;
   if(!c._row || !c._key){ alert('この行はシート更新に未対応です'); return; }
-  var t=_taxTag_(c.memo), on={ self:t.self, tok:t.tok }; if(f==='amtSelf') on.self=!on.self; else on.tok=!on.tok;
-  var parts=[]; if(on.self) parts.push('自社'); if(on.tok) parts.push('トキワ');
-  var prev=c.memo||'', body=prev.replace(/【税込[:：][^】]*】/g,'').trim();
-  var newMemo=(parts.length?'【税込:'+parts.join('・')+'】':'')+(body?(parts.length?' ':'')+body:'');
+  var nx={ '':'税込', '税込':'非課税', '非課税':'' };
+  var kS=_taxKind_(c,'amtSelf'), kT=_taxKind_(c,'amtTokiwa'); if(f==='amtSelf') kS=nx[kS]; else kT=nx[kT];
+  var prev=c.memo||'', body=_taxStrip_(prev).trim(), tg=_taxTags_(kS,kT);
+  var newMemo=tg+(body?(tg?' ':'')+body:'');
   c.memo=newMemo; render();
   try{ var r=await _apiT_('sheetLedgerUpdate',{},{company:c._key,row:c._row,denpyo:c.denpyo,case:{memo:newMemo}},20000);
     if(!(r&&r.success)) throw new Error((r&&r.error)||'保存できませんでした'); }
-  catch(e){ c.memo=prev; render(); alert('税込・税抜を保存できませんでした：\n'+e.message+'\n\n（🔄で読み直してからやり直してください）'); }
+  catch(e){ c.memo=prev; render(); alert('税抜・税込・非課税を保存できませんでした：\n'+e.message+'\n\n（🔄で読み直してからやり直してください）'); }
 }
 // 一覧の状況欄で選んだら、その場でシートに保存する。
 // 失敗したら元に戻す（画面だけ変わってシートが変わっていない、を防ぐ）
@@ -1246,8 +1253,8 @@ function render(){
       // 金額未入力(空/0)は赤セル：金額(トキワ)=全社、金額(自社)=自社金額列を持つ会社のみ
       if((k==='amtTokiwa' || (k==='amtSelf' && SELF_AMT_KEYS[c._key])) && !(toNum(v)>0)){ cls=' class="num" style="background:#fde8e4"'; cell=''; }
       if((k==='amtSelf'||k==='amtTokiwa') && cell!==''){   // TAXKUBUN-1: 一覧で押すと 税抜⇄税込 を切り替えてシートに保存
-        var _inc=_isIncl_(c,k);
-        cell+=' <button onclick="event.stopPropagation();chgTax(\''+esc(c.id)+'\',\''+k+'\')" title="'+(_inc?'税込で入っています（合計・利益・帳票は税抜 '+yen(exT(c,k))+' で計算）。押すと税抜に':'税抜で入っています。押すと税込に（合計・利益・帳票は ÷1.1 で計算）')+'" style="font-size:9.5px;cursor:pointer;border-radius:3px;padding:0 4px;'+(_inc?'color:#fff;background:#d97706;border:1px solid #d97706':'color:#64748b;background:#fff;border:1px solid #cbd5e1')+'">'+(_inc?'込':'抜')+'</button>'; }
+        var _kd=_taxKind_(c,k), _inc=!!_kd;
+        cell+=' <button onclick="event.stopPropagation();chgTax(\''+esc(c.id)+'\',\''+k+'\')" title="'+(_kd==='非課税'?'非課税（官製はがき・切手など、消費税がかからない）。押すと税抜に':_kd==='税込'?'税込で入っています（合計・利益は税抜 '+yen(exT(c,k))+' で計算）。押すと非課税に':'税抜で入っています。押すと税込に')+'" style="font-size:9.5px;cursor:pointer;border-radius:3px;padding:0 4px;'+(_kd==='非課税'?'color:#fff;background:#0369a1;border:1px solid #0369a1':_inc?'color:#fff;background:#d97706;border:1px solid #d97706':'color:#64748b;background:#fff;border:1px solid #cbd5e1')+'">'+(_kd==='非課税'?'非':_kd==='税込'?'込':'抜')+'</button>'; }
       if(k==='memo'){ cell=_memoHtml_(c); }
       // 伝票番号の頭に「見積」の印を出して、案件（受注）と見分けやすくする。
       // 仮番号（見積-…）は番号自体に「見積」と入っているので印は付けない
@@ -1377,9 +1384,9 @@ function openForm(id, asCopy){
   document.getElementById('f-id').value=editing?editing.id:'';
   ['denpyo','customer','item','qty','unit','orderDate','hopeDate','deliveryDate','unitSelf','amtSelf','unitTokiwa','amtTokiwa','profit','memo','billMonth'].forEach(function(f){ var el=document.getElementById('f-'+f); if(el) el.value=g(f); });
   document.getElementById('f-status2').value=g('status');
-  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【税込[:：][^】]*】/g,'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
+  var mmEl=document.getElementById('f-memo'); if(mmEl) mmEl.value=(mmEl.value||'').replace(/【税込[:：][^】]*】/g,'').replace(/【非課税[:：][^】]*】/g,'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim(); // タグは別欄で管理
   var _oqEl=document.getElementById('f-orderQty'); if(_oqEl) _oqEl.value=_orderQtyTag_(src&&src.memo);
-  var _tx=_taxTag_(src&&src.memo); if(document.getElementById('f-taxSelf')) document.getElementById('f-taxSelf').value=_tx.self?'税込':''; if(document.getElementById('f-taxTokiwa')) document.getElementById('f-taxTokiwa').value=_tx.tok?'税込':'';   // TAXKUBUN-1
+  if(document.getElementById('f-taxSelf')) document.getElementById('f-taxSelf').value=_taxKind_(src||{},'amtSelf'); if(document.getElementById('f-taxTokiwa')) document.getElementById('f-taxTokiwa').value=_taxKind_(src||{},'amtTokiwa');   // TAXKUBUN-1
   var _qdEl=document.getElementById('f-quoteDate'); if(_qdEl) _qdEl.value=_quoteDateTag_(src&&src.memo);
   var _oqCk=document.getElementById('f-oqSame'); if(_oqCk){ _oqCk.checked=!(_oqEl&&_oqEl.value&&toNum(_oqEl.value)>0); if(_oqEl) _oqEl.disabled=_oqCk.checked; }
   ['f-amtSelf','f-amtTokiwa','f-profit'].forEach(function(x){ var el=document.getElementById(x); if(el) delete el.dataset.auto; }); // 復元値は手入力扱い（自動クリア対象外）
@@ -1538,11 +1545,11 @@ async function saveCase(){
     billMonth:document.getElementById('f-billMonth').value };
   // 複数梱包・納品先はシートに専用列が無いため備考に畳んで保存（情報を失わない・重複防止）
   var mp=document.getElementById('f-multiPack').checked, md=document.getElementById('f-multiDest').checked;
-  var memo=(document.getElementById('f-memo').value||'').replace(/【税込[:：][^】]*】/g,'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
+  var memo=(document.getElementById('f-memo').value||'').replace(/【税込[:：][^】]*】/g,'').replace(/【非課税[:：][^】]*】/g,'').replace(/【複数梱包】|【複数納品先】/g,'').replace(/【受注数[:：][0-9,]*】/g,'').replace(/【見積日[:：][^】]*】/g,'').replace(/^(【納品先:[^】]*】)+\s*/,'').trim();
   var oq=(document.getElementById('f-orderQty').value||'').trim().replace(/,/g,'');
   if(document.getElementById('f-oqSame').checked || !(toNum(oq)>0)) oq='';   // チェックON・空・0は「製造数量と同じ」＝タグ保存しない
   var qd=(document.getElementById('f-quoteDate').value||'').trim();
-  var pre=''; var _ts=[]; if((document.getElementById('f-taxSelf')||{}).value==='税込') _ts.push('自社'); if((document.getElementById('f-taxTokiwa')||{}).value==='税込') _ts.push('トキワ'); if(_ts.length) pre+='【税込:'+_ts.join('・')+'】';   // TAXKUBUN-1
+  var pre=_taxTags_((document.getElementById('f-taxSelf')||{}).value||'', (document.getElementById('f-taxTokiwa')||{}).value||'');   // TAXKUBUN-4
   if(qd) pre+='【見積日:'+qd+'】'; if(oq) pre+='【受注数:'+oq+'】'; if(mp) pre+='【複数梱包】'; if(md) pre+='【複数納品先】';
   c.memo=(pre?pre+' ':'')+memo;
   // 対象会社キー（編集時は元レコードの会社、新規時は選択中の会社）
@@ -2021,18 +2028,21 @@ function _docRaw_(c){
 function _docAmt_(c){ return _docRaw_(c); }
 function _docUnit_(c){ return toNum(c.unitSelf)||''; }
 function _docInc_(c){ return _isIncl_(c,'amtSelf'); }
+function _docEx_(c){ return _isExempt_(c,'amtSelf'); }
 function _docSum_(list){
-  var s1=0, s2=0; (list||[]).forEach(function(x){ var a=Math.round(_docRaw_(x)); if(_docInc_(x)) s2+=a; else s1+=a; });
+  var s1=0, s2=0, s3=0; (list||[]).forEach(function(x){ var a=Math.round(_docRaw_(x)); if(_docEx_(x)) s3+=a; else if(_docInc_(x)) s2+=a; else s1+=a; });
   var t1=Math.round(s1*TAX_RATE), t2=Math.round(s2*TAX_RATE/(1+TAX_RATE));
-  return { ex:s1, exTax:t1, in:s2, inTax:t2, tax:t1+t2, sub:s1+(s2-t2), inc:s1+t1+s2, mode:(s2&&s1)?'mixed':(s2?'incl':'excl') };
+  var kinds=(s1?1:0)+(s2?1:0)+(s3?1:0);
+  return { ex:s1, exTax:t1, in:s2, inTax:t2, free:s3, tax:t1+t2, sub:s1+(s2-t2)+s3, inc:s1+t1+s2+s3, mode:(kinds>1?'mixed':s2?'incl':s3?'free':'excl') };
 }
 // 合計の表（行の様式ごとに作り分けるときの共通部品）。cls: 行の class、yenFn: 金額の書き方
 function _docSumRows_(m, yenFn, tdL){
   tdL=tdL||'<td>'; var row=function(l,v,b){ return '<tr'+(b?' class="g"':'')+'>'+tdL+l+'</td><td class="r">'+yenFn(v)+'</td></tr>'; };
   if(m.mode==='excl') return row('小計（税抜）',m.ex)+row('消費税（10%）',m.exTax)+row('合計（税込）',m.inc,true);
   if(m.mode==='incl') return row('合計（税込）',m.inc,true)+row('（うち消費税10%）',m.inTax)+row('（税抜金額）',m.sub);
+  if(m.mode==='free') return row('非課税の品',m.free)+row('消費税',0)+row('合計',m.inc,true);
   // 混在: 3 行に詰める（3 面の納品書にも収まるように）。税抜の品は消費税を足し、税込の品は「うち」
-  return row('税抜の品 '+yenFn(m.ex).replace(/\s*円$/,'')+' ＋消費税',m.exTax)+row('税込の品（うち消費税 '+yenFn(m.inTax).replace(/\s*円$/,'')+'）',m.in)+row('合計（税込）',m.inc,true);
+  return (m.ex?row('税抜 '+yenFn(m.ex).replace(/\s*円$/,'')+'＋消費税',m.exTax):'')+(m.in?row('税込（うち税 '+yenFn(m.inTax).replace(/\s*円$/,'')+'）',m.in):'')+(m.free?row('非課税（税なし）',m.free):'')+row('合計（税込）',m.inc,true);
 }
 // 自社金額が入っていない案件（帳票に金額が出ない）
 function _docMissing_(list){ return (list||[]).filter(function(x){ return !(_docAmt_(x)>0); }); }
@@ -2081,7 +2091,7 @@ function _ns4Rows_(list, esc2, pad){
     var x=list[i], amt=Math.round(_docAmt_(x)), unit=_docUnit_(x);
     var nm=(list.length>1&&x.denpyo&&!_ns4NoDen_&&!/^見積-/.test(String(x.denpyo))?(x.denpyo+'　'):'')+(x.item||'');   // 見積書と仮番号（見積-…）は品名に番号を付けない
     var q=Number(String(_docQty_(x)).replace(/,/g,''));
-    if(_docInc_(x)) nm+='（税込）';   // TAXKUBUN-3
+    if(_docEx_(x)) nm+='（非課税）'; else if(_docInc_(x)) nm+='（税込）';   // TAXKUBUN-3/4
     h+='<tr><td class="c">'+(i+1)+'</td><td>'+esc2(nm)+'</td><td class="r">'+(unit?_ns4Fmt_(unit):'')+'</td><td class="r">'+(q?q.toLocaleString():esc2(_docQty_(x)||''))+'</td><td class="r">'+(amt?amt.toLocaleString():'')+'</td></tr>';
   }
   for(;i<(pad||0);i++){ h+='<tr><td class="c">&nbsp;</td><td></td><td></td><td></td><td></td></tr>'; }
@@ -2107,7 +2117,7 @@ function _ns4Panel_(title, sub, list, co, iss, opt){
     +_ns4Rows_(list, esc2, opt.pad||0)
     +'</table>'
     +'<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:6mm;margin-top:1.5mm">'
-      +'<div class="nt" style="margin:0">'+(_sm.mode==='incl'?'※単価・金額は消費税込みです。':_sm.mode==='mixed'?'※（税込）の品は単価・金額が消費税込み、それ以外は消費税抜きです。':(opt.note||'※単価は消費税抜きの単価です。'))+'</div>'
+      +'<div class="nt" style="margin:0">'+(_sm.mode==='incl'?'※単価・金額は消費税込みです。':_sm.mode==='free'?'※非課税の品です（消費税はかかりません）。':_sm.mode==='mixed'?'※（税込）の品は消費税込み、（非課税）の品は消費税なし、それ以外は消費税抜きです。':(opt.note||'※単価は消費税抜きの単価です。'))+'</div>'
       +'<table class="sum">'+_docSumRows_(_sm, function(v){ return Math.round(v).toLocaleString()+' 円'; }).replace('<td>合計（税込）</td>','<td>'+(opt.grand||'合計（税込）')+'</td>')+'</table>'
     +'</div>'
     +(opt.receipt?'<div class="rcvl">上記のとおり相違なく受領いたしました。　受領日：　　　　年　　月　　日　　受領者：　　　　　　　　　　</div>':'')
@@ -2159,7 +2169,7 @@ function _nkSheet_(title, c, co, iss, opt){
     var x=list[i];
     if(x){
       var amt=_docAmt_(x), unit=_docUnit_(x);
-      var nm=(list.length>1 && x.denpyo && !isQuote && !/^見積-/.test(String(x.denpyo)) ? (x.denpyo+'　') : '')+(x.item||'')+(_docInc_(x)?'（税込）':'');   // 見積書は品名に番号を付けない
+      var nm=(list.length>1 && x.denpyo && !isQuote && !/^見積-/.test(String(x.denpyo)) ? (x.denpyo+'　') : '')+(x.item||'')+(_docEx_(x)?'（非課税）':_docInc_(x)?'（税込）':'');   // 見積書は品名に番号を付けない
       rows+='<tr><td>'+esc2(nm)+'</td><td class="c">'+_qtyDisp_(x)+'</td><td class="c">'+esc2(x.unit||'')+'</td><td class="r">'+(unit?Math.round(unit).toLocaleString():'')+'</td><td class="r">'+(amt?Math.round(amt).toLocaleString():'')+'</td></tr>';
     } else {
       rows+='<tr><td></td><td></td><td></td><td></td><td></td></tr>';
@@ -2277,7 +2287,7 @@ function genDoc(type){
     +'<div style="margin-top:10px;font-size:12px">伝票番号：'+esc2(_denTxt)+'</div></div>'
     +'<div class="dfrom"><div style="margin-bottom:6px">発行日：'+esc2(iss)+'</div>'+fromLines+'</div></div>';
   var itemRows=list.map(function(x){ var xa=_docAmt_(x), xu=_docUnit_(x);
-    return '<tr><td>'+esc2(x.item||'')+(_docInc_(x)?'（税込）':'')+'</td><td class="c">'+_qtyDisp_(x)+'</td><td class="c">'+esc2(x.unit||'')+'</td><td class="r">'+(xu?'¥'+Math.round(xu).toLocaleString():'')+'</td><td class="r">¥'+Math.round(xa).toLocaleString()+'</td></tr>'; }).join('');
+    return '<tr><td>'+esc2(x.item||'')+(_docEx_(x)?'（非課税）':_docInc_(x)?'（税込）':'')+'</td><td class="c">'+_qtyDisp_(x)+'</td><td class="c">'+esc2(x.unit||'')+'</td><td class="r">'+(xu?'¥'+Math.round(xu).toLocaleString():'')+'</td><td class="r">¥'+Math.round(xa).toLocaleString()+'</td></tr>'; }).join('');
   var itemTable='<table><thead><tr><th>品名・摘要</th><th class="c" style="width:70px">数量</th><th class="c" style="width:56px">単位</th><th class="r" style="width:100px">単価</th><th class="r" style="width:120px">金額</th></tr></thead><tbody>'+itemRows
     +_docSumRows_(_sm, function(v){ return '¥'+Math.round(v).toLocaleString(); }, '<td colspan="4" class="r">').replace('<tr class="g">','<tr class="tot">')+'</tbody></table>';
   var body='';
