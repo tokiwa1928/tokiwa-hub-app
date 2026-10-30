@@ -429,8 +429,38 @@
   }
   function impFoot() {
     var k = Object.keys(IMP.pick).length;
-    $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#4A574E">ノート 1 件 = カード 1 枚。題の伝票番号（a108393 など）で案件とつなぎ、本文の書き込みは履歴に、添付は Drive へ</span><button class="btn" id="lwn-cancel">閉じる</button><button class="btn btn-p" id="lwn-go" style="font-weight:700"' + (k ? '' : ' disabled') + '>' + k + ' 件を取り込む</button>';
+    $('lwn-foot').innerHTML = '<span id="lwn-msg" style="margin-right:auto;font-size:12px;color:#4A574E">ノート 1 件 = カード 1 枚。題の伝票番号（a108393 など）で案件とつなぎ、本文の書き込みは履歴に、添付は Drive へ</span><button class="btn" id="lwn-cancel">閉じる</button>'
+      + (IMP.group ? '<button class="btn" id="lwn-goall" style="font-weight:700;border-color:#15743A;color:#15743A" title="いちばん古いノートまで読んで、まだ取り込んでいないものを全部取り込みます">全部読んで全部取り込む</button>' : '')
+      + '<button class="btn btn-p" id="lwn-go" style="font-weight:700"' + (k ? '' : ' disabled') + '>' + k + ' 件を取り込む</button>';
     $('lwn-cancel').onclick = function () { if (!IMP.busy) { IMP = null; close(); } }; $('lwn-go').onclick = impGo;
+    if ($('lwn-goall')) $('lwn-goall').onclick = impAll;
+  }
+  // ほんとに全部: 次のページが無くなるまで読み、まだのものを全部選んで取り込む
+  function impAll() {
+    if (!IMP || IMP.busy || !IMP.group) return;
+    IMP.busy = true; var gid = IMP.group.id, pages = 0;
+    var msg = function (t) { var el = $('lwn-msg'); if (el) { el.style.color = '#4A574E'; el.textContent = t; } };
+    $('lwn-goall').disabled = true; $('lwn-go').disabled = true;
+    var next = function (cursor) {
+      msg('ノートを読んでいます… ' + IMP.posts.length + ' 件');
+      return api('lwNotePosts', cursor ? { groupId: gid, cursor: cursor } : { groupId: gid }).then(function (r) {
+        if (!IMP || !IMP.group || IMP.group.id !== gid) return null;
+        if (!r.success) throw new Error(why(r));
+        var seen = {}; IMP.posts.forEach(function (p) { seen[String(p.postId)] = 1; });
+        (r.posts || []).forEach(function (p) { if (!seen[String(p.postId)]) IMP.posts.push(p); });
+        IMP.next = r.nextCursor || ''; pages++;
+        return (IMP.next && pages < 200) ? next(IMP.next) : true;
+      });
+    };
+    next('').then(function (ok) {
+      if (!ok || !IMP) return;
+      var done = impDone(); IMP.pick = {};
+      IMP.posts.forEach(function (p) { if (!done[String(p.postId)]) IMP.pick[String(p.postId)] = 1; });
+      var n = Object.keys(IMP.pick).length; IMP.busy = false; impRender();
+      if (!n) { msg('全部で ' + IMP.posts.length + ' 件。まだ取り込んでいないノートはありません'); return; }
+      msg('全部で ' + IMP.posts.length + ' 件のうち、まだの ' + n + ' 件を取り込みます…');
+      impGo();
+    }).catch(function (e) { if (IMP) { IMP.busy = false; impRender(); var el = $('lwn-msg'); if (el) { el.style.color = '#B42318'; el.textContent = String(e && e.message || e); } } });
   }
   function impPosts(more) {
     var gid = IMP.group.id;
