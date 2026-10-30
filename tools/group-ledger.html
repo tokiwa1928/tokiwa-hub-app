@@ -684,8 +684,8 @@ function _isExempt_(c,f){ return _taxKind_(c,f)==='非課税'; }
 function _taxStrip_(memo){ return String(memo==null?'':memo).replace(/【税込[:：][^】]*】/g,'').replace(/【非課税[:：][^】]*】/g,'').replace(/【非課税[:：][^】]*】/g,''); }
 function _taxTags_(kSelf,kTok){ var inc=[],ex=[]; if(kSelf==='税込') inc.push('自社'); if(kTok==='税込') inc.push('トキワ'); if(kSelf==='非課税') ex.push('自社'); if(kTok==='非課税') ex.push('トキワ');
   return (inc.length?'【税込:'+inc.join('・')+'】':'')+(ex.length?'【非課税:'+ex.join('・')+'】':''); }
-function exT(c,f){ return toNum(c&&c[f]); }   // TAXKUBUN-5: 税込も金額はそのまま（消費税を抜き出さない）
-function _formEx_(id){ return toNum(document.getElementById(id).value); }
+function exT(c,f){ var v=toNum(c&&c[f]); return _isIncl_(c,f)?Math.round(v/(1+TAX_RATE)):v; }
+function _formEx_(id){ var v=toNum(document.getElementById(id).value), sel=document.getElementById(id==='f-amtSelf'?'f-taxSelf':'f-taxTokiwa'); return (sel&&sel.value==='税込')?Math.round(v/(1+TAX_RATE)):v; }
 function parseD(v){ if(!v)return null; var s=String(v).trim(); var m=s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); return m?new Date(+m[1],+m[2]-1,+m[3]):null; }
 function ymd(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
 function weekRange(){ var t=new Date();t.setHours(0,0,0,0); var dow=(t.getDay()+6)%7; var mon=new Date(t);mon.setDate(t.getDate()-dow); var sun=new Date(mon);sun.setDate(mon.getDate()+6); return [mon,sun]; }
@@ -2030,17 +2030,15 @@ function _docAmt_(c){ return _docRaw_(c); }
 function _docUnit_(c){ return toNum(c.unitSelf)||''; }
 function _docInc_(c){ return _isIncl_(c,'amtSelf'); }
 function _docEx_(c){ return _isExempt_(c,'amtSelf'); }
-function _docSum_(list){   // TAXKUBUN-5: 税抜の品だけ消費税 10% を足す。税込の品はそのまま足す
+function _docSum_(list){   // TAXKUBUN-6（本多さん 10/30「税抜合計、消費税、税込合計（総額）にして」）: 税抜の品は +10%、税込の品は金額そのまま（中の税を抜き出して税抜合計・消費税に入れる）
   var s1=0, s2=0; (list||[]).forEach(function(x){ var a=Math.round(_docRaw_(x)); if(_docInc_(x)) s2+=a; else s1+=a; });
-  var t1=Math.round(s1*TAX_RATE);
-  return { ex:s1, exTax:t1, in:s2, tax:t1, inc:s1+t1+s2, mode:(s1&&s2)?'mixed':(s2?'incl':'excl') };
+  var t1=Math.round(s1*TAX_RATE), e2=Math.round(s2/(1+TAX_RATE)), inc=s1+t1+s2;
+  return { ex:s1+e2, tax:inc-(s1+e2), inc:inc, sub:s1+e2, mode:(s1&&s2)?'mixed':(s2?'incl':'excl') };
 }
 // 合計の表（行の様式ごとに作り分けるときの共通部品）。cls: 行の class、yenFn: 金額の書き方
 function _docSumRows_(m, yenFn, tdL){
   tdL=tdL||'<td>'; var row=function(l,v,b){ return '<tr'+(b?' class="g"':'')+'>'+tdL+l+'</td><td class="r">'+yenFn(v)+'</td></tr>'; };
-  if(m.mode==='excl') return row('小計（税抜）',m.ex)+row('消費税（10%）',m.exTax)+row('合計（税込）',m.inc,true);
-  if(m.mode==='incl') return row('合計（税込）',m.inc,true);
-  return row('税抜の品 小計',m.ex)+row('　消費税（10%）',m.exTax)+row('税込の品',m.in)+row('合計（税込）',m.inc,true);
+  return row('税抜合計',m.ex)+row('消費税（10%）',m.tax)+row('税込合計（総額）',m.inc,true);
 }
 // 自社金額が入っていない案件（帳票に金額が出ない）
 function _docMissing_(list){ return (list||[]).filter(function(x){ return !(_docAmt_(x)>0); }); }
@@ -2116,7 +2114,7 @@ function _ns4Panel_(title, sub, list, co, iss, opt){
     +'</table>'
     +'<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:6mm;margin-top:1.5mm">'
       +'<div class="nt" style="margin:0">'+(_sm.mode==='incl'?'※金額は税込です。':_sm.mode==='mixed'?'※（税込）の品は税込の金額です。それ以外は消費税抜きの単価です。':(opt.note||'※単価は消費税抜きの単価です。'))+'</div>'
-      +'<table class="sum">'+_docSumRows_(_sm, function(v){ return Math.round(v).toLocaleString()+' 円'; }).replace('<td>合計（税込）</td>','<td>'+(opt.grand||'合計（税込）')+'</td>')+'</table>'
+      +'<table class="sum">'+_docSumRows_(_sm, function(v){ return Math.round(v).toLocaleString()+' 円'; }).replace('<td>税込合計（総額）</td>','<td>'+(opt.grand||'税込合計（総額）')+'</td>')+'</table>'
     +'</div>'
     +(opt.receipt?'<div class="rcvl">上記のとおり相違なく受領いたしました。　受領日：　　　　年　　月　　日　　受領者：　　　　　　　　　　</div>':'')
     +(opt.bank!==undefined?('<div class="bank"><b>お振込先</b>'+esc2(opt.bank||'（未登録：🏢会社情報で振込先を登録してください）')+'</div>'):'')
