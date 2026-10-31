@@ -4893,7 +4893,7 @@ async function loadFromCloud() {
       var vs=[], seen={}; (base.versions||[]).concat(other.versions||[]).forEach(function(v){ if(!v||!v.id||seen[v.id]) return; seen[v.id]=1; vs.push(v); });
       vs.sort(function(a,b){ return String(a.uploadedAt||'').localeCompare(String(b.uploadedAt||'')); });
       var out=Object.assign({}, base); out.versions=vs;
-      ['snoozeUntil','replyDoneAt','statusAt','statusSeenAt'].forEach(function(k){ var a=String(base[k]||''), b=String(other[k]||''); if(a||b) out[k]=a>b?a:b; });   // MORNING-1: 「待つ」「返信した」は新しい方
+      ['snoozeUntil','replyDoneAt','statusAt','statusSeenAt','koryoPlan'].forEach(function(k){ var a=String(base[k]||''), b=String(other[k]||''); if(a||b) out[k]=a>b?a:b; });   // MORNING-1: 「待つ」「返信した」は新しい方
       // AI-PROOF-1: AI 修正リストも id の和集合（消したものは除く）
       var adel={}; (base.aiFixDel||[]).concat(other.aiFixDel||[]).forEach(function(id){ if(id) adel[id]=1; });
       var af=[], aseen={}; (base.aiFix||[]).concat(other.aiFix||[]).forEach(function(e){ if(!e||!e.id||aseen[e.id]||adel[e.id]) return; aseen[e.id]=1; af.push(e); });
@@ -21392,6 +21392,8 @@ function _proofFlags_(p){
   var out=[]; if(!p) return out;
   var meta=_proofStatusMeta_(_normProofStatus_(p.status));
   if(p.isDraft) out.push({ k:'draft', label:'📝 下書き', bg:'#ede9fe', fg:'#5b21b6', title:'内容が入っていません。開いて内容を入れるか、ステータスを進めてください' });
+  var kr=_proofKoryoRisk_(p); if(kr) out.push({ k:'koryo', label:kr.label.replace(/（納期[^）]*）/,''), bg:kr.level==='over'?'#7f1d1d':'#fed7aa', fg:kr.level==='over'?'#fff':'#7c2d12', title:kr.label });   // KORYO-RISK-1
+  if(p.triage && _snoozed_(p)) out.push({ k:'triage', label:p.triage.label+' 〜'+_md_(_ymd_(new Date(p.triage.until))), bg:'#e0e7ff', fg:'#3730a3', title:(p.triage.by||'')+' が振り分け。この日にまたレポートに出ます' });   // TRIAGE-1
   var sa=_proofStatAlert_(p); if(sa) out.push({ k:'stat', label:sa.label, bg:'#fde68a', fg:'#7c2d12', title:sa.title });   // STAT-ALERT-1
   if(p.needFile && !_proofHasFile_(p) && !meta.done) out.push({ k:'nofile', label:'📎 ファイル無し', bg:'#fee2e2', fg:'#991b1b', title:'支給データも校正データも入っていません。前回のデータを使うなら、詳細で「データ無しで依頼（前回データを参照）」に' });
   var rw=_proofReplyWait_(p); if(rw) out.push({ k:'reply', label:'💬 返信待ち '+rw.days+'日', bg:'#fef3c7', fg:'#92400e', title:(rw.who?rw.who+': ':'')+rw.text });
@@ -21424,6 +21426,7 @@ function _proofGearMenu_(){
   m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
   m.onclick=function(e){ if(e.target===m) m.remove(); };
   m.innerHTML='<div style="background:#fff;border-radius:10px;padding:14px 16px;min-width:260px;display:flex;flex-direction:column;gap:8px" onclick="if(event.target.tagName===\'BUTTON\')setTimeout(function(){var x=document.getElementById(\'proof-gear-modal\');if(x)x.remove();},0)"><b style="font-size:13px">⚙ 校正BOX の設定</b>'
+    + '<button class="btn" style="font-size:11px;color:#9a3412" onclick="_koryoConfEdit_()">⏰ 校了の目安（納期の何日前）</button>'
    // PROOF-GEAR-1（本多さん 10/30「全部消す・選んだものを消すは歯車の中に」）
     + (vm==='list'?'<button class="btn" style="font-size:11px;color:#b91c1c" onclick="_proofDeleteSelected_()" title="一覧でチェックした校正を消します（2 回確認）。基本的に削除はしません。同じ案件が 2 枚あるなら 📎 でまとめてください">🗑 選んだカードを削除</button>':'')
     + '<button class="btn" style="font-size:11px;color:#b91c1c;border-color:#fca5a5" onclick="_proofClearAll_()" title="校正BOX のカードを全部消します（先にバックアップ JSON を保存。Drive のファイルは残ります）">🧹 全部消す（バックアップ付き）</button>'
@@ -22406,10 +22409,58 @@ function _morningReport_(force){
 }
 (function(){ var tries=0, t=setInterval(function(){ if(_morningReport_() || ++tries>30) clearInterval(t); }, 20000); setInterval(function(){ _morningReport_(); }, 30*60000); })();
 // 朝のレポート: 1 件ずつ「返信を入力」「待つ（○日）」「納期をずらす」で片づける。片づけたものは消える
+// ═══ KORYO-RISK-1（本多さん 10/31「納期に対して、おおよそこのくらいには校了が欲しいという目安を入れて、まだ校了していないとやばいよ、を校了予定日の前に知らせる」） ═══
+//   校了予定日 ＝ カードで入れた日、無ければ 納期 − 目安の日数（品名のルールで変える）。予定日の ○ 日前から ⏰、過ぎたら 🚨。一覧の印・朝のレポートに出す
+function _koryoConf_(){ var c=(DB.conf&&DB.conf.koryoLead)||{}; return { lead:(c.lead!=null?+c.lead:5), warn:(c.warn!=null?+c.warn:2), rules:String(c.rules!=null?c.rules:'名刺=3\nはがき=4\nチラシ=5\n封筒=5\n冊子=10\n会社案内=10') }; }
+function _ymd_(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+function _md_(s){ var m=/^\d{4}-(\d\d)-(\d\d)/.exec(String(s||'')); return m?(+m[1])+'/'+(+m[2]):String(s||''); }
+function _proofDue_(p){ var d=p&&p.dueDate; if(!d && p && p.projectId){ var pj=(DB.projects||[]).find(function(x){ return x && x.id===p.projectId; }); d=pj&&pj.dueDate; } return String(d||'').slice(0,10); }
+function _proofKoryoLead_(p){ var c=_koryoConf_(), nm=String((p&&p.prodName)||''), lead=c.lead;
+  c.rules.split(/\r?\n/).some(function(l){ var m=/^\s*(.+?)\s*[=＝:：]\s*(\d+)\s*$/.exec(l); if(m && nm.indexOf(m[1])>=0){ lead=+m[2]; return true; } return false; }); return lead; }
+function _proofKoryoPlan_(p){
+  if(!p) return null; if(p.koryoPlan) return { date:String(p.koryoPlan).slice(0,10), manual:true, due:_proofDue_(p) };
+  var due=_proofDue_(p); if(!/^\d{4}-\d\d-\d\d$/.test(due)) return null;
+  var lead=_proofKoryoLead_(p), d=new Date(due+'T00:00:00'); d.setDate(d.getDate()-lead); return { date:_ymd_(d), lead:lead, due:due };
+}
+function _proofKoryoRisk_(p){
+  if(!p) return null; var meta=_proofStatusMeta_(_normProofStatus_(p.status)); if(meta.done) return null;
+  var pl=_proofKoryoPlan_(p); if(!pl) return null;
+  var t=new Date(); t.setHours(0,0,0,0); var left=Math.round((new Date(pl.date+'T00:00:00')-t)/86400000), w=_koryoConf_().warn;
+  var dueTx=pl.due?'（納期 '+_md_(pl.due)+'）':'';
+  if(left<0) return { level:'over', left:left, label:'🚨 校了予定 '+_md_(pl.date)+' を '+(-left)+'日 過ぎています'+dueTx };
+  if(left<=w) return { level:'soon', left:left, label:'⏰ 校了予定 '+_md_(pl.date)+(left===0?' は今日':' まで あと'+left+'日')+dueTx };
+  return null;
+}
+function _proofSetKoryoPlan_(id, v){ var p=(DB.proofings||[]).find(function(x){ return x.id===id; }); if(!p) return; p.koryoPlan=v||''; p.lastMoveAt=new Date().toISOString(); try{ saveDB(); }catch(e){} renderProofingList(); showProofingDetail(id); }
+function _koryoConfEdit_(){
+  var c=_koryoConf_(); var old=document.getElementById('koryo-conf-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='koryo-conf-modal'; m.className='proof-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;padding:1rem';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;padding:16px 18px;width:100%;max-width:420px;font-size:12.5px;display:flex;flex-direction:column;gap:8px"><b style="font-size:14px">⏰ 校了の目安</b>'
+    +'<label>納期の <input id="kc-lead" type="number" min="0" value="'+c.lead+'" style="width:56px"> 日前までに校了（品名のルールに当たらないとき）</label>'
+    +'<label>校了予定日の <input id="kc-warn" type="number" min="0" value="'+c.warn+'" style="width:56px"> 日前から ⏰ を出す</label>'
+    +'<div>品名ごとの目安（1 行に「品名に入る言葉=日数」。上から先に当たったもの）</div><textarea id="kc-rules" rows="7" style="font-size:12px;padding:6px">'+_escDiff(c.rules)+'</textarea>'
+    +'<div style="color:#64748b;font-size:11px">カードの詳細で校了予定日を直接入れたときは、そちらが先です。</div>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="this.closest(\'.proof-modal\').remove()">やめる</button><button class="btn btn-p" onclick="DB.conf=DB.conf||{};DB.conf.koryoLead={lead:+document.getElementById(\'kc-lead\').value||0,warn:+document.getElementById(\'kc-warn\').value||0,rules:document.getElementById(\'kc-rules\').value};try{saveDB();if(typeof saveToCloud===\'function\')saveToCloud();}catch(e){}this.closest(\'.proof-modal\').remove();renderProofingList();">保存</button></div></div>';
+  document.body.appendChild(m);
+}
+// TRIAGE-1（本多さん 10/31「レポートは振り分け（再確認中なら次の日に出てくる）をする画面に」）
+var PROOF_TRIAGE=[['🔁 再確認中',1],['📞 先方確認待ち',2],['🏢 社内確認中',1],['⏸ 3日待つ',3],['⏸ 1週間待つ',7]];
+function _mrClear_(i){ var it=(window._mrList_||[])[i]; if(!it) return; delete it.o.triage; it.o.snoozeUntil=''; it.o.statusSeenAt=new Date().toISOString(); it.o.lastMoveAt=it.o.statusSeenAt; _mrDone_(i, '✔ 済みにしました'); }
+function _mrTriage_(i, k){
+  var it=(window._mrList_||[])[i], t=PROOF_TRIAGE[k]; if(!it||!t) return;
+  var u=new Date(); u.setHours(0,0,0,0); u.setDate(u.getDate()+t[1]);
+  it.o.snoozeUntil=u.toISOString(); it.o.triage={ label:t[0], until:it.o.snoozeUntil, at:new Date().toISOString(), by:(currentAuth&&currentAuth.userName)||'' };
+  if(it.kind==='due' || it.kind==='project') it.o.updatedAt=new Date().toISOString(); else it.o.lastMoveAt=it.o.lastMoveAt||new Date().toISOString();
+  _mrDone_(i, t[0]+'：'+(u.getMonth()+1)+'/'+u.getDate()+' にまた出します');
+}
 function _mrItems_(){
   var seen={}, out=[];
   var add=function(kind, o, txt){ var k=((kind==='due'||kind==='project')?'j':'p')+o.id; if(seen[k]) return; seen[k]=1; out.push({ kind:kind, o:o, txt:txt }); };   // 同じカード・案件は 1 回だけ（返信待ち・納期を先に）
-  (DB.proofings||[]).forEach(function(p){ if(_snoozed_(p)) return; var sa=_proofStatAlert_(p); if(sa) add('stat', p, sa.label+'：'+sa.title.split('\n')[0]); });   // STAT-ALERT-1
+  var pre=function(o){ return (o.triage&&o.triage.label)?'（前回: '+o.triage.label+'）':''; };
+  (DB.proofings||[]).map(function(p){ return { p:p, r:_snoozed_(p)?null:_proofKoryoRisk_(p) }; }).filter(function(x){ return x.r; }).sort(function(a,b){ return a.r.left-b.r.left; }).forEach(function(x){ add('koryo', x.p, x.r.label+pre(x.p)); });   // KORYO-RISK-1
+  (DB.proofings||[]).forEach(function(p){ if(!p || !p.triage || _snoozed_(p) || _proofStatusMeta_(_normProofStatus_(p.status)).done) return; if(!_proofKoryoRisk_(p) && !_proofStatAlert_(p)) add('proof', p, '🔁 振り分けた日になりました'+pre(p)); });   // TRIAGE-1: 振り分けたものは、その日にまた出す（「✔ 済み」で終わり）
+  (DB.proofings||[]).forEach(function(p){ if(_snoozed_(p)) return; var sa=_proofStatAlert_(p); if(sa) add('stat', p, sa.label+'：'+sa.title.split('\n')[0]+pre(p)); });   // STAT-ALERT-1
   ((typeof _replyWaitProofings_==='function')?_replyWaitProofings_():[]).forEach(function(x){ add('reply', x.p, '💬 返信待ち '+x.rw.days+'日'+(x.rw.who?'（'+x.rw.who+'）':'')+'：'+x.rw.text); });
   _staleProofings_().forEach(function(x){ add('proof', x.p, '📸 '+x.days+'日 動いていない（'+_proofStatusMeta_(_normProofStatus_(x.p.status)).label+'）'); });
   _dueSoonProjects_().forEach(function(x){ add('due', x.p, (x.left<0?'🚨 納期 '+(-x.left)+'日 超過':x.left===0?'🚨 納期 今日':'⏰ 納期まで あと'+x.left+'日')+'（'+x.p.dueDate+'）'); });
@@ -22421,18 +22472,19 @@ function showMorningReport(){
   var items=_mrItems_(), d=new Date();
   var esc=function(s){ return _escDiff(String(s==null?'':s)); };
   var rows=items.map(function(it, i){
-    var o=it.o, isP=(it.kind==='reply'||it.kind==='proof'||it.kind==='stat');
+    var o=it.o, isP=(it.kind==='reply'||it.kind==='proof'||it.kind==='stat'||it.kind==='koryo');
     var name=isP ? ((o.fmNo?o.fmNo+' ':'')+(o.custName||'')+' '+(o.prodName||'')) : ((o.id||'')+' '+(o.cust||'')+' '+(o.item||''));
     var open=isP ? "swPage('proofing',document.querySelector('.tb-btn[data-page=proofing]'));setTimeout(function(){showProofingDetail('"+o.id+"')},200)" : "jumpToProject('"+o.id+"')";
     var wait=function(n,l){ return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="_mrWait_('+i+','+n+')">'+l+'</button>'; };
-    return '<div id="mr-row-'+i+'" style="border:1px solid #e5e7eb;border-left:4px solid '+(it.kind==='due'?'#d97706':it.kind==='reply'?'#b45309':'#dc2626')+';border-radius:6px;padding:8px 10px;margin-bottom:7px;background:#fff">'
+    return '<div id="mr-row-'+i+'" style="border:1px solid #e5e7eb;border-left:4px solid '+(it.kind==='koryo'?'#7c2d12':it.kind==='due'?'#d97706':it.kind==='reply'?'#b45309':'#dc2626')+';border-radius:6px;padding:8px 10px;margin-bottom:7px;background:#fff">'
       +'<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><a href="#" onclick="document.getElementById(\'morning-modal\').remove();'+open+';return false" style="font-weight:700;font-size:12.5px;color:#0f172a">'+esc(name.trim())+'</a></div>'
       +'<div style="font-size:11.5px;color:#475569;margin:3px 0 6px">'+esc(it.txt)+'</div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
         +(isP?'<button class="btn btn-p" style="font-size:11px;padding:2px 10px" onclick="var b=document.getElementById(\'mr-rbox-'+i+'\');b.style.display=b.style.display===\'none\'?\'flex\':\'none\';var t=b.querySelector(\'textarea\');if(t)t.focus()">✏ 返信を入力</button>':'')
         +(it.kind==='stat'?(function(){ var sa=_proofStatAlert_(o)||{}; return (sa.sug?'<button class="btn" style="font-size:11px;padding:2px 8px;background:#fde68a" onclick="updateProofingStatus(\''+o.id+'\',\''+sa.sug+'\');_mrDone_('+i+',\'状態を変えました\')">→ '+esc(_proofStatusMeta_(_normProofStatus_(sa.sug)).label)+'</button>':'')+'<button class="btn" style="font-size:11px;padding:2px 8px" onclick="_proofStatSeen_(\''+o.id+'\');_mrDone_('+i+',\'このままにしました\')">このまま</button>'; })():'')
         +(it.kind==='due'||it.kind==='project'?'<span style="font-size:11px;color:#475569;margin-left:4px">納期</span><input type="date" id="mr-due-'+i+'" value="'+esc(o.dueDate||'')+'" style="font-size:11px;padding:1px 4px"><button class="btn" style="font-size:11px;padding:2px 8px" onclick="_mrDue_('+i+')">📅 納期をずらす</button>':'')
-        +'<span style="font-size:11px;color:#475569;margin-left:6px">待つ</span>'+wait(2,'2日')+wait(3,'3日')+wait(7,'1週間')
+        +(isP?'<button class="btn" style="font-size:11px;padding:2px 8px;color:#166534" onclick="_mrClear_('+i+')" title="もう大丈夫。振り分けを終わりにする">✔ 済み</button>':'')
+        +'<span style="font-size:11px;color:#475569;margin-left:6px">振り分け</span>'+PROOF_TRIAGE.map(function(t,k){ return '<button class="btn" style="font-size:11px;padding:2px 8px" onclick="_mrTriage_('+i+','+k+')" title="'+t[1]+'日後にまた出します">'+t[0]+'</button>'; }).join('')
       +'</div>'
       +(isP?'<div id="mr-rbox-'+i+'" style="display:none;gap:6px;margin-top:6px;align-items:flex-end"><textarea rows="2" style="flex:1;font-size:12px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:5px" placeholder="返信（校正BOX のコメントと LW ノートに入ります）"></textarea><button class="btn btn-p" style="font-size:11px" onclick="_mrReply_('+i+')">送る</button></div>':'')
     +'</div>';
@@ -22441,8 +22493,8 @@ function showMorningReport(){
   var m=document.createElement('div'); m.id='morning-modal'; m.className='proof-modal';
   m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:2rem 1rem;overflow:auto';
   m.innerHTML='<div style="background:#f8fafc;border-radius:10px;max-width:700px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">'
-    +'<div style="padding:12px 18px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>☀ 今朝の要注意レポート（'+(d.getMonth()+1)+'/'+d.getDate()+'）<span id="mr-count">'+items.length+'</span>件</b><button onclick="document.getElementById(\'morning-modal\').remove()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div>'
-    +'<div style="font-size:11px;color:#475569;padding:8px 18px 0">1 件ずつ確認して、<b>返信を入力</b>／<b>待つ</b>（その日数はレポートに出ない）／<b>納期をずらす</b> で片づけます。</div>'
+    +'<div style="padding:12px 18px;background:#0e7490;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>☀ 振り分け（要注意レポート '+(d.getMonth()+1)+'/'+d.getDate()+'）<span id="mr-count">'+items.length+'</span>件</b><button onclick="document.getElementById(\'morning-modal\').remove()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div>'
+    +'<div style="font-size:11px;color:#475569;padding:8px 18px 0">1 件ずつ確認して、<b>返信を入力</b>／<b>振り分け</b>（再確認中＝明日、先方確認待ち＝2日後… にまた出る）／<b>納期をずらす</b> で片づけます。</div>'
     +'<div style="overflow-y:auto;padding:10px 18px 16px;flex:1">'+(rows||'<div style="padding:20px;text-align:center;color:#64748b">要注意はありません 👍</div>')+'</div></div>';
   document.body.appendChild(m);
 }
@@ -22674,6 +22726,9 @@ function showProofingDetail(proofingId){
         + '</div>') : '')
     + (typeof _proofPrevLink_==='function' && _proofPrevLink_(p) ? ('<div>'+_proofPrevLink_(p)+'</div>') : '')
     + (function(){ var sa=_proofStatAlert_(p); if(!sa) return ''; return '<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:6px 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="color:#7c2d12">'+_escDiff(sa.label)+'</b><span style="font-size:11px;color:#78350f">'+_escDiff(sa.title.split('\n')[0])+'</span>'+(sa.sug?'<button class="btn btn-p" style="font-size:11px;padding:2px 10px" onclick="updateProofingStatus(\''+p.id+'\',\''+sa.sug+'\')">'+_escDiff(_proofStatusMeta_(_normProofStatus_(sa.sug)).label)+' にする</button>':'')+'<button class="btn" style="font-size:11px;padding:2px 10px" onclick="_proofStatSeen_(\''+p.id+'\')">確認した（このまま）</button></div>'; })()
+    + (function(){ var pl=_proofKoryoPlan_(p), kr=_proofKoryoRisk_(p); return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;color:#334155">⏰ 校了予定 <input type="date" value="'+_escDiff((p.koryoPlan||'').slice(0,10))+'" onchange="_proofSetKoryoPlan_(\''+p.id+'\',this.value)" style="font-size:11.5px;padding:1px 4px">'
+        +(p.koryoPlan?'<span style="font-size:11px;color:#64748b">（手で入れた日）</span>':pl?'<span style="font-size:11px;color:#64748b">目安 '+_md_(pl.date)+'（納期 '+_md_(pl.due)+' の '+pl.lead+'日前）</span>':'<span style="font-size:11px;color:#94a3b8">納期が無いので目安は出ません</span>')
+        +(kr?'<b style="font-size:11.5px;color:'+(kr.level==='over'?'#991b1b':'#9a3412')+'">'+_escDiff(kr.label)+'</b>':'')+'</div>'; })()
     + ('<label style="display:flex;gap:6px;align-items:center;color:'+(p.needFile&&!_proofHasFile_(p)?'#991b1b':'#334155')+'" title="チェックすると、添付（支給データ・校正データ）が入るまで一覧に「📎 ファイル無し」と出します"><input type="checkbox" '+(p.needFile?'checked':'')+' onchange="_proofNeedFile_(\''+p.id+'\',this.checked)"> 📎 添付が要る'+(p.needFile?(_proofHasFile_(p)?'（入っています）':'（まだ入っていません）'):'（文章だけの変更・前回データのときは外す）')+'</label>')
     + '</div>';
   container.innerHTML = `
