@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <script>/* UIZOOM-2: CSS の zoom をかけると vh・vw（画面の高さ・幅）まで縮むので、vh/vw を「÷ 倍率」に書き換える（スタイルシートと、あとから作られる要素の style） */
 function _hubZoomFixText_(t){ return String(t).replace(/(\d+(?:\.\d+)?)(d|s|l)?(vh|vw)\b/g, function(m,n,k,u){ return 'calc(var(--z'+u+') * '+n+')'; }); }
-function _hubZoomFixEl_(el){ try{ var st=el.getAttribute&&el.getAttribute('style'); if(st && /\d(?:d|s|l)?v[hw]\b/.test(st)) el.setAttribute('style', _hubZoomFixText_(st)); }catch(e){} }
+function _hubZoomFixEl_(el){ try{ if(el===document.documentElement) return; var st=el.getAttribute&&el.getAttribute('style'); if(st && /\d(?:d|s|l)?v[hw]\b/.test(st)) el.setAttribute('style', _hubZoomFixText_(st)); }catch(e){} }
 function _hubZoomFixSheets_(){
   var fixRules=function(rules){ for(var i=0;i<rules.length;i++){ var r=rules[i]; if(r.cssRules && !r.style){ fixRules(r.cssRules); continue; } if(!r.style) continue;
-    for(var j=0;j<r.style.length;j++){ var p=r.style[j], v=r.style.getPropertyValue(p); if(/\d(?:d|s|l)?v[hw]\b/.test(v)) r.style.setProperty(p, _hubZoomFixText_(v), r.style.getPropertyPriority(p)); } } };
+    for(var j=0;j<r.style.length;j++){ var p=r.style[j]; if(p.indexOf('--')===0) continue; var v=r.style.getPropertyValue(p); if(/\d(?:d|s|l)?v[hw]\b/.test(v)) r.style.setProperty(p, _hubZoomFixText_(v), r.style.getPropertyPriority(p)); } } };
   for(var i=0;i<document.styleSheets.length;i++){ var sh=document.styleSheets[i]; if(sh._zf) continue; try{ fixRules(sh.cssRules); sh._zf=1; }catch(e){} }
 }
 function _hubApplyZoom_(z){
@@ -22283,7 +22283,7 @@ function _lwSyncCatsPoll_(){
   if(!cards.length) return;
   var ids=cards.map(function(p){ return String(p.lwNote.postId); }), n=0, chain=Promise.resolve();
   for(var i=0;i<ids.length;i+=30) (function(part){ chain=chain.then(function(){ return _lwGas_({ action:'lwSyncCats', ids:part.join(',') }).then(function(r){
-    if(r && !r.success && /unknown_action/.test(String(r.error||''))){ window._lwCatsNoApi_=true; setTimeout(_lwCatsByRead_, 1000); return; }
+    if(r && !r.success && /unknown_action/.test(String(r.error||''))){ window._lwCatsNoApi_=true; return; }   /* URLFETCH-1: ノートを 1 件ずつ読む代わりの処理はやめた（会社 GAS の 1 日の外部通信の上限を使い切ったため） */
     var cats=(r&&r.cats)||{}; cards.forEach(function(p){ var c=cats[String(p.lwNote.postId)]; if(c && _proofApplyLwCat_(p, c)) n++; });
   }); }); })(ids.slice(i,i+30));
   chain.then(function(){ if(n){ try{ saveDB(); if(typeof saveToCloud==='function') saveToCloud(); renderProofingList(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('💼 LW ノートのカテゴリーから状態を合わせました（'+n+' 件）'); } }).catch(function(){});
@@ -22303,7 +22303,10 @@ function _lwCatsByRead_(){
   };
   step();
 }
-setTimeout(_lwSyncCatsPoll_, 25000); setInterval(_lwSyncCatsPoll_, 5*60000); setTimeout(function(){ try{ _lwSyncPanel_(); }catch(e){} }, 9000);
+// URLFETCH-1（11/1）: 開いている画面ごとに 5 分おきに全カードのノートを読むと、会社 GAS の 1 日の外部通信（urlfetch）の上限を使い切り、FileMaker の読み込みまで止まった。
+//   カテゴリーの変化は会社 GAS の 1 分ごとの同期（type=cat）で届くので、画面からの読み直しは 1 日 1 回・この PC だけ、取り込んだときの値で合わせるだけにする
+(function(){ try{ var k='lw_cats_poll_day', d=new Date().toISOString().slice(0,10); setTimeout(function(){ try{ var _ln=0; (DB.proofings||[]).forEach(function(p){ if(p && p.lwCategory && _proofApplyLwCat_(p, p.lwCategory)) _ln++; }); if(_ln){ saveDB(); renderProofingList(); } }catch(e){} }, 25000);
+  if(localStorage.getItem(k)===d) return; setTimeout(function(){ try{ localStorage.setItem(k, d); }catch(e){} _lwSyncCatsPoll_(); }, 120000); }catch(e){} })(); setTimeout(function(){ try{ _lwSyncPanel_(); }catch(e){} }, 9000);
 // 校正BOX の上: 自動連携の状態と、はじめる／止める
 function _lwSyncPanel_(){
   var el=document.getElementById('lw-sync-state'); if(!el) return;
