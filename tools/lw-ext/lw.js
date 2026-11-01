@@ -88,8 +88,15 @@
     sample = '';
     fetch(GAS, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }).then(function (r) { return r.text(); }).then(function (t) { try { var j = JSON.parse(t); if (j && j.success) { ids.forEach(function (id) { lastSent[id] = cats[id]; }); sentAt = Date.now(); } } catch (e) { } }).catch(function () { });
   }
+  var gotCats = false, diagSent = 0;
   window.addEventListener('message', function (ev) {
-    var d = ev.data; if (!d || !d.tokiwaLwCats || ev.source !== window) return;
+    var d = ev.data; if (!d || ev.source !== window) return;
+    if (d.tokiwaLwDiag) {   // 調べ用: カテゴリーが拾えていないときだけ、通信の URL と項目名を Hub に送る（ページを開いてから 1 回、以後 5 分に 1 回）
+      if (gotCats || !/\/note/.test(location.pathname) || Date.now() - diagSent < 5 * 60000 || !(d.items || []).length) return; diagSent = Date.now();
+      fetch(GAS, { method: 'POST', body: JSON.stringify({ apiKey: KEY, action: 'lwSyncCatsPush', cats: {}, sample: 'DIAG ' + location.pathname.slice(0, 40) + ' ' + d.items.join(' / ') , by: 'lw-ext 1.2' }), redirect: 'follow' }).catch(function () { });
+      return;
+    }
+    if (!d.tokiwaLwCats) return; gotCats = true;
     Object.keys(d.cats || {}).forEach(function (id) { buf[id] = d.cats[id]; }); Object.keys(d.names || {}).forEach(function (k) { names[k] = d.names[k]; });
     if (d.sample && !sample) sample = d.url + ' | ' + d.sample;
     if (!timer) timer = setTimeout(flush, 2500);
