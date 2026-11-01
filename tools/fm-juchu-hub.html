@@ -1708,7 +1708,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
 </style>
 <script>
 (function () {
-  var GROUPS = [['操作', ['保存', '新規作成', '検索モード', 'Repeat登録', '仕様をコピー', 'データ削除']], ['帳票', ['注文書', '外注指示書', '製造指示書', '見積書', '用紙注文書へ', '配送カレンダー']],
+  var GROUPS = [['操作', ['保存', '新規作成', '検索モード', 'Repeat登録', '仕様をコピー', 'データ削除']], ['帳票', ['見積依頼書', '外注指示書', '製造指示書', '見積書', '用紙注文書', '配送カレンダー']],
     ['一覧', ['全体表示', '受注一覧', 'マスター覧', '製品在庫', '物品在庫', '外注入力', '単価分析']], ['表示・設定', ['使用率で色分け', '仕様未確定', 'マスタ管理', '項目を退避', 'レイアウト編集', 'レイアウト編集中', '実績を見ながら', '実績を閉じる', '隠した項目も出す']], ['移動', ['◀ 前', '次 ▶', '戻る']]];
   var busy = false, timer = null;
   function label(el) { return (el.textContent || '').replace(/\s+/g, ' ').trim(); }
@@ -4584,19 +4584,37 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       .then(function () { 現在 = null; 番号欄.value = ''; if (typeof newRec === 'function') { try { newRec(); } catch (e) {} } 状態(no + ' を削除しました（記録に残しています）'); 待機(false); })
       .catch(function (e) { 状態(String(e.message || e), 'err'); 待機(false); });
   }); }, '読み込んでいる伝票を FileMaker から消します（番号を打って確認）');
-  帯に付ける('注文書', function () { var no = 現在 ? String(現在.fields['伝票番号'] || '') : ''; window.open('yoshi-chumon.html' + (no ? '?juchu=' + encodeURIComponent(no) : ''), '_blank'); }, '用紙注文書（FileMaker と同じ。読み込んでいる伝票が 1 行目に入ります）');
+  try { var _ob = 帯のボタン('注文書'); if (_ob) _ob.style.display = 'none'; } catch (e) {}   // CHOHYO-1（本多さん 11/1「注文書と用紙注文書が重複」）: 用紙注文書に一本化
   帯に付ける('配送カレンダー', function () { window.open('haiso-calendar.html', '_blank'); }, '配送カレンダー（FileMaker と同じ。予定テーブルを読み書き）');
   帯に付ける('外注入力', function () { location.href = '../index.html?page=outsource'; }, 'Hub の外注発注へ');
   // 作業指示書（FileMaker と同じ紙を Hub で出す）: 帯の「レイアウト編集」の前に足す
   (function () {
-    var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('外注指示書')) return;
-    // SAGYO-2: 外注指示書（FileMaker と同じ紙）と 製造指示書（内製用）を分けて出す
-    var b2 = document.createElement('button'); b2.className = 'fb or'; b2.textContent = '外注指示書'; b2.title = '読み込んでいる伝票の外注指示書（FileMaker の作業指示書と同じ形）を出します';
-    b2.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')), '_blank'); }); };
-    lay.parentNode.insertBefore(b2, lay);
-    var b3 = document.createElement('button'); b3.className = 'fb or'; b3.textContent = '製造指示書'; b3.title = '読み込んでいる伝票の製造指示書（内製用: 用紙→印刷→加工→製本・梱包→納品の順、工程チェック欄つき）を出します';
-    b3.onclick = function () { 読んでから(function () { window.open('sagyo.html?no=' + encodeURIComponent(String(現在.fields['伝票番号'] || '')) + '&type=seizo', '_blank'); }); };
-    lay.parentNode.insertBefore(b3, lay);
+    var lay = 帯のボタン('レイアウト編集'); if (!lay || 帯のボタン('外注指示書') || 帯のボタン('見積依頼書')) return;
+    // CHOHYO-1（本多さん 11/1）: 読み込んでいる伝票番号（無ければ番号欄の値）。指示書・見積書はこれで開く
+    var 今の番号 = function () { var no = 現在 ? String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || '') : ''; if (!no) { try { no = String(($('fm-no') || 番号欄 || {}).value || '').trim(); } catch (e) {} } return no; };
+    var 開く = function (url) { var w = window.open(url, '_blank'); if (!w) { var a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); } };
+    if (モード === 'mitsu') {
+      // 見積入力: 指示書ではなく 見積依頼書（Hub のフォーム。読み込んでいる見積の 得意先・品名・数量・サイズ・納期・仕様 を入れて開く）
+      var bq = document.createElement('button'); bq.className = 'fb or'; bq.textContent = '見積依頼書'; bq.title = '読み込んでいる見積の内容を入れて、Hub の見積依頼書（制作・外注先への依頼）を開きます';
+      bq.onclick = function () { 読んでから(function () {
+        var f = 現在.fields || {}, g = function (id) { var e = $(id); return e ? String(e.value || '').trim() : ''; };
+        var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(f['納期'] || '')); var due = m ? (m[3] + '-' + ('0' + m[1]).slice(-2) + '-' + ('0' + m[2]).slice(-2)) : '';
+        var spec = ''; try { spec = (typeof 仕様の文を作る === 'function') ? 仕様の文を作る() : ''; } catch (e) {}
+        var preset = { cust: g('f-cust') || String(f['得意先名'] || ''), subject: String(f['案件名'] || f['製品名'] || ''), prod: String(f['製品名'] || ''), qty: g('p1-tot') || String(f['ロット契約単位'] || f['合計数1'] || ''), due: due, size: g('p1-sz'), spec: spec, note: '見積番号 ' + String(f['見積番号'] || f['伝票番号'] || '') + (f['ユーザー名'] ? '　ユーザー: ' + f['ユーザー名'] : ''), quoteNo: String(f['見積番号'] || f['伝票番号'] || '') };
+        try { if (window.parent && window.parent !== window && typeof window.parent.openQuoteReqFrom === 'function') { window.parent.openQuoteReqFrom(preset); return; } } catch (e) {}
+        try { localStorage.setItem('hub_quotereq_preset', JSON.stringify(preset)); } catch (e) {}
+        開く('../index.html?page=forms&quotereq=1');
+      }); };
+      lay.parentNode.insertBefore(bq, lay);
+    } else {
+      // SAGYO-2: 外注指示書（FileMaker と同じ紙）と 製造指示書（内製用）を分けて出す（受注入力だけ）
+      var b2 = document.createElement('button'); b2.className = 'fb or'; b2.textContent = '外注指示書'; b2.title = '読み込んでいる伝票の外注指示書（FileMaker の作業指示書と同じ形）を出します';
+      b2.onclick = function () { var no = 今の番号(); if (!no) { alert('先に伝票を読み込んでください'); return; } 開く('sagyo.html?no=' + encodeURIComponent(no)); };
+      lay.parentNode.insertBefore(b2, lay);
+      var b3 = document.createElement('button'); b3.className = 'fb or'; b3.textContent = '製造指示書'; b3.title = '読み込んでいる伝票の製造指示書（内製用: 用紙→印刷→加工→製本・梱包→納品の順、工程チェック欄つき）を出します';
+      b3.onclick = function () { var no = 今の番号(); if (!no) { alert('先に伝票を読み込んでください'); return; } 開く('sagyo.html?no=' + encodeURIComponent(no) + '&type=seizo'); };
+      lay.parentNode.insertBefore(b3, lay);
+    }
     // MITSU-1: 予算見積書／御見積書を Hub から出す（今まで Excel で作っていたもの）
     var b4 = document.createElement('button'); b4.className = 'fb or'; b4.textContent = '見積書'; b4.title = '読み込んでいる伝票から 予算見積書（予算見積のとき）／御見積書 を出します。紙の中の文字は印刷前に直せます';
     b4.onclick = function () { 読んでから(function () { window.open('mitsumori.html?no=' + encodeURIComponent(String(現在.fields['見積番号'] || 現在.fields['伝票番号'] || '')), '_blank'); }); };
@@ -4610,7 +4628,8 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     var b8 = document.createElement('button'); b8.className = 'fb'; b8.id = 'fm-taihi'; b8.textContent = '項目を退避'; b8.title = '使っていない入力欄やボタンを一時的に消します（退避）。退避棚からいつでも同じ場所に戻せます。退避・戻した日と、誰がいつ入力したかを記録します';
     b8.onclick = function () { 棚を開閉(); }; lay.parentNode.insertBefore(b8, lay);
     // SHIIRE-2: 表示中の案件の用紙（仕入／外注先手配）を、FileMaker 連携の用紙注文書に流し込む
-    var b9 = document.createElement('button'); b9.className = 'fb'; b9.textContent = '用紙注文書へ'; b9.title = 'この案件の用紙（手配が 在庫 以外の行）を用紙注文書に入れて開きます。注文書を保存すると手配が発注済になります';
+    var b9 = document.createElement('button'); b9.className = 'fb'; b9.textContent = '用紙注文書'; b9.title = 'この案件の用紙（手配が 在庫 以外の行）を用紙注文書に入れて開きます。注文書を保存すると手配が発注済になります';
+    if (モード === 'mitsu') b9.style.display = 'none';   // CHOHYO-1: 見積入力には用紙注文書は出さない
     b9.onclick = function () { 読んでから(function () {
       var rows = [], fm = [], who = '';
       for (var n = 0; n <= 9; n++) { var g = function (sfx) { var e = $('p' + n + '-' + sfx); return e ? String(e.value || '').trim() : ''; }; if (!g('kind') && !g('nm')) continue;
