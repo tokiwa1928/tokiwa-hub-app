@@ -4915,6 +4915,11 @@ async function loadFromCloud() {
     DB.calendarOrders = calDedupe(_coOrder.filter(function(id){ var r=_coById[id]; if(_coTomb[id]) return false; if(r && !r._manual && _coSig[typeof calSigOf==='function'?calSigOf(r):'']) return false; return true; }).map(function(id){ return _coById[id]; }));   // CAL-DUP-1: 内容が同じ行は 1 行に
   }
 
+  // DOC-LINK-1: 外注先に送った書類の覚え（送信・返事は新しい方）
+  if (result.data.docSends && typeof result.data.docSends==='object') {
+    var _dsm=DB.docSends||{}; Object.keys(result.data.docSends).forEach(function(k){ var a=_dsm[k], b=result.data.docSends[k]; if(!b) return; if(!a){ _dsm[k]=b; return; } ['docId','url','type'].forEach(function(x){ if(!a[x]&&b[x]) a[x]=b[x]; }); ['publishedAt','sentAt','lastReplyAt'].forEach(function(x){ if(String(b[x]||'')>String(a[x]||'')){ a[x]=b[x]; if(x==='sentAt'){ a.to=b.to; a.sentBy=b.sentBy; } if(x==='lastReplyAt') a.reply=b.reply; } }); });
+    DB.docSends=_dsm;
+  }
   // QFOLDER-1: 見積番号のフォルダの覚え。番号ごとに合わせる（id は同じになる。印は両方の OR、外注見積書は和集合）
   if (result.data.quoteFolders && typeof result.data.quoteFolders==='object') {
     var _qfm=DB.quoteFolders||{}; Object.keys(result.data.quoteFolders).forEach(function(no){ var a=_qfm[no], b=result.data.quoteFolders[no]; if(!b) return; if(!a){ _qfm[no]=b; return; }
@@ -5533,6 +5538,7 @@ async function _saveToCloudNow_() {
     proofings: DB.proofings || [],                                   // KOSEI-SYNC-1: 校正BOX のカードも全社保存
     proofingsDeleted: (DB.proofingsDeleted || []).slice(-2000),
     quoteFolders: DB.quoteFolders || {},   // QFOLDER-1
+    docSends: DB.docSends || {},   // DOC-LINK-1
     sagyoPrints: (DB.sagyoPrints || []).slice(-8000),                // SEIZO-1: 製造指示書の出力記録（第N回・日時・誰が・変更コメント・写し）
     inquiries: DB.inquiries || [],
     deliveryItems: DB.deliveryItems || [],
@@ -29028,6 +29034,7 @@ function _applyDeepLink_(){
 function renderFormsPage(){
   var le=document.getElementById('form-editor'); if(le) le.style.display='none';
   var fl=document.getElementById('forms-list'); if(!fl) return; fl.style.display='block';
+  try{ setTimeout(_docStatusFetch_, 500); }catch(e){}   // DOC-LINK-1
   var all=_formsList_().slice().sort(function(a,b){ return new Date(b.updatedAt||b.createdAt||0)-new Date(a.updatedAt||a.createdAt||0); });
   // ① フォーム種別＝ツールと同じカードグリッド（クリックで新規作成）
   var cards=FORMS_REGISTRY.map(function(f){
@@ -29070,7 +29077,7 @@ function renderFormsPage(){
       var tc=TCOL[f.key]||'#64748b';
       list='<div>'+shown.map(function(r,i){ var when=(r.updatedAt||r.createdAt||'').slice(0,10); var dd=r.data||{}; var bg=(i%2===0)?'#ffffff':'#f6f7f9';
         return '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid #e2e0da;border-left:5px solid '+tc+';border-radius:6px;margin-top:5px;background:'+bg+'">'
-          + '<span style="flex:1;min-width:0"><b style="font-size:12.5px">'+_formEsc_(r.title||dd.subject||dd.prod||f.name)+'</b><span style="font-size:11px;color:#64748b;margin-left:8px">'+when+(r.createdBy?' ／ '+_formEsc_(r.createdBy):'')+'</span></span>'
+          + '<span style="flex:1;min-width:0"><b style="font-size:12.5px">'+_formEsc_(r.title||dd.subject||dd.prod||f.name)+'</b><span style="font-size:11px;color:#64748b;margin-left:8px">'+when+(r.createdBy?' ／ '+_formEsc_(r.createdBy):'')+'</span>'+((typeof _docChip_==='function')?_docChip_(r):'')+'</span>'
           + '<button class="btn" style="font-size:11px;padding:3px 9px" onclick="openForm(\''+r.type+'\',\''+r.id+'\')">✏ 開く</button>'
           + '<button class="btn" style="font-size:11px;padding:3px 9px" onclick="printForm(\''+r.id+'\')">🖨 PDF</button>'
           + '<button class="btn" style="font-size:11px;padding:3px 9px;color:#b91c1c;border-color:#fca5a5" onclick="deleteForm(\''+r.id+'\')">🗑</button>'
@@ -29365,6 +29372,7 @@ function openQuoteReq(id){
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">'
     +   '<button class="btn btn-p" onclick="saveQuoteReq()">💾 保存</button>'
     +   '<button class="btn" onclick="saveQuoteReq(true)">💾 保存して印刷/PDF</button>'
+    +   '<button class="btn" style="background:#15743a;color:#fff;border-color:#15743a" onclick="_docSendOpen_(\'quotereq\')" title="添付ではなく、外注先が開けるページのリンクをメールで送ります。直して保存すれば先方のページも新しくなります">📧 外注先にメールで送る（リンク）</button>'
     +   (id?'<button class="btn" onclick="_formBackToList_()">キャンセル</button>':'')
     + '</div>'
     + '<datalist id="dl-mit-vendor"></datalist><datalist id="dl-mit-cust"></datalist><datalist id="dl-mit-prod"></datalist><datalist id="dl-mit-size"></datalist><datalist id="dl-mit-color"></datalist>'
@@ -29386,9 +29394,71 @@ function saveQuoteReq(thenPrint){
   if(!rec){ rec={ id:'frm_'+Date.now()+'_'+Math.random().toString(36).slice(2,6), type:'quotereq', title:title, data:data, createdAt:now, updatedAt:now, createdBy:_formWho_() }; L.push(rec); window._formEditId_=rec.id; }
   if(typeof saveDB==='function')saveDB(); if(typeof saveToCloud==='function')try{saveToCloud();}catch(e){}
   if(typeof _toastMsg==='function')_toastMsg('💾 保存しました');
+  try{ _docRepublish_(rec); }catch(e){}   // DOC-LINK-1: 送ってある書類なら、外注先のページも新しくする
   if(thenPrint) _printQuoteReq_(rec); else renderFormsPage();
 }
-function _printQuoteReq_(r){
+// ═══ DOC-LINK-1（本多さん 11/1「依頼はメールで、添付ではなく URL。保管も PDF ではなく Hub 上で」）═══
+//   見積依頼書（まず 1 種類）を会社 GAS の「外注先が開くページ」として預け、リンクをメールで送る。
+//   直して保存すると自動で預け直す（外注先が次に開くと新しくなり、「変更あり」が出る）。開封・返事は一覧に出る。覚え: DB.docSends[フォームid]
+var DOC_LABELS={ quotereq:{ cust:'得意先', subject:'件名', prod:'品名', due:'希望納期', size:'サイズ', sizeW:'横(mm)', sizeH:'縦(mm)', color:'色数', qty:'部数', pages:'頁数', paper:'用紙', parts:'パーツ', kakou:'加工', spec:'仕様', note:'備考', dest:'外注先', kubun:'区分', requester:'依頼者' } };
+function _docHtmlOf_(rec){ if(rec.type==='quotereq' && typeof _quoteReqHtml_==='function') return _quoteReqHtml_(rec); return ''; }
+function _docPublish_(rec, by){
+  var html=_docHtmlOf_(rec); if(!html) return Promise.reject(new Error('この書類はまだページにできません'));
+  var d=rec.data||{}, co=(typeof MIT_CO!=='undefined' && MIT_CO[d.co])||{};
+  return callCloudAPI('docPublish',{},{ docId:'frm:'+rec.id, type:rec.type, title:(rec.type==='quotereq'?'見積依頼書 ':'')+(rec.title||''), vendor:d.dest||'', email:(typeof _vendorEmail_==='function'?_vendorEmail_(d.dest||''):'')||'', html:html, data:d, labels:DOC_LABELS[rec.type]||{}, co:co.name||'', by:by||'' })
+    .then(function(r){ if(!r||!r.success) throw new Error((r&&r.error)||'預けられませんでした'); DB.docSends=DB.docSends||{}; var m=DB.docSends[rec.id]=DB.docSends[rec.id]||{}; m.docId='frm:'+rec.id; m.url=r.url; m.type=rec.type; m.publishedAt=new Date().toISOString(); try{ saveDB(); }catch(e){} return m; });
+}
+function _docRepublish_(rec){ if(!rec || !DB.docSends || !DB.docSends[rec.id]) return; _docPublish_(rec,(currentAuth&&currentAuth.userName)||'').then(function(){ if(typeof _toastMsg==='function') _toastMsg('🔗 外注先のページも新しくしました'); }).catch(function(e){ console.warn('[DOC]', e); }); }
+function _docSendOpen_(type){
+  if(type==='quotereq'){ try{ saveQuoteReq(); }catch(e){} }
+  var id=window._formEditId_; var rec=_formsList_().find(function(x){ return x.id===id; }); if(!rec){ alert('先に保存してください'); return; }
+  var d=rec.data||{}, co=(typeof MIT_CO!=='undefined' && MIT_CO[d.co])||{}; var esc=function(v){ return _escDiff(String(v==null?'':v)); };
+  var to=(typeof _vendorEmail_==='function'?_vendorEmail_(d.dest||''):'')||''; var who=d.requester||(currentAuth&&currentAuth.userName)||'';
+  var old=document.getElementById('doc-send-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='doc-send-modal'; m.className='proof-modal'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
+  var subj='【見積依頼】'+(d.subject||d.prod||rec.title||''); var body=(d.dest?d.dest+' 御中\n\n':'')+'いつもお世話になっております。'+(co.name||'')+(who?' '+who:'')+'です。\n下記の見積依頼書をご確認ください（添付ではなく、ページで開きます。ログインは要りません）。\n\n{url}\n\n内容が変わった場合は、同じページの上に「変更あり」と出ます。\nページの下の欄から、受けられるかと納期をご返信ください。\n\nよろしくお願いいたします。\n'+(co.name||'')+(co.tel?'　TEL '+co.tel:'');
+  m.innerHTML='<div style="background:#fff;width:100%;max-width:620px;max-height:92vh;overflow:auto;border-radius:10px;padding:16px 18px;font-size:13px">'
+    +'<div style="font-size:15px;font-weight:900;margin-bottom:8px">📧 外注先にメールで送る（リンク）</div>'
+    +'<div style="color:#64748b;font-size:12px;margin-bottom:8px">書類はページとして送ります。あとで直して保存すれば、先方が次に開いたときに新しくなります。</div>'
+    +'<label style="display:block;font-weight:700;margin:6px 0 2px">宛先（メール）</label><input id="ds-to" list="dl-doc-mails" value="'+esc(to)+'" placeholder="例: order@vendor.co.jp" style="width:100%;padding:7px 9px;border:1px solid #94a3b8;border-radius:6px;box-sizing:border-box">'
+    +'<datalist id="dl-doc-mails">'+((DB.outsourceVendors||[]).filter(function(v){ return v&&v.email; }).map(function(v){ return '<option value="'+esc(v.email)+'">'+esc(v.name||'')+'</option>'; }).join(''))+'</datalist>'
+    +(to?'':'<div style="font-size:11.5px;color:#b45309">外注先マスタに「'+esc(d.dest||'')+'」のメールが無いので、手で入れてください</div>')
+    +'<label style="display:block;font-weight:700;margin:6px 0 2px">CC（任意）</label><input id="ds-cc" value="'+esc(co.email||'')+'" style="width:100%;padding:7px 9px;border:1px solid #94a3b8;border-radius:6px;box-sizing:border-box">'
+    +'<label style="display:block;font-weight:700;margin:6px 0 2px">件名</label><input id="ds-subj" value="'+esc(subj)+'" style="width:100%;padding:7px 9px;border:1px solid #94a3b8;border-radius:6px;box-sizing:border-box">'
+    +'<label style="display:block;font-weight:700;margin:6px 0 2px">本文（{url} の所にリンクが入ります）</label><textarea id="ds-body" rows="11" style="width:100%;padding:7px 9px;border:1px solid #94a3b8;border-radius:6px;box-sizing:border-box;font-family:inherit">'+esc(body)+'</textarea>'
+    +'<div id="ds-msg" style="font-size:12px;color:#64748b;margin-top:6px"></div>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" onclick="document.getElementById(\'doc-send-modal\').remove()">やめる</button><button class="btn" onclick="_docPreview_(\''+esc(rec.id)+'\')">👁 ページを確かめる</button><button class="btn btn-p" id="ds-go" onclick="_docSendGo_(\''+esc(rec.id)+'\')">📧 送る</button></div></div>';
+  document.body.appendChild(m);
+}
+function _docPreview_(id){ var rec=_formsList_().find(function(x){ return x.id===id; }); if(!rec) return; var msg=document.getElementById('ds-msg'); if(msg) msg.textContent='ページを作っています…'; _docPublish_(rec,(currentAuth&&currentAuth.userName)||'').then(function(mm){ if(msg) msg.textContent=''; window.open(mm.url+'&internal=1','_blank'); }).catch(function(e){ if(msg) msg.textContent='作れませんでした: '+String(e&&e.message||e)+(/unknown_action/.test(String(e&&e.message))?'（会社 GAS の更新が要ります）':''); }); }
+function _docSendGo_(id){
+  var rec=_formsList_().find(function(x){ return x.id===id; }); if(!rec) return;
+  var to=(document.getElementById('ds-to')||{}).value||'', cc=(document.getElementById('ds-cc')||{}).value||'', subj=(document.getElementById('ds-subj')||{}).value||'', body=(document.getElementById('ds-body')||{}).value||'';
+  if(!/.+@.+\..+/.test(to)){ alert('宛先のメールを入れてください'); return; }
+  var btn=document.getElementById('ds-go'); if(btn){ btn.disabled=true; btn.textContent='送っています…'; }
+  var who=(currentAuth&&currentAuth.userName)||'';
+  _docPublish_(rec, who).then(function(mm){ return callCloudAPI('docSend',{},{ docId:mm.docId, to:to, cc:cc, subject:subj, body:body, by:who, fromName:((typeof MIT_CO!=='undefined'&&MIT_CO[(rec.data||{}).co])||{}).name||'Tokiwa Hub' }).then(function(r){ if(!r||!r.success) throw new Error((r&&r.error)||'送れませんでした'); mm.to=to; mm.sentAt=r.sentAt||new Date().toISOString(); mm.sentBy=who; try{ saveDB(); if(typeof saveToCloud==='function') saveToCloud(); }catch(e){} }); })
+    .then(function(){ var m=document.getElementById('doc-send-modal'); if(m) m.remove(); if(typeof _toastMsg==='function') _toastMsg('📧 送りました（'+to+'）'); try{ renderFormsPage(); }catch(e){} })
+    .catch(function(e){ if(btn){ btn.disabled=false; btn.textContent='📧 送る'; } alert('送れませんでした: '+String(e&&e.message||e)+(/unknown_action/.test(String(e&&e.message))?'\n（会社 GAS の更新が要ります）':'')); });
+}
+// 一覧に出す印（送信・開封・返事）。状態は 2 分に 1 回まとめて聞く
+function _docChip_(r){
+  var m=DB.docSends&&DB.docSends[r.id]; if(!m) return ''; var st=(window._docStatus_&&window._docStatus_[m.docId])||null; var md=function(s){ var x=/^\d{4}-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(String(s||'')); return x?(+x[1])+'/'+(+x[2])+' '+x[3]+':'+x[4]:''; };
+  var h='<a href="'+_escDiff(m.url)+'&internal=1" target="_blank" onclick="event.stopPropagation()" style="font-size:10.5px;background:#e0f2fe;color:#075985;border-radius:8px;padding:1px 7px;margin-left:6px;text-decoration:none" title="外注先に見えているページ（当社用。開封には数えません）">🔗 ページ</a>';
+  if(m.sentAt) h+='<span style="font-size:10.5px;background:#f1f5f9;color:#334155;border-radius:8px;padding:1px 7px;margin-left:4px" title="'+_escDiff(m.to||'')+'">📧 送信 '+md(m.sentAt)+'</span>';
+  if(st){ var op=(st.opens||[]); if(op.length) h+='<span style="font-size:10.5px;background:#dcfce7;color:#166534;border-radius:8px;padding:1px 7px;margin-left:4px">👁 受領 '+md(op[op.length-1].at)+(op.length>1?'（'+op.length+'回）':'')+'</span>'; else if(m.sentAt) h+='<span style="font-size:10.5px;background:#fef3c7;color:#92400e;border-radius:8px;padding:1px 7px;margin-left:4px">未開封</span>';
+    var rp=(st.replies||[]); if(rp.length){ var l=rp[rp.length-1]; h+='<span style="font-size:10.5px;background:#ede9fe;color:#5b21b6;border-radius:8px;padding:1px 7px;margin-left:4px" title="'+_escDiff(l.memo||'')+'">↩ '+_escDiff(l.ok||'返事')+(l.due?' 納期 '+_escDiff(l.due):'')+(l.name?'（'+_escDiff(l.name)+'）':'')+'</span>'; } }
+  return h;
+}
+function _docStatusFetch_(){
+  var ids=Object.keys(DB.docSends||{}).map(function(k){ return DB.docSends[k].docId; }).filter(Boolean); if(!ids.length) return;
+  if(window._docStatusAt_ && Date.now()-window._docStatusAt_<2*60000) return; window._docStatusAt_=Date.now();
+  callCloudAPI('docStatus',{},{ docIds:ids.join(',') }).then(function(r){ if(!r||!r.success) return; window._docStatus_=r.docs||{};
+    // 返事（納期）を外注発注・案件にも入れる
+    try{ Object.keys(window._docStatus_).forEach(function(did){ var st=window._docStatus_[did], rp=(st.replies||[]); if(!rp.length) return; var last=rp[rp.length-1]; var fid=did.replace(/^frm:/,''); var m=DB.docSends[fid]; if(!m || m.lastReplyAt===last.at) return; m.lastReplyAt=last.at; m.reply=last; try{ saveDB(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('↩ 外注先から返事: '+(last.ok||'')+(last.due?' 納期 '+last.due:'')); }); }catch(e){}
+    try{ if(document.getElementById('forms-list') && document.getElementById('forms-list').style.display!=='none') renderFormsPage(); }catch(e){} }).catch(function(){});
+}
+function _quoteReqHtml_(r){
   var d=r.data||{}; var p=MIT_CO[d.co]||MIT_CO.arteso; var e=_formEsc_;
   var sizeStr=(d.size||'')+((d.sizeW&&d.sizeH)?'（'+e(d.sizeW)+'×'+e(d.sizeH)+'mm）':'');
   var spec=[ (sizeStr.trim()?'サイズ：'+e(d.size||'')+((d.sizeW&&d.sizeH)?'（'+e(d.sizeW)+'×'+e(d.sizeH)+'mm）':''):''), (d.color?'色数：'+e(d.color):''), (d.qty?'部数：'+e(d.qty):''), (d.pages?'ページ数：'+e(d.pages):''), (d.parts?'パーツ数：'+e(d.parts):''), (d.paper?'用紙：'+e(d.paper):'') ].filter(function(x){return x;});
@@ -29423,9 +29493,9 @@ function _printQuoteReq_(r){
     +   '</div>'
     + '</div>'
     + '</body></html>';
-  var w=window.open('','_blank'); if(!w){ if(typeof _toastMsg==='function')_toastMsg('ポップアップを許可してください'); return; }
-  w.document.write(html); w.document.close();
+  return html;
 }
+function _printQuoteReq_(r){ var html=_quoteReqHtml_(r); var w=window.open('','_blank'); if(!w){ if(typeof _toastMsg==='function')_toastMsg('ポップアップを許可してください'); return; } w.document.write(html); w.document.close(); }
 // ── 📅 日程表（進行スケジュール・各社対応） ──
 var NT_STEP_PRESET=['入稿','データ作成','デザイン','初校','再校','校了','下版','印刷','製本・加工','断裁','検品','箱詰め','納品','発送'];
 function openNittei(id){
