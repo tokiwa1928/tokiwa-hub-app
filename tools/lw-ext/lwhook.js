@@ -4,16 +4,19 @@
 (function () {
   if (window.__tokiwaHooked) return; window.__tokiwaHooked = true;
   setInterval(function () { try { window.postMessage({ tokiwaLwDiag: true, items: (window.__tokiwaDiag || []).slice(-12) }, '*'); } catch (e) { } }, 15000);
-  var catKeys = ['categoryName', 'categoryTitle', 'boardName', 'folderName'], idKeys = ['categoryId', 'boardId', 'folderId'];
+  // 11/1 調べた結果: LINE WORKS の画面は /p/note/open-api/teamNote/post/selectList?…&boardNo=<カテゴリー番号> で一覧を読む。投稿は postNoString、カテゴリーは boardNo（名前は別の一覧に boardName）
+  var catKeys = ['categoryName', 'categoryTitle', 'boardName', 'folderName'], idKeys = ['boardNo', 'categoryId', 'categoryNo', 'boardId', 'folderId'];
+  function qs(url, k) { var m = new RegExp('[?&]' + k + '=([^&]*)').exec(String(url || '')); return m ? decodeURIComponent(m[1]) : ''; }
   function pick(o, keys) { for (var i = 0; i < keys.length; i++) { var k = keys[i]; if (o[k] != null && o[k] !== '') return o[k]; var c = o.category || o.board || o.folder; if (c && typeof c === 'object' && c[k] != null) return c[k]; } return null; }
   function scan(json, url) {
-    var cats = {}, names = {}, n = 0, sample = null, seen = 0;
+    var cats = {}, names = {}, n = 0, sample = null, seen = 0, urlBoard = qs(url, 'boardNo');
     (function walk(v, depth) {
       if (!v || typeof v !== 'object' || depth > 8 || seen++ > 20000) return;
       if (Array.isArray(v)) { v.forEach(function (x) { walk(x, depth + 1); }); return; }
-      var pid = v.postId || v.noteId || v.postNo; var cn = pick(v, catKeys), ci = pick(v, idKeys);
+      var pid = v.postNoString || v.postIdString || v.postId || v.noteId || null; if (!pid && v.postNo != null && typeof v.postNo === 'string') pid = v.postNo;
+      var cn = pick(v, catKeys), ci = pick(v, idKeys); if (pid && ci == null && urlBoard) ci = urlBoard;   // 一覧の URL の boardNo をその中の投稿に
       if (pid && (cn != null || ci != null)) { cats[String(pid)] = { name: cn != null ? String(cn) : '', id: ci != null ? String(ci) : '' }; n++; if (!sample) sample = Object.keys(v).join(','); }
-      else if (!pid && ci != null && cn != null) names[String(ci)] = String(cn);   // カテゴリーの一覧
+      else if (!pid && ci != null && cn != null) names[String(ci)] = String(cn);   // カテゴリー（ボード）の一覧
       Object.keys(v).forEach(function (k) { walk(v[k], depth + 1); });
     })(json, 0);
     if (n || Object.keys(names).length) window.postMessage({ tokiwaLwCats: true, url: String(url || '').slice(0, 200), cats: cats, names: names, sample: sample }, '*');
