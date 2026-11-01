@@ -1731,6 +1731,7 @@ setTimeout(_removeBootLoader_, 5000);
       <th data-col="no" style="min-width:80px">案件番号</th>
       <th data-col="quoteNo" style="min-width:80px">見積番号</th>
       <th data-col="due" style="min-width:80px">納期</th>
+      <th data-col="koryo" style="min-width:84px" title="校了予定日。校正BOX のカードで入れた日、無ければ 納期 − 目安の日数（⚙ 校了の目安）。予定の前後で ⏰／🚨">校了予定</th>
       <th data-col="orderDate" style="min-width:60px">受注日</th>
       <th data-col="cust" style="min-width:100px">得意先</th>
       <th data-col="endUser" style="min-width:90px" title="ユーザー名（エンドユーザー）">ユーザー</th>
@@ -21525,7 +21526,7 @@ function _proofCell_(key, c, statuses){
   return '';
 }
 // ═══ PJCOL-1: 営業の案件一覧の列（表示/非表示。この端末に記憶）═══
-var PROJ_COL_DEFS=[ {key:'no',label:'案件番号',always:true}, {key:'quoteNo',label:'見積番号'}, {key:'due',label:'納期'}, {key:'orderDate',label:'受注日'},
+var PROJ_COL_DEFS=[ {key:'no',label:'案件番号',always:true}, {key:'quoteNo',label:'見積番号'}, {key:'due',label:'納期'}, {key:'koryo',label:'校了予定'}, {key:'orderDate',label:'受注日'},
   {key:'cust',label:'得意先',always:true}, {key:'endUser',label:'ユーザー'}, {key:'item',label:'品名',always:true}, {key:'unit',label:'単価'}, {key:'amount',label:'受注金額'},
   {key:'gp',label:'粗利'}, {key:'gpRate',label:'粗利率'}, {key:'status',label:'ステータス'}, {key:'tanto',label:'担当者'}, {key:'ops',label:'操作ボタン',always:true} ];
 function _projVisCols_(){ try{ var a=JSON.parse(localStorage.getItem('tokiwa_proj_cols')||'null'); if(a&&a.length) return a; }catch(e){} return PROJ_COL_DEFS.map(function(c){ return c.key; }); }
@@ -21534,8 +21535,8 @@ function _projApplyCols_(){
   var tr=thead.querySelector('tr'); if(!tr || tr.getAttribute('data-mode')==='quote') return;
   // PJORDER-1（本多さん 11/1「金額より、ステータスと納期、進んでない案件がないかが一番大事。粗利は参考程度」）: 列を 案件番号 → ステータス → 納期 → … の順に並べ替え、粗利・粗利率は控えめに
   try{
-    var ORIG=['','no','quoteNo','due','orderDate','cust','endUser','item','unit','amount','gp','gpRate','status','tanto','ops'];
-    var WANT=['','no','status','due','cust','endUser','item','orderDate','quoteNo','unit','amount','gp','gpRate','tanto','ops'];
+    var ORIG=['','no','quoteNo','due','koryo','orderDate','cust','endUser','item','unit','amount','gp','gpRate','status','tanto','ops'];
+    var WANT=['','orderDate','no','status','due','koryo','cust','endUser','item','quoteNo','unit','amount','gp','gpRate','tanto','ops'];   // PJORDER-2（本多さん 11/1「受注日いちばん左。案件番号、校了予定日」）
     var hs=Array.prototype.slice.call(tr.children), keyOf=function(th){ return th.getAttribute('data-col')||''; };
     if(hs.length===ORIG.length && hs.map(keyOf).join(',')!==WANT.join(',')){ var byK={}; hs.forEach(function(th){ byK[keyOf(th)]=th; }); WANT.forEach(function(k){ if(byK[k]) tr.appendChild(byK[k]); }); }
     ['gp','gpRate'].forEach(function(k){ var th=tr.querySelector('th[data-col="'+k+'"]'); if(th) th.classList.add('pj-ref'); });
@@ -22462,6 +22463,24 @@ function _proofKoryoPlan_(p){
   if(!p) return null; if(p.koryoPlan) return { date:String(p.koryoPlan).slice(0,10), manual:true, due:_proofDue_(p) };
   var due=_proofDue_(p); if(!/^\d{4}-\d\d-\d\d$/.test(due)) return null;
   var lead=_proofKoryoLead_(p), d=new Date(due+'T00:00:00'); d.setDate(d.getDate()-lead); return { date:_ymd_(d), lead:lead, due:due };
+}
+// PJKORYO-1: 案件の校了予定（案件につながる校正カードの予定。無ければ 納期 − 品名の目安）
+function _projKoryoPlan_(r){
+  if(!r) return null; var due=String(r.dueDate||'').slice(0,10);
+  var card=(DB.proofings||[]).filter(function(p){ return p && (p.projectId===r.id || (r.fm && p.fmNo && String(p.fmNo)===String(r.fm['fm-denpyo']||''))); }).sort(function(a,b){ return String(b.createdAt||'').localeCompare(String(a.createdAt||'')); })[0];
+  if(card){ var pl=_proofKoryoPlan_(card); if(pl) return { date:pl.date, manual:!!pl.manual, lead:pl.lead, due:pl.due||due, card:card }; }
+  if(!/^\d{4}-\d\d-\d\d$/.test(due)) return null;
+  var lead=_proofKoryoLead_({ prodName:r.item||'' }), d=new Date(due+'T00:00:00'); d.setDate(d.getDate()-lead); return { date:_ymd_(d), lead:lead, due:due, card:null };
+}
+function _projKoryoCellHtml_(r){
+  var pl=_projKoryoPlan_(r); if(!pl) return '<span style="color:#94a3b8">-</span>';
+  var fin=/完了|納品済|失注|キャンセル/.test(r.status||'') || (pl.card && _proofStatusMeta_(_normProofStatus_(pl.card.status)).done);
+  var t=new Date(); t.setHours(0,0,0,0); var left=Math.round((new Date(pl.date+'T00:00:00')-t)/86400000), w=_koryoConf_().warn;
+  var tag=fin?'<span style="background:#dcfce7;color:#166534;border-radius:4px;padding:0 4px;font-size:9.5px;margin-left:3px">校了</span>'
+    : left<0?'<span style="background:#7f1d1d;color:#fff;border-radius:4px;padding:0 4px;font-size:9.5px;margin-left:3px">🚨 '+(-left)+'日 超過</span>'
+    : left<=w?'<span style="background:#fed7aa;color:#7c2d12;border-radius:4px;padding:0 4px;font-size:9.5px;margin-left:3px">⏰ あと'+left+'日</span>'
+    : '<span style="color:#64748b;font-size:9.5px;margin-left:3px">あと'+left+'日</span>';
+  return '<span title="'+(pl.manual?'校正BOX で入れた校了予定日':'納期 '+_escDiff(pl.due||'')+' の '+pl.lead+' 日前（⚙ 校了の目安）')+'">'+_md_(pl.date)+'</span>'+tag;
 }
 function _proofKoryoRisk_(p){
   if(!p) return null; var meta=_proofStatusMeta_(_normProofStatus_(p.status)); if(meta.done) return null;
@@ -47855,6 +47874,7 @@ function _projSortVal_(r, col){
     case 'no': return String(r.master_no || r.fmNo || r.id || '');
     case 'quoteNo': return String(r.fromQuote || r.quoteNo || r.estNo || '');
     case 'due': return String(r.dueDate || r.due || '');
+    case 'koryo': var _kp=(typeof _projKoryoPlan_==='function')?_projKoryoPlan_(r):null; return _kp?_kp.date:'';
     case 'orderDate': return String(r.orderDate || r.createdAt || '');
     case 'cust': return String(r.cust || '');
     case 'endUser': return String(r.endUser || r.user || '');
@@ -47930,7 +47950,7 @@ function _projSortPaint_(){
     h.title=(h.getAttribute('data-title0')?h.getAttribute('data-title0')+'　':'')+'押すと 昇順・降順・この列で絞り込む。Shift＋押しで 2 番目以降の並び順を足す';
     if(!h._sortBound){ h._sortBound=true; h.addEventListener('click', function(ev){ if(ev.target && ev.target.tagName==='INPUT') return; if(ev.shiftKey){ _projSortClick_(col, ev); return; } _projColMenu_(col, h); }); }   // COLF-1
   });
-  var bar=document.getElementById('proj-sort-bar'); if(bar){ var lb={no:'案件番号',quoteNo:'見積番号',due:'納期',orderDate:'受注日',cust:'得意先',endUser:'ユーザー',item:'品名',unit:'単価',amount:'受注金額',gp:'粗利',gpRate:'粗利率',status:'ステータス',tanto:'担当者'};
+  var bar=document.getElementById('proj-sort-bar'); if(bar){ var lb={no:'案件番号',quoteNo:'見積番号',due:'納期',koryo:'校了予定',orderDate:'受注日',cust:'得意先',endUser:'ユーザー',item:'品名',unit:'単価',amount:'受注金額',gp:'粗利',gpRate:'粗利率',status:'ステータス',tanto:'担当者'};
     bar.innerHTML = keys.length ? '並び順: ' + keys.map(function(k,i){ return (i+1)+'. '+(lb[k.col]||k.col)+(k.dir==='desc'?'（降順）':'（昇順）'); }).join(' → ') + ' <button class="btn" style="font-size:10.5px;padding:1px 8px;margin-left:6px" onclick="_projSortSave_([]);_projSortPaint_();renderProjects()">並び順を解除</button>' : ''; bar.style.display = keys.length ? '' : 'none'; }
 }
 function _projIsMoving_(r){
@@ -48858,6 +48878,7 @@ function renderProjects(){
       </td>
       <td style="white-space:nowrap">${_quoteCell}</td>
       <td style="font-size:11px;white-space:nowrap">${_projDueCellHtml_(r)}</td>
+      <td style="font-size:11px;white-space:nowrap">${(typeof _projKoryoCellHtml_==='function')?_projKoryoCellHtml_(r):''}</td>
       <td style="font-size:11px;white-space:nowrap;line-height:1.35"><span style="white-space:nowrap">${r.orderDate?_ymdJP2_(r.orderDate).replace('<br>',''):'-'}</span></td>
       <td style="max-width:180px">${groupTag?`<span class="pj-cust-tag">${groupTag}</span>`:''}<span class="pj-cust" style="font-size:12px">${_escDiff(r.cust||'')}</span>${(function(){ var an=_ankenName_(r); var sid=String(r.id||'').replace(/'/g,''); return '<div style="font-size:10.5px;line-height:1.3;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(an?'<span style="color:#1e40af" title="案件名（同じ P番号ぜんぶに付いています）">📌 '+_escDiff(an)+'</span> <span onclick="event.stopPropagation();_ankenNameEdit_(\''+sid+'\')" style="cursor:pointer;color:#94a3b8" title="案件名を直す">✎</span>':'<span onclick="event.stopPropagation();_ankenNameEdit_(\''+sid+'\')" style="cursor:pointer;color:#94a3b8" title="案件名を付ける">📌 案件名</span> <span onclick="event.stopPropagation();_ankenNameEdit_(\''+sid+'\',true)" style="cursor:pointer;color:#1e40af" title="サイズ・両面／片面・色・品目から案件名を作る（例: A4両面カラーチラシ）">自動</span>')+'</div>'; })()}${(function(){
         // 請求先が納品先と違う場合だけ小さく出す（市役所などで請求窓口が別のとき）
@@ -50951,7 +50972,9 @@ function applyRolePermissions(){
   // 最初に表示可能なページに切り替え
   const visibleBtn = document.querySelector('.topbar .tb-btn:not([style*="display: none"])');
   if(visibleBtn){
+    window._navIgnore = true;   // STAYPAGE-3（本多さん 11/1「リフレッシュしたらホームに残るのをやめて」）: ここで押すと「最後に開いた画面」がホームに上書きされ、更新後にホームへ戻っていた
     visibleBtn.click();
+    window._navIgnore = false;
   }
 }
 
