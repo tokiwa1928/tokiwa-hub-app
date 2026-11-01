@@ -48123,6 +48123,59 @@ window._nsOrdView_ = window._nsOrdView_ || 'amt';
 window._nsOrdOpt_ = window._nsOrdOpt_ || (function(){ try{ return JSON.parse(localStorage.getItem('ns_ord_opt')||'null')||{}; }catch(e){ return {}; } })();
 function _nsOrdOptGet_(){ var o=window._nsOrdOpt_||{}; return { kubun:o.kubun||'blank', kin:o.kin||'売価金額', dup:o.dup||'one' }; }
 function _nsOrdOptSet_(k,v){ var o=_nsOrdOptGet_(); o[k]=v; window._nsOrdOpt_=o; try{ localStorage.setItem('ns_ord_opt', JSON.stringify(o)); }catch(e){} _nsOrdFill_(); }
+// ═══ FMIDX-FRESH-1（本多さん 11/1「ホームのダッシュボードは FileMaker と確実に合うように」）═══
+//   ホームが使う FileMaker の控え（IndexedDB 'juchu'）を、受注登録を開かなくても自分で新しくする。
+//   ・控えが無い／作ってから 20 時間以上 → 中継の 写し_索引を配る（毎晩の写し。Drive の JSON なので外部通信の上限に入らない）を取り直す（この PC で 6 時間に 1 回まで）
+//   ・そのあと 写し_差分（その日以降に直った伝票。FileMaker 1 回）を重ねる（この PC で 1 時間に 1 回まで）
+//   取ったものは控えに残す（受注登録と同じ置き場・同じ形。受注登録側も続きから取る）
+function _fmIdxSave_(idx){ return new Promise(function(res){ try{ var q=indexedDB.open('tokiwa_fm_index',1); q.onupgradeneeded=function(){ try{ q.result.createObjectStore('idx'); }catch(e){} }; q.onsuccess=function(){ try{ var d=q.result; var t=d.transaction('idx','readwrite'); t.objectStore('idx').put(idx,'juchu'); t.oncomplete=function(){ d.close(); res(true); }; t.onerror=function(){ d.close(); res(false); }; }catch(e){ res(false); } }; q.onerror=function(){ res(false); }; }catch(e){ res(false); } }); }
+function _fmIdxFresh_(force){
+  var signed=!!(window.FM && FM.名乗っている && FM.名乗っている());
+  return _fmIdxLoad_().then(function(idx){
+    if(!signed) return idx;
+    var now=Date.now(), ls=function(k){ try{ return Number(localStorage.getItem(k)||0); }catch(e){ return 0; } }, set=function(k){ try{ localStorage.setItem(k,String(now)); }catch(e){} };
+    var made=idx&&(idx.作った||idx.取った); var madeAge=made?(now-new Date(made).getTime()):Infinity;
+    var needPull=force || !idx || !idx.行 || madeAge>20*3600000;
+    var p=Promise.resolve(idx);
+    if(needPull && (force || now-ls('fm_idx_pull_at')>6*3600000)){
+      set('fm_idx_pull_at');
+      p=FM.呼ぶ('写し_索引を配る',[]).then(function(j){ if(!j||!j.行) return idx; if(idx && idx.作った && j.作った && String(j.作った)===String(idx.作った) && !force) return idx;   // 毎晩の写しが新しくなっていなければそのまま
+        j.取った=new Date().toISOString(); window._fmIdxCache_=null; return _fmIdxSave_(j).then(function(){ window._fmIdxCache_={ at:Date.now(), idx:j }; return j; }); }).catch(function(e){ console.warn('[FMIDX pull]', e); return idx; });
+    }
+    return p.then(function(idx2){
+      if(!idx2 || !idx2.行 || !idx2.列) return idx2;
+      if(!force && now-ls('fm_idx_diff_at')<3600000) return idx2;
+      set('fm_idx_diff_at');
+      var base=idx2.差分まで?new Date(idx2.差分まで):idx2.作った?new Date(idx2.作った):new Date(now-86400000); base=new Date(base.getTime()-86400000);
+      var d=('0'+(base.getMonth()+1)).slice(-2)+'/'+('0'+base.getDate()).slice(-2)+'/'+base.getFullYear();
+      return FM.呼ぶ('写し_差分',[d]).then(function(r){
+        var P={}; idx2.列.forEach(function(c,i){ P[c]=i; }); var id=P['recordId'];
+        if(r && r.行 && r.行.length && id!=null){ var pos={}; idx2.行.forEach(function(row,i){ pos[String(row[id])]=i; });
+          r.行.forEach(function(row){ var v=idx2.列.map(function(c){ var j=r.列.indexOf(c); return j<0?'':row[j]; }); var at=pos[String(v[id])]; if(at!==undefined) idx2.行[at]=v; else { idx2.行.push(v); pos[String(v[id])]=idx2.行.length-1; } }); }
+        idx2.差分まで=new Date().toISOString(); window._fmIdxCache_=null;
+        return _fmIdxSave_(idx2).then(function(){ window._fmIdxCache_={ at:Date.now(), idx:idx2 }; return idx2; });
+      }).catch(function(e){ console.warn('[FMIDX diff]', e); return idx2; });
+    });
+  });
+}
+// JUCHU-SUM-1: FileMaker を直接数えて照合（3 年分の 1/1〜今日と同じ月日）。1 日 1 回この PC で自動、手でも押せる。結果は localStorage に残し、上の 3 つの数字はこちらを優先
+function _nsOrdVerify_(force){
+  if(!(window.FM && FM.名乗っている && FM.名乗っている())){ if(force) alert('FileMaker（中継）にログインしていません。受注登録を一度開いてログインしてください'); return Promise.resolve(null); }
+  var now=new Date(), Y=now.getFullYear(), key='ns_ord_fm_'+_ymd_(now);
+  var cached=null; try{ cached=JSON.parse(localStorage.getItem(key)||'null'); }catch(e){}
+  if(cached && !force) return Promise.resolve(cached);
+  if(window._nsOrdVerifyBusy_) return window._nsOrdVerifyBusy_;
+  var opt=_nsOrdOptGet_(), kbs=opt.kubun==='juchu'?['受注']:opt.kubun==='blank'?['受注','（空欄）']:[''];   // 区分＝受注／受注か空欄（2 回に分けて足す）／問わない
+  var md=('0'+(now.getMonth()+1)).slice(-2)+'/'+('0'+now.getDate()).slice(-2);
+  var el=document.getElementById('ns-ord-verify'); if(el) el.innerHTML='<span style="color:var(--ord-mute)">FileMaker で数えています…（3 年分）</span>';
+  var out={ at:new Date().toISOString(), kubun:kbs[0]?kbs.join('＋'):'（区分を問わない）', years:{} };
+  var jobs=[]; [Y-2,Y-1,Y].forEach(function(y){ kbs.forEach(function(kb){ jobs.push({ y:y, kb:kb }); }); });
+  window._nsOrdVerifyBusy_=jobs.reduce(function(p,j){ return p.then(function(){ return FM.呼ぶ('受注_集計',[{ 開始:'01/01/'+j.y, 終了:md+'/'+j.y, 区分:j.kb }]).then(function(r){
+      var o=out.years[j.y]=out.years[j.y]||{ uri:0, gokei:0, cnt:0, days:{} }; Object.keys(r.日||{}).forEach(function(d){ var x=r.日[d]; o.uri+=x[0]; o.gokei+=x[1]; o.cnt+=x[2]; var dd=o.days[d]=o.days[d]||[0,0,0]; dd[0]+=x[0]; dd[1]+=x[1]; dd[2]+=x[2]; }); }); }); }, Promise.resolve())
+    .then(function(){ try{ localStorage.setItem(key, JSON.stringify(out)); }catch(e){} window._nsOrdVerifyBusy_=null; _nsOrdFill_(); return out; })
+    .catch(function(e){ window._nsOrdVerifyBusy_=null; var msg=String(e&&e.message||e); var el2=document.getElementById('ns-ord-verify'); if(el2) el2.innerHTML='<span style="color:#b91c1c">FileMaker で数えられませんでした: '+_escDiff(msg)+(/知らない|unknown|action/i.test(msg)?'（中継の更新が要ります: tools/fm-relay/コード.js を clasp push）':'')+'</span>'; return null; });
+  return window._nsOrdVerifyBusy_;
+}
 function _nsOrdData_(){
   var now=new Date(), Y=now.getFullYear(), years=[Y-2,Y-1,Y];
   var blank=function(){ var o={}; years.forEach(function(y){ o[y]=[0,0,0,0,0,0,0,0,0,0,0,0]; }); return o; };
@@ -48139,7 +48192,7 @@ function _nsOrdData_(){
   };
   var all=(typeof _canSeeAllCompanies_!=='function')||_canSeeAllCompanies_();
   if(!all || typeof _fmIdxLoad_!=='function') return Promise.resolve(fromHub());
-  return _fmIdxLoad_().then(function(idx){
+  return _fmIdxFresh_(!!window._nsOrdForce_).then(function(idx){ window._nsOrdForce_=false;
     if(!idx||!idx.列||!idx.行||!idx.行.length) return fromHub();
     var P={}; idx.列.forEach(function(c,i){ P[c]=i; }); if(P['起票日']==null||P['売価金額']==null) return fromHub();
     var opt=_nsOrdOptGet_(), kinCol=(P[opt.kin]!=null)?opt.kin:'売価金額', seen={};
@@ -48227,10 +48280,14 @@ function _nsOrdFill_(){
     // YTD-DAY-1（本多さん 11/1「数字が違う」）: 前の年も「1/1〜今日と同じ月日」で切る（今までは前の年は今月の月末まで入っていた）
     var tk=('0'+(now.getMonth()+1)).slice(-2)+'-'+('0'+now.getDate()).slice(-2);
     var ytd=function(yr,k){ if(!d.day||!d.day[yr]) return k?sum(d.cnt[yr],curM):sum(d.amt[yr],curM); var t=0, m=d.day[yr]; Object.keys(m).forEach(function(x){ if(x<=tk) t+=m[x][k]; }); return t; };
-    var tiles=ys.map(function(yr,i){ var ytdA=ytd(yr,0), ytdC=ytd(yr,1), prevA=i?ytd(ys[i-1],0):0, prevC=i?ytd(ys[i-1],1):0;
+    var fmv=null; try{ fmv=JSON.parse(localStorage.getItem('ns_ord_fm_'+_ymd_(now))||'null'); }catch(e){}   // JUCHU-SUM-1: 今日 FileMaker を直接数えた結果があればそれを優先
+    var kin=_nsOrdOptGet_().kin==='合計金額'?'gokei':'uri';
+    var ytdX=function(yr,k){ var v=fmv&&fmv.years&&fmv.years[yr]; return v?(k?v.cnt:v[kin]):ytd(yr,k); };
+    var tiles=ys.map(function(yr,i){ var ytdA=ytdX(yr,0), ytdC=ytdX(yr,1), prevA=i?ytdX(ys[i-1],0):0, prevC=i?ytdX(ys[i-1],1):0;
       var full=yr<Y?('<div class="s">年間 '+yen(sum(d.amt[yr],11))+'・'+sum(d.cnt[yr],11).toLocaleString()+'件</div>'):'';
       var pct=function(a,b){ if(!b) return ''; var p=Math.round(a/b*100), up=a>=b; return '<span style="color:'+(up?'var(--ord-up)':'var(--ord-down)')+';font-weight:700">'+(up?'▲':'▼')+' 前年比 '+p+'%</span>'; };
-      return '<div class="ns-ord-t"><div class="k"><i style="background:'+COL[yr]+'"></i>'+yr+'年 1/1〜'+(curM+1)+'/'+now.getDate()+'</div><div class="v">'+yen(ytdA)+'</div><div class="s">'+ytdC.toLocaleString()+'件 '+(i?pct(ytdA,prevA):'')+'</div>'+full+'</div>'; }).join('');
+      var isFm=!!(fmv&&fmv.years&&fmv.years[yr]), dv=isFm?(ytd(yr,0)-ytdX(yr,0)):0;
+      return '<div class="ns-ord-t"><div class="k"><i style="background:'+COL[yr]+'"></i>'+yr+'年 1/1〜'+(curM+1)+'/'+now.getDate()+(isFm?' <span style="color:#166534;font-weight:700" title="今日 FileMaker を直接数えた値">FM直接</span>':'')+'</div><div class="v">'+yen(ytdA)+'</div><div class="s">'+ytdC.toLocaleString()+'件 '+(i?pct(ytdA,prevA):'')+'</div>'+(dv?'<div class="s" style="color:#b45309" title="控え（毎晩の写し＋差分）との差。控えが古いか、写しが止まっている">控えとの差 '+(dv>0?'+':'')+yen(dv)+'</div>':'')+full+'</div>'; }).join('');
     var rows=''; for(var m2=0;m2<12;m2++){ rows+='<tr'+(m2===curM?' style="font-weight:700"':'')+'><td>'+(m2+1)+'月</td>'+ys.map(function(yr,i){ var fut=(yr===Y&&m2>curM); var a=d.amt[yr][m2], c=d.cnt[yr][m2], pa=i?d.amt[ys[i-1]][m2]:0; return '<td>'+(fut?'':yen(a))+'</td><td>'+(fut?'':c)+'</td>'+(i?'<td>'+(fut||!pa?'':Math.round(a/pa*100)+'%')+'</td>':''); }).join('')+'</tr>'; }
     // 数え方と内訳（FileMaker の集計と合わないとき用）
     var how='';
@@ -48245,7 +48302,10 @@ function _nsOrdFill_(){
     box.innerHTML='<h3>受注の推移（月別・'+ys[0]+'〜'+ys[2]+'年）<span style="display:flex;gap:0">'+btn('amt','金額')+btn('cnt','件数')+'</span></h3>'
       +(function(){ if(!d.fm) return ''; var lastD=String(d.last||''), t=new Date(); t.setDate(t.getDate()-3); var old=lastD && lastD<_ymd_(t); var up=d.upto?new Date(d.upto):null;   // IDXSAVE-1: 控えが古いと少なく出る
           return '<div style="font-size:11.5px;margin:0 0 6px;padding:5px 9px;border-radius:6px;'+(old?'background:#fef2f2;color:#991b1b;border:1px solid #fca5a5':'color:var(--ord-mute)')+'">'+(old?'⚠ ':'')+'FileMaker の控え: いちばん新しい起票日 <b>'+_escDiff(lastD||'—')+'</b>'+(up?'（'+(up.getMonth()+1)+'/'+up.getDate()+' '+('0'+up.getHours()).slice(-2)+':'+('0'+up.getMinutes()).slice(-2)+' に取得）':'')
-            +(old?'。<b>控えが古いので、最近の受注が入っていません。</b>「受注登録」を一度開くと最新を取りに行きます。':'')+'</div>'; })()
+            +(old?'。<b>控えが古いので、最近の受注が入っていません。</b>':'')
+            +' <button onclick="window._nsOrdForce_=true;_nsOrdFill_()" style="font:inherit;font-size:11px;padding:1px 8px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;cursor:pointer" title="毎晩の写しと今日の差分を FileMaker（中継）から取り直す">🔄 控えを取り直す</button>'
+            +' <button onclick="_nsOrdVerify_(true)" style="font:inherit;font-size:11px;padding:1px 8px;border:1px solid #166534;border-radius:10px;background:#f0fdf4;color:#166534;cursor:pointer" title="FileMaker を直接数えて、上の 3 つの数字を合わせる（3 年分・FileMaker に数回問い合わせ）">✅ FileMaker で今すぐ数える</button>'
+            +'<span id="ns-ord-verify" style="margin-left:6px">'+(function(){ var v=null; try{ v=JSON.parse(localStorage.getItem('ns_ord_fm_'+_ymd_(new Date()))||'null'); }catch(e){} if(!v) return ''; var t=new Date(v.at); return '<span style="color:#166534">FileMaker 直接: 今日 '+('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2)+' に数えました（区分 '+_escDiff(v.kubun)+'）</span>'; })()+'</span></div>'; })()
       +'<div class="ns-ord-tiles">'+tiles+'</div>'
       +'<div id="ns-ord-range" style="margin:4px 0 8px;padding:8px 10px;border:1px dashed #cfd8cf;border-radius:10px"></div>'
       +'<div style="font-size:10.5px;color:var(--ord-mute);margin:-2px 0 6px">どの年も 1/1〜'+(curM+1)+'/'+now.getDate()+'（今日と同じ月日）で比べています。下の表は月ごと（'+Y+'年 '+(curM+1)+'月は途中）</div>'
@@ -60829,6 +60889,7 @@ body.new-shell [style*="color:#999"], body.new-shell [style*="color:#aaa"]{ colo
     if(!host){ host=document.createElement('div'); host.id='ns-home'; pg.appendChild(host); }
     host.innerHTML=html;
     try{ setTimeout(_nsOrdFill_, 0); }catch(e){}   // HOME-JUCHU-1
+    try{ setTimeout(function(){ _nsOrdVerify_(false); }, 8000); }catch(e){}   // JUCHU-SUM-1: 1 日 1 回 FileMaker を直接数えて合わせる
   }
   function buildSidebar(){
     if(document.getElementById('hub-sidebar')) return;

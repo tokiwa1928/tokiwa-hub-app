@@ -1218,6 +1218,7 @@ function handle_(action, req, who) {
     case '画面_recordIdで読む': return 画面_recordIdで読む(req.recordId);
     case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields, req['元'], req['強制']);
     case '写し_差分':         return 写し_差分(req['日付']);
+    case '受注_集計':         return 受注_集計(req['条件']);   // JUCHU-SUM-1: ホームの照合（FileMaker を直接数える）
     case '画面_新規案件':     return 画面_新規案件(req['種別'], req['初期値']);
     case '画面_新規段階':     return 画面_新規段階(req['案件ID'], req['種別'], req['初期値']);   // HUBMITSU-1: 初期値 { P番号, P番号ヒント }
     case '画面_Repeat登録':   return 画面_Repeat登録(req.recordId);
@@ -1472,6 +1473,23 @@ function fieldInfo_(layout) {
   return out;
 }
 
+/** JUCHU-SUM-1（本多さん 11/1「ホームの数字を FileMaker と確実に合わせる」）: 起票日の範囲で FileMaker を直接数える。
+ *  条件: { 開始, 終了（MM/DD/YYYY）, 区分（既定 受注。'' で区分を問わない） }。日ごとに [売価金額, 合計金額, 件数] を返す（Hub が 3 年分を照合する） */
+function 受注_集計(条件) {
+  var who = 画面_利用者_(); var lay = LAYOUTS.juchu; 条件 = 条件 || {};
+  var 開始 = String(条件['開始'] || '').trim(), 終了 = String(条件['終了'] || '').trim();
+  if (!/^\d\d\/\d\d\/\d{4}$/.test(開始) || !/^\d\d\/\d\d\/\d{4}$/.test(終了)) throw new Error('開始・終了は MM/DD/YYYY で');
+  var q = { '起票日': 開始 + '...' + 終了 };
+  var kb = ('区分' in 条件) ? String(条件['区分'] || '') : '受注'; if (kb === '（空欄）') q['案件区分'] = '='; else if (kb) q['案件区分'] = '==' + kb;   // （空欄）＝案件区分が空の伝票
+  var 日 = {}, total = 0, off = 1, pages = 0, rows;
+  do {
+    rows = find_(lay, [q], 1000, off, null); total = rows.total;
+    rows.records.forEach(function (r) { var f = r.fields; var d = String(f['起票日'] || ''); var o = 日[d] = 日[d] || [0, 0, 0];
+      o[0] += Number(f['売価金額'] || 0) || 0; o[1] += Number(f['合計金額'] || 0) || 0; o[2]++; });
+    off += rows.records.length; pages++;
+  } while (off <= total && rows.records.length && pages < 30);
+  return { ok: true, user: who.email, 日: 日, 件数: total, 区分: kb, 開始: 開始, 終了: 終了, 取った: new Date().toISOString() };
+}
 function getByDenpyo_(layout, denpyo) {
   if (!denpyo) throw new Error('伝票番号がありません');
   var rows = find_(layout, [{ '伝票番号': '==' + denpyo }], 1, 1, null);
