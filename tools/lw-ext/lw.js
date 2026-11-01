@@ -75,3 +75,23 @@
   function start() { run().catch(function (e) { fail(String(e && e.message || e)); }); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
+
+// EXT-CAT-1（11/1）: LINE WORKS の画面が読んだノートの一覧から、投稿 → カテゴリー を拾って Hub（会社 GAS）へ送る（API にはカテゴリーが無いため）
+(function () {
+  var GAS = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec', KEY = 'mitsumori-2024';
+  try { var sc = document.createElement('script'); sc.src = chrome.runtime.getURL('lwhook.js'); sc.onload = function () { sc.remove(); }; (document.head || document.documentElement).appendChild(sc); } catch (e) { }
+  var buf = {}, names = {}, sample = '', timer = null, sentAt = 0, lastSent = {};
+  function flush() {
+    timer = null; var cats = {}; Object.keys(buf).forEach(function (id) { var c = buf[id]; var nm = c.name || names[c.id] || ''; if (!nm) return; if (lastSent[id] === nm) return; cats[id] = nm; });
+    var ids = Object.keys(cats); if (!ids.length && !sample) return;
+    var body = { apiKey: KEY, action: 'lwSyncCatsPush', cats: cats, names: names, sample: sample, page: location.pathname.slice(0, 80), by: 'lw-ext 1.1' };
+    sample = '';
+    fetch(GAS, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }).then(function (r) { return r.text(); }).then(function (t) { try { var j = JSON.parse(t); if (j && j.success) { ids.forEach(function (id) { lastSent[id] = cats[id]; }); sentAt = Date.now(); } } catch (e) { } }).catch(function () { });
+  }
+  window.addEventListener('message', function (ev) {
+    var d = ev.data; if (!d || !d.tokiwaLwCats || ev.source !== window) return;
+    Object.keys(d.cats || {}).forEach(function (id) { buf[id] = d.cats[id]; }); Object.keys(d.names || {}).forEach(function (k) { names[k] = d.names[k]; });
+    if (d.sample && !sample) sample = d.url + ' | ' + d.sample;
+    if (!timer) timer = setTimeout(flush, 2500);
+  });
+})();
