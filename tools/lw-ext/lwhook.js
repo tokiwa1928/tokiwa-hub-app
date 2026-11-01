@@ -2,7 +2,7 @@
 //   LINE WORKS の画面が自分で読んでいる通信（fetch / XMLHttpRequest）の返事を見て、投稿 → カテゴリー を拾い、Hub（会社 GAS）へ送る。
 //   ページの中で動く（content script からは見えないため）。見つけたものは window.postMessage で lw.js に渡す
 (function () {
-  if (window.__tokiwaHooked) return; window.__tokiwaHooked = true;
+  if (window.__tokiwaHooked) return; window.__tokiwaHooked = true; try { document.documentElement.setAttribute('data-tokiwa-hooked', '1'); } catch (e) { }
   setInterval(function () { try { window.postMessage({ tokiwaLwDiag: true, items: (window.__tokiwaDiag || []).slice(-12) }, '*'); } catch (e) { } }, 15000);
   // 11/1 調べた結果: LINE WORKS の画面は /p/note/open-api/teamNote/post/selectList?…&boardNo=<カテゴリー番号> で一覧を読む。投稿は postNoString、カテゴリーは boardNo（名前は別の一覧に boardName）
   var catKeys = ['categoryName', 'categoryTitle', 'boardName', 'folderName'], idKeys = ['boardNo', 'categoryId', 'categoryNo', 'boardId', 'folderId'];

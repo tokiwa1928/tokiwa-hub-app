@@ -84,16 +84,18 @@
   function flush() {
     timer = null; var cats = {}; Object.keys(buf).forEach(function (id) { var c = buf[id]; var nm = c.name || names[c.id] || (c.id ? '#' + c.id : ''); if (!nm) return; if (lastSent[id] === nm) return; cats[id] = nm; });
     var ids = Object.keys(cats); if (!ids.length && !sample) return;
-    var body = { apiKey: KEY, action: 'lwSyncCatsPush', cats: cats, names: names, sample: sample, page: location.pathname.slice(0, 80), by: 'lw-ext 1.3' };
+    var body = { apiKey: KEY, action: 'lwSyncCatsPush', cats: cats, names: names, sample: sample, page: location.pathname.slice(0, 80), by: 'lw-ext 1.4' };
     sample = '';
     fetch(GAS, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }).then(function (r) { return r.text(); }).then(function (t) { try { var j = JSON.parse(t); if (j && j.success) { ids.forEach(function (id) { lastSent[id] = cats[id]; }); sentAt = Date.now(); } } catch (e) { } }).catch(function () { });
   }
   var gotCats = false, diagSent = 0;
+  // 1.4: 動いていることを Hub に知らせる（ページを開いて 8 秒後に 1 回。何も拾えていなくても届く）
+  setTimeout(function () { try { fetch(GAS, { method: 'POST', body: JSON.stringify({ apiKey: KEY, action: 'lwSyncCatsPush', cats: {}, sample: 'HELLO ' + (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '?') + ' ' + location.pathname.slice(0, 60) + ' hooked=' + !!document.documentElement.getAttribute('data-tokiwa-hooked'), by: 'lw-ext hello' }), redirect: 'follow' }).catch(function () { }); } catch (e) { } }, 8000);
   window.addEventListener('message', function (ev) {
     var d = ev.data; if (!d || ev.source !== window) return;
     if (d.tokiwaLwDiag) {   // 調べ用: カテゴリーが拾えていないときだけ、通信の URL と項目名を Hub に送る（ページを開いてから 1 回、以後 5 分に 1 回）
       if (gotCats || !/\/note/.test(location.pathname) || Date.now() - diagSent < 5 * 60000 || !(d.items || []).length) return; diagSent = Date.now();
-      fetch(GAS, { method: 'POST', body: JSON.stringify({ apiKey: KEY, action: 'lwSyncCatsPush', cats: {}, sample: 'DIAG ' + location.pathname.slice(0, 40) + ' ' + d.items.join(' / ') , by: 'lw-ext 1.3' }), redirect: 'follow' }).catch(function () { });
+      fetch(GAS, { method: 'POST', body: JSON.stringify({ apiKey: KEY, action: 'lwSyncCatsPush', cats: {}, sample: 'DIAG ' + location.pathname.slice(0, 40) + ' ' + d.items.join(' / ') , by: 'lw-ext 1.4' }), redirect: 'follow' }).catch(function () { });
       return;
     }
     if (!d.tokiwaLwCats) return; gotCats = true;
