@@ -22370,6 +22370,49 @@ function _lwSyncStart_(){
     if(typeof _toastMsg==='function') _toastMsg('🔁 LW 自動連携をはじめました（'+((r.group&&r.group.name)||'')+'）');
   });
 }
+// ═══ SLIP-LW-1（本多さん 11/2「受注からそのままノートに作業伝票を送れるように」）═══
+//   受注登録の「📨 ノートへ送る」→ 指示書（sagyo.html）を裏で描いて PDF にし（Drive の案件フォルダ 06_指示書。無ければ校正カードのフォルダ）、
+//   その伝票の校正BOXカードにつながる LINE WORKS のノートへ添付して書き込む（カードが無ければメディア部に新しくノートを作り、伝票番号で覚える）
+//   データ（入稿データ）は Drive の整備ができてから足す
+window._sagyoToLw_ = function(no, type){
+  no=String(no||'').trim(); type=(type==='seizo')?'seizo':'gaichu'; var label=(type==='seizo')?'製造指示書':'外注指示書';
+  if(!no){ alert('伝票番号がありません'); return Promise.resolve(false); }
+  if(!(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn)){ alert('Hub にログインしてから送ってください'); return Promise.resolve(false); }
+  var toast=function(m){ try{ if(typeof _toastMsg==='function') _toastMsg(m); }catch(e){} };
+  toast('📄 '+label+'を描いています…');
+  // 1. 裏で指示書を描く
+  var fr=document.createElement('iframe'); fr.style.cssText='position:fixed;left:-9999px;top:0;width:900px;height:1300px;border:0;opacity:0'; fr.src='tools/sagyo.html?no='+encodeURIComponent(no)+(type==='seizo'?'&type=seizo':'');
+  document.body.appendChild(fr);
+  var waitPaper=new Promise(function(res, rej){ var t0=Date.now(); (function poll(){ try{ var d=fr.contentDocument, p=d&&d.getElementById('paper'); var tx=p?String(p.innerText||''):''; if(p && tx.length>300 && tx.indexOf(no)>=0 && !/読み込んでいます|取得中/.test(tx)){ res(d); return; } }catch(e){} if(Date.now()-t0>30000){ rej(new Error('指示書を描けませんでした（受注入力で FileMaker にログインしているか確かめてください）')); return; } setTimeout(poll, 400); })(); });
+  var card=(DB.proofings||[]).find(function(p){ return p && (String(p.fmNo||'')===no || (p.fmNos||[]).map(String).indexOf(no)>=0); });
+  var fileId='', fileUrl='';
+  return waitPaper.then(function(d){
+    var css=Array.prototype.map.call(d.querySelectorAll('style'), function(s){ return s.textContent; }).join('\n');
+    var paper=d.getElementById('paper'); var html='<style>@page{size:A4;margin:0} body{padding:0!important;margin:0;background:#fff} #paper{margin:0!important;box-shadow:none!important;width:210mm;min-height:297mm}'+css+'</style>'+paper.outerHTML;
+    try{ fr.remove(); }catch(e){}
+    // 2. 置き場所: 案件フォルダの 06_指示書 → 校正カードのフォルダ
+    return callCloudAPI('caseFolderByDenpyo',{},{ denpyo:no }).then(function(cf){ var sub=cf&&cf.success&&cf.found&&cf.subFolders&&cf.subFolders['06_指示書']; if(sub&&sub.id) return sub.id;
+        if(card && typeof ensureProofDriveFolder==='function') return Promise.resolve(ensureProofDriveFolder(card.id, true)).then(function(p){ return (p&&p.driveFolderId)||(card.driveFolderId)||''; });
+        return ''; })
+      .then(function(folderId){ if(!folderId) throw new Error('置き場所（案件フォルダの 06_指示書）がありません。先に案件管理でこの伝票の案件フォルダを用意してください');
+        toast('📄 PDF にしています…');
+        return callCloudAPI('saveHtmlAsPdf',{},{ folderId:folderId, name:no+'_'+label+'_'+new Date().toISOString().slice(0,10), html:html }); })
+      .then(function(r){ if(!r||!r.success) throw new Error((r&&r.error)||'PDF にできませんでした'); fileId=r.fileId; fileUrl=r.url||''; });
+  }).then(function(){
+    // 3. ノートへ
+    var who=(currentAuth&&currentAuth.userName)||'';
+    var comment='📄 '+label+'を付けました（伝票 '+no+'）'+(fileUrl?'\n'+fileUrl:'');
+    if(card){ _lwAutoPost_(card, { kind:'作業伝票', comment:comment, fileIds:[fileId] });
+      card.versions=card.versions||[]; card.versions.push({ id:'VER'+Date.now(), fileName:no+'_'+label+'.pdf', kind:'instruction', round:card._proofRound||1, subVersion:1, uploadedAt:new Date().toISOString(), driveFileId:fileId, driveUrl:fileUrl, feedback:'【'+(who||'社内')+'】\n'+label+'をノートへ送りました', annotations:[], manual:true });
+      card.lastMoveAt=new Date().toISOString(); try{ saveDB(); }catch(e){} try{ renderProofingList(); }catch(e){}
+      toast('📨 '+label+'をノートへ送りました（校正BOX のカードにも記録）'); return true; }
+    DB.lwSlipNotes=DB.lwSlipNotes||{}; var m=DB.lwSlipNotes[no]||{};
+    var pj=(DB.projects||[]).find(function(p){ return p && p.fm && String(p.fm['fm-denpyo']||'')===no; });
+    var title=(no+' '+((pj&&pj.cust)||'')+' '+((pj&&pj.item)||'')).trim();
+    return _lwGas_({ action:'lwSyncInsert', postId:m.postId||'', groupId:m.groupId||'', title:m.postId?'':title, kind:'作業伝票', comment:comment+'\n🔗 Tokiwa Hub: '+_hubLink_('case', no), by:who, fileIds:[fileId], notify:true })
+      .then(function(r){ if(!r||!r.success) throw new Error((r&&r.error)||'ノートに書けませんでした'); DB.lwSlipNotes[no]={ postId:String(r.postId||m.postId||''), groupId:r.groupId||m.groupId||'', at:new Date().toISOString() }; try{ saveDB(); }catch(e){} toast('📨 '+label+'をノートへ送りました（'+title+'）'); return true; });
+  }).catch(function(e){ try{ fr.remove(); }catch(x){} alert('ノートへ送れませんでした: '+String(e&&e.message||e)); return false; });
+};
 // HUBLINK-1: Hub の詳細を開くリンク（GitHub Pages でも、アプリとして入れた Hub でも同じ所を指す）
 function _hubLink_(key, val){ return location.origin+location.pathname.replace(/[^/]*$/,'')+'?'+key+'='+encodeURIComponent(String(val||'')); }
 function _proofLwHtml_(p){
