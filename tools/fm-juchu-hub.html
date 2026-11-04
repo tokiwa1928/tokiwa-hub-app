@@ -2756,7 +2756,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     $('rk-sum').textContent = '読んでいます…'; $('rk-list').innerHTML = ''; $('rk-check').innerHTML = ''; box.style.display = 'block';
     (済み ? Promise.resolve(済み) : 呼ぶ('画面_履歴', [String(recordId), no])).then(function (r) {   // FAST-2
       var 行 = r.行 || []; var 週 = Date.now() - 7 * 24 * 3600 * 1000; var 最近 = 行.filter(function (h) { return new Date(h.日時).getTime() >= 週; });
-      if (!行.length) { $('rk-sum').textContent = 'Hub からの変更はまだありません（FileMaker で直した分は載りません）'; }
+      if (!行.length) { $('rk-sum').textContent = '変更はまだありません（FileMaker で直した分は、毎晩の写しで翌朝に載ります）'; }
       else { var l = 行[0]; $('rk-sum').textContent = '直近 7 日で ' + 最近.length + ' 項目 ／ 全部で ' + 行.length + ' 項目。最後: ' + 日時短(l.日時) + ' ' + esc(l.誰.split('@')[0]) + ' が ' + esc(l.項目); }
       // 欄に赤枠（7 日以内）
       var 重要 = false;
@@ -5497,5 +5497,82 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
 <script>window.KAIZEN_KEY = 'juchu-fm';</script>
 <script src="kaizen.js"></script>
 
+<style id="layout-5">
+/* LAYOUT-5（本多さん 11/5）: 過去実績の取り込み行は出さない／金額の欄は横に伸ばさない／製本加工は広く／保存は題の下に大きく */
+#pastbar{ display:none !important; }
+body.fm-mode-juchu #kubun-row > span.lb:first-child, body.fm-mode-juchu #kubun-row > label.lb{ display:none !important; }   /* 受注入力では区分（受注）のラジオは出さない。製造区分だけ */
+body.fm-mode-juchu #kubun-row > span.lb{ margin-left:0 !important; }
+.btm .colM{ flex:0 0 auto !important; width:auto !important; min-width:0 !important; }
+.btm .colM .row > .in, .btm .colM .row > .in:last-of-type{ flex:0 0 auto !important; width:120px !important; }
+.btm .colL .row > #f-bind{ flex:1 1 220px !important; min-width:220px; }
+.hdrow .ttlwrap{ display:flex; flex-direction:column; align-items:stretch; gap:6px; flex:0 0 auto; }
+.hdrow #fm-save-big{ font:inherit; font-size:15px; font-weight:800; letter-spacing:.1em; padding:9px 18px; border-radius:7px; border:0; background:#1d6f3f; color:#fff; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,.25); }
+.hdrow #fm-save-big:hover{ background:#155c33; }
+.hdrow #fm-save-big:disabled{ opacity:.5; cursor:default; }
+#fmbar #fm-save{ display:none !important; }
+.wrapv{ display:inline-block; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-all; box-sizing:border-box; line-height:1.35; cursor:text; vertical-align:middle; text-align:left; }
+</style>
+<script>
+// LAYOUT-5 / WRAP-1（本多さん 11/5「文字があふれるときはすべて折り返して表示」）
+//   1 行の入力欄はそのままにして（中で使う仕組みを壊さない）、文字が欄からあふれるときだけ、同じ大きさの折り返し表示に差し替える。押すと元の欄で直せる
+(function () {
+  function $(id) { return document.getElementById(id); }
+  // 保存ボタン: 題（受注入力）の下に大きく。中身は黒帯の保存と同じ
+  function 保存を置く() {
+    var ttl = document.querySelector('.hdrow .ttl'); if (!ttl || $('fm-save-big')) return;
+    var w = document.createElement('div'); w.className = 'ttlwrap'; ttl.parentNode.insertBefore(w, ttl); w.appendChild(ttl);
+    var b = document.createElement('button'); b.id = 'fm-save-big'; b.type = 'button'; b.textContent = '💾 保存'; b.title = 'FileMaker に保存します';
+    b.onclick = function () { var s = $('fm-save'); if (s) s.click(); };
+    w.appendChild(b);
+    var src = $('fm-save'); if (src) { try { new MutationObserver(function () { b.disabled = !!src.disabled; }).observe(src, { attributes: true, attributeFilter: ['disabled'] }); } catch (e) {} }
+  }
+  // 操作の帯の「保存」は二重になるので隠す（帯が並べ直されても）
+  function 帯の保存を隠す() { Array.prototype.forEach.call(document.querySelectorAll('.hdrow .btns .fb, .hdrow .btns button'), function (el) { if (el.id === 'fm-save-big') return; if (/^\W*保存$/.test((el.textContent || '').replace(/\s+/g, ''))) el.style.display = 'none'; }); }
+  // 有効期限は見積登録だけ
+  function 有効期限() { var m = ''; try { m = new URLSearchParams(location.search).get('mode') || ''; } catch (e) {} var el = $('f-valid'); if (!el) return; var row = el.closest('.row') || el.parentNode; if (row) row.style.display = (m === 'mitsu') ? '' : 'none'; }
+
+  var proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  var 待ち = [], 予約 = false;
+  function 候補() {
+    return Array.prototype.filter.call(document.querySelectorAll('.sheet input, .btm input'), function (el) {
+      var t = (el.getAttribute('type') || 'text').toLowerCase();
+      return t === 'text' && el.id && !el.classList.contains('num') && !el.closest('#fmbar, #fmfind, .hdrow, #pastbar');
+    });
+  }
+  function 見る(el) {
+    var d = el._wrapv; if (!d || document.activeElement === el) return;
+    el.style.display = ''; d.style.display = 'none';
+    if (!el.offsetParent) return;
+    if (el.scrollWidth <= el.clientWidth + 1) return;
+    var cs = getComputedStyle(el);
+    d.textContent = proto.get.call(el);
+    var td = el.parentNode && el.parentNode.tagName === 'TD';
+    d.style.width = td ? '100%' : (el.offsetWidth + 'px');
+    ['font', 'padding', 'border', 'borderRadius', 'color', 'boxShadow', 'outline'].forEach(function (k) { d.style[k] = cs[k]; });
+    d.style.background = cs.backgroundColor; d.style.minHeight = el.offsetHeight + 'px';
+    d.title = el.title || '';
+    el.style.display = 'none'; d.style.display = 'inline-block';
+  }
+  function 予約する(el) { 待ち.push(el); if (予約) return; 予約 = true; requestAnimationFrame(function () { 予約 = false; var l = 待ち; 待ち = []; l.forEach(見る); }); }
+  function 用意(el) {
+    if (el._wrapv) return;
+    var d = document.createElement('div'); d.className = 'wrapv'; d.style.display = 'none';
+    el._wrapv = d; el.parentNode.insertBefore(d, el.nextSibling);
+    d.addEventListener('mousedown', function (ev) { ev.preventDefault(); d.style.display = 'none'; el.style.display = ''; el.focus(); });
+    try { Object.defineProperty(el, 'value', { configurable: true, get: function () { return proto.get.call(el); }, set: function (v) { proto.set.call(el, v); 予約する(el); } }); } catch (e) {}
+    el.addEventListener('focus', function () { d.style.display = 'none'; el.style.display = ''; });
+    el.addEventListener('blur', function () { 予約する(el); });
+  }
+  function 全部() { 候補().forEach(function (el) { 用意(el); 予約する(el); }); }
+  function 始める() {
+    保存を置く(); 帯の保存を隠す(); 有効期限(); 全部();
+    var btns = document.querySelector('.hdrow .btns'); if (btns) { try { new MutationObserver(帯の保存を隠す).observe(btns, { childList: true, subtree: true }); } catch (e) {} }
+    var t = null; window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(全部, 200); });
+    setTimeout(全部, 1500);   // 行の出し入れ（applyRowVis）のあと
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', 始める); else setTimeout(始める, 0);
+  window._wrapRecheck_ = 全部;
+})();
+</script>
 </body>
 </html>

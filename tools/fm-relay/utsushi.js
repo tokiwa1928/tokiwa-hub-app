@@ -206,6 +206,14 @@ function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日
   var 年別 = {};
 
   var 更新 = 0, 追加 = 0;
+  // FMLOG-1（11/5 本多さん「FileMaker の変更履歴も追えない？」）: 写しの前の行と比べて、変わった項目を「書き込み記録」へ（誰が＝FileMaker（修正者））。
+  //   Hub から直した分は Hub がもう記録しているので、同じ伝票・同じ項目・同じ値の記録が近くにあれば載せない
+  var FM記録 = [], 記録sh = null, Hub済 = {};
+  try {
+    記録sh = 記録の置き場_().getSheets()[0]; var lr = 記録sh.getLastRow();
+    if (lr > 1) { var from = Math.max(2, lr - 3000 + 1); 記録sh.getRange(from, 1, lr - from + 1, 6).getValues().forEach(function (r) { var sent = {}; try { sent = JSON.parse(r[5] || '{}'); } catch (e) {} Object.keys(sent).forEach(function (k) { Hub済[String(r[3]) + '|' + k + '|' + String(sent[k])] = 1; }); }); }
+  } catch (e) { 記録sh = null; }
+  var 比べない = { recordId: 1, modId: 1, '修正日': 1, '修正時刻': 1, '修正者': 1, '年': 1 };
   rows.records.forEach(function (rec) {
     var f = rec.fields, y = 年_(f['起票日']);
     if (!年別[y]) {
@@ -226,17 +234,30 @@ function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日
       var v = f[c]; return (v === undefined || v === null) ? '' : v;
     });
     var Y = 年別[y], at = Y.pos[String(rec.recordId)];
+    if (at && 記録sh) {   // FMLOG-1
+      try {
+        var 前 = Y.sh.getRange(at, 1, 1, row.length).getValues()[0], 送 = {}, 元 = {}, n = 0;
+        p.列.forEach(function (c, ci) { if (比べない[c]) return; var a = 前[ci], b = row[ci]; var sa = (a instanceof Date) ? Utilities.formatDate(a, 'Asia/Tokyo', 'MM/dd/yyyy') : String(a === null || a === undefined ? '' : a), sb = String(b === null || b === undefined ? '' : b);
+          if (sa === sb) return; if (Hub済[String(rec.recordId) + '|' + c + '|' + sb]) return; 送[c] = b; 元[c] = a; n++; });
+        if (n && n <= 200) {
+          var 日 = String(f['修正日'] || ''), 時 = String(f['修正時刻'] || ''), m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(日), t = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(時);
+          var when = m ? new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]), t ? Number(t[1]) : 0, t ? Number(t[2]) : 0, t && t[3] ? Number(t[3]) : 0) : new Date();
+          FM記録.push([when, 'FileMaker' + (f['修正者'] ? '（' + f['修正者'] + '）' : ''), lay, String(rec.recordId), Object.keys(送).join(', '), JSON.stringify(送), JSON.stringify(元)]);
+        }
+      } catch (e) { Logger.log('FMLOG: ' + e.message); }
+    }
     if (at) { Y.sh.getRange(at, 1, 1, row.length).setValues([row]); 更新++; }
     else { Y.sh.appendRow(row); Y.pos[String(rec.recordId)] = Y.sh.getLastRow(); 追加++; }
     var ai = 索引位置[String(rec.recordId)];
     if (ai) 索引.getRange(ai, 1, 1, 索引行.length).setValues([索引行]);
     else { 索引.appendRow(索引行); 索引位置[String(rec.recordId)] = 索引.getLastRow(); }
   });
+  if (記録sh && FM記録.length) { try { FM記録.sort(function (a, b) { return a[0] - b[0]; }); 記録sh.getRange(記録sh.getLastRow() + 1, 1, FM記録.length, 7).setValues(FM記録); } catch (e) { Logger.log('FMLOG 書き込み: ' + e.message); } }   // FMLOG-1
   索引キャッシュを捨てる_(); 写し_索引_();   // 索引の json を作り直しておく（朝一番の人を待たせない）
   // GAICHU-CODE-2: その日に直った伝票の外注データで、外注コードと会社名が食い違っていればそろえる（FileMaker 側で会社名だけ直した分）。多すぎる日は 150 件まで
   var そろえた = 0; try { var 見た = 0; rows.records.forEach(function (rec) { if (見た++ >= 150) return; var no = String(rec.fields['伝票番号'] || ''); if (!no) return; try { if (外注_そろえる_(no, { email: 'hub-yoru' }).length) そろえた++; } catch (e) {} }); } catch (e) { Logger.log('外注そろえ: ' + e.message); }
   Logger.log('毎晩の写し: 更新 ' + 更新 + '・追加 ' + 追加 + '（修正日 ' + 昨日 + ' 以降 ' + rows.records.length + ' 件）' + (そろえた ? '　外注のコードをそろえた伝票 ' + そろえた : ''));
-  return { 件数: rows.records.length, 更新: 更新, 追加: 追加, 以降: 昨日, 外注そろえ: そろえた };
+  return { 件数: rows.records.length, 更新: 更新, 追加: 追加, 以降: 昨日, 外注そろえ: そろえた, FileMakerの変更: FM記録.length };
 }
 
 /** 写しがどこまで追いついているか（索引にある一番新しい修正日・件数・json を作った時刻・写しの置き場）。読むだけ */

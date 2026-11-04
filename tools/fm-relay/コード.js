@@ -983,6 +983,7 @@ function 画面_履歴(recordId, 伝票番号) {
     Object.keys(sent).forEach(function (k) { out.push({ 日時: 日時, 誰: String(r[1] || ''), 項目: k, 前: (前[k] === undefined ? null : 前[k]), 後: sent[k] }); });
     if (out.length > 300) break;
   }
+  out.sort(function (a, b) { return String(b.日時) < String(a.日時) ? -1 : String(b.日時) > String(a.日時) ? 1 : 0; });   // FMLOG-1: FileMaker の分は翌朝まとめて入るので、時刻順に並べ直す
   return { ok: true, user: who.email, 行: out };
 }
 /** 関連会社の売価（FileMaker に項目が無いので Hub 側＝保管庫の「関連会社売価」シートに持つ）GRP-1 */
