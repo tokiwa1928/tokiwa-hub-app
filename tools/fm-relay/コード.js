@@ -1053,6 +1053,8 @@ function マスタ_書く(layout, recordId, 項目, 前) {
   var r = update_(layout, recordId, d.modId, 項目, who); if (r.conflict) throw new Error('読み込んだあとに誰かが直しています。読み直してください');
   // 用紙の単価を直したら履歴に残す
   try { if (layout === '用紙マスタ' && 項目['単価'] !== undefined && String(項目['単価']) !== String(d.fieldData['単価'] || '')) Hubマスタ_書く('用紙単価履歴', { 品名: d.fieldData['品名'] || '', 種類: d.fieldData['種類'] || '', メーカー: d.fieldData['メーカー'] || '', 旧単価: d.fieldData['単価'] || '', 新単価: 項目['単価'], 有効日: 項目['有効日'] || 日付_(new Date()), 誰が: who.email, 日時: new Date().toISOString() }); } catch (e) {}
+  // PAPERM-1: 配っているマスタの写し（Drive の json）も同じ値にしておく（次に開く人が古い単価を見ないように）
+  try { var it = 写し_フォルダ_().getFilesByName(マスタ_json名_(layout)); if (it.hasNext()) { var fj = it.next(); var j = JSON.parse(fj.getBlob().getDataAsString('UTF-8')); (j.行 || []).forEach(function (r) { if (String(r._recordId) === String(recordId)) Object.keys(項目).forEach(function (k) { r[k] = String(項目[k]); }); }); fj.setContent(JSON.stringify(j)); } } catch (e) { Logger.log('マスタ json: ' + e.message); }
   return { ok: true, user: who.email, recordId: recordId };
 }
 function マスタ_作る(layout, 項目) {
@@ -1066,7 +1068,7 @@ function マスタ_作る(layout, 項目) {
   return { ok: true, user: who.email, recordId: r.response.recordId };
 }
 // Hub だけのマスタ（封筒・ユーザー名・基本原価・用紙単価履歴）。保管庫「Hubマスタ_<名>」に 1 行＝1 件（id, json, at, by）
-var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目', '用紙在庫', '先方担当', '持参書類'];   // TANTO-1: 先方担当（得意先→ユーザー名→部・課・係→氏名）   // ZAIKO-1: 用紙在庫（主要用紙のおおまかな在庫）   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
+var Hubマスタ名 = ['封筒', 'ユーザー名', '基本原価', '用紙単価履歴', '原価テーブル', '画面項目', '用紙在庫', '先方担当', '持参書類', '用紙統合'];   // PAPERM-1: 用紙統合（同じ紙の重複を「正」にまとめる。FileMaker のマスタは消さない）   // TANTO-1: 先方担当（得意先→ユーザー名→部・課・係→氏名）   // ZAIKO-1: 用紙在庫（主要用紙のおおまかな在庫）   // KAKAKU-2: 原価テーブル（価格ガイド）／HIDE-1: 画面項目（退避と使われ方）
 var Hubマスタ列 = ['id', 'json', 'at', 'by', '消'];
 function Hubマスタ_帳簿_(名) { if (Hubマスタ名.indexOf(名) < 0) throw new Error('知らないマスタです: ' + 名); return 写し_帳簿_('Hubマスタ_' + 名, Hubマスタ列).getSheets()[0]; }
 function Hubマスタ_一覧(名) {

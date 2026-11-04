@@ -74,7 +74,7 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function 
 function 文字が合う(hay, q) { var groups = String(q).normalize('NFKC').toLowerCase().split(/\s+(?:or|または)\s+|\s*[|｜]\s*/).map(function (g) { return g.split(/[\s　]+/).filter(Boolean); }).filter(function (g) { return g.length; }); if (!groups.length) return true; hay = String(hay).normalize('NFKC').toLowerCase(); return groups.some(function (g) { return g.every(function (t) { if (t.length > 1 && t.charAt(0) === '-') return hay.indexOf(t.slice(1)) < 0; return hay.indexOf(t) >= 0; }); }); }
 // 種類ごとの定義。FM = FileMaker のマスタ（読み込み → 直す → 反映）、Hub = 中継の保管庫だけ
 var 定義 = {
-  '用紙':   { FM: '用紙マスタ', 鍵: ['品名', '種類', 'メーカー'], 数: ['単価', '厚さ'], 履歴: '単価' },
+  '用紙':   { FM: '用紙マスタ', 鍵: ['品名', '種類', 'メーカー'], 数: ['単価', '厚さ'], 履歴: '単価', 触らない: ['単価の確認日', '統合'], 送らない: ['単価の確認日', '統合'] },
   '得意先': { FM: '得意先マスタ', 鍵: ['得意先コード', '得意先名'], 数: [], 触らない: ['得意先コード'] },
   '封筒':   { Hub: '封筒', 列: ['型', 'メーカー', '品名', '窓', '色', '仕入単価', '売単価', '有効日', '備考'], 数: ['仕入単価', '売単価'] },
   'ユーザー名': { Hub: 'ユーザー名', 列: ['得意先コード', '得意先名', 'ユーザー名', '読み', '備考'], 数: [] },
@@ -105,6 +105,15 @@ function 読む() {
   $('note').textContent = d.説明 ? d.説明 : d.FM ? '黄色＝直した欄。「FileMaker に反映」で変更した行だけ書き込みます（誰が・何を・いつ を記録します）' : d.読むだけ ? '用紙の単価を直したときに自動で残る履歴です' : '「Hub に保存」で中継の保管庫に残ります。受注入力の候補に出ます';
   var p = d.FM ? FM.呼ぶ('マスタ_配る', [d.FM]).then(function (j) { 列 = []; (j.行 || []).forEach(function (r) { Object.keys(r).forEach(function (k) { if (k !== '_recordId' && 列.indexOf(k) < 0) 列.push(k); }); }); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r._recordId); return o; }); })
                   : FM.呼ぶ('Hubマスタ_一覧', [d.Hub]).then(function (j) { 列 = d.列.slice(); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r.id); return o; }); });
+  // PAPERM-1: 用紙は「単価の確認日」「統合」を足す（受注入力で使いながら直した日。古い順・まだ に並べると、あとでまとめて直せる）
+  if (今 === '用紙') p = p.then(function () { return Promise.all([FM.呼ぶ('Hubマスタ_一覧', ['用紙単価履歴']).catch(function () { return { 行: [] }; }), FM.呼ぶ('Hubマスタ_一覧', ['用紙統合']).catch(function () { return { 行: [] }; })]).then(function (a) {
+    var n = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/[\s#＃・\-_\/／()（）\r\n]/g, ''); }; var 鍵 = function (r) { return [n(r['品名']), n(String(r['サイズ'] || '').split(/\r|\n/)[0]), n(r['種類']), n(r['メーカー'])].join('|'); };
+    var h = {}; (a[0].行 || []).forEach(function (x) { var k = 鍵(x), t = String(x['日時'] || x.at || '').slice(0, 10); if (!h[k] || h[k] < t) h[k] = t; });
+    var 統 = {}; (a[1].行 || []).forEach(function (g) { (g['別'] || []).forEach(function (rid) { 統[String(rid)] = '→ #' + g['正']; }); 統[String(g['正'])] = 統[String(g['正'])] || '正（' + (g['別'] || []).length + ' 件をまとめた）'; });
+    if (列.indexOf('単価の確認日') < 0) 列.push('単価の確認日'); if (列.indexOf('統合') < 0) 列.push('統合');
+    行.forEach(function (r) { r['単価の確認日'] = h[鍵(r)] || 'まだ'; r['統合'] = 統[r._id] || ''; });
+    行.sort(function (x, y) { var a1 = x['単価の確認日'] === 'まだ' ? '' : x['単価の確認日'], b1 = y['単価の確認日'] === 'まだ' ? '' : y['単価の確認日']; return a1 < b1 ? -1 : a1 > b1 ? 1 : 0; });
+  }); });
   return p.then(function () { 行.forEach(function (r) { 元[r._id] = JSON.stringify(r); }); 描く(); $('st').textContent = ''; }).catch(function (e) { $('out').textContent = String(e.message || e); });
 }
 function 描く() {
@@ -131,7 +140,7 @@ function 反映() {
   $('diff-ok').onclick = function () {
     $('diffbox').style.display = 'none'; $('st').textContent = '反映しています…'; var i = 0, ok = 0, ng = [];
     var next = function () { if (i >= ch.length) { $('st').textContent = ok + ' 行を反映しました' + (ng.length ? '　できなかった: ' + ng.join('、') : ''); 読む(); return; }
-      var r = ch[i++]; var fields = {}; 列.forEach(function (c) { if (r._new ? r[c] !== '' : JSON.parse(元[r._id] || '{}')[c] !== r[c]) fields[c] = r[c]; });
+      var r = ch[i++]; var fields = {}; 列.forEach(function (c) { if ((d.送らない || []).indexOf(c) >= 0) return; if (r._new ? r[c] !== '' : JSON.parse(元[r._id] || '{}')[c] !== r[c]) fields[c] = r[c]; });
       var p = r._new ? FM.呼ぶ('マスタ_作る', [d.FM, fields]) : FM.呼ぶ('マスタ_書く', [d.FM, r._id, fields, JSON.parse(元[r._id] || '{}')]);
       p.then(function () { ok++; next(); }).catch(function (e) { ng.push(((d.鍵 || []).map(function (k) { return r[k]; }).filter(Boolean).join(' ') || r._id) + '（' + String(e.message || e) + '）'); next(); }); };
     next();
