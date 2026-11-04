@@ -9,6 +9,7 @@
     var remembered = sessionStorage.getItem('tokiwa_hub_nav') === '1';
     if (fromHub) sessionStorage.setItem('tokiwa_hub_nav', '1');
     var inHub = fromHub || remembered;
+    try { if (window.parent !== window) inHub = false; } catch (e) {}   // SLIM-1: Hub の画面に組み込まれているときは帯が二重になるので出さない
     var hubHref = (function () { var p = location.pathname; return /\/tools\//.test(p) ? '../index.html' : 'index.html'; })();
     function ready(fn) { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn); else fn(); }
     ready(function () {
