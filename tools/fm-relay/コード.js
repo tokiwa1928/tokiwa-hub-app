@@ -286,6 +286,9 @@ function 画面_付属(伝票番号, recordId) {
   try { out.外注 = 伝票番号 ? 画面_外注(伝票番号) : { 外注: [] }; } catch (e) { out.外注エラー = String(e.message || e); }
   try { out.履歴 = recordId ? 画面_履歴(recordId, 伝票番号) : { 行: [] }; } catch (e) { out.履歴エラー = String(e.message || e); }
   try { out.先方売価 = 伝票番号 ? 先方売価_読む(伝票番号) : { 行: [] }; } catch (e) { out.先方売価エラー = String(e.message || e); }
+  try { if (伝票番号) out.手配 = 手配_読む(伝票番号); } catch (e) { out.手配エラー = String(e.message || e); }       // 無ければ画面が自分で取りに行く
+  try { if (伝票番号) out.仕様書 = 仕様書_一覧(伝票番号); } catch (e) { out.仕様書エラー = String(e.message || e); }
+  try { if (伝票番号) out.予定 = 予定_探す(伝票番号); } catch (e) { out.予定エラー = String(e.message || e); }
   return out;
 }
 

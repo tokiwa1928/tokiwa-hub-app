@@ -2370,6 +2370,9 @@ window.FM見た目 = function () {};
   function 控えに置く(番号, r) { try { var k = 'fm_rec_' + String(番号 || ''); var all = JSON.parse(localStorage.getItem('fm_rec_keys') || '[]').filter(function (x) { return x !== k; }); all.push(k); while (all.length > 25) { try { localStorage.removeItem(all.shift()); } catch (e) {} } localStorage.setItem('fm_rec_keys', JSON.stringify(all)); localStorage.setItem(k, JSON.stringify({ at: Date.now(), r: r })); } catch (e) {} }
   function 控えを見る(番号) { try { var c = JSON.parse(localStorage.getItem('fm_rec_' + String(番号 || '')) || 'null'); if (c && c.r && c.r.record && Date.now() - c.at < 14 * 24 * 3600 * 1000) return c.r; } catch (e) {} return null; }
   var 仮表示中 = false;
+  // FAST-2: 画面_付属 の返事を待っている間に 手配・仕様書・予定 を取りに行く所は、その返事から取る（無ければ自分で取る）
+  var 付属待ち = null;
+  function 付属から(名, no, 自分で) { var w = 付属待ち; if (!w || String(w.no) !== String(no)) return 自分で(); return w.p.then(function (a) { return (a && a[名] !== undefined) ? a[名] : 自分で(); }, function () { return 自分で(); }); }
   function 仮を解く() { 仮表示中 = false; var m = $('fmmain') || document.body; m.style.pointerEvents = ''; m.style.opacity = ''; }
   function 受け取る(r, msg, ms, 仮) {
     書ける = r.writable || 書ける;
@@ -2396,7 +2399,8 @@ window.FM見た目 = function () {};
     // FAST-2: 外注・変更履歴・関連会社売価を 1 往復で。古い中継（知らない操作）なら前のとおり 3 本
     (function (no, rid) {
       外注 = null; $('gc-rows').innerHTML = ''; $('gc-total').textContent = ''; $('gc-msg').textContent = '読んでいます…'; $('fmgaichu').style.display = no ? 'block' : 'none';
-      呼ぶ('画面_付属', [no, String(rid)]).then(function (a) {
+      var pp = 呼ぶ('画面_付属', [no, String(rid)]); 付属待ち = { no: no, p: pp };
+      pp.then(function (a) {
         外注を読む(no, a.外注 || { 外注: [] }); 履歴を読む(rid, no, a.履歴 || { 行: [] }); 先方売価を読む(no, a.先方売価 || { 行: [] });
       }).catch(function () { 外注を読む(no); 履歴を読む(rid, no); 先方売価を読む(no); });
     })(r.record.fields['伝票番号'], r.record.recordId);
@@ -3909,7 +3913,7 @@ window.FM見た目 = function () {};
   }
   function 予定一覧を出す() {
     var box = $('fmyotei'); if (!box) return; var no = 現在の番号(); if (!現在 || !no) { box.style.display = 'none'; return; } box.style.display = 'block'; $('yt-list').textContent = '読んでいます…';
-    呼ぶ('予定_探す', [no]).then(function (r) { if (現在の番号() !== no) return; var rows = (r.行 || []).slice().sort(function (a, b) { return 日を数に(a.日付) - 日を数に(b.日付); });
+    付属から('予定', no, function () { return 呼ぶ('予定_探す', [no]); }).then(function (r) { if (現在の番号() !== no) return; var rows = (r.行 || []).slice().sort(function (a, b) { return 日を数に(a.日付) - 日を数に(b.日付); });
       $('yt-list').innerHTML = rows.length ? rows.map(function (x) { var t = String(x.タイトル || ''); var done = /^【済/.test(t); var l1 = t.replace(/^【済[^】]*】\s*/, '').split(/\r\n|\r|\n/)[0]; var k = (/(受取|持込|見積提出|宅配|郵送|直送|引取)(?=\s|$)/.exec(l1) || ['', '自社便'])[1]; var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(x.日付 || '')); var d = m ? (Number(m[1]) + '/' + Number(m[2])) : ''; var iso = m ? (m[3] + '-' + m[1] + '-' + m[2]) : '';
         var 誰 = (/\s([^\s●★]{1,6})[●★]*\s*(?:受取|持込|見積提出|宅配|郵送|直送|引取)?\s*$/.exec(l1) || ['', ''])[1];
         return '<a class="it' + (done ? ' done' : '') + '" href="haiso-calendar.html?v=' + encodeURIComponent('日') + '&d=' + iso + '" target="_blank" title="' + esc(t.replace(/\r/g, '\n')) + '" style="color:#111;text-decoration:none"><b>' + esc(d) + '</b><span class="c" style="background:' + (予定色[k] || '#64748b') + '">' + esc(k === '自社便' ? '納品' : k) + '</span>' + (/●/.test(l1) ? '<span style="color:#166534;font-weight:700">領収書</span>' : '') + (/★/.test(l1) ? '<span style="color:#be123c;font-weight:700">請求書</span>' : '') + esc(誰) + (done ? '（済）' : '') + '</a>'; }).join('') : '<span style="color:#64748b">まだありません</span>';
@@ -4419,7 +4423,7 @@ window.FM見た目 = function () {};
     if (!no) { el.textContent = '（なし）'; return; }
     if (Hub番号か(no) && window.HubAPI) { Hub支給ファイルを出す(no, el); return; }   // HUBMITSU-1: 支給ファイルは P番号の案件フォルダ（01_問い合わせ／02_見積／04_データ）
     el.textContent = '読んでいます…';
-    Promise.all([呼ぶ('仕様書_一覧', [no]).catch(function () { return { files: [] }; }), gid ? 呼ぶ('仕様書_一覧', [gid]).catch(function () { return { files: [] }; }) : Promise.resolve({ files: [] })]).then(function (rs) {
+    Promise.all([付属から('仕様書', no, function () { return 呼ぶ('仕様書_一覧', [no]); }).catch(function () { return { files: [] }; }), gid ? 呼ぶ('仕様書_一覧', [gid]).catch(function () { return { files: [] }; }) : Promise.resolve({ files: [] })]).then(function (rs) {
       if (手配の伝票 !== no) return; 仕様書一覧 = { 番号: rs[0].files || [], 依頼: rs[1].files || [] };
       var h = 仕様書一覧.番号.map(function (f) { return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener" title="' + esc(String(f.at || '').slice(0, 10)) + '">📄 ' + esc(f.name) + '</a>'; }).join('')
         + 仕様書一覧.依頼.map(function (f) { return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener" title="まとめ依頼 ' + esc(gid) + ' の共有ファイル ' + esc(String(f.at || '').slice(0, 10)) + '">📎 ' + esc(f.name) + ' <span style="color:#64748b">(依頼 ' + esc(gid) + ')</span></a>'; }).join('');
@@ -4634,7 +4638,7 @@ window.FM見た目 = function () {};
   window.仕様未確定を出す = function () { document.body.classList.add('fm-mitei'); };
   function 手配を読む(no) {
     手配の伝票 = no; 手配 = {}; 手配を置く({}); if (!no) return;
-    呼ぶ('手配_読む', [no]).then(function (r) { if (手配の伝票 !== no) return; 手配 = r.手配 || {}; 手配を置く(手配); if ($('th-msg')) $('th-msg').textContent = r.手配 ? '' : ''; }).catch(function (e) { if ($('th-msg')) $('th-msg').textContent = '手配を読めません: ' + String(e.message || e); });
+    付属から('手配', no, function () { return 呼ぶ('手配_読む', [no]); }).then(function (r) { if (手配の伝票 !== no) return; 手配 = r.手配 || {}; 手配を置く(手配); if ($('th-msg')) $('th-msg').textContent = r.手配 ? '' : ''; }).catch(function (e) { if ($('th-msg')) $('th-msg').textContent = '手配を読めません: ' + String(e.message || e); });
   }
   function 手配が変わった() {
     if (手配読込中) return; var td = this && this.closest ? this.closest('td') : null; if (td) 手配の見た目(td);
@@ -4810,8 +4814,9 @@ window.FM見た目 = function () {};
     Array.prototype.forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function () { var k = b.getAttribute('data-k'); if (!k) { d.remove(); return; } リピートを選ぶ(k); }; });
   }
   var 受け取る元 = 受け取る;
-  受け取る = function (r, msg, ms) {
-    受け取る元(r, msg, ms);
+  受け取る = function (r, msg, ms, 仮) {
+    受け取る元(r, msg, ms, 仮);
+    if (仮) return;   // FAST-3: 控えの先表示のときは、手配・金額などは最新が来てから
     if (r && r.record) { 手配を読む(String(r.record.fields['伝票番号'] || r.record.fields['見積番号'] || '')); 送り位置を出す(); try { 金額を出す(); } catch (e) {}
       try { 段階の注意(r.record.fields); } catch (e) {}
       if (リピート予約) { var s1 = リピート予約; リピート予約 = ''; try { 元伝票の帯(r.record.fields, s1); } catch (e) {} setTimeout(function () { リピートを選ぶ(s1); }, 600); } }
