@@ -2591,6 +2591,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   function 控えに置く(番号, r) { try { var k = 'fm_rec_' + String(番号 || ''); var all = JSON.parse(localStorage.getItem('fm_rec_keys') || '[]').filter(function (x) { return x !== k; }); all.push(k); while (all.length > 25) { try { localStorage.removeItem(all.shift()); } catch (e) {} } localStorage.setItem('fm_rec_keys', JSON.stringify(all)); localStorage.setItem(k, JSON.stringify({ at: Date.now(), r: r })); } catch (e) {} }
   function 控えを見る(番号) { try { var c = JSON.parse(localStorage.getItem('fm_rec_' + String(番号 || '')) || 'null'); if (c && c.r && c.r.record && Date.now() - c.at < 14 * 24 * 3600 * 1000) return c.r; } catch (e) {} return null; }
   var 仮表示中 = false;
+  function 計時文(k) { if (!k) return ''; var p = []; if (k.伝票検索 != null) p.push('FM ' + (k.伝票検索 / 1000).toFixed(1) + 's'); if (k.案件検索 != null) p.push('案件 ' + (k.案件検索 / 1000).toFixed(1) + 's'); if (k.中継合計 != null) p.push('中継 ' + (k.中継合計 / 1000).toFixed(1) + 's'); return p.length ? '：' + p.join('・') : ''; }
   // FAST-2: 画面_付属 の返事を待っている間に 手配・仕様書・予定 を取りに行く所は、その返事から取る（無ければ自分で取る）
   var 付属待ち = null;
   function 付属から(名, no, 自分で) { var w = 付属待ち; if (!w || String(w.no) !== String(no)) return 自分で(); return w.p.then(function (a) { return (a && a[名] !== undefined) ? a[名] : 自分で(); }, function () { return 自分で(); }); }
@@ -2614,14 +2615,20 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     差分を出す(r['参考'], r['差分']);
     try { 前段階比を出す(r['前段階'], r['前段階差分']); } catch (e) {}   // YOY-2
     前回原価 = r['前回原価'] || null;   // COST-1
-    状態(msg + (ms ? '（' + ms + 'ms）' : ''), 'ok');
+    状態(msg + (ms ? '（' + ms + 'ms' + 計時文(r.計時) + '）' : ''), 'ok');
     待機(false);
     try { 控えに置く(r.record.fields['伝票番号'] || r.record.fields['見積番号'], { writable: r.writable, record: r.record, 履歴: r['履歴'], 参考: r['参考'], 差分: r['差分'], 前段階: r['前段階'], 前段階差分: r['前段階差分'], 前回原価: r['前回原価'] }); } catch (e) {}
     // FAST-2: 外注・変更履歴・関連会社売価を 1 往復で。古い中継（知らない操作）なら前のとおり 3 本
     (function (no, rid) {
       外注 = null; $('gc-rows').innerHTML = ''; $('gc-total').textContent = ''; $('gc-msg').textContent = '読んでいます…'; $('fmgaichu').style.display = no ? 'block' : 'none';
       var pp = 呼ぶ('画面_付属', [no, String(rid)]); 付属待ち = { no: no, p: pp };
+      var t1 = Date.now();
       pp.then(function (a) {
+        if (a.案件) {   // FAST-4: 前回との差・前段階・前回原価・履歴
+          try { 履歴を出す(a.案件.履歴); 差分を出す(a.案件.参考, a.案件.差分); 前段階比を出す(a.案件.前段階, a.案件.前段階差分); 前回原価 = a.案件.前回原価 || null; } catch (e) { console.warn('[付属]', e); }
+          try { var c = 控えを見る(no); if (c) { c.履歴 = a.案件.履歴; c.参考 = a.案件.参考; c.差分 = a.案件.差分; c.前段階 = a.案件.前段階; c.前段階差分 = a.案件.前段階差分; c.前回原価 = a.案件.前回原価; 控えに置く(no, c); } } catch (e) {}
+          var k = a.計時 || {}; var ex = stat; if (ex && /読み込みました/.test(ex.textContent)) ex.textContent = ex.textContent.replace(/）$/, '') + '／付属 ' + ((Date.now() - t1) / 1000).toFixed(1) + 's' + (k.案件 != null ? '（案件 ' + (k.案件 / 1000).toFixed(1) + 's）' : '') + '）';
+        }
         外注を読む(no, a.外注 || { 外注: [] }); 履歴を読む(rid, no, a.履歴 || { 行: [] }); 先方売価を読む(no, a.先方売価 || { 行: [] });
       }).catch(function () { 外注を読む(no); 履歴を読む(rid, no); 先方売価を読む(no); });
     })(r.record.fields['伝票番号'], r.record.recordId);
@@ -3451,7 +3458,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     待機(true); 失敗(''); diff.style.display = 'none'; 状態('読み込み中… ' + 番号);
     var t0 = Date.now();
     try { var 控え = 控えを見る(番号); if (控え) { 受け取る(控え, '', 0, true); setTimeout(function () { if (仮表示中) 仮を解く(); }, 8000); } } catch (e) {}   // FAST-3（8 秒で最新が来なくても触れるように）
-    呼ぶ('画面_読み込み', [番号])
+    呼ぶ('画面_読み込み', [番号, true])   // FAST-4: 伝票だけ先に。前回との差・履歴などは 画面_付属 で
       .then(function (r) { 受け取る(r, 番号 + ' を読み込みました', Date.now() - t0); })
       .catch(function (e) { 仮を解く(); 現在 = null; 状態(String(e.message || e), 'err'); 待機(false); });
   }
