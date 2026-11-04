@@ -25,7 +25,7 @@
            + 'AKfycby3DCpR4kCCQMBZ0a8sdsBArM1z_J3JJKcIMYNOHLlhzB1LNrYPqw_NM-dxo_JirSyK4g/exec';
   // FAST-5: 速い中継（Cloudflare Workers。tools/fm-fast）。FileMaker を「読む」だけをこちらへ。無ければ・失敗したら Apps Script へ
   //   住所は配ったあとに決まる（https://tokiwa-fm-fast.<サブドメイン>.workers.dev）。localStorage の fm_fast_url が優先（試すとき用）。空なら使わない
-  var 速い中継 = '';
+  var 速い中継 = 'https://tokiwa-fm-fast.tokiwa-hub.workers.dev/';   // 配った住所（GitHub Actions「速い中継を Cloudflare へ配る」）
   try { var _fu = localStorage.getItem('fm_fast_url'); if (_fu !== null) 速い中継 = _fu; } catch (e) {}
   function 速い中継で(name, args) {
     if (!速い中継) return false;
