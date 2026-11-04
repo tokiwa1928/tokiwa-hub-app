@@ -1759,7 +1759,9 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   #fmbar button.save{ background:#1d6f3f; border-color:#1d6f3f; font-weight:700; }
   #fmbar button.new{ background:#334155; border-color:#475569; }
   /* SLIM-1（11/4 本多さん「読み込み部分は不要。検索で開く。黒帯のかぶっている部分は不要」）: 下の白い帯と重なるものは出さない */
-  #fmbar .back, #fmbar #fm-title, #fmbar #fm-no, #fmbar #fm-load, #fmbar #fm-save, #fmbar #fm-reload{ display:none !important; }
+  #fmbar .back, #fmbar #fm-title, #fmbar #fm-no, #fmbar #fm-load, #fmbar #fm-reload, #fmbar button.new, #fmbar #fm-hist, #fmbar #fmstage, #fmbar .sep, #fmbar > span:not(#fmstat):not(#fmwho):not(#fmsignin), #fmbar .ai-make{ display:none !important; }   /* SLIM-2: 黒帯は保存だけ（新しく起こすはまず使わない） */
+  #fmbar #fm-save{ display:inline-block !important; padding:4px 18px; }
+  #fmbar #fm-similar{ background:#b45309; border-color:#d97706; font-weight:700; }
   #fmbar{ padding:3px 12px; }
   #fmbar #fmstat{ font-size:12px; color:#cbd5e1; }
   #fmbar button:disabled{ opacity:.4; cursor:default; }
@@ -1979,6 +1981,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   <button class="new" data-kind="受注">受注</button>
   <span class="sep"></span>
   <button class="save" id="fm-save" title="伝票を読み込んでいなければ、打った内容で新しく起こして保存します">保存</button>
+  <button id="fm-similar" title="いま入っている品名・得意先・品種から似た過去の伝票を探し、その仕様（用紙・印刷・加工・サイズなど）をこの画面に写します">🔎 似た伝票から仕様を持ってくる</button>
   <button id="fm-reload" disabled style="display:none" title="編集を捨てて FileMaker の内容に戻す">読み直す</button>
   <span id="fmwho"></span>
   <span id="fmsignin"></span>
@@ -2595,6 +2598,61 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   function 控えに置く(番号, r) { try { var k = 'fm_rec_' + String(番号 || ''); var all = JSON.parse(localStorage.getItem('fm_rec_keys') || '[]').filter(function (x) { return x !== k; }); all.push(k); while (all.length > 25) { try { localStorage.removeItem(all.shift()); } catch (e) {} } localStorage.setItem('fm_rec_keys', JSON.stringify(all)); localStorage.setItem(k, JSON.stringify({ at: Date.now(), r: r })); } catch (e) {} }
   function 控えを見る(番号) { try { var c = JSON.parse(localStorage.getItem('fm_rec_' + String(番号 || '')) || 'null'); if (c && c.r && c.r.record && Date.now() - c.at < 14 * 24 * 3600 * 1000) return c.r; } catch (e) {} return null; }
   var 仮表示中 = false;
+  // ═══ SIMILAR-1（11/4 本多さん「仕様を見て類似から持ってくる機能が欲しい」）═══
+  //   索引（写し）から、品名の語・得意先・品種・ユーザー名が近い伝票を点数で並べ、選んだ伝票の仕様欄だけをこの画面に写す（番号・日付・得意先・金額は写さない）
+  var 似た伝票 = [];
+  function 似た語に(s) { s = String(s || '').normalize('NFKC').toLowerCase().replace(/[（）()「」【】\[\]・、。,.\/／\-_－—~～:：;；'"'"'"]/g, ' ').trim(); var out = {}; s.split(/\s+/).filter(Boolean).forEach(function (w) { if (w.length >= 2) out[w] = 1; for (var i = 0; i + 2 <= w.length; i++) out[w.slice(i, i + 2)] = 1; }); return Object.keys(out); }
+  function 似た伝票を探す() {
+    var 品名 = g('f-item'), 得意先 = g('f-custcd'), 品種 = g('f-hinshu'), ユーザー = g('f-user'), 自分 = 現在の番号();
+    if (!品名 && !得意先 && !ユーザー) { 状態('品名か得意先かユーザー名を入れてから押してください', 'err'); return; }
+    状態('似た伝票を探しています…');
+    (索引 ? Promise.resolve() : 索引を用意()).then(function () {
+      if (!索引 || !索引.行) { 状態('索引がまだありません（検索欄で一度探すと用意されます）', 'err'); return; }
+      var P = 索引位置, 語 = 似た語に(品名), 得 = 得意先.normalize('NFKC'), 種 = 品種.normalize('NFKC').toLowerCase(), 使 = ユーザー.normalize('NFKC').toLowerCase();
+      var hits = [];
+      索引.行.forEach(function (r) {
+        var no = String(r[P['伝票番号']] || ''); if (!no || /^hub:/i.test(String(r[P['recordId']] || '')) || no === 自分) return;
+        if (String(r[P['案件区分']] || '受注') !== '受注' && String(r[P['案件区分']] || '') !== '') return;   // 仕様は受注から
+        var nm = String(r[P['製品名']] || '').normalize('NFKC').toLowerCase(); var sc = 0, hit = 0;
+        語.forEach(function (w) { if (nm.indexOf(w) >= 0) { hit++; sc += w.length >= 3 ? 3 : 1; } });
+        if (語.length && !hit) sc -= 2;
+        if (得 && String(r[P['得意先コード']] || '') === 得) sc += 8;
+        if (種 && String(r[P['品種']] || '').normalize('NFKC').toLowerCase() === 種) sc += 3;
+        if (使 && String(r[P['ユーザー名']] || '').normalize('NFKC').toLowerCase().indexOf(使) >= 0) sc += 5;
+        if (sc <= 0) return;
+        hits.push({ sc: sc, no: no, 日: String(r[P['起票日']] || ''), 得: String(r[P['得意先コード']] || ''), 使: String(r[P['ユーザー名']] || ''), 名: String(r[P['製品名']] || ''), 種: String(r[P['品種']] || ''), 数: r[P['合計数1']], 金: r[P['合計金額']] });
+      });
+      hits.sort(function (a, b) { return (b.sc - a.sc) || (日を数に(b.日) - 日を数に(a.日)); });
+      似た伝票 = hits.slice(0, 30);
+      if (!似た伝票.length) { 状態('似た伝票が見つかりません（品名の語を減らすと当たりやすくなります）', 'err'); return; }
+      var d = document.createElement('div'); d.id = 'fm-similar-box'; d.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto';
+      var h = '<div style="background:#fff;border-radius:10px;max-width:1100px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;font-size:12.5px"><div style="padding:10px 16px;background:#b45309;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🔎 似た伝票（' + 似た伝票.length + ' 件・似ている順）</b><span style="font-size:11px;opacity:.9">「仕様を写す」= 用紙・印刷・加工・サイズなどだけをこの画面に入れる（番号・日付・得意先・金額はそのまま）</span><button id="fm-similar-x" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div><div style="overflow:auto;flex:1"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f1f5f9;text-align:left"><th style="padding:5px 8px">点</th><th style="padding:5px 8px">伝票番号</th><th style="padding:5px 8px">起票日</th><th style="padding:5px 8px">得意先</th><th style="padding:5px 8px">ユーザー</th><th style="padding:5px 8px">製品名</th><th style="padding:5px 8px">品種</th><th style="padding:5px 8px;text-align:right">数量</th><th style="padding:5px 8px;text-align:right">金額</th><th style="padding:5px 8px"></th></tr></thead><tbody>';
+      似た伝票.forEach(function (x, i) { h += '<tr style="border-top:1px solid #e5e7eb"><td style="padding:4px 8px;color:#94a3b8">' + x.sc + '</td><td style="padding:4px 8px;font-weight:700">' + esc(x.no) + '</td><td style="padding:4px 8px;white-space:nowrap">' + esc(x.日) + '</td><td style="padding:4px 8px">' + esc(x.得) + '</td><td style="padding:4px 8px">' + esc(x.使) + '</td><td style="padding:4px 8px">' + esc(x.名) + '</td><td style="padding:4px 8px">' + esc(x.種) + '</td><td style="padding:4px 8px;text-align:right">' + esc(x.数 || '') + '</td><td style="padding:4px 8px;text-align:right">' + (x.金 ? '¥' + Number(x.金).toLocaleString() : '') + '</td><td style="padding:4px 8px;white-space:nowrap"><button data-i="' + i + '" data-k="copy" style="font-size:11.5px;padding:3px 10px;background:#b45309;color:#fff;border:none;border-radius:5px;cursor:pointer">仕様を写す</button> <button data-i="' + i + '" data-k="open" style="font-size:11.5px;padding:3px 8px;cursor:pointer">開く</button></td></tr>'; });
+      d.innerHTML = h + '</tbody></table></div></div>';
+      document.body.appendChild(d);
+      d.querySelector('#fm-similar-x').onclick = function () { d.remove(); };
+      Array.prototype.forEach.call(d.querySelectorAll('button[data-i]'), function (b) { b.onclick = function () { var x = 似た伝票[Number(b.getAttribute('data-i'))]; d.remove(); if (b.getAttribute('data-k') === 'open') { 番号欄.value = x.no; 読み込む(x.no); } else 仕様を写す(x.no); }; });
+      状態('似た伝票 ' + 似た伝票.length + ' 件', 'ok');
+    });
+  }
+  // 写さない欄（番号・日付・相手・金額・管理）。それ以外の TO_FM の欄（用紙・印刷・加工・サイズ・パーツ・品目など）を写す
+  var 写さない = /伝票番号|見積番号|案件|起票日|納品日|納期|修正|作成|得意先|ユーザー|担当|注文書|前回|有効期限|注残|売価|金額|合計|単価|用紙代|印刷代|版代|加工賃|梱包代|配送代|人件費|製造区分|経由|製品名|備考|メモ/;
+  function 仕様を写す(no) {
+    状態('仕様を読んでいます… ' + no);
+    呼ぶ('画面_読み込み', [no, true]).then(function (r) {
+      if (!r || !r.record) { 状態('読めませんでした', 'err'); return; }
+      var f = r.record.fields, n = 0, ok = (書ける && 書ける.length) ? 書ける : null;
+      Object.keys(TO_FM).forEach(function (id) {
+        var col = TO_FM[id]; if (写さない.test(col) || 写さない.test(id)) return; if (ok && ok.indexOf(col) < 0) return;
+        var el = document.getElementById(id); if (!el) return; var v = f[col]; v = (v === undefined || v === null) ? '' : String(v);
+        if (日付欄か(el)) return; if (年から欄[id]) v = 年からへ(v);
+        if (String(el.value || '') === v) return; el.value = v; el.classList.add('fm-changed'); el.title = no + ' から写した'; n++;
+      });
+      try { calc(); } catch (e) {} try { onInk(); } catch (e) {} try { 表紙を決める(null); } catch (e) {} try { applyRowVis(); } catch (e) {}
+      状態(no + ' の仕様を写しました（' + n + ' 項目。赤枠が写した欄。保存するまで FileMaker には入りません）', 'ok');
+    }).catch(function (e) { 状態(String(e.message || e), 'err'); });
+  }
+  $('fm-similar').onclick = 似た伝票を探す;
   function 候補を履歴に(候補, rec) { var dn = function (v) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v || '').trim()); return m ? Number(m[3] + m[1] + m[2]) : 0; };
     var list = 候補.map(function (c) { return { recordId: c.recordId, 区分: c.区分 || '（従来の受注）', 番号: c.番号, 起票日: c.起票日 || '', 合計金額: c.合計金額, 売価金額: c.売価金額 }; });
     if (rec && !list.some(function (h) { return String(h.recordId) === String(rec.recordId); })) list.push({ recordId: rec.recordId, 区分: rec.fields['案件区分'] || '（従来の受注）', 番号: rec.fields['見積番号'] || rec.fields['伝票番号'] || '', 起票日: rec.fields['起票日'] || '', 合計金額: rec.fields['合計金額'], 売価金額: rec.fields['売価金額'] });
@@ -4405,7 +4463,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     var n = 0, t = setInterval(function () { n++; if (!索引 && n < 60) return; clearInterval(t); AI起票を開く(); $('aik-in').value = seed.text; $('aik-go').click(); }, 500);
   })();
   (function () {
-    var b = document.createElement('button'); b.textContent = '🤖 AIで起こす'; b.title = '依頼の文から、前回の伝票（リピート）を探して起こす';
+    var b = document.createElement('button'); b.className = 'ai-make'; b.textContent = '🤖 AIで起こす'; b.title = '依頼の文から、前回の伝票（リピート）を探して起こす';
     b.style.cssText = 'background:#5b21b6;color:#fff;border:0;border-radius:4px;padding:4px 10px;font-weight:700';
     b.onclick = AI起票を開く;
     var last = bar.querySelectorAll('button.new'); last = last[last.length - 1];
