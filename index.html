@@ -4915,6 +4915,10 @@ async function loadFromCloud() {
     DB.calendarOrders = calDedupe(_coOrder.filter(function(id){ var r=_coById[id]; if(_coTomb[id]) return false; if(r && !r._manual && _coSig[typeof calSigOf==='function'?calSigOf(r):'']) return false; return true; }).map(function(id){ return _coById[id]; }));   // CAL-DUP-1: 内容が同じ行は 1 行に
   }
 
+  // BULK-SORT-1: 問い合わせの覚え（和集合。同じ鍵はクラウドを優先しない＝この PC で決めた方を残す）
+  if (result.data.inqBinRules && typeof result.data.inqBinRules==='object') {
+    var _ir=_inqBinRules_(); ['byEmail','byDomain','byFax','byFaxCust'].forEach(function(k){ var src=result.data.inqBinRules[k]||{}; _ir[k]=_ir[k]||{}; Object.keys(src).forEach(function(x){ if(!(x in _ir[k])) _ir[k][x]=src[x]; }); });
+  }
   // DOC-LINK-1: 外注先に送った書類の覚え（送信・返事は新しい方）
   if (result.data.docSends && typeof result.data.docSends==='object') {
     var _dsm=DB.docSends||{}; Object.keys(result.data.docSends).forEach(function(k){ var a=_dsm[k], b=result.data.docSends[k]; if(!b) return; if(!a){ _dsm[k]=b; return; } ['docId','url','type'].forEach(function(x){ if(!a[x]&&b[x]) a[x]=b[x]; }); ['publishedAt','sentAt','lastReplyAt'].forEach(function(x){ if(String(b[x]||'')>String(a[x]||'')){ a[x]=b[x]; if(x==='sentAt'){ a.to=b.to; a.sentBy=b.sentBy; } if(x==='lastReplyAt') a.reply=b.reply; } }); });
@@ -5539,6 +5543,7 @@ async function _saveToCloudNow_() {
     proofingsDeleted: (DB.proofingsDeleted || []).slice(-2000),
     quoteFolders: DB.quoteFolders || {},   // QFOLDER-1
     docSends: DB.docSends || {},   // DOC-LINK-1
+    inqBinRules: DB.inqBinRules || {},   // BULK-SORT-1: 今後もこの箱、の覚え（全 PC で同じに）
     sagyoPrints: (DB.sagyoPrints || []).slice(-8000),                // SEIZO-1: 製造指示書の出力記録（第N回・日時・誰が・変更コメント・写し）
     inquiries: DB.inquiries || [],
     deliveryItems: DB.deliveryItems || [],
@@ -55868,7 +55873,62 @@ function _inqKnownContacts_(){
   window._inqKnownCache_={ at:Date.now(), emails:emails, domains:domains }; return window._inqKnownCache_;
 }
 function _inqKnownContact_(inq){ var k=_inqKnownContacts_(); var e=String(inq.from_email||inq.email||'').toLowerCase(); if(!e) return false; return !!(k.emails[e]||k.domains[_inqDomain_(e)]); }
-function _inqBinRules_(){ DB.inqBinRules = DB.inqBinRules || { byEmail:{}, byDomain:{} }; if(!DB.inqBinRules.byEmail) DB.inqBinRules.byEmail={}; if(!DB.inqBinRules.byDomain) DB.inqBinRules.byDomain={}; return DB.inqBinRules; }
+function _inqBinRules_(){ DB.inqBinRules = DB.inqBinRules || { byEmail:{}, byDomain:{} }; if(!DB.inqBinRules.byEmail) DB.inqBinRules.byEmail={}; if(!DB.inqBinRules.byDomain) DB.inqBinRules.byDomain={}; if(!DB.inqBinRules.byFax) DB.inqBinRules.byFax={}; if(!DB.inqBinRules.byFaxCust) DB.inqBinRules.byFaxCust={}; return DB.inqBinRules; }
+// ═══ BULK-SORT-1（本多さん 11/4「一旦全て振り分けて、今後もというのをたくさん作って流れを作る」）═══
+//   振り分け前のものを「送り元」（FAX の発信番号／メールのドメイン／差出人）ごとにまとめ、箱を選んで一度に振り分ける。
+//   選んだ箱は「今後も」の覚え（byFax / byDomain / byEmail）に入り、届いた瞬間から自動で入る。クラウドへは bulkUpdateCommunications で一度に送る
+function _inqFaxNo_(inq){ var m=/FAX image from:\s*\[?\s*([0-9０-９\-]{6,})/i.exec(String((inq&&inq.subject)||'')); return m?m[1].replace(/[０-９]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); }).replace(/-/g,''):''; }
+function _inqGroupKey_(inq){ var fx=_inqFaxNo_(inq); if(fx) return { t:'fax', k:fx, label:'FAX '+fx }; var e=String(inq.from_email||inq.email||'').trim().toLowerCase(); var d=_inqDomain_(e); if(!e) return { t:'none', k:'', label:'差出人なし' };
+  var generic=/^(gmail\.com|yahoo\.co\.jp|icloud\.com|outlook\.com|hotmail\.com|docomo\.ne\.jp|ezweb\.ne\.jp|softbank\.ne\.jp|i\.softbank\.jp|au\.com|nifty\.com|ocn\.ne\.jp|leaf\.ocn\.ne\.jp)$/.test(d);
+  return generic ? { t:'email', k:e, label:e } : { t:'domain', k:d, label:'@'+d }; }
+function _inqBulkOpen_(){
+  var esc=_inqEsc_; var list=(DB.inquiries||[]).filter(function(q){ return q && !q.bin && !q.isSpam && _inqBin_(q)==='その他'; });
+  var g={}; list.forEach(function(q){ var k=_inqGroupKey_(q); var id=k.t+'|'+k.k; var o=g[id]=g[id]||{ t:k.t, k:k.k, label:k.label, n:0, co:{}, ex:[], names:{} }; o.n++; o.co[q.channel_company||'?']=(o.co[q.channel_company||'?']||0)+1; if(o.ex.length<3) o.ex.push(String(q.subject||'（件名なし）').slice(0,40)); var nm=q.from_company||q.from_name; if(nm) o.names[nm]=(o.names[nm]||0)+1; });
+  var rows=Object.keys(g).map(function(id){ return g[id]; }).sort(function(a,b){ return b.n-a.n; }).slice(0,120);
+  var opts=INQ_BINS.map(function(b){ return '<option value="'+b.k+'">'+b.icon+' '+(b.k==='控え'?'参考（控え）':b.label)+'</option>'; }).join('');
+  var old=document.getElementById('inq-bulk-modal'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='inq-bulk-modal'; m.className='proof-modal'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;display:flex;align-items:flex-start;justify-content:center;padding:2rem 1rem;overflow:auto';
+  var tr=rows.map(function(o,i){ var nm=Object.keys(o.names).sort(function(a,b){ return o.names[b]-o.names[a]; })[0]||''; var cos=Object.keys(o.co).map(function(c){ return c.replace(/^\d+_/,'')+' '+o.co[c]; }).join('・');
+    return '<tr id="bk-'+i+'" style="border-top:1px solid #e5e7eb"><td style="padding:6px 8px;white-space:nowrap"><b>'+esc(o.label)+'</b>'+(nm?'<div style="font-size:11px;color:#64748b">'+esc(nm)+'</div>':'')+'<div style="font-size:10.5px;color:#94a3b8">'+esc(cos)+'</div></td>'
+      +'<td style="padding:6px 8px;text-align:right;font-weight:700">'+o.n+'</td>'
+      +'<td style="padding:6px 8px;font-size:11px;color:#475569">'+o.ex.map(esc).join('<br>')+'</td>'
+      +'<td style="padding:6px 8px;white-space:nowrap"><select id="bk-sel-'+i+'" style="font-size:12px;padding:3px"><option value="">（決めない）</option>'+opts+'</select>'
+      +(o.t==='fax'?' <input id="bk-cust-'+i+'" placeholder="得意先（任意）" value="'+esc(nm)+'" style="font-size:12px;padding:3px;width:120px">':'')
+      +' <button class="btn btn-p" style="font-size:11px;padding:3px 10px" onclick="_inqBulkApply_('+i+')">この送り元を今後も →</button></td></tr>'; }).join('');
+  window._inqBulkRows_=rows;
+  m.innerHTML='<div style="background:#fff;border-radius:10px;max-width:1100px;width:100%;max-height:92vh;display:flex;flex-direction:column;overflow:hidden">'
+    +'<div style="padding:12px 18px;background:#0f766e;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>📥 送り元ごとにまとめて振り分ける（振り分け前 '+list.length+' 件・'+rows.length+' の送り元）</b><button onclick="document.getElementById(\'inq-bulk-modal\').remove()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div>'
+    +'<div style="font-size:11.5px;color:#475569;padding:8px 18px 0">箱を選んで「この送り元を今後も →」を押すと、その送り元の振り分け前を全部その箱に入れ、<b>今後届くものも自動で同じ箱</b>に入ります（FAX は発信番号、メールは会社のドメインか差出人で覚えます）。間違えたら 設定 → 問い合わせの覚え で消せます。</div>'
+    +'<div style="overflow:auto;padding:10px 18px 16px;flex:1"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#f1f5f9;text-align:left"><th style="padding:5px 8px">送り元</th><th style="padding:5px 8px;text-align:right">件数</th><th style="padding:5px 8px">件名の例</th><th style="padding:5px 8px">箱</th></tr></thead><tbody>'+tr+'</tbody></table></div></div>';
+  document.body.appendChild(m);
+}
+function _inqBulkApply_(i){
+  var o=(window._inqBulkRows_||[])[i]; if(!o) return; var bin=(document.getElementById('bk-sel-'+i)||{}).value||''; if(!bin){ alert('箱を選んでください'); return; }
+  var cust=(document.getElementById('bk-cust-'+i)||{}).value||''; var r=_inqBinRules_(); r.byFax=r.byFax||{}; r.byFaxCust=r.byFaxCust||{};
+  if(o.t==='fax'){ r.byFax[o.k]=bin; if(cust) r.byFaxCust[o.k]=cust; } else if(o.t==='domain'){ r.byDomain[o.k]=bin; } else if(o.t==='email'){ r.byEmail[o.k]=bin; }
+  var who=(currentAuth&&currentAuth.userName)||'', now=new Date().toISOString(), meta=_inqBinMeta_(bin), items=[];
+  (DB.inquiries||[]).forEach(function(q){ if(!q||q.bin||q.isSpam) return; var k=_inqGroupKey_(q); if(k.t!==o.t||k.k!==o.k) return;
+    q.bin=bin; q.bin_by=who; q.bin_at=now; if(meta.kind && !q.kind) q.kind=meta.kind; if(bin==='ジャンク') q.isSpam=true; if(cust && !q.from_company) q.from_company=cust; delete q.bin_auto; delete q.bin_reason;
+    var patch={ bin:bin, bin_by:who, bin_at:now, kind:q.kind||'' }; if(bin==='ジャンク') patch.isSpam=true; if(cust && q.from_company===cust) patch.from_company=cust; items.push({ id:q.id, patch:patch }); });
+  window._inqKnownCache_=null; try{ saveDB(); if(typeof saveToCloud==='function') saveToCloud(); }catch(e){}
+  var row=document.getElementById('bk-'+i); if(row) row.style.opacity='.45';
+  if(typeof _toastMsg==='function') _toastMsg(meta.icon+' '+o.label+' → '+(bin==='控え'?'参考（控え）':meta.label)+'：'+items.length+' 件。今後も同じ箱に入ります');
+  try{ renderInquiryList(); }catch(e){}
+  // クラウドへ（まとめて。古い GAS なら 1 件ずつ・最大 60 件）
+  var send=function(chunk){ return callCloudAPI('bulkUpdateCommunications',{},{ items:chunk }); };
+  var chunks=[]; for(var a=0;a<items.length;a+=300) chunks.push(items.slice(a,a+300));
+  chunks.reduce(function(p,c){ return p.then(function(){ return send(c).then(function(r){ if(r && !r.success && /unknown_action/.test(String(r.error||''))){ return c.slice(0,60).reduce(function(p2,it){ return p2.then(function(){ return callCloudAPI('updateCommunication',{},{ id:it.id, patch:it.patch }); }); }, Promise.resolve()); } }); }); }, Promise.resolve()).catch(function(e){ console.warn('[BULK]', e); });
+}
+function _inqRulesEdit_(){
+  var r=_inqBinRules_(), esc=_inqEsc_; var old=document.getElementById('inq-rules-modal'); if(old) old.remove();
+  var rows=[]; Object.keys(r.byFax||{}).forEach(function(k){ rows.push({ t:'byFax', k:k, label:'FAX '+k+(r.byFaxCust&&r.byFaxCust[k]?'（'+r.byFaxCust[k]+'）':''), bin:r.byFax[k] }); });
+  Object.keys(r.byDomain||{}).forEach(function(k){ rows.push({ t:'byDomain', k:k, label:'@'+k, bin:r.byDomain[k] }); }); Object.keys(r.byEmail||{}).forEach(function(k){ rows.push({ t:'byEmail', k:k, label:k, bin:r.byEmail[k] }); });
+  var m=document.createElement('div'); m.id='inq-rules-modal'; m.className='proof-modal'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;display:flex;align-items:flex-start;justify-content:center;padding:2rem 1rem;overflow:auto';
+  m.innerHTML='<div style="background:#fff;border-radius:10px;max-width:720px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden"><div style="padding:12px 18px;background:#1f2937;color:#fff;display:flex;justify-content:space-between;align-items:center"><b>🧠 問い合わせの覚え（今後もこの箱）'+rows.length+' 件</b><button onclick="document.getElementById(\'inq-rules-modal\').remove()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer">×</button></div>'
+    +'<div style="overflow:auto;padding:10px 18px 16px;flex:1">'+(rows.length?'<table style="width:100%;border-collapse:collapse;font-size:12.5px">'+rows.map(function(x){ var mt=_inqBinMeta_(x.bin); return '<tr style="border-top:1px solid #eee"><td style="padding:5px 8px">'+esc(x.label)+'</td><td style="padding:5px 8px;white-space:nowrap">'+mt.icon+' '+esc(x.bin==='控え'?'参考（控え）':mt.label)+'</td><td style="padding:5px 8px;text-align:right"><button class="btn" style="font-size:11px;padding:2px 8px;color:#b91c1c" onclick="var r=_inqBinRules_();delete r[\''+x.t+'\'][\''+esc(x.k)+'\'];if(r.byFaxCust)delete r.byFaxCust[\''+esc(x.k)+'\'];try{saveDB();if(typeof saveToCloud===\'function\')saveToCloud();}catch(e){}_inqRulesEdit_()">消す</button></td></tr>'; }).join('')+'</table>':'<div style="color:#64748b">まだありません</div>')+'</div></div>';
+  document.body.appendChild(m);
+}
+
 // 自動仕分け。{ bin, reason }
 // AI-BIN-1: 取り込み側（メール振り分け）の AI 判定は kind に載って来る。kind ↔ 箱
 const _INQ_KIND_BIN_ = { quote_req:'見積', budget_quote:'予算見積', proof_return:'校正', order:'受注', order_ai:'受注', question:'質問', mgmt:'経営', notice:'控え', junk:'ジャンク', schedule:'質問' };
@@ -55934,6 +55994,7 @@ function _inqBinAuto_(inq){
   var email=String(inq.from_email||inq.email||'').toLowerCase(); var dom=_inqDomain_(email); var src=inq.source_type||'manual';
   if(src==='internal_msg') return { bin:'その他', reason:'社内連絡' };
   if(src==='interco') return { bin:'受注', reason:'社間の発注' };
+  var _fx=_inqFaxNo_(inq); if(_fx){ var _fr=_inqBinRules_(); if(_fr.byFax[_fx]){ if(_fr.byFaxCust[_fx] && !inq.from_company) inq.from_company=_fr.byFaxCust[_fx]; return { bin:_fr.byFax[_fx], reason:'前に同じ FAX 番号（'+_fx+'）をそう仕分けた' }; } }   // BULK-SORT-1
   if(/^(Message from\b|.*FAX image from)/i.test(subj)) return { bin:'その他', reason:'複合機・FAX の転送（中身を見て振り分け）' };   // AI-BIN-3
   // AI-BIN-TRIAL-2: AI が決めた種類は規則より先（件名の語でも付く quote_req／proof_return は後ろのまま）
   var _aiK={ budget_quote:1, question:1, mgmt:1, notice:1, junk:1, order_ai:1 }; if(_aiK[inq.kind] && src!=='manual' && !inq.bin) return { bin:_INQ_KIND_BIN_[inq.kind], reason:'AI の判定' };
@@ -55968,7 +56029,7 @@ function _inqBinAuto_(inq){
   if(junk>=3 && !known) return { bin:'ジャンク', reason:'「'+jhit.slice(0,3).join('」「')+'」' };
   return { bin:'その他', reason:known?'知っている相手（言葉では決められず）':'言葉では決められず' };
 }
-const INQ_RULES_V=8;   // AI-BIN-4: 規則を変えたら上げる → 端末に残っている古い自動判定を捨てて全部やり直す
+const INQ_RULES_V=9;   // AI-BIN-4: 規則を変えたら上げる → 端末に残っている古い自動判定を捨てて全部やり直す
 function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; if(!inq.bin_auto || inq.bin_auto_v!==INQ_RULES_V){ try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } inq.bin_auto_v=INQ_RULES_V; delete inq._impCache; } return inq.bin_auto; }
 function _inqBinMeta_(k){ return INQ_BINS.find(function(b){ return b.k===k; })||INQ_BINS[6]; }
 // 人が直す: 覚える（差出人のメール）。見積・受注・校正・経営・質問・ジャンク は覚え、その他は覚えない
@@ -56144,6 +56205,8 @@ function _renderInqBinTabs_(){
   var preOn=window._inqBinSel_==='__pre'&&!window._inqWaitSel_;
   var h='<button onclick="setInqBin(\'__pre\')" title="人がまだ振り分けを決めていないもの（自動の提案だけ）。札の「✔ この振り分けで OK」か振り分けのボタンで決めると、振り分け後へ移ります" style="font-size:13px;font-weight:900;padding:6px 14px;border:2px solid #b45309;background:'+(preOn?'#b45309':'#fffbeb')+';color:'+(preOn?'#fff':'#b45309')+';cursor:pointer">📥 振り分け前 <span style="font-size:15px">'+(cnt.pre||0)+'</span></button>'
     +(( (function(){ try{ return localStorage.getItem('inq_ai_btn')==='1'; }catch(e){ return false; } })() ) ? '<button id="inq-ai-sort-btn" onclick="if(window._inqAiSortStop_===false){window._inqAiSortStop_=true;return;}_inqAiSortRun_()" title="振り分け前と、言葉の当たりだけで自動に入っているものを Claude に 10 通ずつ聞いて判定し直します（新しい順に 200 件ずつ・少額の利用料）。人が決めたもの・覚えている差出人は触りません" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #7c3aed;background:#fff;color:#7c3aed;cursor:pointer;margin-left:6px">🤖 AI で判定</button>' : '')   // AI-OFF-1: AI は使わない方針（10/28）。戻すときは localStorage.setItem('inq_ai_btn','1')
+    +'<button onclick="_inqBulkOpen_()" title="振り分け前を送り元ごとにまとめて振り分け、今後も同じ箱に入るよう覚える" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #0f766e;background:#ccfbf1;color:#0f766e;border-radius:7px;cursor:pointer;margin-left:6px">📥 送り元ごとにまとめて振り分け</button>'
+    +'<button onclick="_inqRulesEdit_()" title="今後もこの箱、の覚えを見る・消す" style="font-size:11.5px;padding:5px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:7px;cursor:pointer;margin-left:4px">🧠 覚え</button>'
     +'<button onclick="_inqReAuto_()" title="自動の判定（AI 以外の規則の分）を全部やり直します。人が決めたもの・覚えている差出人はそのまま" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #64748b;background:#fff;color:#334155;cursor:pointer;margin-left:4px">↻ 自動を判定し直す</button>'
     +'<span style="font-size:11px;font-weight:700;color:#115e59;margin-left:10px">振り分け後:</span>';
   INQ_BINS.forEach(function(b){ h+=chip(b.icon+' '+esc(b.label), cnt[b.k]||0, window._inqBinSel_===b.k, b.color, "setInqBin('"+b.k+"')", b.label+'（人が決めたもの・覚えている差出人のもの）'); });
