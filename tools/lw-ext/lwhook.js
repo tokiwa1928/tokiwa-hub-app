@@ -9,17 +9,21 @@
   function qs(url, k) { var m = new RegExp('[?&]' + k + '=([^&]*)').exec(String(url || '')); return m ? decodeURIComponent(m[1]) : ''; }
   function pick(o, keys) { for (var i = 0; i < keys.length; i++) { var k = keys[i]; if (o[k] != null && o[k] !== '') return o[k]; var c = o.category || o.board || o.folder; if (c && typeof c === 'object' && c[k] != null) return c[k]; } return null; }
   function scan(json, url) {
-    var cats = {}, names = {}, n = 0, sample = null, seen = 0, urlBoard = qs(url, 'boardNo');
+    var cats = {}, names = {}, n = 0, sample = null, seen = 0, urlBoard = qs(url, 'boardNo'), counts = {}, comments = [], urlPost = qs(url, 'postNo') || qs(url, 'postNoString');   // 1.5: コメント数・コメント本文
     (function walk(v, depth) {
       if (!v || typeof v !== 'object' || depth > 8 || seen++ > 20000) return;
       if (Array.isArray(v)) { v.forEach(function (x) { walk(x, depth + 1); }); return; }
       var pid = v.postNoString || v.postIdString || v.postId || v.noteId || null; if (!pid && v.postNo != null && typeof v.postNo === 'string') pid = v.postNo;
       var cn = pick(v, catKeys), ci = pick(v, idKeys); if (pid && ci == null && urlBoard) ci = urlBoard;   // 一覧の URL の boardNo をその中の投稿に
       if (pid && (cn != null || ci != null)) { cats[String(pid)] = { name: cn != null ? String(cn) : '', id: ci != null ? String(ci) : '' }; n++; if (!sample) sample = Object.keys(v).join(','); }
+      if (pid && v.commentCount != null) counts[String(pid)] = Number(v.commentCount) || 0;
+      // コメントらしいもの: commentNo があって本文がある（ノートを開いたときに読まれる）
+      var cno = v.commentNoString || v.commentNo || v.commentId; var ctext = v.plainTextBody || v.content || v.body || v.text;
+      if (cno != null && !v.postNoString && !v.title && typeof ctext === 'string' && ctext.length) { var cp = v.postNoString || v.postNo || v.parentPostNo || urlPost; if (cp) comments.push({ post: String(cp), no: String(cno), text: String(ctext).slice(0, 2000), by: String(v.memberName || v.userName || v.writerName || ''), at: String(v.registUtcYmdt || v.createdTime || v.regDate || '') }); if (comments.length === 1 && !sample) sample = 'CMT ' + Object.keys(v).join(','); }
       else if (!pid && ci != null && cn != null) names[String(ci)] = String(cn);   // カテゴリー（ボード）の一覧
       Object.keys(v).forEach(function (k) { walk(v[k], depth + 1); });
     })(json, 0);
-    if (n || Object.keys(names).length) window.postMessage({ tokiwaLwCats: true, url: String(url || '').slice(0, 200), cats: cats, names: names, sample: sample }, '*');
+    if (n || Object.keys(names).length || comments.length || Object.keys(counts).length) window.postMessage({ tokiwaLwCats: true, url: String(url || '').slice(0, 200), cats: cats, names: names, counts: counts, comments: comments, sample: sample }, '*');
   }
   // 調べ用: 通信の URL と項目名を覚えておく（カテゴリーが拾えないとき、lw.js が Hub に送る）
   var diag = []; window.__tokiwaDiag = diag;

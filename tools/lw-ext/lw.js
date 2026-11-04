@@ -80,13 +80,15 @@
 (function () {
   var GAS = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec', KEY = 'mitsumori-2024';
   try { var sc = document.createElement('script'); sc.src = chrome.runtime.getURL('lwhook.js'); sc.onload = function () { sc.remove(); }; (document.head || document.documentElement).appendChild(sc); } catch (e) { }
-  var buf = {}, names = {}, sample = '', timer = null, sentAt = 0, lastSent = {};
+  var buf = {}, names = {}, sample = '', timer = null, sentAt = 0, lastSent = {}, counts = {}, cmts = [], sentCount = {}, sentCmt = {};
   function flush() {
     timer = null; var cats = {}; Object.keys(buf).forEach(function (id) { var c = buf[id]; var nm = c.name || names[c.id] || (c.id ? '#' + c.id : ''); if (!nm) return; if (lastSent[id] === nm) return; cats[id] = nm; });
-    var ids = Object.keys(cats); if (!ids.length && !sample) return;
-    var body = { apiKey: KEY, action: 'lwSyncCatsPush', cats: cats, names: names, sample: sample, page: location.pathname.slice(0, 80), by: 'lw-ext 1.4' };
+    var cnt = {}; Object.keys(counts).forEach(function (id) { if (sentCount[id] !== counts[id]) cnt[id] = counts[id]; });
+    var cm = cmts.filter(function (c) { return !sentCmt[c.no]; }); cmts = [];
+    var ids = Object.keys(cats); if (!ids.length && !sample && !Object.keys(cnt).length && !cm.length) return;
+    var body = { apiKey: KEY, action: 'lwSyncCatsPush', cats: cats, names: names, counts: cnt, comments: cm, sample: sample, page: location.pathname.slice(0, 80), by: 'lw-ext 1.5' };
     sample = '';
-    fetch(GAS, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }).then(function (r) { return r.text(); }).then(function (t) { try { var j = JSON.parse(t); if (j && j.success) { ids.forEach(function (id) { lastSent[id] = cats[id]; }); sentAt = Date.now(); } } catch (e) { } }).catch(function () { });
+    fetch(GAS, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }).then(function (r) { return r.text(); }).then(function (t) { try { var j = JSON.parse(t); if (j && j.success) { ids.forEach(function (id) { lastSent[id] = cats[id]; }); Object.keys(cnt).forEach(function (id) { sentCount[id] = cnt[id]; }); cm.forEach(function (c) { sentCmt[c.no] = 1; }); sentAt = Date.now(); } } catch (e) { } }).catch(function () { });
   }
   var gotCats = false, diagSent = 0;
   // 1.4: 動いていることを Hub に知らせる（ページを開いて 8 秒後に 1 回。何も拾えていなくても届く）
@@ -95,11 +97,12 @@
     var d = ev.data; if (!d || ev.source !== window) return;
     if (d.tokiwaLwDiag) {   // 調べ用: カテゴリーが拾えていないときだけ、通信の URL と項目名を Hub に送る（ページを開いてから 1 回、以後 5 分に 1 回）
       if (gotCats || !/\/note/.test(location.pathname) || Date.now() - diagSent < 5 * 60000 || !(d.items || []).length) return; diagSent = Date.now();
-      fetch(GAS, { method: 'POST', body: JSON.stringify({ apiKey: KEY, action: 'lwSyncCatsPush', cats: {}, sample: 'DIAG ' + location.pathname.slice(0, 40) + ' ' + d.items.join(' / ') , by: 'lw-ext 1.4' }), redirect: 'follow' }).catch(function () { });
+      fetch(GAS, { method: 'POST', body: JSON.stringify({ apiKey: KEY, action: 'lwSyncCatsPush', cats: {}, sample: 'DIAG ' + location.pathname.slice(0, 40) + ' ' + d.items.join(' / ') , by: 'lw-ext 1.5' }), redirect: 'follow' }).catch(function () { });
       return;
     }
     if (!d.tokiwaLwCats) return; gotCats = true;
     Object.keys(d.cats || {}).forEach(function (id) { buf[id] = d.cats[id]; }); Object.keys(d.names || {}).forEach(function (k) { names[k] = d.names[k]; });
+    Object.keys(d.counts || {}).forEach(function (id) { counts[id] = d.counts[id]; }); (d.comments || []).forEach(function (c) { cmts.push(c); });
     if (d.sample && !sample) sample = d.url + ' | ' + d.sample;
     if (!timer) timer = setTimeout(flush, 2500);
   });
