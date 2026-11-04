@@ -235,18 +235,21 @@ function 画面_読み込み(番号) {
   var rows = find_(lay, [{ '伝票番号': '==' + 番号 }], 1, 1, null);
   if (!rows.records.length) rows = find_(lay, [{ '見積番号': '==' + 番号 }], 1, 1, null);
   var rec = rows.records[0] || null;
+  // FAST-1（11/4）: 同じ案件の伝票は 1 回だけ FileMaker に聞き、前回・前段階・前回原価・履歴はその中から選ぶ（前は 4〜5 回続けて検索していた）
+  var 案件行 = []; try { if (rec && rec.fields['案件ID']) 案件行 = find_(lay, [{ '案件ID': '==' + String(rec.fields['案件ID']) }], 500, 1, null).records; } catch (e) { 案件行 = []; }
+  var 案件内 = function (q) { return { total: 案件行.length, records: 案件行.filter(q) }; };
   // YOY-1: 同じ段階の前回（前年の予算見積／見積／受注）との差分を、読み込むたびに返す（昨年比の注意）
   var 参考 = null, 差分 = [];
   try {
     var kb = rec ? String(rec.fields['案件区分'] || '') : ''; var aid = rec ? String(rec.fields['案件ID'] || '') : '';
-    if (rec && aid && kb) { var p = 同じ段階の前回_(lay, aid, kb, rec.recordId); if (p) { 参考 = { recordId: p.recordId, 番号: p.fields['見積番号'] || p.fields['伝票番号'] || '', 起票日: p.fields['起票日'] || '', 合計金額: p.fields['合計金額'], 売価金額: p.fields['売価金額'] }; 差分 = 差分_(p.fields, rec.fields); } }
+    if (rec && aid && kb) { var p = 同じ段階の前回_(lay, aid, kb, rec.recordId, 案件内(function (r) { return String(r.fields['案件区分'] || '') === kb; })); if (p) { 参考 = { recordId: p.recordId, 番号: p.fields['見積番号'] || p.fields['伝票番号'] || '', 起票日: p.fields['起票日'] || '', 合計金額: p.fields['合計金額'], 売価金額: p.fields['売価金額'] }; 差分 = 差分_(p.fields, rec.fields); } }
   } catch (e) { 参考 = null; 差分 = []; }
   // YOY-2: 前段階（同じ案件で、この伝票より前に起こした 1 つ下の段階。受注なら今年の見積、見積なら今年の予算見積）との差分
   var 前段階 = null, 前段階差分 = [];
   try {
     var 順 = { '予算見積': 1, '見積': 2, '受注': 3 }; var kb2 = rec ? String(rec.fields['案件区分'] || '') : ''; var aid2 = rec ? String(rec.fields['案件ID'] || '') : '';
     if (rec && aid2 && 順[kb2] > 1) {
-      var rows2 = find_(lay, [{ '案件ID': '==' + aid2 }], 500, 1, null); var best = null; var my = String(rec.fields['起票日'] || '');
+      var rows2 = 案件内(function () { return true; }); var best = null; var my = String(rec.fields['起票日'] || '');
       rows2.records.forEach(function (r) { if (String(r.recordId) === String(rec.recordId)) return; var k2 = String(r.fields['案件区分'] || ''); if (!順[k2] || 順[k2] >= 順[kb2]) return; var d = String(r.fields['起票日'] || ''); if (my && 日付数_(d) > 日付数_(my)) return; if (!best || 日付数_(d) > 日付数_(String(best.fields['起票日'] || '')) || (日付数_(d) === 日付数_(String(best.fields['起票日'] || '')) && 順[k2] > 順[String(best.fields['案件区分'] || '')])) best = r; });
       if (best) { 前段階 = { recordId: best.recordId, 番号: best.fields['見積番号'] || best.fields['伝票番号'] || '', 起票日: best.fields['起票日'] || '', 区分: String(best.fields['案件区分'] || '') }; 前段階差分 = 差分_(best.fields, rec.fields); }
     }
@@ -256,8 +259,8 @@ function 画面_読み込み(番号) {
   try {
     if (rec) {
       var pv = null; var pno = String(rec.fields['前回伝票番号'] || '').trim();
-      if (pno) { var f1 = find_(lay, [{ '伝票番号': '==' + pno }], 1, 1, null); pv = f1.records[0] || null; }
-      if (!pv && rec.fields['案件ID']) { var f2 = find_(lay, [{ '案件ID': '==' + String(rec.fields['案件ID']), '案件区分': '==受注' }], 200, 1, null); var my2 = 日付数_(String(rec.fields['起票日'] || '')); var bestp = null;
+      if (pno) { pv = 案件行.filter(function (r) { return String(r.fields['伝票番号'] || '') === pno; })[0] || null; if (!pv) { var f1 = find_(lay, [{ '伝票番号': '==' + pno }], 1, 1, null); pv = f1.records[0] || null; } }
+      if (!pv && rec.fields['案件ID']) { var f2 = 案件内(function (r) { return String(r.fields['案件区分'] || '') === '受注'; }); var my2 = 日付数_(String(rec.fields['起票日'] || '')); var bestp = null;
         f2.records.forEach(function (r) { if (String(r.recordId) === String(rec.recordId)) return; var d = 日付数_(String(r.fields['起票日'] || '')); if (my2 && d > my2) return; if (!bestp || d > 日付数_(String(bestp.fields['起票日'] || ''))) bestp = r; }); pv = bestp; }
       if (pv) { var cols = ['伝票番号', '起票日', '売価金額', '売価単価', '合計数1', '用紙代', '印刷代', '加工賃', '人件費', '梱包代', '版代', '配送代', '合計金額', '用紙単価1', '紙質1', '品名1']; 前回原価 = {}; cols.forEach(function (c) { 前回原価[c] = pv.fields[c] === undefined ? '' : pv.fields[c]; }); }
     }
@@ -273,14 +276,14 @@ function 画面_読み込み(番号) {
     前段階: 前段階,
     前段階差分: 前段階差分,
     前回原価: 前回原価,
-    履歴: rec ? 案件の履歴_(lay, rec.fields['案件ID']) : []
+    履歴: rec ? 案件の履歴_(lay, rec.fields['案件ID'], 案件行) : []
   };
 }
 
 /** 同じ案件の段階を、古い順に並べて返す */
-function 案件の履歴_(lay, 案件ID) {
+function 案件の履歴_(lay, 案件ID, 既に) {
   if (!案件ID) return [];
-  var rows = find_(lay, [{ '案件ID': '==' + 案件ID }], 500, 1, null);
+  var rows = 既に ? { records: 既に } : find_(lay, [{ '案件ID': '==' + 案件ID }], 500, 1, null);   // FAST-1: 取ってあればそれを使う
   return rows.records.map(function (r) {
     return {
       recordId: r.recordId,
@@ -1622,8 +1625,8 @@ function 最新_(layout, 案件ID) {
 }
 
 /** 同じ案件・同じ段階のうち、いちばん新しい1件（前年の予算見積などの参考用） */
-function 同じ段階の前回_(layout, 案件ID, 種別, 除くRecordId) {
-  var rows = find_(layout, [{ '案件ID': '==' + 案件ID, '案件区分': '==' + 種別 }], 500, 1, null);
+function 同じ段階の前回_(layout, 案件ID, 種別, 除くRecordId, 既に) {
+  var rows = 既に || find_(layout, [{ '案件ID': '==' + 案件ID, '案件区分': '==' + 種別 }], 500, 1, null);   // FAST-1: 取ってあればそれを使う
   var best = null;
   rows.records.forEach(function (r) {
     if (除くRecordId && String(r.recordId) === String(除くRecordId)) return;
