@@ -23,6 +23,16 @@
 
   var 中継 = 'https://script.google.com/macros/s/'
            + 'AKfycby3DCpR4kCCQMBZ0a8sdsBArM1z_J3JJKcIMYNOHLlhzB1LNrYPqw_NM-dxo_JirSyK4g/exec';
+  // FAST-5: 速い中継（Cloudflare Workers。tools/fm-fast）。FileMaker を「読む」だけをこちらへ。無ければ・失敗したら Apps Script へ
+  //   住所は配ったあとに決まる（https://tokiwa-fm-fast.<サブドメイン>.workers.dev）。localStorage の fm_fast_url が優先（試すとき用）。空なら使わない
+  var 速い中継 = '';
+  try { var _fu = localStorage.getItem('fm_fast_url'); if (_fu !== null) 速い中継 = _fu; } catch (e) {}
+  function 速い中継で(name, args) {
+    if (!速い中継) return false;
+    if (name === '画面_読み込み') return (args || [])[1] === true && /^[a-zA-Z]{1,2}\d{3,}/.test(String((args || [])[0] || '').trim());
+    if (name === '画面_recordIdで読む') return /^\d+$/.test(String((args || [])[0] || ''));
+    return false;
+  }
 
   // GCP で作った OAuth クライアントID。秘密ではないのでページに書いてよい。
   // 承認済みの JavaScript 生成元: https://tokiwa1928.github.io ／ http://127.0.0.1:8765
@@ -269,6 +279,13 @@
     return トークンを得る().then(function (jwt) {
       var body = { action: name, idToken: jwt };
       名.forEach(function (k, i) { body[k] = (args || [])[i]; });
+      if (速い中継で(name, args)) {   // FAST-5: まず速い中継。fallback か通信の失敗なら Apps Script へ
+        var ctl = (typeof AbortController === 'function') ? new AbortController() : null; var tm = ctl ? setTimeout(function () { ctl.abort(); }, 8000) : null;
+        return fetch(速い中継, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined })
+          .then(function (res) { return res.text().then(function (t) { var r = null; try { r = JSON.parse(t); } catch (e) {} if (!r || (!r.ok && r.fallback)) throw new Error('FB'); return { status: res.status, text: function () { return Promise.resolve(t); } }; }); })
+          .catch(function () { return fetch(中継, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' }); })
+          .then(function (res) { if (tm) clearTimeout(tm); return res; });
+      }
       return fetch(中継, {
         method: 'POST',
         // text/plain にすると事前確認（preflight）が飛ばない。
