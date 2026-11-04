@@ -280,6 +280,15 @@ function 画面_読み込み(番号) {
   };
 }
 
+/** FAST-2（11/4）: 読み込みのあとに画面が別々に取りに来ていた 3 つ（外注・変更履歴・関連会社売価）を 1 往復で返す。どれかが失敗しても他は返す */
+function 画面_付属(伝票番号, recordId) {
+  var who = 画面_利用者_(); var out = { ok: true, user: who.email };
+  try { out.外注 = 伝票番号 ? 画面_外注(伝票番号) : { 外注: [] }; } catch (e) { out.外注エラー = String(e.message || e); }
+  try { out.履歴 = recordId ? 画面_履歴(recordId, 伝票番号) : { 行: [] }; } catch (e) { out.履歴エラー = String(e.message || e); }
+  try { out.先方売価 = 伝票番号 ? 先方売価_読む(伝票番号) : { 行: [] }; } catch (e) { out.先方売価エラー = String(e.message || e); }
+  return out;
+}
+
 /** 同じ案件の段階を、古い順に並べて返す */
 function 案件の履歴_(lay, 案件ID, 既に) {
   if (!案件ID) return [];
@@ -1218,6 +1227,7 @@ function handle_(action, req, who) {
 
     // 受注入力の画面から呼ぶもの。google.script.run と同じ中身を fetch でも使えるようにした
     case '画面_読み込み':     return 画面_読み込み(req['番号']);
+    case '画面_付属':         return 画面_付属(req['伝票番号'], req.recordId);   // FAST-2: 外注・変更履歴・先方売価を 1 往復で
     case '画面_recordIdで読む': return 画面_recordIdで読む(req.recordId);
     case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields, req['元'], req['強制']);
     case '写し_差分':         return 写し_差分(req['日付']);
