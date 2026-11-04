@@ -2370,6 +2370,10 @@ window.FM見た目 = function () {};
   function 控えに置く(番号, r) { try { var k = 'fm_rec_' + String(番号 || ''); var all = JSON.parse(localStorage.getItem('fm_rec_keys') || '[]').filter(function (x) { return x !== k; }); all.push(k); while (all.length > 25) { try { localStorage.removeItem(all.shift()); } catch (e) {} } localStorage.setItem('fm_rec_keys', JSON.stringify(all)); localStorage.setItem(k, JSON.stringify({ at: Date.now(), r: r })); } catch (e) {} }
   function 控えを見る(番号) { try { var c = JSON.parse(localStorage.getItem('fm_rec_' + String(番号 || '')) || 'null'); if (c && c.r && c.r.record && Date.now() - c.at < 14 * 24 * 3600 * 1000) return c.r; } catch (e) {} return null; }
   var 仮表示中 = false;
+  function 候補を履歴に(候補, rec) { var dn = function (v) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v || '').trim()); return m ? Number(m[3] + m[1] + m[2]) : 0; };
+    var list = 候補.map(function (c) { return { recordId: c.recordId, 区分: c.区分 || '（従来の受注）', 番号: c.番号, 起票日: c.起票日 || '', 合計金額: c.合計金額, 売価金額: c.売価金額 }; });
+    if (rec && !list.some(function (h) { return String(h.recordId) === String(rec.recordId); })) list.push({ recordId: rec.recordId, 区分: rec.fields['案件区分'] || '（従来の受注）', 番号: rec.fields['見積番号'] || rec.fields['伝票番号'] || '', 起票日: rec.fields['起票日'] || '', 合計金額: rec.fields['合計金額'], 売価金額: rec.fields['売価金額'] });
+    return list.sort(function (a, b) { var d = dn(a.起票日) - dn(b.起票日); return d || (Number(a.recordId) - Number(b.recordId)); }); }
   function 計時文(k) { if (!k) return ''; var p = []; if (k.伝票検索 != null) p.push('FM ' + (k.伝票検索 / 1000).toFixed(1) + 's'); if (k.案件検索 != null) p.push('案件 ' + (k.案件検索 / 1000).toFixed(1) + 's'); if (k.中継合計 != null) p.push('中継 ' + (k.中継合計 / 1000).toFixed(1) + 's'); return p.length ? '：' + p.join('・') : ''; }
   // FAST-2: 画面_付属 の返事を待っている間に 手配・仕様書・予定 を取りに行く所は、その返事から取る（無ければ自分で取る）
   var 付属待ち = null;
@@ -2400,7 +2404,14 @@ window.FM見た目 = function () {};
     // FAST-2: 外注・変更履歴・関連会社売価を 1 往復で。古い中継（知らない操作）なら前のとおり 3 本
     (function (no, rid) {
       外注 = null; $('gc-rows').innerHTML = ''; $('gc-total').textContent = ''; $('gc-msg').textContent = '読んでいます…'; $('fmgaichu').style.display = no ? 'block' : 'none';
-      var pp = 呼ぶ('画面_付属', [no, String(rid)]); 付属待ち = { no: no, p: pp };
+      // DIFF-1: 同じ案件の伝票一覧は Hub の索引（写し）から。中継には候補を渡し、必要な 2〜3 枚だけ伝票番号で取ってもらう
+      var 候補p = Promise.resolve(null);
+      try { var pf = (window.parent !== window) && window.parent._fmCaseRows_; var aid = r.record.fields['案件ID'];
+        if (pf && aid) 候補p = Promise.race([pf(String(aid)), new Promise(function (res) { setTimeout(function () { res(null); }, 2000); })]).catch(function () { return null; }); } catch (e) {}
+      var pp = 候補p.then(function (候補) {
+        if (候補 && 候補.length) { try { 履歴を出す(候補を履歴に(候補, r.record)); } catch (e) {} }
+        return 呼ぶ('画面_付属', [no, String(rid), (候補 && 候補.length) ? 候補 : undefined]); });
+      付属待ち = { no: no, p: pp };
       var t1 = Date.now();
       pp.then(function (a) {
         if (a.案件) {   // FAST-4: 前回との差・前段階・前回原価・履歴

@@ -255,15 +255,86 @@ function 画面_読み込み(番号, 軽く) {
   };
 }
 
+/** FAST-4（11/4）: 伝票を開いたあとに足す情報（前回との差・前段階・前回原価・履歴）。案件 ID の検索が重いので、画面_読み込み とは別の往復（画面_付属）で返す */
+function 案件の付け足し_(lay, rec, 渡された案件行, 履歴の代わり) {
+  // FAST-1（11/4）: 同じ案件の伝票は 1 回だけ FileMaker に聞き、前回・前段階・前回原価・履歴はその中から選ぶ（前は 4〜5 回続けて検索していた）
+  var 計時 = {}, t = Date.now(); var 案件行 = [];
+  if (渡された案件行) { 案件行 = 渡された案件行; 計時.索引から = true; }   // DIFF-1: Hub の索引（写し）から選んだ伝票だけ取ってある → 案件 ID の重い検索をしない
+  else { try { if (rec && rec.fields['案件ID']) 案件行 = find_(lay, [{ '案件ID': '==' + String(rec.fields['案件ID']) }], 500, 1, null).records; } catch (e) { 案件行 = []; } }
+  計時.案件検索 = Date.now() - t; t = Date.now();
+  var 案件内 = function (q) { return { total: 案件行.length, records: 案件行.filter(q) }; };
+  // YOY-1: 同じ段階の前回（前年の予算見積／見積／受注）との差分を、読み込むたびに返す（昨年比の注意）
+  var 参考 = null, 差分 = [];
+  try {
+    var kb = rec ? String(rec.fields['案件区分'] || '') : ''; var aid = rec ? String(rec.fields['案件ID'] || '') : '';
+    if (rec && aid && kb) { var p = 同じ段階の前回_(lay, aid, kb, rec.recordId, 案件内(function (r) { return String(r.fields['案件区分'] || '') === kb; })); if (p) { 参考 = { recordId: p.recordId, 番号: p.fields['見積番号'] || p.fields['伝票番号'] || '', 起票日: p.fields['起票日'] || '', 合計金額: p.fields['合計金額'], 売価金額: p.fields['売価金額'] }; 差分 = 差分_(p.fields, rec.fields); } }
+  } catch (e) { 参考 = null; 差分 = []; }
+  // YOY-2: 前段階（同じ案件で、この伝票より前に起こした 1 つ下の段階。受注なら今年の見積、見積なら今年の予算見積）との差分
+  var 前段階 = null, 前段階差分 = [];
+  try {
+    var 順 = { '予算見積': 1, '見積': 2, '受注': 3 }; var kb2 = rec ? String(rec.fields['案件区分'] || '') : ''; var aid2 = rec ? String(rec.fields['案件ID'] || '') : '';
+    if (rec && aid2 && 順[kb2] > 1) {
+      var rows2 = 案件内(function () { return true; }); var best = null; var my = String(rec.fields['起票日'] || '');
+      rows2.records.forEach(function (r) { if (String(r.recordId) === String(rec.recordId)) return; var k2 = String(r.fields['案件区分'] || ''); if (!順[k2] || 順[k2] >= 順[kb2]) return; var d = String(r.fields['起票日'] || ''); if (my && 日付数_(d) > 日付数_(my)) return; if (!best || 日付数_(d) > 日付数_(String(best.fields['起票日'] || '')) || (日付数_(d) === 日付数_(String(best.fields['起票日'] || '')) && 順[k2] > 順[String(best.fields['案件区分'] || '')])) best = r; });
+      if (best) { 前段階 = { recordId: best.recordId, 番号: best.fields['見積番号'] || best.fields['伝票番号'] || '', 起票日: best.fields['起票日'] || '', 区分: String(best.fields['案件区分'] || '') }; 前段階差分 = 差分_(best.fields, rec.fields); }
+    }
+  } catch (e) { 前段階 = null; 前段階差分 = []; }
+  // COST-1: 前回の受注（前回伝票番号、無ければ同じ案件の前の受注）の原価内訳。原価差の助言に使う
+  var 前回原価 = null;
+  try {
+    if (rec) {
+      var pv = null; var pno = String(rec.fields['前回伝票番号'] || '').trim();
+      if (pno) { pv = 案件行.filter(function (r) { return String(r.fields['伝票番号'] || '') === pno; })[0] || null; if (!pv) { var f1 = find_(lay, [{ '伝票番号': '==' + pno }], 1, 1, null); pv = f1.records[0] || null; } }
+      if (!pv && rec.fields['案件ID']) { var f2 = 案件内(function (r) { return String(r.fields['案件区分'] || '') === '受注'; }); var my2 = 日付数_(String(rec.fields['起票日'] || '')); var bestp = null;
+        f2.records.forEach(function (r) { if (String(r.recordId) === String(rec.recordId)) return; var d = 日付数_(String(r.fields['起票日'] || '')); if (my2 && d > my2) return; if (!bestp || d > 日付数_(String(bestp.fields['起票日'] || ''))) bestp = r; }); pv = bestp; }
+      if (pv) { var cols = ['伝票番号', '起票日', '売価金額', '売価単価', '合計数1', '用紙代', '印刷代', '加工賃', '人件費', '梱包代', '版代', '配送代', '合計金額', '用紙単価1', '紙質1', '品名1']; 前回原価 = {}; cols.forEach(function (c) { 前回原価[c] = pv.fields[c] === undefined ? '' : pv.fields[c]; }); }
+    }
+  } catch (e) { 前回原価 = null; }
+
+  計時.選別 = Date.now() - t;
+  return { 参考: 参考, 差分: 差分, 前段階: 前段階, 前段階差分: 前段階差分, 前回原価: 前回原価, 履歴: 履歴の代わり || (rec ? 案件の履歴_(lay, rec.fields['案件ID'], 案件行) : []), 計時: 計時 };
+}
+
+// DIFF-1（11/4 本多さん「検索したら差分更新の設計に。すでに書き出されているものは変更不要でそのまま使える」）
+//   Hub が持つ索引（毎晩の写し＋30 分ごとの差分）から、同じ案件の伝票一覧（候補）を画面がよこす。
+//   中継はその中から「前回の同じ段階」「前段階」「前回の受注」の 2〜3 枚を選び、伝票番号（索引が効く）で 1 回だけ取る。
+//   候補: [{ 番号, recordId, 区分, 起票日, 合計金額, 売価金額 }]
+function 案件行_候補から_(lay, rec, 候補) {
+  var 順 = { '予算見積': 1, '見積': 2, '受注': 3 }; var kb = String(rec.fields['案件区分'] || ''); var my = 日付数_(String(rec.fields['起票日'] || '')); var me = String(rec.recordId);
+  var 他 = (候補 || []).filter(function (c) { return c && c.番号 && String(c.recordId) !== me && !/^hub:/i.test(String(c.番号)); });
+  var 後の方 = function (a, b) { var da = 日付数_(a.起票日), db = 日付数_(b.起票日); return da !== db ? da - db : (Number(a.recordId) - Number(b.recordId)); };
+  var 欲しい = {};
+  var 同じ = 他.filter(function (c) { return String(c.区分 || '') === kb; }).sort(後の方); if (同じ.length) 欲しい[同じ[同じ.length - 1].番号] = 1;   // 同じ段階の前回（一番新しいもの）
+  if (順[kb] > 1) { var 前 = 他.filter(function (c) { var k = String(c.区分 || ''); return 順[k] && 順[k] < 順[kb] && (!my || 日付数_(c.起票日) <= my); }).sort(function (a, b) { var d = 日付数_(a.起票日) - 日付数_(b.起票日); return d || (順[String(a.区分)] - 順[String(b.区分)]); }); if (前.length) 欲しい[前[前.length - 1].番号] = 1; }
+  var pno = String(rec.fields['前回伝票番号'] || '').trim(); if (pno) 欲しい[pno] = 1;
+  else { var 受 = 他.filter(function (c) { return String(c.区分 || '') === '受注' && (!my || 日付数_(c.起票日) <= my); }).sort(後の方); if (受.length) 欲しい[受[受.length - 1].番号] = 1; }
+  var nos = Object.keys(欲しい); if (!nos.length) return [];
+  var q = nos.map(function (n) { return { '伝票番号': '==' + n }; });
+  var got = find_(lay, q, 20, 1, null).records;
+  var miss = nos.filter(function (n) { return !got.some(function (r) { return String(r.fields['伝票番号'] || '') === n; }); });
+  if (miss.length) { try { got = got.concat(find_(lay, miss.map(function (n) { return { '見積番号': '==' + n }; }), 20, 1, null).records); } catch (e) {} }
+  return got;
+}
+function 履歴_候補から_(rec, 候補) {
+  var list = (候補 || []).filter(function (c) { return c && c.番号; }).map(function (c) { return { recordId: c.recordId, 区分: c.区分 || '（従来の受注）', 番号: c.番号, 起票日: c.起票日 || '', 合計金額: c.合計金額, 売価金額: c.売価金額 }; });
+  if (rec && !list.some(function (h) { return String(h.recordId) === String(rec.recordId); })) list.push({ recordId: rec.recordId, 区分: rec.fields['案件区分'] || '（従来の受注）', 番号: rec.fields['見積番号'] || rec.fields['伝票番号'] || '', 起票日: rec.fields['起票日'] || '', 合計金額: rec.fields['合計金額'], 売価金額: rec.fields['売価金額'] });
+  return list.sort(function (a, b) { if (a.起票日 !== b.起票日) return 日付数_(a.起票日) < 日付数_(b.起票日) ? -1 : 1; return Number(a.recordId) - Number(b.recordId); });
+}
+
 /** FAST-2（11/4）: 読み込みのあとに画面が別々に取りに来ていた 3 つ（外注・変更履歴・関連会社売価）を 1 往復で返す。どれかが失敗しても他は返す */
-function 画面_付属(伝票番号, recordId) {
+function 画面_付属(伝票番号, recordId, 候補) {
   var who = 画面_利用者_(); var out = { ok: true, user: who.email }; var 計時 = {}, t0 = Date.now(), t = Date.now();
+  if (typeof 候補 === 'string') { try { 候補 = JSON.parse(候補); } catch (e) { 候補 = null; } }
+  if (候補 && !Array.isArray(候補)) 候補 = null;
   // FAST-4: 伝票そのもの（recordId で 1 回）→ 案件の付け足し（前回・前段階・前回原価・履歴）
   try {
     if (recordId && !HubのrecordIdか_(recordId) && !/^no:/.test(String(recordId))) {
       var g = fmCall_('/layouts/' + encodeURIComponent(LAYOUTS.juchu) + '/records/' + recordId); var d = (g.response.data || [])[0];
       計時.伝票 = Date.now() - t; t = Date.now();
-      if (d) { var rec0 = { recordId: d.recordId, modId: d.modId, fields: d.fieldData }; out.案件 = 案件の付け足し_(LAYOUTS.juchu, rec0); 計時.案件 = Date.now() - t; t = Date.now(); }
+      if (d) { var rec0 = { recordId: d.recordId, modId: d.modId, fields: d.fieldData };
+        if (候補) { var rows0 = 案件行_候補から_(LAYOUTS.juchu, rec0, 候補); 計時.候補取得 = Date.now() - t; t = Date.now(); out.案件 = 案件の付け足し_(LAYOUTS.juchu, rec0, rows0.concat([rec0]), 履歴_候補から_(rec0, 候補)); out.案件.索引から = true; }
+        else out.案件 = 案件の付け足し_(LAYOUTS.juchu, rec0);
+        計時.案件 = Date.now() - t; t = Date.now(); }
     }
   } catch (e) { out.案件エラー = String(e.message || e); }
   try { out.外注 = 伝票番号 ? 画面_外注(伝票番号) : { 外注: [] }; } catch (e) { out.外注エラー = String(e.message || e); }
@@ -1214,7 +1285,7 @@ function handle_(action, req, who) {
 
     // 受注入力の画面から呼ぶもの。google.script.run と同じ中身を fetch でも使えるようにした
     case '画面_読み込み':     return 画面_読み込み(req['番号'], req['軽く'] === true || req['軽く'] === 'true');
-    case '画面_付属':         return 画面_付属(req['伝票番号'], req.recordId);   // FAST-2: 外注・変更履歴・先方売価を 1 往復で
+    case '画面_付属':         return 画面_付属(req['伝票番号'], req.recordId, req['候補']);   // FAST-2: 外注・変更履歴・先方売価を 1 往復で／DIFF-1: 候補は Hub の索引から
     case '画面_recordIdで読む': return 画面_recordIdで読む(req.recordId);
     case '画面_保存':         return 画面_保存(req.recordId, req.modId, req.fields, req['元'], req['強制']);
     case '写し_差分':         return 写し_差分(req['日付']);
