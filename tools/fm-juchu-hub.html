@@ -3911,8 +3911,9 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   function 得意先コードを名前で(nm) {
     var m = 得意先マスタ; if (!m) { try { var c = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); if (c && c.行) { 得意先マスタ = c; m = c; } } catch (e) {} }
     if (!m) return null;
-    var key = String(nm).toLowerCase(), out = {}, n = 0;
-    m.行.forEach(function (r) { if (String(r['得意先名'] || '').toLowerCase().indexOf(key) >= 0) { out[String(r['得意先コード'])] = 1; n++; } });
+    var 素 = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|㈱|㈲|様|御中|案件/g, '').replace(/[\s　・,，、()（）「」『』【】\[\]"'_\-－ー.]/g, ''); };   // AI-KIHYO-7: 「村山印刷案件」「㈱井手精機」なども当てる
+    var key = 素(nm), out = {}, n = 0; if (!key) return out;
+    m.行.forEach(function (r) { var k2 = 素(r['得意先名']); if (k2 && (k2.indexOf(key) >= 0 || key.indexOf(k2) >= 0)) { out[String(r['得意先コード'])] = 1; n++; } });
     return out;
   }
   function 索引を据える(j) {
@@ -4385,14 +4386,18 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     if (!索引) return [];
     var P = 索引位置, 行 = 索引.行;
     var custSet = o.得意先 ? (得意先コードを名前で(o.得意先) || {}) : {}, cust有 = Object.keys(custSet).length > 0;
-    var user = AI文字(o.ユーザー), item = AI文字(o.品名);
+    var 社 = function (x) { return AI文字(String(x || '').normalize('NFKC').replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|様|御中/g, '')); };   // AI-KIHYO-7: ㈱・株式会社の有無で外さない
+    var user = 社(o.ユーザー), item = AI文字(o.品名);
     var 括弧 = (/[（(]([^）)]+)[）)]/.exec(String(o.品名 || '')) || [])[1]; 括弧 = 括弧 ? AI文字(括弧) : '';
     var 元 = AI文字(String(o.品名 || '').replace(/[（(][^）)]*[）)]/g, ''));
+    // AI-KIHYO-7（11/5 本多さん「過去のデータがうまくひろえない」）: 品名の一部（2 文字ずつ・語）が合うものも「近いもの」に入れる
+    //   例）廃業のお知らせハガキ → 廃業挨拶状（「廃業」）・事業所移転ご案内ハガキ（「ハガキ」）。得意先・ユーザーが同じものほど上に
+    var 語 = 似た語に(String(o.品名 || '') + ' ' + String(o.仕様 || '').split(/\s+/)[0]).map(AI文字).filter(function (w) { return w.length >= 2 && !/^(の|お|ご|御)/.test(w) && !/^\d+$/.test(w); });
     var out = [];
     for (var i = 0; i < 行.length; i++) {
       var r = 行[i];
       if (!段階が合う(r[P['案件区分']]) && String(r[P['案件区分']] || '') !== '受注') continue;
-      var rc = String(r[P['得意先コード']] || ''), ru = AI文字(r[P['ユーザー名']]), ri = AI文字(r[P['製品名']]);
+      var rc = String(r[P['得意先コード']] || ''), ru = 社(r[P['ユーザー名']]), ri = AI文字(r[P['製品名']]);
       var ri元 = AI文字(String(r[P['製品名']] || '').replace(/[（(][^）)]*[）)]/g, ''));
       var 得意先が合う = cust有 && !!custSet[rc];
       var ユーザーが合う = !!(user && ru && (ru === user || ru.indexOf(user) >= 0 || user.indexOf(ru) >= 0));
@@ -4404,14 +4409,17 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       if (品名が同じ && 会社が合う && (!cust有 || 得意先が合う)) 段 = 1;
       else if (会社が合う && 元が同じ) 段 = 2;
       else {
-        var 点 = (得意先が合う ? 2 : 0) + (ユーザーが合う ? 2 : 0) + (品名が同じ ? 3 : 元が同じ ? 2 : 0) + (括弧 && ri.indexOf(括弧) >= 0 ? 2 : 0);
+        var 合語 = [], 語点 = 0; 語.forEach(function (w) { if (ri.indexOf(w) >= 0) { 語点 += w.length >= 3 ? 3 : 1; if (合語.length < 3 && !合語.some(function (x) { return x.indexOf(w) >= 0; })) 合語.push(w); } });
+        var 点 = (得意先が合う ? 3 : 0) + (ユーザーが合う ? 5 : 0) + (品名が同じ ? 6 : 元が同じ ? 4 : 0) + (括弧 && ri.indexOf(括弧) >= 0 ? 2 : 0) + Math.min(語点, 8);
         if (括弧 && ri.indexOf(括弧) >= 0 && !品名が同じ) why.push('（' + 括弧 + '）');
-        if (品名が同じ || 元が同じ || (括弧 && ri.indexOf(括弧) >= 0)) 段 = 3; else continue;   // 近いもの＝品名のどこかが合うもの（得意先だけ合っても別の商品）
+        if (!品名が同じ && !元が同じ && 合語.length) { var 片 = [], 字 = item, a0 = 0; while (a0 < 字.length - 1) { var b0 = a0 + 2; if (ri.indexOf(字.slice(a0, b0)) < 0) { a0++; continue; } while (b0 < 字.length && ri.indexOf(字.slice(a0, b0 + 1)) >= 0) b0++; if (!/^(の|お|ご)/.test(字.slice(a0, b0))) 片.push(字.slice(a0, b0)); a0 = b0; } why.push('品名の一部（' + (片.length ? 片 : 合語).slice(0, 3).join('・') + '）'); }
+        var 一部が合う = 語点 >= 2 || (語点 >= 1 && (得意先が合う || ユーザーが合う));
+        if (品名が同じ || 元が同じ || (括弧 && ri.indexOf(括弧) >= 0) || 一部が合う) 段 = 3; else continue;   // 近いもの＝品名のどこかが合うもの（得意先だけ合っても別の商品）
       }
       out.push({ i: i, 段: 段, 点: 段 === 3 ? 点 : 99, わけ: why.join('・') });
     }
     out.sort(function (a, b) { return (a.段 - b.段) || (b.点 - a.点) || (索引日[b.i] - 索引日[a.i]); });
-    return out.slice(0, 8).map(function (c) { var o2 = { 段: c.段, わけ: c.わけ }; 索引.列.forEach(function (col, ci) { o2[col] = 行[c.i][ci]; }); o2.recordId = String(o2.recordId); return o2; });
+    return out.slice(0, 12).map(function (c) { var o2 = { 段: c.段, わけ: c.わけ }; 索引.列.forEach(function (col, ci) { o2[col] = 行[c.i][ci]; }); o2.recordId = String(o2.recordId); return o2; });
   }
   function AI起票を開く() {
     var old = $('fm-ai-kihyo'); if (old) old.remove();
