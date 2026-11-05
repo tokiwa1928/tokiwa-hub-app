@@ -4354,12 +4354,16 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       + '・「村山印刷案件→井手精機」のように「A→B」「A経由B」と書いてあれば、A が得意先、B がユーザー\n'
       + '・表計算から貼った文はタブ区切りで、"" で囲まれた欄の中は改行を含む 1 つの欄\n'
       + '・書いていないことは推測で埋めない\n\n文:\n' + String(文).slice(0, 8000);
-    var u = new URL(AI_GAS_URL); u.searchParams.set('action', 'claudeText'); u.searchParams.set('apiKey', AI_GAS_KEY);
-    return fetch(u.toString(), { method: 'POST', redirect: 'follow', body: JSON.stringify({ prompt: prompt, maxTokens: 2000 }) })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (!j || !j.success) { var m = (j && j.error) || '応答なし'; if (/daily_limit/.test(m)) m = '今日の AI の上限に達しました（明日 0 時に戻ります）'; if (/ai_disabled/.test(m)) m = 'AI が止められています（設定で AI_ENABLED）'; throw new Error(m); }
-        var t = String(j.reply || ''), a = t.indexOf('['), b = t.lastIndexOf(']');
+    // AI-KIHYO-5（11/5 本多さん「ここは Gemini だと？」）: 読み取りは Gemini（Flash-Lite・安い）を先に使い、だめなら Claude
+    var 頼む = function (action, body) { var u = new URL(AI_GAS_URL); u.searchParams.set('action', action); u.searchParams.set('apiKey', AI_GAS_KEY);
+      return fetch(u.toString(), { method: 'POST', redirect: 'follow', body: JSON.stringify(body) }).then(function (r) { return r.json(); })
+        .then(function (j) { if (!j || !j.success) throw new Error((j && j.error) || '応答なし'); return String(j.text || j.reply || ''); }); };
+    return 頼む('geminiSummary', { text: prompt })
+      .catch(function (e1) { if (/daily_limit|ai_disabled/.test(String(e1.message))) throw e1; console.warn('[AI-KIHYO-5] Gemini 不可 → Claude', e1);
+        return 頼む('claudeText', { prompt: prompt, maxTokens: 2000 }).catch(function (e2) { throw new Error('Gemini: ' + String(e1.message).slice(0, 120) + ' ／ Claude: ' + String(e2.message).slice(0, 120)); }); })
+      .catch(function (e) { var m = String(e.message || e); if (/daily_limit/.test(m)) m = '今日の AI の上限に達しました（明日 0 時に戻ります）'; else if (/ai_disabled/.test(m)) m = 'AI が止められています（設定で AI_ENABLED）'; else if (/credit balance/.test(m)) m = 'AI が使えません（Gemini が応答せず、Claude はクレジット不足）。' + m.slice(0, 160); throw new Error(m); })
+      .then(function (t) {
+        var a = t.indexOf('['), b = t.lastIndexOf(']');
         if (a < 0 || b < a) throw new Error('AI の返事を読めませんでした: ' + t.slice(0, 120));
         var arr = JSON.parse(t.slice(a, b + 1));
         return (Array.isArray(arr) ? arr : []).filter(function (x) { return x && (x.品名 || x.ユーザー || x.得意先); });
