@@ -643,3 +643,48 @@ function 用紙_使用回数(作り直す) {
   var js = JSON.stringify(out); var it2 = fo.getFilesByName(名); if (it2.hasNext()) it2.next().setContent(js); else fo.createFile(名, js, 'application/json');
   out.ok = true; out.user = who.email; return out;
 }
+
+
+// ROOT-TIDY-1（11/5 本多さん「止めて整理する」）: マイドライブ直下に毎晩作られる重複を調べる・片付ける。
+//   片付けるのは「同じ名前のフォルダが直下に 2 つ以上あるうちの、中身が空のもの」と「同じ名前・同じ大きさのファイルの古いほう」だけ。
+//   消さずに、直下の「_空の重複フォルダ_YYYYMMDD」へ移す（戻せる）。中身のある案件フォルダは触らない
+function 直下_一覧_(以降) {
+  var q = "'root' in parents and trashed = false" + (以降 ? " and createdTime >= '" + 以降 + "T00:00:00'" : '');
+  var out = [], tok = null, t0 = Date.now();
+  do { var r = Drive.Files.list({ q: q, pageSize: 1000, pageToken: tok, fields: 'nextPageToken, files(id, name, mimeType, createdTime, size)' });
+    (r.files || []).forEach(function (f) { out.push(f); }); tok = r.nextPageToken || null; } while (tok && Date.now() - t0 < 120000);
+  return out;
+}
+function 直下_空か_(id) { var r = Drive.Files.list({ q: "'" + id + "' in parents and trashed = false", pageSize: 1, fields: 'files(id)' }); return !(r.files && r.files.length); }
+function ドライブ直下_調べる(以降) {
+  var who = 画面_利用者_(); マスタ管理者か_(who);
+  以降 = String(以降 || '2026-10-20').slice(0, 10);
+  var all = 直下_一覧_(以降), 日 = {}, 名 = {};
+  all.forEach(function (f) { var d = String(f.createdTime || '').slice(0, 10); 日[d] = (日[d] || 0) + 1; var k = (f.mimeType === 'application/vnd.google-apps.folder' ? '📁 ' : '') + f.name; 名[k] = (名[k] || 0) + 1; });
+  var 多い = Object.keys(名).map(function (k) { return { 名前: k, 数: 名[k] }; }).sort(function (a, b) { return b.数 - a.数; }).slice(0, 60);
+  return { ok: true, user: who.email, 以降: 以降, 合計: all.length, フォルダ: all.filter(function (f) { return f.mimeType === 'application/vnd.google-apps.folder'; }).length, 日ごと: 日, 多い名前: 多い };
+}
+function ドライブ直下_片付ける(以降, 確認) {
+  var who = 画面_利用者_(); マスタ管理者か_(who);
+  if (確認 !== '空の重複を移す') throw new Error('確認の言葉が違います');
+  以降 = String(以降 || '2026-10-20').slice(0, 10);
+  var t0 = Date.now(), all = 直下_一覧_(以降);
+  var 置き場名 = '_空の重複フォルダ_' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd');
+  var it = DriveApp.getRootFolder().getFoldersByName(置き場名); var 置き場 = it.hasNext() ? it.next() : DriveApp.getRootFolder().createFolder(置き場名);
+  var 組 = {}; all.forEach(function (f) { if (f.id === 置き場.getId() || /^_空の重複フォルダ_/.test(f.name)) return; var k = (f.mimeType === 'application/vnd.google-apps.folder' ? 'D|' : 'F|' + (f.size || '') + '|') + f.name; (組[k] = 組[k] || []).push(f); });
+  var 移した = 0, 残した = 0, 時間切れ = false;
+  Object.keys(組).forEach(function (k) {
+    var g = 組[k]; if (g.length < 2 || 時間切れ) return;
+    if (k.indexOf('D|') === 0) {
+      var 空 = [], 有 = [];
+      g.forEach(function (f) { if (Date.now() - t0 > 270000) { 時間切れ = true; return; } (直下_空か_(f.id) ? 空 : 有).push(f); });
+      if (時間切れ) return;
+      if (!有.length) { 空.sort(function (a, b) { return a.createdTime < b.createdTime ? 1 : -1; }); 有.push(空.shift()); }   // 全部空なら一番新しい 1 つは残す
+      空.forEach(function (f) { try { DriveApp.getFolderById(f.id).moveTo(置き場); 移した++; } catch (e) {} }); 残した += 有.length;
+    } else {
+      g.sort(function (a, b) { return a.createdTime < b.createdTime ? 1 : -1; });
+      g.slice(1).forEach(function (f) { if (Date.now() - t0 > 270000) { 時間切れ = true; return; } try { DriveApp.getFileById(f.id).moveTo(置き場); 移した++; } catch (e) {} }); 残した++;
+    }
+  });
+  return { ok: true, user: who.email, 移した: 移した, 残した: 残した, 置き場: 置き場名, url: 置き場.getUrl(), 続きあり: 時間切れ };
+}

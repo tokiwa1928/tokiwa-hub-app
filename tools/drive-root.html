@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>マイドライブ直下の整理</title>
+<style>
+  :root{ --ink:#1f2937; --sub:#64748b; --line:#e5e7eb; --bg:#f8fafc; --acc:#0f766e; --warn:#b45309; }
+  body{ margin:0; background:var(--bg); color:var(--ink); font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif; font-size:14px; }
+  .wrap{ max-width:900px; margin:0 auto; padding:20px 16px 40px; }
+  h1{ font-size:20px; margin:0 0 6px; }
+  .note{ color:var(--sub); font-size:12.5px; line-height:1.7; margin:0 0 14px; }
+  .card{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  button{ font:inherit; padding:7px 16px; border-radius:7px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; }
+  button.go{ background:var(--acc); color:#fff; border-color:var(--acc); font-weight:700; }
+  button.warn{ background:var(--warn); color:#fff; border-color:var(--warn); font-weight:700; }
+  button:disabled{ opacity:.5; cursor:default; }
+  input[type=date]{ font:inherit; padding:5px 8px; border:1px solid #cbd5e1; border-radius:6px; }
+  table{ border-collapse:collapse; width:100%; font-size:12.5px; }
+  th,td{ border-top:1px solid var(--line); padding:4px 8px; text-align:left; }
+  td.n{ text-align:right; font-variant-numeric:tabular-nums; }
+  #st{ margin-left:8px; color:var(--sub); font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>マイドライブ直下の整理</h1>
+  <p class="note">info@tokiwap-group.com のマイドライブ直下に、毎晩同じ名前のフォルダが作られている件の整理です。「調べる」は見るだけです。<br>
+  「空の重複を移す」は、同じ名前のフォルダのうち中身が空のものと、同じ名前・同じ大きさのファイルの古いほうだけを「_空の重複フォルダ_日付」へ移します。消しません。中身のあるフォルダは触りません。使えるのは本多さん・福永さんだけです。</p>
+  <div class="card">
+    この日以降に作られたもの <input type="date" id="since" value="2026-10-20">
+    <button class="go" id="look">調べる</button>
+    <button class="warn" id="tidy" disabled>空の重複を移す</button>
+    <span id="st"></span>
+    <span id="signin" style="margin-left:8px"></span>
+  </div>
+  <div class="card" id="out" style="display:none"></div>
+</div>
+<script src="fm-bridge.js"></script>
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  try { FM.サインインのボタンを置く($('signin')); } catch (e) {}
+  function 表(r) {
+    var days = Object.keys(r.日ごと || {}).sort();
+    var h = '<b>合計 ' + r.合計 + ' 件（うちフォルダ ' + r.フォルダ + '）</b>　' + esc(r.以降) + ' 以降に直下へ作られたもの'
+      + '<h3 style="font-size:14px;margin:14px 0 4px">日ごと</h3><table><tr><th>日（UTC）</th><th style="text-align:right">件数</th></tr>' + days.map(function (d) { return '<tr><td>' + esc(d) + '</td><td class="n">' + r.日ごと[d] + '</td></tr>'; }).join('') + '</table>'
+      + '<h3 style="font-size:14px;margin:14px 0 4px">同じ名前が多いもの</h3><table><tr><th>名前</th><th style="text-align:right">数</th></tr>' + (r.多い名前 || []).map(function (x) { return '<tr><td>' + esc(x.名前) + '</td><td class="n">' + x.数 + '</td></tr>'; }).join('') + '</table>';
+    $('out').innerHTML = h; $('out').style.display = 'block';
+  }
+  $('look').onclick = function () {
+    $('st').textContent = '調べています…（1 分ほど）'; $('look').disabled = true;
+    FM.呼ぶ('ドライブ直下_調べる', [$('since').value]).then(function (r) { 表(r); $('st').textContent = ''; $('tidy').disabled = false; })
+      .catch(function (e) { $('st').textContent = String(e.message || e); }).then(function () { $('look').disabled = false; });
+  };
+  $('tidy').onclick = function () {
+    if (!confirm('空の重複フォルダと、古い重複ファイルを「_空の重複フォルダ_日付」へ移します（消しません）。よろしいですか？')) return;
+    $('st').textContent = '移しています…（数分かかることがあります）'; $('tidy').disabled = true;
+    var 回 = 0, 計 = 0;
+    var 次 = function () {
+      FM.呼ぶ('ドライブ直下_片付ける', [$('since').value, '空の重複を移す']).then(function (r) {
+        計 += r.移した; 回++;
+        if (r.続きあり && 回 < 10) { $('st').textContent = '移しています… ' + 計 + ' 件'; 次(); return; }
+        $('st').innerHTML = '移しました: ' + 計 + ' 件（置き場 <a href="' + esc(r.url) + '" target="_blank">' + esc(r.置き場) + '</a>）。中身のあるものは残しています';
+        $('look').click();
+      }).catch(function (e) { $('st').textContent = String(e.message || e); $('tidy').disabled = false; });
+    };
+    次();
+  };
+})();
+</script>
+</body>
+</html>
