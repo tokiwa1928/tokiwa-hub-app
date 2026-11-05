@@ -38324,7 +38324,9 @@ async function generateInquirySummary(inq){
       '## 本文\n' + (inq.body || '');
     // 💰 Gemini で要約 (安価)。claudeChat へはフォールバックしない = 誤課金防止。
     //    本体GASに geminiSummary アクションが必要 (未デプロイ時は失敗→aiReadAt立てず次回再試行)
+    if(_geminiQuotaOut_()) return null;   // GEMINI-FREE-1: 無料枠を使い切った日は送らない
     var resp = await callCloudAPI('geminiSummary', {}, { text: prompt });
+    if(resp && !resp.success && /gemini_http_429|RESOURCE_EXHAUSTED|exceeded your current quota/i.test(String(resp.error||''))){ _geminiQuotaMark_(); return null; }
     if(!resp || !resp.success) return null;
     var summary = (resp.text || '').trim().replace(/^["「『]|["」』]$/g, '').substring(0, 250);
     if(summary){
@@ -38338,8 +38340,19 @@ async function generateInquirySummary(inq){
 }
 
 // 一括: 要約が無いメール系問い合わせに自動生成 (sync 後 or 手動)
+// GEMINI-FREE-1（11/5 本多さん「Gemini は無料枠で」）: 無料枠（1日の回数）を使い切ったら、次に戻る時刻（太平洋時間の 0 時＝日本の 16〜17 時）まで
+//   自動要約を送らない。切れたあとも同期のたびに送り続けていたのを止め、戻ったぶんを AI 起票にも残す
+function _geminiResetAt_(){
+  var now = new Date();
+  var pt = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  var next = new Date(pt); next.setHours(24, 0, 5, 0);
+  return now.getTime() + (next.getTime() - pt.getTime());
+}
+function _geminiQuotaMark_(){ try { localStorage.setItem('gemini_quota_until', String(_geminiResetAt_())); } catch(e){} console.warn('[GEMINI-FREE-1] Gemini の無料枠を使い切りました。自動要約は ' + new Date(_geminiResetAt_()).toLocaleString('ja-JP') + ' まで止めます'); }
+function _geminiQuotaOut_(){ try { return Date.now() < Number(localStorage.getItem('gemini_quota_until') || 0); } catch(e){ return false; } }
 async function autoGenerateAllSummaries(opts){
   opts = opts || {};
+  if(_geminiQuotaOut_() && !opts.force) return { generated: 0, total: 0, quotaOut: true };
   // 💰 自動要約は Gemini(安価) で実行するため既定ON。明示的に autoSummaryEnabled=false の時のみ停止。
   // (旧: Claude で継続課金の最大源だったため OFF にしていた。要約は geminiSummary 経由・1メール1回・迷惑除外)
   var settings = (typeof _getMailSettings_ === 'function') ? _getMailSettings_() : {};
