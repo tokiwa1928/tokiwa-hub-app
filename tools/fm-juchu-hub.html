@@ -5552,6 +5552,10 @@ body.fm-mode-juchu #kubun-row > span.lb{ margin-left:0 !important; }
   function 有効期限() { var m = ''; try { m = new URLSearchParams(location.search).get('mode') || ''; } catch (e) {} var el = $('f-valid'); if (!el) return; var row = el.closest('.row') || el.parentNode; if (row) row.style.display = (m === 'mitsu') ? '' : 'none'; }
 
   var proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  // ZENKAKU-1（11/5「品名・紙質は全角表示に」）: 半角カナ（ｻｷﾞ など）は全角（サギ）で見せる。打ったり選んだりしたときは値そのものも全角に
+  function 全角(v) { return String(v == null ? '' : v).replace(/[\uFF61-\uFF9F]+/g, function (m) { return m.normalize('NFKC'); }); }
+  window.全角カナ = 全角;
+  function カナ欄(el) { return /^p\d-(nm|kind)$/.test(el.id || ''); }
   var 待ち = [], 予約 = false;
   function 候補() {
     return Array.prototype.filter.call(document.querySelectorAll('.sheet input, .btm input'), function (el) {
@@ -5561,11 +5565,14 @@ body.fm-mode-juchu #kubun-row > span.lb{ margin-left:0 !important; }
   }
   function 見る(el) {
     var d = el._wrapv; if (!d || document.activeElement === el) return;
+    if (el.dataset.slot) { d.style.display = 'none'; return; }   // INK-SPLIT-1: 色ごとの欄に分けているときは触らない
     el.style.display = ''; d.style.display = 'none';
     if (!el.offsetParent) return;
-    if (el.scrollWidth <= el.clientWidth + 1) return;
+    var v0 = proto.get.call(el), 半 = カナ欄(el) && /[\uFF61-\uFF9F]/.test(v0);
+    if (!半 && el.scrollWidth <= el.clientWidth + 1) return;
     var cs = getComputedStyle(el);
-    d.textContent = proto.get.call(el);
+    d.textContent = カナ欄(el) ? 全角(v0) : v0;
+    if (半 && el.scrollWidth <= el.clientWidth + 1) d.style.whiteSpace = 'nowrap'; else d.style.whiteSpace = '';
     var td = el.parentNode && el.parentNode.tagName === 'TD';
     d.style.width = td ? '100%' : (el.offsetWidth + 'px');
     ['font', 'padding', 'border', 'borderRadius', 'color', 'boxShadow', 'outline'].forEach(function (k) { d.style[k] = cs[k]; });
@@ -5581,7 +5588,7 @@ body.fm-mode-juchu #kubun-row > span.lb{ margin-left:0 !important; }
     d.addEventListener('mousedown', function (ev) { ev.preventDefault(); d.style.display = 'none'; el.style.display = ''; el.focus(); });
     try { Object.defineProperty(el, 'value', { configurable: true, get: function () { return proto.get.call(el); }, set: function (v) { proto.set.call(el, v); 予約する(el); } }); } catch (e) {}
     el.addEventListener('focus', function () { d.style.display = 'none'; el.style.display = ''; });
-    el.addEventListener('blur', function () { 予約する(el); });
+    el.addEventListener('blur', function () { if (カナ欄(el)) { var v = proto.get.call(el), z = 全角(v); if (z !== v) { proto.set.call(el, z); try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} } } 予約する(el); });
   }
   function 全部() { 候補().forEach(function (el) { 用意(el); 予約する(el); }); }
   function 始める() {
@@ -5685,7 +5692,7 @@ tr.pm-sum td{ background:#f8fafc; }
   }
   function 入れる(r) {
     var n = 行番, put = function (id, v) { var el = $('p' + n + '-' + id); if (!el) return; el.value = v; try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} };
-    put('nm', r['品名']); if (r['メーカー'] && r['メーカー'] !== '情報無し') put('mk', r['メーカー']); if (r['サイズ']) put('sz', r['サイズ']); if (r['厚さ'] && r['厚さ'] !== '情報無し') put('th', r['厚さ']); if (r['単価'] !== '') put('up', r['単価']);
+    put('nm', (window.全角カナ ? 全角カナ(r['品名']) : r['品名'])); if (r['メーカー'] && r['メーカー'] !== '情報無し') put('mk', r['メーカー']); if (r['サイズ']) put('sz', r['サイズ']); if (r['厚さ'] && r['厚さ'] !== '情報無し') put('th', r['厚さ']); if (r['単価'] !== '') put('up', r['単価']);
     try { if (typeof calc === 'function') calc(); } catch (e) {}
     閉じる(); 小計();
   }
@@ -5885,6 +5892,43 @@ body.num-off .num-col{ display:none !important; }
   }
   function 始める() { 動かす(); setInterval(動かす, 1500); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 500); }); else setTimeout(始める, 500);
+})();
+</script>
+<script>
+// INK-SPLIT-1（11/5「インキは 2 色なら 2 色分の欄に分けて 1 色ずつ選べるように。FileMaker では , で」）
+//   色数（表・裏）が 2 以上の行は、インキの欄を色数ぶんの小さな欄に分ける（候補から選ぶか打つ）。FileMaker のインキ表・裏には「墨,赤」のように「,」でつないで入る
+(function () {
+  function $(id) { return document.getElementById(id); }
+  var 基本 = ['墨', '赤', '金赤', '藍', '青', '緑', '黄', '茶', '紫', '橙', '桃', 'グレー', '白', '金', '銀', '特色', '見本'];
+  function 候補を足す() {
+    var dl = $('dl-ink-1'); if (dl) return; dl = document.createElement('datalist'); dl.id = 'dl-ink-1';
+    var seen = {}; var add = function (v) { v = String(v || '').trim(); if (!v || seen[v]) return; seen[v] = 1; var o = document.createElement('option'); o.value = v; dl.appendChild(o); };
+    基本.forEach(add); try { (window.MASTER && MASTER['インキ'] || []).forEach(function (v) { String(v).split(/[,、，・\/／\s　]+/).forEach(add); }); } catch (e) {}
+    document.body.appendChild(dl);
+  }
+  function 分ける(v) { return String(v || '').split(/[,、，・\/／\s　]+/).map(function (x) { return x.trim(); }).filter(Boolean); }
+  function 打った(el) { try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} }
+  function 合わせる(数id, 色id) {
+    var ne = $(数id), el = $(色id); if (!ne || !el) return;
+    var n = parseInt(String(ne.value || '').normalize('NFKC'), 10); if (!(n >= 2 && n <= 6)) n = 0;
+    var box = el._inkbox;
+    if (!n) { if (box) { box.remove(); el._inkbox = null; delete el.dataset.slot; el.style.display = ''; if (window._wrapRecheck_) _wrapRecheck_(); } return; }
+    if (!box) { box = document.createElement('span'); box.className = 'ink-slots'; box.style.cssText = 'display:inline-flex;gap:2px;width:100%'; el.parentNode.insertBefore(box, el.nextSibling); el._inkbox = box; }
+    el.dataset.slot = '1'; el.style.display = 'none'; if (el._wrapv) el._wrapv.style.display = 'none';
+    var vs = 分ける(el.value), ins = box.querySelectorAll('input');
+    var 作り直す = ins.length !== n || (!box.contains(document.activeElement) && 分ける(Array.prototype.map.call(ins, function (x) { return x.value; }).join(',')).join(',') !== vs.join(','));
+    if (!作り直す) return;
+    box.innerHTML = '';
+    for (var i = 0; i < n; i++) {
+      var s = document.createElement('input'); s.setAttribute('list', 'dl-ink-1'); s.value = vs[i] || ''; s.placeholder = (i + 1) + '色目';
+      s.style.cssText = 'flex:1 1 0;min-width:0;width:0;font:inherit;font-size:11.5px;border:1px solid #cbd5e1;background:#fff;padding:0 2px;height:100%';
+      s.addEventListener('change', function () { var all = Array.prototype.map.call(box.querySelectorAll('input'), function (x) { return x.value.trim(); }).filter(Boolean); var extra = 分ける(el.value).slice(n); el.value = all.concat(extra).join(','); 打った(el); });
+      box.appendChild(s);
+    }
+  }
+  function 見る() { for (var i = 0; i <= 9; i++) { 合わせる('k' + i + '-iro1', 'k' + i + '-ink'); 合わせる('k' + i + '-iro2', 'k' + i + '-ura'); } }
+  function 始める() { 候補を足す(); 見る(); document.addEventListener('input', function (ev) { if (ev.target && /^k\d-iro[12]$/.test(ev.target.id || '')) 見る(); }, true); setInterval(見る, 1000); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 400); }); else setTimeout(始める, 400);
 })();
 </script>
 </body>
