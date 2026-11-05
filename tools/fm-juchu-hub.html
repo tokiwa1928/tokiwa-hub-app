@@ -5931,5 +5931,51 @@ body.num-off .num-col{ display:none !important; }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 400); }); else setTimeout(始める, 400);
 })();
 </script>
+<script>
+// CUST-SEARCH-1（11/5「得意先で検索して選んだら得意先コードが入るように」）: 得意先名の欄を押す／打つと、得意先マスタから名前・読み・コードで探す窓が出る。選ぶとコードが入り、名前はいつもどおりコードから引く
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function 呼(n, a) { var f = window.FM呼ぶ || (window.FM && window.FM.呼ぶ); return f ? f(n, a) : Promise.reject(new Error('中継がありません')); }
+  function 芯(s) { return String(s || '').normalize('NFKC').toLowerCase().replace(/(株式会社|有限会社|合同会社|\(株\)|\(有\)|様|御中)/g, '').replace(/[\s　・･\-ー－\/／_（）()]/g, ''); }
+  var 表 = null;
+  function 読む() {
+    if (表) return Promise.resolve(表);
+    try { var c = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); if (c && c.行 && c.行.length) { 表 = c.行; return Promise.resolve(表); } } catch (e) {}
+    return 呼('マスタ_配る', ['得意先マスタ']).then(function (j) { j.取った = new Date().toISOString(); try { localStorage.setItem('fm_master_得意先マスタ', JSON.stringify(j)); } catch (e) {} 表 = j.行 || []; return 表; });
+  }
+  var 窓 = null;
+  function 閉じる() { if (窓) { 窓.remove(); 窓 = null; } }
+  function 開く() {
+    var el = $('f-cust'); if (!el || 窓) return;
+    窓 = document.createElement('div');
+    窓.style.cssText = 'position:absolute;z-index:9000;background:#fff;border:1px solid #94a3b8;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);font-size:12.5px;width:560px;max-height:360px;display:flex;flex-direction:column';
+    窓.innerHTML = '<div style="display:flex;gap:8px;align-items:center;padding:6px 10px;background:#1f2937;color:#fff;border-radius:8px 8px 0 0"><b>👥 得意先を探す</b><input id="cs-q" placeholder="名前・コードの一部（例: 村山 / 5236）" style="flex:1;font:inherit;padding:2px 6px;border:0;border-radius:4px"><span id="cs-n" style="font-size:11px;opacity:.85"></span><button id="cs-x" style="background:none;border:0;color:#fff;font-size:16px;cursor:pointer">×</button></div><div id="cs-body" style="overflow:auto;flex:1">読んでいます…</div>';
+    document.body.appendChild(窓);
+    var r = el.getBoundingClientRect(); 窓.style.left = (window.scrollX + r.left) + 'px'; 窓.style.top = (window.scrollY + r.bottom + 4) + 'px';
+    $('cs-x').onclick = 閉じる;
+    var q = $('cs-q'); q.value = el.readOnly ? '' : (el.value || ''); q.focus();
+    var 選ぶ = function (row) { var cd = $('f-custcd'); cd.value = String(row['得意先コード']); ['input', 'change', 'blur'].forEach(function (t) { try { cd.dispatchEvent(new Event(t, { bubbles: true })); } catch (e) {} }); if (!el.readOnly) el.value = String(row['得意先名'] || ''); 閉じる(); };
+    var 描く = function () {
+      var b = $('cs-body'); if (!b || !表) return; var w = 芯(q.value), raw = String(q.value || '').trim();
+      var hits = 表.filter(function (x) { if (!w) return true; var c = String(x['得意先コード'] || ''); return c.indexOf(raw) === 0 || 芯(x['得意先名']).indexOf(w) >= 0 || 芯(x['フリガナ'] || x['得意先名カナ'] || x['ヨミ'] || '').indexOf(w) >= 0; });
+      $('cs-n').textContent = hits.length + ' 件';
+      b.innerHTML = '<table style="width:100%;border-collapse:collapse">' + hits.slice(0, 150).map(function (x, i) { return '<tr data-i="' + i + '" style="cursor:pointer;border-top:1px solid #eef2f7"><td style="padding:4px 8px;width:70px;color:#64748b">' + esc(x['得意先コード']) + '</td><td style="padding:4px 8px"><b>' + esc(x['得意先名']) + '</b></td></tr>'; }).join('') + '</table>' + (hits.length ? '' : '<div style="padding:12px;color:#64748b">見つかりません</div>');
+      Array.prototype.forEach.call(b.querySelectorAll('tr[data-i]'), function (tr) { tr.onmouseenter = function () { tr.style.background = '#fef9c3'; }; tr.onmouseleave = function () { tr.style.background = ''; }; tr.onclick = function () { 選ぶ(hits[Number(tr.getAttribute('data-i'))]); }; });
+      q.onkeydown = function (ev) { if (ev.key === 'Escape') 閉じる(); if (ev.key === 'Enter' && hits.length) { ev.preventDefault(); 選ぶ(hits[0]); } };
+    };
+    q.oninput = 描く;
+    読む().then(描く).catch(function (e) { var b = $('cs-body'); if (b) b.textContent = '得意先マスタを読めませんでした: ' + String(e.message || e); });
+    setTimeout(function () { document.addEventListener('mousedown', function h(ev) { if (窓 && !窓.contains(ev.target) && ev.target !== el) { 閉じる(); document.removeEventListener('mousedown', h); } }); }, 0);
+  }
+  function 始める() {
+    var el = $('f-cust'); if (!el) return;
+    el.removeAttribute('list'); el.title = '押すと得意先を名前で探せます。選ぶと得意先コードが入ります'; el.style.cursor = 'pointer';
+    el.addEventListener('focus', 開く); el.addEventListener('click', 開く);
+    if (el._wrapv) el._wrapv.addEventListener('mousedown', function () { setTimeout(開く, 0); });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 400); }); else setTimeout(始める, 400);
+})();
+</script>
 </body>
 </html>
