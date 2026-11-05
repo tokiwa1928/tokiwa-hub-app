@@ -4916,6 +4916,7 @@ async function loadFromCloud() {
   }
 
   // BULK-SORT-1: 問い合わせの覚え（和集合。同じ鍵はクラウドを優先しない＝この PC で決めた方を残す）
+  if (Array.isArray(result.data.aiRules)) { var _ar={}; (DB.aiRules||[]).forEach(function(r){ _ar[r.id]=r; }); result.data.aiRules.forEach(function(r){ if(!r||!r.id) return; if(!_ar[r.id]) _ar[r.id]=r; else if(r.del) _ar[r.id].del=true; }); DB.aiRules=Object.keys(_ar).map(function(k){ return _ar[k]; }).sort(function(a,b){ return String(a.at)<String(b.at)?-1:1; }); }   // AI-WIN-1
   if (result.data.inqBinRules && typeof result.data.inqBinRules==='object') {
     var _ir=_inqBinRules_(); ['byEmail','byDomain','byFax','byFaxCust'].forEach(function(k){ var src=result.data.inqBinRules[k]||{}; _ir[k]=_ir[k]||{}; Object.keys(src).forEach(function(x){ if(!(x in _ir[k])) _ir[k][x]=src[x]; }); });
   }
@@ -5544,6 +5545,7 @@ async function _saveToCloudNow_() {
     quoteFolders: DB.quoteFolders || {},   // QFOLDER-1
     docSends: DB.docSends || {},   // DOC-LINK-1
     inqBinRules: DB.inqBinRules || {},   // BULK-SORT-1: 今後もこの箱、の覚え（全 PC で同じに）
+    aiRules: DB.aiRules || [],   // AI-WIN-1: AI への決まり（今後は全体でこう対応）
     sagyoPrints: (DB.sagyoPrints || []).slice(-8000),                // SEIZO-1: 製造指示書の出力記録（第N回・日時・誰が・変更コメント・写し）
     inquiries: DB.inquiries || [],
     deliveryItems: DB.deliveryItems || [],
@@ -61623,5 +61625,178 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
 html body :is(div,section,article,aside,form,fieldset,details,main,nav):is(:has(> * > * > * > table),:has(> * > * > * > * > table)):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}
 /* 作業BOX の箱も角あり（9/26）。ボタン・入力欄は丸くてよい */
 html body #page-workbox :not(button):not(.btn):not(input):not(select):not(textarea):not(.tb-btn):not(#_):not(#_):not(#_):not(#_){border-radius:0 !important}</style>
+<style id="ai-win-1">
+#ai-win{ position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:100000; display:flex; align-items:flex-start; justify-content:center; padding:5vh 12px; overflow:auto; }
+#ai-win .w{ background:#fff; border-radius:12px; width:100%; max-width:1080px; box-shadow:0 20px 50px rgba(0,0,0,.3); font-size:13px; color:#1f2937; }
+#ai-win .top{ display:flex; gap:8px; align-items:center; padding:12px 14px; border-bottom:1px solid #e5e7eb; }
+#ai-win .top input{ flex:1; font:inherit; font-size:15px; padding:9px 12px; border:2px solid #7c3aed; border-radius:8px; outline:none; }
+#ai-win button{ font:inherit; padding:6px 14px; border-radius:7px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; }
+#ai-win button.p{ background:#7c3aed; border-color:#7c3aed; color:#fff; font-weight:700; }
+#ai-win button.g{ background:#0f766e; border-color:#0f766e; color:#fff; font-weight:700; }
+#ai-win .ex{ padding:6px 14px 10px; color:#64748b; font-size:12px; }
+#ai-win .ex span{ display:inline-block; margin:3px 6px 0 0; padding:2px 9px; border-radius:12px; background:#f5f3ff; color:#5b21b6; cursor:pointer; }
+#ai-win .plan{ padding:8px 14px; background:#faf5ff; border-top:1px solid #ede9fe; border-bottom:1px solid #ede9fe; font-size:12.5px; }
+#ai-win .body{ padding:8px 14px 14px; max-height:62vh; overflow:auto; }
+#ai-win table{ width:100%; border-collapse:collapse; }
+#ai-win th, #ai-win td{ padding:4px 8px; border-top:1px solid #eef2f7; text-align:left; vertical-align:top; }
+#ai-win th{ background:#f8fafc; font-size:12px; color:#475569; position:sticky; top:0; }
+#ai-win .k{ display:inline-block; font-size:11px; padding:0 7px; border-radius:9px; }
+#ai-win .send{ margin-top:10px; padding:10px; border:1px solid #c7d2fe; border-radius:8px; background:#eef2ff; }
+#ai-win textarea{ width:100%; box-sizing:border-box; font:inherit; min-height:110px; padding:6px 8px; }
+#ai-btn{ margin-left:6px; padding:5px 10px; border-radius:6px; border:1px solid rgba(255,255,255,.4); background:#7c3aed; color:#fff; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; }
+</style>
+<script>
+// AI-WIN-1（11/5 本多さん「予算見積・見積・受注入力・問い合わせ、どこからでも AI で入力すれば探せるように。
+//   こうしてほしいという AI も。全体から探して、これとこれ送って、とか。今後は全体でこう対応して、も」）
+//   上の帯の「🤖 AI に頼む」（Ctrl+K）。言葉 → AI が「何を・どの条件で・どうするか」に分ける → 手元の索引（FileMaker の写し・Hub の見積・問い合わせ）から探す
+//   → 開く／選んで送る文を作る（コピー・メール）／「今後は」の決まりを覚える（以後の AI への頼みごとにいつも添える）。勝手には送らない・直さない（必ず人が押す）
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function 正(s) { return String(s == null ? '' : s).normalize('NFKC').toLowerCase().replace(/[\s　・,，、()（）「」『』【】\[\]"'_\-－ー〜~:：\/／]/g, '').replace(/(株式会社|有限会社|合同会社|㈱|㈲|様|御中)/g, ''); }
+  function 日数(v) { v = String(v || ''); var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(v); if (m) return Number(m[3] + ('0' + m[1]).slice(-2) + ('0' + m[2]).slice(-2)); m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v); return m ? Number(m[1] + m[2] + m[3]) : 0; }
+  function 日表示(v) { var n = typeof v === 'number' ? v : 日数(v); return n ? String(n).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1/$2/$3') : ''; }
+  function 決まり() { try { DB.aiRules = DB.aiRules || []; return DB.aiRules; } catch (e) { return []; } }
+  function 得意先表() { try { var c = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); var m = {}; (c && c.行 || []).forEach(function (r) { m[String(r['得意先コード'])] = String(r['得意先名'] || ''); }); return m; } catch (e) { return {}; } }
+
+  // ---------------------------------------------------------------- AI に分けてもらう
+  function AIで分ける(文) {
+    var 今日 = new Date(); var ymd = 今日.getFullYear() + '-' + ('0' + (今日.getMonth() + 1)).slice(-2) + '-' + ('0' + 今日.getDate()).slice(-2);
+    var rules = 決まり().filter(function (r) { return !r.del; }).map(function (r) { return '・' + r.text; }).join('\n');
+    var prompt = 'あなたは印刷会社の基幹システム（Tokiwa Hub）の窓口です。今日は ' + ymd + '。社員の頼みごとを読み、次の JSON 1 つだけを返してください（説明文は書かない）。\n'
+      + '{"意図":"探す|開く|送る|決まり","種類":["受注","見積","予算見積","問い合わせ"],"得意先":"","ユーザー":"","品名":"","番号":"","語":[],"期間":{"から":"YYYY-MM-DD","まで":"YYYY-MM-DD"},"件数":0,"送り先":"","送る文":"","決まり":"","説明":""}\n'
+      + '・種類は頼みに出てくるものだけ（指定が無ければ 4 つ全部）。番号は a109181・P0042-M01 のような伝票番号や見積番号\n'
+      + '・得意先＝注文してくる会社、ユーザー＝その先の使う人・会社。「村山印刷の活動記録簿」なら 得意先=村山印刷 品名=活動記録簿\n'
+      + '・期間は「去年」「先月」「今年の 4 月」などを日付に直す。書いていなければ空\n'
+      + '・語は、得意先・ユーザー・品名に入らなかった探す手がかり（例: 封筒、窓付き、FAX）\n'
+      + '・「送って」「渡して」「知らせて」なら 意図=送る。送り先は相手の名前、送る文は相手に送る文の下書き（敬体・短く。案件の一覧は後でシステムが付ける）\n'
+      + '・「今後は」「これからは」「毎回」「全体で」のように決まりにしたい頼みなら 意図=決まり。決まり に、だれが読んでも分かる 1 文で書く\n'
+      + '・説明 は、何をするかを 1 文で（例: 村山印刷の活動記録簿を、受注と見積から探します）\n'
+      + (rules ? '\n会社の決まり（守ること）:\n' + rules + '\n' : '') + '\n頼みごと:\n' + String(文).slice(0, 2000);
+    return callCloudAPI('claudeText', {}, { prompt: prompt, maxTokens: 900 }).then(function (r) {
+      var t = String((r && (r.text || r.reply || (r.data && r.data.text))) || ''); if (!r || r.success === false) throw new Error((r && r.error) || 'AI の応答がありません');
+      var a = t.indexOf('{'), b = t.lastIndexOf('}'); if (a < 0) throw new Error('AI の返事を読めませんでした'); return JSON.parse(t.slice(a, b + 1));
+    });
+  }
+  function 言葉だけで(文) { return { 意図: '探す', 種類: ['受注', '見積', '予算見積', '問い合わせ'], 語: String(文).split(/[\s　]+/).filter(Boolean), 説明: 'AI が使えないので、言葉そのままで探します' }; }
+
+  // ---------------------------------------------------------------- 探す（手元の索引・Hub の見積・問い合わせ）
+  function 探す(pl) {
+    var 種 = (pl.種類 && pl.種類.length) ? pl.種類 : ['受注', '見積', '予算見積', '問い合わせ'];
+    var 得 = 正(pl.得意先), 使 = 正(pl.ユーザー), 品 = 正(pl.品名), 番 = String(pl.番号 || '').trim().toLowerCase(), 語 = (pl.語 || []).map(正).filter(Boolean);
+    var から = 日数((pl.期間 || {}).から), まで = 日数((pl.期間 || {}).まで);
+    var 合う = function (o) { // o: {種, 番号, 日, 得意先, ユーザー, 品名, 全文}
+      if (種.indexOf(o.種) < 0) return false;
+      if (番 && String(o.番号 || '').toLowerCase().indexOf(番) !== 0 && String(o.番号2 || '').toLowerCase().indexOf(番) !== 0) return false;
+      if (から && o.日 && o.日 < から) return false; if (まで && o.日 && o.日 > まで) return false;
+      var 全 = 正(o.全文);
+      if (得 && 正(o.得意先).indexOf(得) < 0 && 全.indexOf(得) < 0) return false;
+      if (使 && 正(o.ユーザー).indexOf(使) < 0 && 全.indexOf(使) < 0) return false;
+      if (品 && 正(o.品名).indexOf(品) < 0 && 全.indexOf(品) < 0) return false;
+      return 語.every(function (w) { return 全.indexOf(w) >= 0; });
+    };
+    var out = [], 名 = 得意先表();
+    var p1 = (typeof _fmIdxLoad_ === 'function' ? _fmIdxLoad_() : Promise.resolve(null)).then(function (idx) {
+      if (!idx || !idx.列 || !idx.行) return; var P = {}; idx.列.forEach(function (c, i) { P[c] = i; }); var g = function (r, c) { return P[c] == null ? '' : String(r[P[c]] == null ? '' : r[P[c]]); };
+      idx.行.forEach(function (r) { if (/^hub:/i.test(g(r, 'recordId'))) return; var k = g(r, '案件区分') || '受注'; if (k === '失注') k = '見積';
+        var cd = g(r, '得意先コード'), o = { 種: k, 番号: g(r, '伝票番号') || g(r, '見積番号'), 番号2: g(r, '見積番号'), 日: 日数(g(r, '起票日')), 得意先: (名[cd] || '') + ' ' + cd, ユーザー: g(r, 'ユーザー名'), 品名: g(r, '製品名'), 金額: g(r, '合計金額'), 案件ID: g(r, '案件ID') };
+        o.全文 = [o.番号, o.番号2, o.得意先, o.ユーザー, o.品名, g(r, '品種')].join(' '); if (合う(o)) out.push(o); });
+    }).catch(function () {});
+    var p2 = (typeof _hubQuotesLoad_ === 'function' ? _hubQuotesLoad_() : Promise.resolve(window._hubQuotes_)).then(function (hq) {
+      ((hq && hq.rows) || []).forEach(function (q) { var k = /予算/.test(String(q['案件区分'] || q['種別'] || q.no)) || /-YM/i.test(q.no) ? '予算見積' : '見積';
+        var o = { 種: k, 番号: q.no, 日: 日数(q['起票日'] || q['作成日'] || ''), 得意先: String(q['得意先'] || q['得意先名'] || ''), ユーザー: String(q['ユーザー名'] || q['ユーザー'] || ''), 品名: String(q['製品名'] || q['品名'] || ''), 金額: q['合計金額'] || '', hub: true };
+        o.全文 = Object.keys(q).map(function (k2) { return typeof q[k2] === 'string' ? q[k2] : ''; }).join(' '); if (合う(o)) out.push(o); });
+    }).catch(function () {});
+    var p3 = Promise.resolve().then(function () {
+      (DB.inquiries || []).forEach(function (q) { if (!q || q.isSpam) return; var o = { 種: '問い合わせ', 番号: String(q.id || ''), id: q.id, 日: 日数(String(q.received_at || q.createdAt || '').slice(0, 10)), 得意先: String(q.from_company || q.channel_company || ''), ユーザー: String(q.from_name || ''), 品名: String(q.subject || '') };
+        o.全文 = [o.得意先, o.ユーザー, o.品名, q.from_email, String(q.body || '').slice(0, 3000), q.summary || ''].join(' '); if (合う(o)) out.push(o); });
+    });
+    return Promise.all([p1, p2, p3]).then(function () { out.sort(function (a, b) { return (b.日 || 0) - (a.日 || 0); }); var n = Number(pl.件数) || 0; return n > 0 ? out.slice(0, n) : out.slice(0, 300); });
+  }
+
+  // ---------------------------------------------------------------- 開く
+  function 開く(o) {
+    if (o.種 === '問い合わせ') { try { var b = document.querySelector('.tb-btn[data-page="inquiry"]'); swPage('inquiry', b); setTimeout(function () { openInquiryDetail(o.id); }, 300); } catch (e) {} 閉じる(); return; }
+    var mitsu = o.種 !== '受注'; var id = mitsu ? 'fmmitsu' : 'fmjuchu';
+    try { var b2 = document.querySelector('.tb-btn[data-page="' + id + '"]'); swPage(id, b2); var f = document.getElementById('fm-frame-' + id); if (f) f.setAttribute('src', 'tools/fm-juchu-hub.html?mode=' + (mitsu ? 'mitsu' : 'juchu') + '&no=' + encodeURIComponent(o.番号) + '&t=' + Date.now()); } catch (e) {}
+    閉じる();
+  }
+
+  // ---------------------------------------------------------------- 窓
+  var 今 = { pl: null, hits: [] };
+  var 色 = { '受注': '#dcfce7', '見積': '#dbeafe', '予算見積': '#fef3c7', '問い合わせ': '#fce7f3' };
+  function 閉じる() { var w = $('ai-win'); if (w) w.remove(); }
+  function 開く窓(初め) {
+    閉じる(); var w = document.createElement('div'); w.id = 'ai-win';
+    w.innerHTML = '<div class="w"><div class="top"><b style="font-size:15px">🤖 AI に頼む</b><input id="ai-q" placeholder="例: 村山印刷の活動記録簿の去年の受注を探して／これとこれを中尾さんに送って／今後は〇〇からの FAX は受注の箱に"><button class="p" id="ai-go">頼む</button><button id="ai-rules" title="今後こうして、と覚えた決まり">📏 決まり</button><button id="ai-x">×</button></div>'
+      + '<div class="ex">例:<span>村山印刷の活動記録簿 去年</span><span>a1091 で始まる受注</span><span>今月の予算見積で中尾印刷のもの</span><span>ハートの年賀状の問い合わせ</span><span>今後は 豊川市からのメールは校正の箱に</span></div>'
+      + '<div id="ai-plan" class="plan" style="display:none"></div><div class="body" id="ai-body"></div></div>';
+    document.body.appendChild(w);
+    w.addEventListener('mousedown', function (ev) { if (ev.target === w) 閉じる(); });
+    $('ai-x').onclick = 閉じる; $('ai-go').onclick = 頼む; $('ai-rules').onclick = 決まり一覧;
+    $('ai-q').onkeydown = function (ev) { if (ev.key === 'Enter') 頼む(); if (ev.key === 'Escape') 閉じる(); };
+    Array.prototype.forEach.call(w.querySelectorAll('.ex span'), function (s) { s.onclick = function () { $('ai-q').value = s.textContent; 頼む(); }; });
+    $('ai-q').value = 初め || ''; $('ai-q').focus(); if (初め) 頼む();
+  }
+  function 頼む() {
+    var q = $('ai-q').value.trim(); if (!q) return;
+    $('ai-plan').style.display = 'block'; $('ai-plan').textContent = 'AI が頼みごとを読んでいます…'; $('ai-body').innerHTML = '';
+    AIで分ける(q).catch(function (e) { var p = 言葉だけで(q); p.説明 += '（' + String(e.message || e).slice(0, 80) + '）'; return p; }).then(function (pl) {
+      今.pl = pl;
+      var 条件 = [pl.得意先 && '得意先「' + pl.得意先 + '」', pl.ユーザー && 'ユーザー「' + pl.ユーザー + '」', pl.品名 && '品名「' + pl.品名 + '」', pl.番号 && '番号「' + pl.番号 + '」', (pl.語 || []).length && '語「' + pl.語.join(' ') + '」', (pl.期間 && (pl.期間.から || pl.期間.まで)) && '期間 ' + (pl.期間.から || '') + '〜' + (pl.期間.まで || '')].filter(Boolean).join('・');
+      $('ai-plan').innerHTML = '<b>' + esc(pl.説明 || '') + '</b><div style="color:#6b21a8;margin-top:2px">' + esc((pl.種類 || []).join('・')) + (条件 ? '　' + esc(条件) : '') + '</div>';
+      if (pl.意図 === '決まり') { 決まりを出す(pl); return; }
+      $('ai-body').innerHTML = '<div style="color:#64748b;padding:6px 0">探しています…</div>';
+      return 探す(pl).then(function (hits) { 今.hits = hits; if (pl.意図 === '開く' && hits.length === 1) { 開く(hits[0]); return; } 一覧(hits, pl); });
+    });
+  }
+  function 一覧(hits, pl) {
+    var b = $('ai-body'); if (!hits.length) { b.innerHTML = '<div style="padding:14px;color:#64748b">見つかりませんでした。言い方を変えるか、条件を減らしてください（受注・見積の索引はこの PC の写しから探します）。</div>'; return; }
+    var 送る = pl.意図 === '送る';
+    var h = '<div style="display:flex;gap:8px;align-items:center;margin:4px 0 6px"><b>' + hits.length + ' 件</b><span style="color:#64748b">（新しい順。行を押すと開きます。チェックして「送る文を作る」）</span><span style="margin-left:auto"></span><button class="g" id="ai-send">✉ 選んだものを送る文を作る</button></div>'
+      + '<table><tr><th style="width:26px"><input type="checkbox" id="ai-all"' + (送る ? ' checked' : '') + '></th><th>種類</th><th>番号</th><th>日付</th><th>得意先</th><th>ユーザー・差出人</th><th>品名・件名</th><th style="text-align:right">金額</th></tr>'
+      + hits.map(function (o, i) { return '<tr data-i="' + i + '" style="cursor:pointer"><td onclick="event.stopPropagation()"><input type="checkbox" class="ai-c" data-i="' + i + '"' + (送る ? ' checked' : '') + '></td><td><span class="k" style="background:' + (色[o.種] || '#f1f5f9') + '">' + esc(o.種) + '</span></td><td style="font-weight:700;white-space:nowrap">' + esc(o.種 === '問い合わせ' ? '' : o.番号) + '</td><td style="white-space:nowrap">' + esc(日表示(o.日)) + '</td><td>' + esc(String(o.得意先 || '').trim()) + '</td><td>' + esc(o.ユーザー) + '</td><td>' + esc(o.品名) + '</td><td style="text-align:right">' + (o.金額 ? '¥' + Math.round(Number(o.金額) || 0).toLocaleString() : '') + '</td></tr>'; }).join('') + '</table><div id="ai-sendbox"></div>';
+    b.innerHTML = h;
+    Array.prototype.forEach.call(b.querySelectorAll('tr[data-i]'), function (tr) { tr.onclick = function () { 開く(hits[Number(tr.getAttribute('data-i'))]); }; });
+    $('ai-all').onchange = function () { Array.prototype.forEach.call(b.querySelectorAll('.ai-c'), function (c) { c.checked = $('ai-all').checked; }); };
+    $('ai-send').onclick = function () { 送る文(hits.filter(function (o, i) { var c = b.querySelector('.ai-c[data-i="' + i + '"]'); return c && c.checked; }), pl); };
+    if (送る) 送る文(hits, pl);
+  }
+  function 送る文(sel, pl) {
+    var box = $('ai-sendbox'); if (!sel.length) { box.innerHTML = '<div class="send">送るものにチェックを付けてください</div>'; return; }
+    var 一 = sel.slice(0, 40).map(function (o) { return '・' + (o.種 === '問い合わせ' ? '問い合わせ ' : o.種 + ' ' + o.番号 + ' ') + [日表示(o.日), String(o.得意先 || '').trim(), o.ユーザー, o.品名].filter(Boolean).join(' ／ ') + (o.金額 ? ' ／ ¥' + Math.round(Number(o.金額) || 0).toLocaleString() : ''); }).join('\n');
+    var 文 = (pl.送る文 ? pl.送る文.trim() + '\n\n' : (pl.送り先 ? pl.送り先 + ' 様\n\n下記をお送りします。\n\n' : '下記をお送りします。\n\n')) + 一 + '\n\nトキワ印刷 ' + ((typeof currentAuth !== 'undefined' && currentAuth && currentAuth.userName) || '');
+    box.innerHTML = '<div class="send"><b>✉ 送る文（' + sel.length + ' 件' + (pl.送り先 ? '・宛先: ' + esc(pl.送り先) : '') + '）</b><span style="color:#64748b;font-size:12px">　直してから、コピーして LINE WORKS に貼るか、メールで開いてください。勝手には送りません</span>'
+      + '<textarea id="ai-text">' + esc(文) + '</textarea><div style="display:flex;gap:8px;margin-top:6px"><input id="ai-to" placeholder="メールの宛先（任意）" style="flex:1;font:inherit;padding:4px 8px"><button id="ai-copy">📋 コピー</button><button class="g" id="ai-mail">✉ メールで開く</button></div></div>';
+    $('ai-copy').onclick = function () { var t = $('ai-text'); t.select(); try { navigator.clipboard.writeText(t.value); } catch (e) { document.execCommand('copy'); } $('ai-copy').textContent = '✓ コピーしました'; };
+    $('ai-mail').onclick = function () { location.href = 'mailto:' + encodeURIComponent($('ai-to').value.trim()) + '?subject=' + encodeURIComponent('ご案内（トキワ印刷）') + '&body=' + encodeURIComponent($('ai-text').value); };
+    box.scrollIntoView({ block: 'nearest' });
+  }
+  // ---------------------------------------------------------------- 決まり（今後は全体でこう対応）
+  function 決まりを出す(pl) {
+    var t = String(pl.決まり || '').trim() || $('ai-q').value.trim();
+    $('ai-body').innerHTML = '<div class="send"><b>📏 この決まりを覚えますか？</b><div style="color:#64748b;font-size:12px;margin:2px 0 6px">覚えた決まりは、これから AI に頼むときにいつも添えます（AI はこれを守って探したり、文を作ったりします）。🤖 の「📏 決まり」でいつでも直せます</div>'
+      + '<textarea id="ai-rule" style="min-height:60px">' + esc(t) + '</textarea><div style="margin-top:6px;text-align:right"><button class="g" id="ai-rule-save">覚える</button></div></div>';
+    $('ai-rule-save').onclick = function () { var v = $('ai-rule').value.trim(); if (!v) return; 決まり().push({ id: 'R' + Date.now(), text: v, at: new Date().toISOString(), by: (typeof currentAuth !== 'undefined' && currentAuth && currentAuth.userName) || '' }); try { saveDB(); if (typeof saveToCloud === 'function') saveToCloud(); } catch (e) {} 決まり一覧(); };
+  }
+  function 決まり一覧() {
+    $('ai-plan').style.display = 'block'; $('ai-plan').innerHTML = '<b>📏 AI への決まり（今後は全体でこう対応）</b>';
+    var L = 決まり().filter(function (r) { return !r.del; });
+    $('ai-body').innerHTML = (L.length ? '<table><tr><th>決まり</th><th style="width:120px">いつ・だれ</th><th style="width:60px"></th></tr>' + L.map(function (r) { return '<tr><td>' + esc(r.text) + '</td><td style="color:#64748b;font-size:12px">' + esc(String(r.at || '').slice(0, 10)) + ' ' + esc(r.by || '') + '</td><td><button data-del="' + esc(r.id) + '">消す</button></td></tr>'; }).join('') + '</table>' : '<div style="padding:12px;color:#64748b">まだありません。「今後は〜」「これからは〜」と頼むと覚えます。</div>')
+      + '<div style="margin-top:8px;display:flex;gap:6px"><input id="ai-newrule" placeholder="決まりを直接書く（例: 見積の送る文は「平素は格別のお引き立て〜」で始める）" style="flex:1;font:inherit;padding:5px 8px"><button class="g" id="ai-addrule">足す</button></div>';
+    Array.prototype.forEach.call($('ai-body').querySelectorAll('button[data-del]'), function (b) { b.onclick = function () { 決まり().forEach(function (r) { if (r.id === b.getAttribute('data-del')) { r.del = true; r.delAt = new Date().toISOString(); } }); try { saveDB(); if (typeof saveToCloud === 'function') saveToCloud(); } catch (e) {} 決まり一覧(); }; });
+    $('ai-addrule').onclick = function () { var v = $('ai-newrule').value.trim(); if (!v) return; 決まり().push({ id: 'R' + Date.now(), text: v, at: new Date().toISOString(), by: (typeof currentAuth !== 'undefined' && currentAuth && currentAuth.userName) || '' }); try { saveDB(); if (typeof saveToCloud === 'function') saveToCloud(); } catch (e) {} 決まり一覧(); };
+  }
+  window.AIに頼む = 開く窓;
+  function ボタン() {
+    if ($('ai-btn')) return; var gs = $('global-search'); if (!gs) return;
+    var b = document.createElement('button'); b.id = 'ai-btn'; b.type = 'button'; b.textContent = '🤖 AI に頼む'; b.title = '受注・見積・予算見積・問い合わせをまとめて探す／送る文を作る／今後の決まりを覚える（Ctrl+K）';
+    b.onclick = function () { 開く窓(''); }; gs.parentNode.parentNode.insertBefore(b, gs.parentNode.nextSibling);
+  }
+  document.addEventListener('keydown', function (ev) { if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'k' || ev.key === 'K')) { ev.preventDefault(); 開く窓(''); } });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(ボタン, 500); }); else setTimeout(ボタン, 500);
+  setInterval(ボタン, 3000);
+})();
+</script>
 </body>
 </html>
