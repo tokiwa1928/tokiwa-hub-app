@@ -2686,6 +2686,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       状態('前回開いた内容を表示中…最新を確認しています', ''); return;
     }
     仮を解く();
+    try { window.FM現在 = r.record; window.FM履歴 = r['履歴'] || []; setTimeout(function () { try { window.dispatchEvent(new CustomEvent('fm-loaded', { detail: r.record })); } catch (e) {} }, 0); } catch (e) {}   // KIROKU-1: ほかの部品から今の伝票を見られるように
     流し込む(r.record);
     得意先名を入れる();
     try { Hub見積の帯(r); } catch (e) { console.warn('[Hub見積]', e); }   // HUBMITSU-1
@@ -2713,6 +2714,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       var t1 = Date.now();
       pp.then(function (a) {
         if (a.案件) {   // FAST-4: 前回との差・前段階・前回原価・履歴
+          try { window.FM履歴 = a.案件.履歴 || window.FM履歴; window.dispatchEvent(new CustomEvent('fm-history')); } catch (e) {}
           try { 履歴を出す(a.案件.履歴); 差分を出す(a.案件.参考, a.案件.差分); 前段階比を出す(a.案件.前段階, a.案件.前段階差分); 前回原価 = a.案件.前回原価 || null; } catch (e) { console.warn('[付属]', e); }
           try { var c = 控えを見る(no); if (c) { c.履歴 = a.案件.履歴; c.参考 = a.案件.参考; c.差分 = a.案件.差分; c.前段階 = a.案件.前段階; c.前段階差分 = a.案件.前段階差分; c.前回原価 = a.案件.前回原価; 控えに置く(no, c); } } catch (e) {}
           var k = a.計時 || {}; var ex = stat; if (ex && /読み込みました/.test(ex.textContent)) ex.textContent = ex.textContent.replace(/）$/, '') + '／付属 ' + ((Date.now() - t1) / 1000).toFixed(1) + 's' + (k.案件 != null ? '（案件 ' + (k.案件 / 1000).toFixed(1) + 's）' : '') + '）';
@@ -6115,6 +6117,207 @@ body.num-off .num-col{ display:none !important; }
   }
   window.表示マスタを開く = 開く;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 800); }); else setTimeout(始める, 800);
+})();
+</script>
+<style id="kiroku-1">
+#km-box{ background:#fffdf5; border:1px solid #e7d9a8; border-radius:8px; margin:6px 0 8px; font-size:12.5px; }
+#km-box .km-hd{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:6px 10px; border-bottom:1px solid #f1e6bf; }
+#km-box .km-hd b{ font-size:13.5px; }
+#km-box button{ font:inherit; font-size:12px; padding:3px 10px; border:1px solid #cbd5e1; background:#fff; border-radius:5px; cursor:pointer; }
+#km-box button.p{ background:#0f766e; color:#fff; border-color:#0f766e; font-weight:700; }
+#km-box button.o{ background:#b45309; color:#fff; border-color:#b45309; font-weight:700; }
+#km-box table{ width:100%; border-collapse:collapse; }
+#km-box td{ padding:4px 8px; border-top:1px solid #f3ecd2; vertical-align:top; }
+#km-box td.d{ white-space:nowrap; color:#475569; width:86px; }
+#km-box td.m{ white-space:nowrap; width:84px; }
+#km-box .tag{ display:inline-block; font-size:10.5px; padding:0 6px; border-radius:9px; background:#e0f2fe; color:#075985; }
+#km-box .tag.prev{ background:#fef3c7; color:#92400e; }
+#km-box .star{ color:#d97706; font-weight:700; }
+#km-box .km-form{ display:none; padding:8px 10px; border-top:1px solid #f1e6bf; background:#fff; }
+#km-box .km-form .r{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:6px; }
+#km-box .km-form textarea{ width:100%; min-height:64px; font:inherit; padding:4px 6px; box-sizing:border-box; }
+#km-box .km-form input, #km-box .km-form select{ font:inherit; padding:2px 6px; }
+.km-diff{ outline:3px solid #dc2626 !important; outline-offset:-1px; }
+#km-cmp{ position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:99999; display:flex; align-items:flex-start; justify-content:center; padding:30px 12px; overflow:auto; }
+#km-cmp .w{ background:#fff; border-radius:10px; width:100%; max-width:980px; font-size:13px; }
+#km-cmp .w > .h{ padding:10px 16px; background:#1f2937; color:#fff; border-radius:10px 10px 0 0; display:flex; align-items:center; gap:10px; }
+#km-cmp table{ width:100%; border-collapse:collapse; }
+#km-cmp th, #km-cmp td{ border-top:1px solid #e5e7eb; padding:5px 8px; text-align:left; vertical-align:top; }
+#km-cmp tr.ng td{ background:#fef2f2; } #km-cmp tr.ok td{ background:#f0fdf4; }
+</style>
+<script>
+// KIROKU-1 / CMP-1 / PREV-1（11/5 本多さん「情報管理が一番大事。アナログをデジタルに、案件から出さない、間違えなく入れる、翌年はもっと楽に」）
+//   📒 案件の記録: 電話・口頭・FAX などの指示を日付と伝達方法つきで残す（添付は保管の窓口へ。Box に切り替わってもそのまま）
+//   📄 紙・FAX と突き合わせ: 原稿・FAX を AI が読み、入力した欄と並べて違うところを赤く出す
+//   前回・同じ案件の記録: 前回伝票・同じ案件ID の記録（★大事 を先に）と前回のファイルを一緒に出す
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function 呼(n, a) { var f = window.FM呼ぶ || (window.FM && window.FM.呼ぶ); return f ? f(n, a) : Promise.reject(new Error('中継がありません')); }
+  function 今日() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  var 方法一覧 = ['電話', '口頭', '来社', '訪問', 'FAX', 'メール', 'LINE WORKS', '郵送', '校正の戻り', 'その他'];
+  var 方法色 = { '電話': '#dbeafe', '口頭': '#fce7f3', '来社': '#ede9fe', '訪問': '#ede9fe', 'FAX': '#fef3c7', 'メール': '#dcfce7', 'LINE WORKS': '#dcfce7', '郵送': '#f1f5f9', '校正の戻り': '#ffedd5', 'その他': '#f1f5f9' };
+  function 今の伝票() { var r = window.FM現在; if (!r || !r.fields) return null; var f = r.fields; return { 番号: String(f['伝票番号'] || f['見積番号'] || ''), 見積番号: String(f['見積番号'] || ''), 伝票番号: String(f['伝票番号'] || ''), 案件ID: String(f['案件ID'] || ''), 前回: String(f['前回伝票番号'] || ($('f-lotno') || {}).value || '').trim() }; }
+  var 記録 = [], 前回ファイル = [], 読んでいる番号 = '';
+
+  // ---------------------------------------------------------------- 箱
+  function 箱() {
+    var b = $('km-box'); if (b) return b;
+    var 前 = document.querySelector('.panebox') || document.querySelector('.sect'); if (!前) return null;
+    b = document.createElement('div'); b.id = 'km-box';
+    b.innerHTML = '<div class="km-hd"><b>📒 案件の記録</b><span id="km-n" style="color:#64748b"></span><span style="margin-left:auto"></span>'
+      + '<button class="o" id="km-cmp-btn" title="原稿・FAX・発注書（PDF・写真）か文を AI が読み、入力した欄と並べて違うところを赤く出します">📄 紙・FAX と突き合わせ</button>'
+      + '<button class="p" id="km-add-btn">＋ 記録する（電話・口頭・FAX…）</button></div>'
+      + '<div class="km-form" id="km-form"><div class="r"><label>日付 <input type="date" id="km-d"></label><label>伝達方法 <select id="km-m">' + 方法一覧.map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></label>'
+      + '<label>相手 <input id="km-who" placeholder="先方の名前・部署" style="width:160px"></label><label title="翌年のリピートや、同じ案件の次の伝票を開いたときにも出します"><input type="checkbox" id="km-imp"> ★大事（翌年も出す）</label></div>'
+      + '<textarea id="km-t" placeholder="受けた内容（例: 4 種類ほど下のミシン目が無くなる。S-17・S-3・S-5・S-4）"></textarea>'
+      + '<div class="r" style="margin-top:6px"><label>添付 <input type="file" id="km-f" multiple></label><span style="color:#64748b;font-size:11.5px" id="km-store"></span><span style="margin-left:auto"></span><button id="km-cancel">やめる</button><button class="p" id="km-save">保存</button></div><input type="hidden" id="km-id"></div>'
+      + '<div id="km-list"></div>';
+    前.parentNode.insertBefore(b, 前);
+    $('km-add-btn').onclick = function () { フォームを開く(null); };
+    $('km-cancel').onclick = function () { $('km-form').style.display = 'none'; };
+    $('km-save').onclick = 保存;
+    $('km-cmp-btn').onclick = 突き合わせを開く;
+    return b;
+  }
+  function フォームを開く(r) {
+    var t = 今の伝票(); if (!t || !t.番号) { alert('先に伝票を開いてください'); return; }
+    $('km-form').style.display = 'block'; $('km-id').value = r ? r.id : ''; $('km-d').value = r ? r.日付 : 今日(); $('km-m').value = r ? r.方法 : '電話';
+    $('km-who').value = r ? r.相手 : ''; $('km-t').value = r ? r.内容 : ''; $('km-imp').checked = !!(r && r.大事); $('km-f').value = ''; $('km-t').focus();
+    呼('保管_状態', []).then(function (s) { $('km-store').textContent = '添付の保管先: ' + s.保管先; }).catch(function () {});
+  }
+  function ファイルを読む(f) { return new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result).split(',')[1] || ''); }; fr.onerror = rej; fr.readAsDataURL(f); }); }
+  function 添付を置く(番号, files, 区分) {
+    var out = []; return Array.prototype.reduce.call(files || [], function (p, f) { return p.then(function () { return ファイルを読む(f).then(function (b64) { return 呼('保管_置く', [番号, f.name, f.type || 'application/octet-stream', b64, 区分]); }).then(function (r) { if (r && r.file) out.push({ name: r.file.name, url: r.file.url, id: r.file.id }); }); }); }, Promise.resolve()).then(function () { return out; });
+  }
+  function 保存() {
+    var t = 今の伝票(); if (!t) return; var 元 = 記録.filter(function (x) { return x.id === $('km-id').value; })[0];
+    $('km-save').disabled = true; $('km-save').textContent = '保存中…';
+    添付を置く(t.番号, $('km-f').files, '記録').then(function (添) {
+      var 行 = { id: $('km-id').value, 伝票番号: t.番号, 案件ID: t.案件ID, 日付: $('km-d').value, 方法: $('km-m').value, 相手: $('km-who').value.trim(), 内容: $('km-t').value.trim(), 大事: $('km-imp').checked, 添付: ((元 && 元.添付) || []).concat(添) };
+      return 呼('記録_書く', [行]);
+    }).then(function () { $('km-form').style.display = 'none'; 読む(true); })
+      .catch(function (e) { alert('保存できませんでした: ' + String(e.message || e)); })
+      .then(function () { $('km-save').disabled = false; $('km-save').textContent = '保存'; });
+  }
+  function 描く() {
+    var b = 箱(); if (!b) return; var t = 今の伝票(); var L = $('km-list');
+    if (!t || !t.番号) { $('km-n').textContent = '（伝票を開くと出ます）'; L.innerHTML = ''; return; }
+    var 自分 = 記録.filter(function (x) { return x.伝票番号 === t.番号 || (t.見積番号 && x.伝票番号 === t.見積番号) || (t.伝票番号 && x.伝票番号 === t.伝票番号); });
+    var 前 = 記録.filter(function (x) { return 自分.indexOf(x) < 0; }).sort(function (a, b) { return (b.大事 - a.大事) || (a.日付 < b.日付 ? 1 : -1); });
+    $('km-n').textContent = 'この伝票 ' + 自分.length + ' 件' + (前.length ? '／前回・同じ案件 ' + 前.length + ' 件' : '');
+    var 行 = function (x, prev) {
+      return '<tr><td class="d">' + esc(x.日付) + '</td><td class="m"><span style="padding:1px 8px;border-radius:9px;background:' + (方法色[x.方法] || '#f1f5f9') + '">' + esc(x.方法) + '</span></td>'
+        + '<td>' + (x.大事 ? '<span class="star">★ </span>' : '') + (prev ? '<span class="tag prev">' + esc(x.伝票番号) + '</span> ' : '') + esc(x.内容).replace(/\n/g, '<br>')
+        + (x.添付 && x.添付.length ? '<div style="margin-top:2px">' + x.添付.map(function (a) { return '📎 <a href="' + esc(a.url) + '" target="_blank">' + esc(a.name) + '</a>'; }).join('　') + '</div>' : '') + '</td>'
+        + '<td style="white-space:nowrap;color:#64748b;width:150px">' + esc(x.相手 || '') + (x.受けた人 ? '<br><span style="font-size:11px">受: ' + esc(x.受けた人) + '</span>' : '') + '</td>'
+        + '<td style="white-space:nowrap;width:70px">' + (prev ? '' : '<button data-e="' + esc(x.id) + '">直す</button> <button data-x="' + esc(x.id) + '" title="記録を消す">✕</button>') + '</td></tr>';
+    };
+    var h = '';
+    if (自分.length) h += '<table>' + 自分.map(function (x) { return 行(x, false); }).join('') + '</table>';
+    else h += '<div style="padding:6px 10px;color:#94a3b8">この伝票の記録はまだありません。電話・口頭で受けた指示も「＋ 記録する」で残すと、次の担当者と翌年に引き継がれます。</div>';
+    if (前.length || 前回ファイル.length) {
+      h += '<div style="padding:6px 10px 2px;font-weight:700;color:#92400e;border-top:1px solid #f1e6bf">🔁 前回・同じ案件の記録（★大事 が先）</div>';
+      if (前.length) h += '<table>' + 前.slice(0, 30).map(function (x) { return 行(x, true); }).join('') + '</table>';
+      if (前回ファイル.length) h += '<div style="padding:4px 10px 8px">📁 前回のファイル: ' + 前回ファイル.slice(0, 12).map(function (a) { return '<a href="' + esc(a.url) + '" target="_blank">' + esc(a.name) + '</a>'; }).join('　') + '</div>';
+    }
+    L.innerHTML = h;
+    Array.prototype.forEach.call(L.querySelectorAll('button[data-e]'), function (bt) { bt.onclick = function () { フォームを開く(記録.filter(function (x) { return x.id === bt.getAttribute('data-e'); })[0]); }; });
+    Array.prototype.forEach.call(L.querySelectorAll('button[data-x]'), function (bt) { bt.onclick = function () { if (!confirm('この記録を消しますか？（記録の表には「消した」として残ります）')) return; 呼('記録_消す', [bt.getAttribute('data-x')]).then(function () { 読む(true); }); }; });
+  }
+  function 読む(強制) {
+    var t = 今の伝票(); 箱(); if (!t || !t.番号) { 記録 = []; 前回ファイル = []; 描く(); return; }
+    var key = t.番号 + '|' + t.案件ID + '|' + t.前回 + '|' + (window.FM履歴 || []).length; if (!強制 && key === 読んでいる番号) return; 読んでいる番号 = key;
+    var nos = [t.番号, t.伝票番号, t.見積番号, t.前回].filter(Boolean); (window.FM履歴 || []).forEach(function (h) { if (h && h.番号) nos.push(String(h.番号)); });
+    呼('記録_一覧', [nos, t.案件ID ? [t.案件ID] : []]).then(function (r) { 記録 = r.行 || []; 描く(); }).catch(function (e) { $('km-n').textContent = '記録を読めません: ' + String(e.message || e); });
+    前回ファイル = []; if (t.前回) 呼('保管_一覧', [t.前回]).then(function (r) { 前回ファイル = r.files || []; 描く(); }).catch(function () {});
+    描く();
+  }
+  window.addEventListener('fm-loaded', function () { 読む(true); });
+  window.addEventListener('fm-history', function () { 読む(false); });
+
+  // ---------------------------------------------------------------- 紙・FAX と突き合わせ
+  var AI_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec', AI_KEY = 'mitsumori-2024';
+  function AI(action, body) { var u = new URL(AI_URL); u.searchParams.set('action', action); u.searchParams.set('apiKey', AI_KEY);
+    return fetch(u.toString(), { method: 'POST', redirect: 'follow', body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.success) throw new Error((j && j.error) || '応答なし'); return String(j.text || j.reply || j.result || ''); }); }
+  var 項目 = ['得意先', 'ユーザー', '品名', '数量', '単位', '単価', '金額', '納期', 'サイズ', '色数', '用紙', '製本加工', '注意'];
+  var 指示 = '印刷会社に届いた原稿・FAX・発注書です。書いてある内容だけを、次の JSON 1 つで返してください（説明文は書かない。書いていない項目は空文字）。\n'
+    + '{"得意先":"","ユーザー":"","品名":"","数量":"","単位":"","単価":"","金額":"","納期":"YYYY-MM-DD","サイズ":"","色数":"","用紙":"","製本加工":"","注意":"","書き起こし":""}\n'
+    + '・数量・単価・金額は数字だけ（カンマなし）。色数は「4/0」「1/1」のように表/裏。サイズは「A4」か「210x297」。注意は手書きの指示や「ミシン目無し」など気を付けること。書き起こしは全文を簡潔に';
+  function pdfjs() { if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib); return new Promise(function (res, rej) { var s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'; s.onload = function () { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; res(window.pdfjsLib); }; s.onerror = function () { rej(new Error('PDF を読む部品を読み込めません')); }; document.head.appendChild(s); }); }
+  function 画像に(file) {
+    if (/pdf/i.test(file.type) || /\.pdf$/i.test(file.name)) return pdfjs().then(function (lib) { return file.arrayBuffer().then(function (buf) { return lib.getDocument({ data: buf }).promise; }); }).then(function (doc) {
+      var n = Math.min(doc.numPages, 4), ps = []; for (var i = 1; i <= n; i++) ps.push(doc.getPage(i).then(function (pg) { var vp = pg.getViewport({ scale: 1.6 }); var c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height; return pg.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise.then(function () { return c.toDataURL('image/jpeg', 0.85).split(',')[1]; }); }));
+      return Promise.all(ps); });
+    return new Promise(function (res) { var img = new Image(); img.onload = function () { var sc = Math.min(1, 2000 / Math.max(img.width, img.height)); var c = document.createElement('canvas'); c.width = img.width * sc; c.height = img.height * sc; c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); res([c.toDataURL('image/jpeg', 0.85).split(',')[1]]); }; img.src = URL.createObjectURL(file); });
+  }
+  function 読ませる(file, text) {
+    var p = file ? 画像に(file).then(function (imgs) { return AI('claudeVision', { images: imgs, prompt: 指示, maxTokens: 2500 }); }) : AI('claudeText', { prompt: 指示 + '\n\n文:\n' + String(text).slice(0, 8000), maxTokens: 2000 });
+    return p.then(function (t) { var a = t.indexOf('{'), b = t.lastIndexOf('}'); if (a < 0 || b < a) throw new Error('AI の返事を読めませんでした: ' + t.slice(0, 120)); return JSON.parse(t.slice(a, b + 1)); });
+  }
+  function 正(s) { return String(s == null ? '' : s).normalize('NFKC').toLowerCase().replace(/[\s　・,，、()（）「」\[\]_\-－ー〜~:：/／]/g, '').replace(/(株式会社|有限会社|合同会社|㈱|㈲|様|御中)/g, ''); }
+  function 数(s) { var m = String(s == null ? '' : s).normalize('NFKC').replace(/,/g, '').match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : null; }
+  function 値(id) { var el = $(id); return el ? String(el.value || '').trim() : ''; }
+  function 比べる(o) {
+    var rows = [], 印 = [];
+    var 足す = function (名, 紙, 入, ids, 判定) { 紙 = String(紙 == null ? '' : 紙).trim(); var st; if (!紙) st = '紙に無い'; else if (!String(入 || '').trim()) st = '入力なし'; else st = 判定 ? '同じ' : '違う'; rows.push({ 名: 名, 紙: 紙, 入: 入, st: st, ids: ids }); if (st === '違う' || st === '入力なし') 印 = 印.concat(ids); };
+    var 含む = function (a, b) { a = 正(a); b = 正(b); return !!a && !!b && (a.indexOf(b) >= 0 || b.indexOf(a) >= 0); };
+    var 等しい = function (a, b) { var x = 数(a), y = 数(b); return x != null && y != null && Math.abs(x - y) < 0.0001; };
+    var 得名 = 値('f-cust'); if (!得名 && 値('f-custcd')) { try { var cm = JSON.parse(localStorage.getItem('fm_master_得意先マスタ') || 'null'); var hit = cm && (cm.行 || []).filter(function (x) { return String(x['得意先コード']) === 値('f-custcd'); })[0]; if (hit) 得名 = String(hit['得意先名'] || ''); } catch (e) {} }
+    足す('得意先', o.得意先, 得名 ? 得名 + '（' + 値('f-custcd') + '）' : 値('f-custcd'), ['f-cust', 'f-custcd'], 含む(o.得意先, 得名));
+    足す('ユーザー', o.ユーザー, 値('f-user'), ['f-user'], 含む(o.ユーザー, 値('f-user')));
+    足す('品名', o.品名, 値('f-item'), ['f-item'], 含む(o.品名, 値('f-item')));
+    足す('数量', o.数量, [値('f-lotunit'), 値('f-lotset')].filter(Boolean).join(' ／ '), ['f-lotunit', 'f-lotset'], 等しい(o.数量, 値('f-lotunit')) || 等しい(o.数量, 値('f-lotset')));
+    足す('単位', o.単位, 値('f-unit'), ['f-unit'], 含む(o.単位, 値('f-unit')));
+    足す('単価', o.単価, 値('f-price'), ['f-price'], 等しい(o.単価, 値('f-price')));
+    var 金入 = 値('f-amt') || String(($('t-amt') || {}).textContent || '').replace(/[^\d.]/g, ''); 足す('金額', o.金額, 金入, ['f-price'], 等しい(o.金額, 金入));
+    var 納 = String(o.納期 || '').normalize('NFKC'); 足す('納期', 納, 値('f-due'), ['f-due'], !!納 && 値('f-due') === 納.slice(0, 10));
+    var w = 値('f-w'), h = 値('f-h'), fs = ($('f-fsize') && $('f-fsize').selectedIndex > 0) ? $('f-fsize').options[$('f-fsize').selectedIndex].text : '';
+    var szn = String(o.サイズ || '').normalize('NFKC').match(/(\d+)\D+(\d+)/); var 寸 = szn ? ((szn[1] === w && szn[2] === h) || (szn[1] === h && szn[2] === w)) : 含む(o.サイズ, fs);
+    足す('サイズ', o.サイズ, [fs, (w && h) ? w + '×' + h : ''].filter(Boolean).join(' '), ['f-fsize', 'f-w', 'f-h'], 寸);
+    var 色紙 = String(o.色数 || '').normalize('NFKC'), cm = 色紙.match(/(\d+)\s*\/\s*(\d+)/), 表 = 値('k1-iro1'), 裏 = 値('k1-iro2');
+    足す('色数（1 行目）', 色紙, (表 || 裏) ? (表 || '0') + '/' + (裏 || '0') : '', ['k1-iro1', 'k1-iro2'], cm ? (Number(cm[1]) === Number(表 || 0) && Number(cm[2]) === Number(裏 || 0)) : 等しい(色紙, 表));
+    足す('用紙（1 行目）', o.用紙, [値('p1-kind'), 値('p1-nm')].filter(Boolean).join(' '), ['p1-kind', 'p1-nm'], 含む(o.用紙, 値('p1-nm')) || 含む(o.用紙, 値('p1-kind')));
+    足す('製本加工', o.製本加工, 値('f-bind'), ['f-bind'], 正(o.製本加工).split(/[,、]/).every(function (x) { return !x || 正(値('f-bind')).indexOf(x) >= 0; }));
+    return { rows: rows, 印: 印 };
+  }
+  function 印を消す() { Array.prototype.forEach.call(document.querySelectorAll('.km-diff'), function (el) { el.classList.remove('km-diff'); }); }
+  function 突き合わせを開く() {
+    var t = 今の伝票(); if (!t || !t.番号) { alert('先に伝票を開いてください'); return; }
+    var old = $('km-cmp'); if (old) old.remove();
+    var d = document.createElement('div'); d.id = 'km-cmp';
+    d.innerHTML = '<div class="w"><div class="h"><b>📄 紙・FAX と突き合わせ（' + esc(t.番号) + '）</b><span style="font-size:11.5px;opacity:.85">原稿・FAX・発注書を AI が読み、いま入力してある欄と並べます。違う欄は画面でも赤枠になります</span><button id="kc-x" style="margin-left:auto;background:none;border:0;color:#fff;font-size:20px;cursor:pointer">×</button></div>'
+      + '<div style="padding:12px 16px"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><label>ファイル（PDF・写真） <input type="file" id="kc-f" accept=".pdf,image/*"></label><span style="color:#94a3b8">または</span>'
+      + '<textarea id="kc-t" placeholder="メールや FAX の文を貼る" style="flex:1;min-width:260px;height:52px;font:inherit"></textarea></div>'
+      + '<div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label><input type="checkbox" id="kc-keep" checked> 読んだ紙を「案件の記録」に残す（ファイルは保管先へ）</label><label>伝達方法 <select id="kc-m">' + 方法一覧.map(function (m) { return '<option' + (m === 'FAX' ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select></label>'
+      + '<span style="margin-left:auto"></span><button id="kc-go" style="background:#b45309;color:#fff;border:0;border-radius:6px;padding:6px 18px;font-weight:700;cursor:pointer">読んで突き合わせる</button></div>'
+      + '<div id="kc-st" style="margin-top:8px;color:#64748b"></div><div id="kc-out" style="margin-top:8px"></div></div></div>';
+    document.body.appendChild(d);
+    $('kc-x').onclick = function () { d.remove(); };
+    $('kc-go').onclick = function () {
+      var f = ($('kc-f').files || [])[0], tx = $('kc-t').value.trim(); if (!f && !tx) { $('kc-st').textContent = 'ファイルを選ぶか、文を貼ってください'; return; }
+      $('kc-go').disabled = true; $('kc-st').textContent = 'AI が読んでいます…（30 秒ほど）'; 印を消す();
+      読ませる(f, tx).then(function (o) {
+        var c = 比べる(o); c.印.forEach(function (id) { var el = $(id); if (el) { el.classList.add('km-diff'); el.title = '紙・FAX と違う／入っていません'; } });
+        var ng = c.rows.filter(function (r) { return r.st === '違う' || r.st === '入力なし'; }).length;
+        $('kc-out').innerHTML = '<div style="font-weight:700;margin-bottom:4px;color:' + (ng ? '#b91c1c' : '#166534') + '">' + (ng ? '⚠ ' + ng + ' 項目が違うか、入っていません' : '✓ 読めた項目はすべて入力と合っています') + '</div>'
+          + '<table><tr><th>項目</th><th>紙・FAX</th><th>入力</th><th>判定</th></tr>' + c.rows.map(function (r) { return '<tr class="' + (r.st === '同じ' ? 'ok' : (r.st === '紙に無い' ? '' : 'ng')) + '"><td>' + esc(r.名) + '</td><td>' + esc(r.紙) + '</td><td>' + esc(r.入) + '</td><td>' + (r.st === '同じ' ? '✓ 同じ' : r.st === '違う' ? '✗ 違う' : r.st === '入力なし' ? '− 入力なし' : '（紙に無い）') + '</td></tr>'; }).join('') + '</table>'
+          + (o.注意 ? '<div style="margin-top:8px;padding:6px 10px;background:#fffbeb;border-left:3px solid #d97706"><b>注意:</b> ' + esc(o.注意) + '</div>' : '')
+          + (o.書き起こし ? '<details style="margin-top:8px"><summary>書き起こし</summary><div style="white-space:pre-wrap;font-size:12px;color:#334155">' + esc(o.書き起こし) + '</div></details>' : '');
+        $('kc-st').textContent = '';
+        if ($('kc-keep').checked) {
+          $('kc-st').textContent = '案件の記録に残しています…';
+          (f ? 添付を置く(t.番号, [f], '原稿') : Promise.resolve([])).then(function (添) {
+            var 要 = 項目.filter(function (k) { return o[k]; }).map(function (k) { return k + ': ' + o[k]; }).join('\n');
+            return 呼('記録_書く', [{ 伝票番号: t.番号, 案件ID: t.案件ID, 日付: 今日(), 方法: $('kc-m').value, 内容: '【' + (f ? f.name : '貼り付けた文') + ' を AI が読んだ内容】\n' + 要 + (ng ? '\n（突き合わせで ' + ng + ' 項目が入力と違いました）' : ''), 大事: !!o.注意, 添付: 添 }]);
+          }).then(function () { $('kc-st').textContent = '案件の記録に残しました'; 読む(true); }).catch(function (e) { $('kc-st').textContent = '記録に残せませんでした: ' + String(e.message || e); });
+        }
+      }).catch(function (e) { $('kc-st').textContent = '読めませんでした: ' + String(e.message || e); }).then(function () { $('kc-go').disabled = false; });
+    };
+  }
+  window.突き合わせを開く = 突き合わせを開く;
+  function 始める() { 箱(); 描く(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 600); }); else setTimeout(始める, 600);
 })();
 </script>
 </body>

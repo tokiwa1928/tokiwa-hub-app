@@ -1341,6 +1341,12 @@ function handle_(action, req, who) {
     case 'マスタ_配る':       return マスタ_配る(req.layout);
     case '用紙_使用回数':     return 用紙_使用回数(req['作り直す'] === true || req['作り直す'] === 'true');   // PAPER-USE-1
     case 'ドライブ直下_調べる':   return ドライブ直下_調べる(req['以降']);   // ROOT-TIDY-1
+    case '記録_一覧':         return 記録_一覧(req['番号たち'], req['案件IDたち']);   // KIROKU-1
+    case '記録_書く':         return 記録_書く(req['行']);
+    case '記録_消す':         return 記録_消す(req.id);
+    case '保管_置く':         return 保管_置く(req['番号'], req['名'], req.mime, req.base64, req['区分']);   // STORE-1
+    case '保管_一覧':         return 保管_一覧(req['番号']);
+    case '保管_状態':         return 保管_状態();
     case 'ドライブ直下_片付ける': return ドライブ直下_片付ける(req['以降'], req['確認']);
     case 'マスタ_写す':       return マスタ_写す(req.layout);
     case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }
