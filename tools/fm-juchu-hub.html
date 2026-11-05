@@ -5739,9 +5739,9 @@ tr.pm-sum td{ background:#f8fafc; }
     小計の列.forEach(function (c) {
       if (小計セル[c[0]]) return; var el = $(c[0].replace('#', '1')); if (!el) return; var td = el.closest('td'), tr = td && td.closest('tr'), tb = tr && tr.closest('table'); if (!tb) return;
       var ft = tb.querySelector('tr.pm-sum');
-      if (!ft) { ft = document.createElement('tr'); ft.className = 'pm-sum'; Array.prototype.forEach.call(tr.children, function (x, k) { var c2 = document.createElement('td'); if (k === 0) { c2.textContent = '小計'; c2.style.cssText = 'font-weight:700;font-size:11px;text-align:center'; } ft.appendChild(c2); }); (tr.parentNode).appendChild(ft); }
+      if (!ft) { ft = document.createElement('tr'); ft.className = 'pm-sum'; Array.prototype.forEach.call(tr.children, function (x, k) { var c2 = document.createElement('td'); c2.className = x.className; c2.colSpan = x.colSpan || 1; if (getComputedStyle(x).display === 'none') c2.style.display = 'none'; if (k === 0) { c2.textContent = '小計'; c2.style.cssText = 'font-weight:700;font-size:11px;text-align:center'; } ft.appendChild(c2); }); (tr.parentNode).appendChild(ft); }
       var idx = Array.prototype.indexOf.call(tr.children, td); var cell = ft.children[idx]; if (!cell) return;
-      cell.style.cssText = 'text-align:right;font-weight:800;font-variant-numeric:tabular-nums;background:#f1f5f9;border-top:2px solid #334155;padding:2px 4px;white-space:nowrap'; 小計セル[c[0]] = cell;
+      cell.style.cssText = (cell.style.display === 'none' ? 'display:none;' : '') + 'text-align:right;font-weight:800;font-variant-numeric:tabular-nums;background:#f1f5f9;border-top:2px solid #334155;padding:2px 4px;white-space:nowrap'; 小計セル[c[0]] = cell;
     });
   }
   var 前回 = '';
@@ -5766,6 +5766,18 @@ tr.pm-sum td{ background:#f8fafc; }
       b.title = '1 行目の手配（仕入／在庫／外注・社内／部分外注、仕入先）を、出ている行すべてに写します';
       b.style.cssText = 'margin-left:6px;font-size:10.5px;padding:0 6px;border:1px solid #b45309;color:#b45309;background:#fff;border-radius:4px;cursor:pointer;vertical-align:middle';
       th.appendChild(b);
+      var bc = document.createElement('button'); bc.type = 'button'; bc.className = 'th-clr'; bc.textContent = '全部クリア';
+      bc.title = '出ている行の手配を、全部はじめの状態（一番上の選択肢・仕入先は空）に戻します';
+      bc.style.cssText = 'margin-left:4px;font-size:10.5px;padding:0 6px;border:1px solid #64748b;color:#475569;background:#fff;border-radius:4px;cursor:pointer;vertical-align:middle';
+      th.appendChild(bc);
+      bc.onclick = function (ev) {
+        ev.preventDefault(); ev.stopPropagation();
+        var tds = Array.prototype.filter.call(tb.querySelectorAll('td.tehai'), function (td) { return 見える(td.closest('tr')); }); var n = 0;
+        tds.forEach(function (td) { var s = td.querySelector('select'), w = td.querySelector('input.th-who');
+          if (s && s.options.length && s.selectedIndex !== 0) { s.selectedIndex = 0; s.dispatchEvent(new Event('change', { bubbles: true })); n++; }
+          if (w && w.value) { w.value = ''; w.dispatchEvent(new Event('input', { bubbles: true })); w.dispatchEvent(new Event('change', { bubbles: true })); n++; } });
+        bc.textContent = n ? 'クリアしました' : '空です'; setTimeout(function () { bc.textContent = '全部クリア'; }, 1500);
+      };
       b.onclick = function (ev) {
         ev.preventDefault(); ev.stopPropagation();
         var tds = Array.prototype.filter.call(tb.querySelectorAll('td.tehai'), function (td) { return 見える(td.closest('tr')); }); if (tds.length < 2) return;
@@ -5781,6 +5793,98 @@ tr.pm-sum td{ background:#f8fafc; }
   }
   function 始める() { 置く(); setInterval(置く, 2000); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', 始める); else setTimeout(始める, 0);
+})();
+</script>
+<style id="btm-tall">
+/* BTM-TALL（11/5「ナンバーから売価金額までの欄を、もう少し縦幅を大きく」） */
+.btm .row{ min-height:32px; margin:3px 0; align-items:center; }
+.btm .in, .btm input.in, .btm select.in{ height:28px !important; font-size:13px !important; }
+.btm .lb{ font-size:12px; }
+.btm .amt{ font-size:16px; padding:3px 10px; }
+#bind-pick{ position:absolute; z-index:9000; background:#fff; border:1px solid #94a3b8; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.18); padding:8px 10px; width:520px; font-size:12.5px; }
+#bind-pick label{ display:inline-flex; align-items:center; gap:3px; margin:2px 10px 2px 0; cursor:pointer; white-space:nowrap; }
+body.num-off .num-col{ display:none !important; }
+</style>
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function 打った(el) { try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} }
+
+  // ---------------------------------------------------------------- NUMBER-1: ナンバー 有／無 で、ナンバーの欄を出す・隠す
+  var NUMID = /^k\d-(nsh|nbn|nks|ncl)$/;
+  function ナンバーの欄に印() {
+    ['b-numdai', 'b-numto'].forEach(function (id) { var el = $(id); if (!el) return; el.classList.add('num-col'); var p = el.previousElementSibling; if (p && p.classList.contains('lb')) p.classList.add('num-col'); });
+    Array.prototype.forEach.call(document.querySelectorAll('table.g input[id]'), function (el) { if (NUMID.test(el.id)) { var td = el.closest('td'); if (td) td.classList.add('num-col'); } });
+    Array.prototype.forEach.call(document.querySelectorAll('table.g th'), function (th) { var t = th.textContent.replace(/\s/g, ''); if (t === 'ナンバーリング') th.classList.add('num-col'); });
+    var tb = $('k1-pc') && $('k1-pc').closest('table'); if (tb) { var hr = tb.querySelectorAll('tr')[1]; if (hr) Array.prototype.forEach.call(hr.children, function (th) { if (/^(種類|書体|桁数|色)$/.test(th.textContent.replace(/\s/g, ''))) th.classList.add('num-col'); }); }
+    // 小計の行も同じ位置を隠す
+    Array.prototype.forEach.call(document.querySelectorAll('tr.pm-sum'), function (ft) { var tb2 = ft.closest('table'); var r1 = tb2 && tb2.querySelector('tr.r-n'); if (!r1) return; Array.prototype.forEach.call(r1.children, function (td, i) { if (td.classList.contains('num-col') && ft.children[i]) ft.children[i].classList.add('num-col'); }); });
+  }
+  function ナンバーがある() { if ((($('b-numdai') || {}).value || '').trim() || (($('b-numto') || {}).value || '').trim()) return true; return Array.prototype.some.call(document.querySelectorAll('table.g input[id]'), function (el) { return NUMID.test(el.id) && String(el.value || '').trim(); }); }
+  function ナンバーを合わせる(v) { var s = $('f-num-yn'); if (s && v != null) s.value = v; document.body.classList.toggle('num-off', !s || s.value !== '有'); }
+  function ナンバーの選びを置く() {
+    if ($('f-num-yn')) return true; var row = $('kubun-row'); if (!row) return false;
+    row.insertAdjacentHTML('beforeend', '<span class="lb" style="margin-left:18px" title="有にすると、ナンバー台・至と印刷のナンバーリングの欄が出ます">ナンバー</span><select id="f-num-yn" class="in w4"><option>無</option><option>有</option></select>');
+    $('f-num-yn').addEventListener('change', function () { ナンバーを合わせる(); });
+    ナンバーの欄に印(); ナンバーを合わせる(ナンバーがある() ? '有' : '無'); return true;
+  }
+  var 前の番号 = null;
+  function 見張る() {
+    if (!ナンバーの選びを置く()) return; ナンバーの欄に印();
+    var no = (($('fm-no') || {}).value || '') + '|' + (($('f-denpyo') || {}).value || '');
+    if (no !== 前の番号) { 前の番号 = no; setTimeout(function () { ナンバーを合わせる(ナンバーがある() ? '有' : '無'); }, 600); }
+  }
+
+  // ---------------------------------------------------------------- BIND-1: 製本加工を選ぶ（Hub は選択、FileMaker には「,」でつないで入れる）
+  var 既定 = ['無線綴じ', '中綴じ', '平綴じ', 'スクラム製本', 'ブック製本', '天糊', '左糊', '背糊（天）', '二つ折り', '三つ折り', '巻き三つ折り', '断裁', 'バラ', '横ミシン1本', '横ミシン2本', '縦ミシン', '穴あけ', 'PP貼り', '表紙印刷無', '裏地券紙', 'マーブル巻', '帯巻き', '荷札加工', 'シュリンク', '結束', 'ナンバー入れ'];
+  function 選択肢() {
+    var o = 既定.slice(); try { (window.MASTER && MASTER['製本加工'] || []).forEach(function (v) { String(v).split(/[,、，]/).forEach(function (w) { w = w.trim(); if (w && o.indexOf(w) < 0) o.push(w); }); }); } catch (e) {}
+    return o;
+  }
+  function 今の値() { return String(($('f-bind') || {}).value || '').split(/[,、，]/).map(function (x) { return x.trim(); }).filter(Boolean); }
+  function 窓を開く(btn) {
+    var old = $('bind-pick'); if (old) { old.remove(); return; }
+    var cur = 今の値(), opts = 選択肢(); cur.forEach(function (v) { if (opts.indexOf(v) < 0) opts.push(v); });
+    var d = document.createElement('div'); d.id = 'bind-pick';
+    d.innerHTML = '<div style="font-weight:700;margin-bottom:4px">製本加工を選ぶ（FileMaker には「,」でつないで入ります）</div>' + opts.map(function (v) { return '<label><input type="checkbox" value="' + esc(v) + '"' + (cur.indexOf(v) >= 0 ? ' checked' : '') + '>' + esc(v) + '</label>'; }).join('')
+      + '<div style="margin-top:6px;display:flex;gap:6px"><input id="bind-other" placeholder="ほかの加工（入れて Enter）" style="flex:1;font:inherit;padding:2px 6px"><button type="button" id="bind-close" style="font:inherit;padding:2px 10px">閉じる</button></div>';
+    document.body.appendChild(d); var r = btn.getBoundingClientRect(); d.style.left = (window.scrollX + r.left) + 'px'; d.style.top = (window.scrollY + r.bottom + 4) + 'px';
+    var 反映 = function () { var vs = Array.prototype.filter.call(d.querySelectorAll('input[type=checkbox]'), function (c) { return c.checked; }).map(function (c) { return c.value; }); var el = $('f-bind'); el.value = vs.join(','); 打った(el); };
+    Array.prototype.forEach.call(d.querySelectorAll('input[type=checkbox]'), function (c) { c.onchange = 反映; });
+    $('bind-other').onkeydown = function (ev) { if (ev.key !== 'Enter') return; var v = this.value.trim(); if (!v) return; var lb = document.createElement('label'); lb.innerHTML = '<input type="checkbox" checked value="' + esc(v) + '">' + esc(v); this.parentNode.parentNode.insertBefore(lb, this.parentNode); lb.querySelector('input').onchange = 反映; this.value = ''; 反映(); };
+    $('bind-close').onclick = function () { d.remove(); };
+    setTimeout(function () { document.addEventListener('mousedown', function h(ev) { if (!d.contains(ev.target) && ev.target !== btn) { d.remove(); document.removeEventListener('mousedown', h); } }); }, 0);
+  }
+  function 製本の選びを置く() {
+    var el = $('f-bind'); if (!el || $('bind-btn')) return;
+    var b = document.createElement('button'); b.type = 'button'; b.id = 'bind-btn'; b.textContent = '選ぶ ▾'; b.title = '製本加工を一覧から選ぶ';
+    b.style.cssText = 'font:inherit;font-size:11.5px;padding:2px 8px;margin-left:4px;border:1px solid #64748b;background:#fff;border-radius:5px;cursor:pointer;flex:none';
+    b.onclick = function () { 窓を開く(b); };
+    var after = el._wrapv || el; after.parentNode.insertBefore(b, after.nextSibling);
+  }
+
+  function 始める() { 製本の選びを置く(); 見張る(); setInterval(見張る, 1000); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 300); }); else setTimeout(始める, 300);
+})();
+</script>
+<script>
+// TEHAI-LEFT-1（11/5「手配は一番左に。備考の幅は縮めてもいい」）: 用紙・印刷・加工の表で、手配の列を行番号のすぐ右へ。備考は 240px に
+(function () {
+  function 動かす() {
+    Array.prototype.forEach.call(document.querySelectorAll('table.g'), function (tb) {
+      if (!tb.querySelector('td.tehai')) return;
+      Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) {
+        var c = tr.querySelector(':scope > td.tehai'); if (c && tr.children[1] !== c && tr.children[0]) tr.insertBefore(c, tr.children[1]);
+      });
+      var hr = tb.querySelector('tr'); if (hr) { var th = Array.prototype.filter.call(hr.children, function (x) { return /^手配/.test(x.textContent.trim()); })[0]; if (th && hr.children[1] !== th) hr.insertBefore(th, hr.children[1]); if (th && !th.dataset.br) { th.dataset.br = '1'; var b1 = th.querySelector('.th-all'); if (b1) th.insertBefore(document.createElement('br'), b1); th.style.whiteSpace = 'normal'; th.style.lineHeight = '1.6'; } }
+      if (!tb.dataset.tl) { tb.dataset.tl = '1'; tb.style.width = 'auto'; tb.style.maxWidth = '100%'; }
+      Array.prototype.forEach.call(tb.querySelectorAll('th'), function (x) { if (x.textContent.replace(/\s/g, '') === '備考' && !x.dataset.w) { x.dataset.w = '1'; x.style.width = '240px'; } });
+      Array.prototype.forEach.call(tb.querySelectorAll('td input[id$="-bk"]'), function (el) { el.style.width = '100%'; var td = el.closest('td'); if (td && !td.dataset.w) { td.dataset.w = '1'; td.style.width = '240px'; td.style.maxWidth = '240px'; } });
+    });
+  }
+  function 始める() { 動かす(); setInterval(動かす, 1500); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 500); }); else setTimeout(始める, 500);
 })();
 </script>
 </body>
