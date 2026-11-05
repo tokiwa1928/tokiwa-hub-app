@@ -2526,8 +2526,10 @@ window.FM見た目 = function () {};
       else if (el.classList.contains('fm-locked')) { el.readOnly = (id === 'c-total'); el.classList.remove('fm-locked'); el.title = ''; } });
     var lb = $('f-price') && $('f-price').parentNode ? $('f-price').parentNode.querySelector('.lb') : null;
     if (lb) lb.textContent = k.partner ? '仕入単価(トキワ)' : '売価単価';
-    var sv = $('sp-save'); if (sv) { sv.disabled = k.tokiwa; sv.title = k.tokiwa ? '関連会社の売価は各社が入れます（トキワは見るだけ。本多・福永は変えられます）' : ''; }
-    var su = $('sp-unit'), sa = $('sp-amt'); [su, sa].forEach(function (el) { if (el) el.readOnly = k.tokiwa; });
+    // GRP-3（11/5）: 得意先が関連会社の伝票なら、トキワ印刷のアカウントからもその会社の売価を入れられる（関連会社の画面にも同じ値が出る）
+    var 相 = 相手会社(), 書けない = k.tokiwa && !相;
+    var sv = $('sp-save'); if (sv) { sv.disabled = 書けない; sv.title = 書けない ? '得意先が関連会社（アート・エス／北上／村山／ヤマウチ／津島／中尾 など）の伝票だけ入れられます' : ''; }
+    var su = $('sp-unit'), sa = $('sp-amt'); [su, sa].forEach(function (el) { if (el) el.readOnly = 書けない; });
   }
   window.FM金額の権限を適用 = 金額の権限を適用; window.FM権限 = 権限;   // 試験・他ページ用
   // 保存のとき、関連会社からはトキワの金額欄を送らない（念のため）
@@ -2562,27 +2564,38 @@ window.FM見た目 = function () {};
   }
   function 日時短(iso) { var d = new Date(iso); if (isNaN(d.getTime())) return String(iso); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
   $('rk-toggle').onclick = function () { var l = $('rk-list'); var open = l.style.display === 'none'; l.style.display = open ? 'block' : 'none'; $('rk-toggle').textContent = open ? '閉じる' : '全部見る'; };
+  // GRP-3: この伝票の得意先が関連会社なら、その会社の短い名前（村山・中尾…）
+  function 相手会社() { var cd = String(($('f-custcd') || {}).value || '').trim(); if (!cd) return ''; var hit = ''; Object.keys(会社の得意先コード).forEach(function (k) { if (会社の得意先コード[k] === cd) hit = k; }); return hit; }
+  function 自社の鍵() { var nm = 会社名(), hit = ''; Object.keys(会社の得意先コード).forEach(function (k) { if (nm.indexOf(k) >= 0) hit = k; }); return hit; }
+  var 先方の行名 = '';
   function 先方売価を読む(no, 済み) {
     $('sp-unit').value = ''; $('sp-amt').value = ''; $('sp-msg').textContent = ''; if ($('sp-all')) $('sp-all').innerHTML = '';
     var k = 権限();
-    if ($('sp-title')) $('sp-title').textContent = k.partner ? (k.会社 + ' の売価（お客様への金額）') : '関連会社の売価（各社が入れた、お客様への金額）';
+    var 相0 = 相手会社(); 先方の行名 = '';
+    if ($('sp-title')) $('sp-title').textContent = k.partner ? (k.会社 + ' の売価（お客様への金額）') : (相0 ? '参考：' + (String(($('f-cust') || {}).value || '').trim() || 相0) + ' の売価（関連会社からお客様への金額）' : '参考：関連会社の売価（お客様への金額）');
+    try { 金額の権限を適用(); } catch (e) {}
     (済み ? Promise.resolve(済み) : 呼ぶ('先方売価_読む', [no])).then(function (r) {   // FAST-2
       var 行 = r.行 || [];
       // GRP-2: 全社ぶんを表に（トキワは見るだけ。関連会社は自社の行を上の欄で直す）
       if ($('sp-all') && 行.length) $('sp-all').innerHTML = 行.map(function (x) { return '<span style="display:inline-block;margin-right:12px">' + esc(x.会社) + ': 単価 ' + esc(x.単価 === '' ? '—' : x.単価) + '／金額 ' + esc(x.金額 === '' ? '—' : 円(x.金額)) + (x.更新日 ? ' <span style="color:#94a3b8">' + esc(日時短(x.更新日)) + ' ' + esc(String(x.更新者 || '').split('@')[0]) + '</span>' : '') + '</span>'; }).join('');
-      if (!行.length) return; var my = 会社名(); var hit = 行.filter(function (x) { return my && String(x.会社) === my; })[0] || (k.partner ? null : 行[0]);
-      if (!hit) return;
+      if (!行.length) return; var 鍵 = k.partner ? 自社の鍵() : 相手会社(); var my = 会社名();
+      var 候補 = 行.filter(function (x) { var c = String(x.会社 || ''); return (鍵 && c.indexOf(鍵) >= 0) || (k.partner && my && c === my); }).sort(function (a, b) { return String(b.更新日 || '') < String(a.更新日 || '') ? -1 : 1; });
+      var hit = 候補[0] || (k.partner || 鍵 ? null : 行[0]);
+      if (!hit) return; 先方の行名 = String(hit.会社 || '');
       $('sp-unit').value = hit.単価 === '' ? '' : hit.単価; $('sp-amt').value = hit.金額 === '' ? '' : hit.金額;
       $('sp-msg').textContent = (hit.会社 ? hit.会社 + '　' : '') + (hit.更新日 ? 日時短(hit.更新日) + ' ' + String(hit.更新者 || '').split('@')[0] : '');
     }).catch(function () {});
   }
   $('sp-save').onclick = function () {
     if (!現在) { alert('先に伝票を開いてください'); return; }
-    var kk = 権限(); if (kk.tokiwa) { $('sp-msg').textContent = '関連会社の売価は各社が入れます（トキワは見るだけ）'; return; }
-    var no = String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || ''); var 会社 = 会社名() || 'トキワ印刷';
-    if (kk.super && !自社の得意先コード()) { var 候補 = Object.keys(会社の得意先コード).map(function (k) { return k; }); var pick = prompt('どの会社の売価として保存しますか？（' + 候補.join('・') + '）', 候補[0]); if (pick === null) return; 会社 = String(pick).trim() || 会社; }
+    var kk = 権限(); var 相 = 相手会社();
+    if (kk.tokiwa && !相) { $('sp-msg').textContent = '得意先が関連会社の伝票だけ入れられます'; return; }
+    var no = String(現在.fields['伝票番号'] || 現在.fields['見積番号'] || '');
+    // 同じ会社の行に上書きする（関連会社が入れた行の名前をそのまま使う）。無ければ関連会社は自社名、トキワは得意先名
+    var 会社 = 先方の行名 || (kk.partner ? 会社名() : (String(($('f-cust') || {}).value || '').trim() || 相)) || 'トキワ印刷';
+    if (kk.super && !自社の得意先コード() && !相) { var 候補 = Object.keys(会社の得意先コード).map(function (k) { return k; }); var pick = prompt('どの会社の売価として保存しますか？（' + 候補.join('・') + '）', 候補[0]); if (pick === null) return; 会社 = String(pick).trim() || 会社; }
     $('sp-msg').textContent = '保存中…';
-    呼ぶ('先方売価_書く', [no, 会社, $('sp-unit').value, $('sp-amt').value, '']).then(function () { $('sp-msg').textContent = '保存しました（' + 会社 + '）'; }).catch(function (e) { $('sp-msg').textContent = String(e.message || e); });
+    呼ぶ('先方売価_書く', [no, 会社, $('sp-unit').value, $('sp-amt').value, '']).then(function () { 先方の行名 = 会社; var 文 = '保存しました（' + 会社 + '）' + (kk.tokiwa ? '。' + 会社 + ' の画面にも同じ値が出ます' : '。トキワ印刷の画面にも参考として出ます'); 先方売価を読む(no); setTimeout(function () { $('sp-msg').textContent = 文; }, 900); }).catch(function (e) { $('sp-msg').textContent = String(e.message || e); });
   };
   // 得意先コード → 得意先名（得意先マスタ）。FileMaker の画面は名前欄がコードから引く作りなので、こちらも同じに
   function 得意先名を入れる() {
@@ -2594,7 +2607,7 @@ window.FM見た目 = function () {};
       else { box.value = ''; box.placeholder = 'コード ' + cd + ' はマスタにありません'; }
     }).catch(function () {});
   }
-  if ($('f-custcd')) { $('f-custcd').addEventListener('change', 得意先名を入れる); $('f-custcd').addEventListener('blur', 得意先名を入れる); }
+  if ($('f-custcd')) { $('f-custcd').addEventListener('change', 得意先名を入れる); $('f-custcd').addEventListener('blur', 得意先名を入れる); $('f-custcd').addEventListener('change', function () { try { 金額の権限を適用(); } catch (e) {} }); }
   // -------------------------------------------------- 💴 価格ガイド（FMHUB-16）
   var ガイド種 = null;   // 種にした前回伝票 { fields, 外注合計 }
   function 数値(v){ var x = Number(String(v == null ? '' : v).replace(/,/g, '')); return isNaN(x) ? 0 : x; }
