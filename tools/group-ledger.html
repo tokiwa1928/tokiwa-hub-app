@@ -129,6 +129,7 @@
   .quotebox{ background:#eef3f9; border:1px solid #d5e2f0; border-radius:10px; padding:9px 12px; margin-bottom:10px; position:relative; }
   /* ── 帳票 ── */
   #doc-print{ display:none; }
+  body.fit-measure .dsheet{ padding:16mm 15mm; box-sizing:border-box; }   /* FIT-1: 測るときも印刷と同じ余白 */
   .dsheet{ width:210mm; box-sizing:border-box; padding:16mm 15mm; background:#fff; color:#111; font-size:13px; }
   .dsheet .dtitle{ text-align:center; font-size:26px; font-weight:800; letter-spacing:.4em; margin:0 0 14px; }
   .dsheet .dhead{ display:flex; justify-content:space-between; align-items:flex-start; gap:20px; margin-bottom:14px; }
@@ -226,6 +227,7 @@
     body.printing-doc>*:not(#doc-print){ display:none !important; }
     html, body.printing-doc{ background:#fff !important; }   /* 画面の灰色背景が用紙下部に印刷されるのを防ぐ */
     #doc-print{ display:block !important; background:#fff; } .dsheet{ padding:16mm 15mm; }
+    .dsheet, .ns4, .nks{ break-inside:avoid; }
     @page{ size:A4 portrait; margin:0; }
   }
 </style>
@@ -236,7 +238,7 @@
 <body>
 <div class="wrap">
   <div class="pagehead">
-    <span class="mini" style="margin-left:auto">v223</span>
+    <span class="mini" style="margin-left:auto">v224</span>
   </div>
   <h1 style="margin-top:0">案件管理表</h1>
   <div class="sub">自社の管理表（スプレッドシート）を直接 追加・編集・削除。📤で他社に案件を送ると相手の管理表に同じ伝票番号で追加。希望納期＝各社の到着予定日。</div>
@@ -2380,6 +2382,7 @@ function printDoc(part){
   // ①②かつエージェント稼働中 → 無音印刷（ダイアログを開かない＝Chromeの最後のプリンタを汚さない）
   if(_which && _agentOk){
     _pmsg_('🖨 '+(_which==='trio'?'納品書3連':'請求書')+' を送信中…');
+    try{ body=_fitHtml_(body, !!_docState_.land); }catch(e){}   // FIT-1
     _agentPrint(_which, body, _docState_.land).then(function(j){
       _pmsg_('✅ '+(_which==='trio'?'納品書3連':'請求書')+' → '+(j.printer||'')+' に無音印刷しました');
       _logPrint_(_logType);
@@ -2391,11 +2394,36 @@ function printDoc(part){
   }
   _dialogPrint_(_html, _docFileName_(_logType)); _logPrint_(_logType);
 }
+// FIT-1（11/5「行数が多いと複数枚になる。1 枚にちゃんと収まるように」）: 印刷の前に 1 枚ずつの高さを測り、A4 に入らなければその 1 枚だけ縮める（下限 50%）
+function _fitSheets_(root, land){
+  var mm=3.7795, pageH=(land?210:297)*mm, pageW=(land?297:210)*mm;
+  var dp=root, saved=dp.getAttribute('style')||'';
+  dp.setAttribute('style','display:block !important;position:absolute;left:-20000px;top:0;width:'+pageW+'px;background:#fff');
+  document.body.classList.add('fit-measure');
+  try{
+    var cand=Array.prototype.slice.call(dp.querySelectorAll('.nks, .ns4, .dsheet, [data-sheet], div[style*="page-break-before:always"]'));
+    var sheets=cand.filter(function(x){ return !cand.some(function(y){ return y!==x && y.contains(x); }); });
+    if(!sheets.length) sheets=Array.prototype.slice.call(dp.children);
+    sheets.forEach(function(sh){
+      sh.style.zoom=''; var fixedH=sh.style.height; var cs=getComputedStyle(sh); var fixed=Math.abs(parseFloat(cs.height)-pageH)<4;
+      if(fixed){ sh.style.height='auto'; }
+      var h=sh.scrollHeight;
+      if(fixed) sh.style.height=fixedH;
+      if(h>pageH*0.985){ var lim=pageH*0.965, z=Math.max(0.45, Math.floor(lim/h*1000)/1000);
+        for(var k=0;k<5;k++){ sh.style.zoom=String(z); if(fixed) sh.style.height=(pageH/z)+'px'; var rh=sh.getBoundingClientRect().height; if(rh<=lim || z<=0.45) break; z=Math.max(0.45, Math.floor(z*lim/rh*1000)/1000); }
+        sh.setAttribute('data-fit',String(z)); }
+    });
+  } finally { document.body.classList.remove('fit-measure'); dp.setAttribute('style',saved); }
+}
+function _fitHtml_(html, land){
+  var dp=document.getElementById('doc-print'); var keep=dp.innerHTML; dp.innerHTML=html; _fitSheets_(dp, land); var out=dp.innerHTML; dp.innerHTML=keep; return out;
+}
 function _dialogPrint_(_html, _fname){
   // 納品書系(中尾様式)=A4横 / 請求書・領収書=A4縦（@pageを動的に切替）
   var os=document.getElementById('doc-orient'); if(!os){ os=document.createElement('style'); os.id='doc-orient'; document.head.appendChild(os); }
   os.textContent='@media print{ @page{ size:A4 '+(_docState_.land?'landscape':'portrait')+'; margin:0; } }';
   document.getElementById('doc-print').innerHTML=_docState_.land?_html:(_docState_.raw?_html:('<div class="dsheet">'+_html+'</div>'));
+  try{ _fitSheets_(document.getElementById('doc-print'), !!_docState_.land); }catch(e){ console.warn('[FIT]', e); }   // FIT-1
   document.body.classList.add('printing-doc');
   // ブラウザは「PDFに保存」の初期ファイル名にページのタイトルを使うので、
   // 印刷の間だけ 日付_宛名御中_品名_帳票名 に差し替える
