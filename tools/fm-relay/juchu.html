@@ -5084,7 +5084,8 @@ tr.pm-sum td{ background:#f8fafc; }
   function 円(n) { return '¥' + Math.round(n).toLocaleString(); }
 
   // ---------------------------------------------------------------- データ（用紙マスタ・単価の履歴・統合）
-  var 紙 = null, 履歴 = {}, 統合 = { 別から正: {}, 行: [] }, 読み中 = null;
+  var 紙 = null, 履歴 = {}, 統合 = { 別から正: {}, 行: [] }, 読み中 = null, 使用 = {};
+  function 回数(r) { return 使用[正規(r['品名']) + '|' + 正規(String(r['サイズ'] || '').split(/\r|\n/)[0])] || 0; }
   function 鍵(r) { return [正規(r['品名']), 正規(r['サイズ']), 正規(r['種類']), 正規(r['メーカー'])].join('|'); }
   function 同じ紙(r) { return [正規(r['品名']), 正規(r['厚さ']), 正規(r['サイズ'])].join('|'); }
   function 読む(強制) {
@@ -5094,7 +5095,8 @@ tr.pm-sum td{ background:#f8fafc; }
     var pm = (新しい && !強制) ? Promise.resolve(c) : 呼('マスタ_配る', ['用紙マスタ']).then(function (j) { var o = { at: Date.now(), 行: j.行 || [] }; try { localStorage.setItem('pm_用紙マスタ', JSON.stringify(o)); } catch (e) {} return o; });
     var ph = 呼('Hubマスタ_一覧', ['用紙単価履歴']).catch(function () { return { 行: [] }; });
     var pt = 呼('Hubマスタ_一覧', ['用紙統合']).catch(function () { return { 行: [] }; });
-    読み中 = Promise.all([pm, ph, pt]).then(function (a) {
+    var pu = (function () { try { var c = JSON.parse(localStorage.getItem('pm_用紙使用') || 'null'); if (c && c.数 && Date.now() - (c.at || 0) < 24 * 3600 * 1000) return Promise.resolve(c); } catch (e) {} return 呼('用紙_使用回数', [false]).then(function (j) { var o = { at: Date.now(), 数: j.数 || {} }; try { localStorage.setItem('pm_用紙使用', JSON.stringify(o)); } catch (e) {} return o; }).catch(function () { return { 数: {} }; }); })();   // PAPER-USE-1
+    読み中 = Promise.all([pm, ph, pt, pu]).then(function (a) { 使用 = (a[3] && a[3].数) || {};
       紙 = (a[0].行 || []).map(function (r) { r['サイズ'] = String(r['サイズ'] || '').split(/\r|\n/)[0]; return r; });
       履歴 = {}; (a[1].行 || []).forEach(function (h) { var k = 鍵(h); var t = String(h['日時'] || h.at || ''); if (!履歴[k] || 履歴[k].日時 < t) 履歴[k] = { 日時: t, 旧: h['旧単価'], 新: h['新単価'], 誰: h['誰が'] }; });
       統合 = { 別から正: {}, 行: a[2].行 || [] }; 統合.行.forEach(function (g) { (g['別'] || []).forEach(function (rid) { 統合.別から正[String(rid)] = String(g['正']); }); });
@@ -5122,7 +5124,7 @@ tr.pm-sum td{ background:#f8fafc; }
     var q = 正規(($('pm-q') || {}).value || ''), sz = 正規(($('p' + 行番 + '-sz') || {}).value || '');
     var list = (紙 || []).filter(function (r) { return !統合.別から正[String(r._recordId)]; });
     if (q) { var ws = String(($('pm-q') || {}).value || '').normalize('NFKC').toLowerCase().split(/[\s　]+/).filter(Boolean).map(正規); list = list.filter(function (r) { var h = 正規(r['品名'] + ' ' + r['種類'] + ' ' + r['メーカー']); return ws.every(function (w) { return h.indexOf(w) >= 0; }); }); }
-    list.sort(function (a, b) { var as = (sz && 正規(a['サイズ']) === sz) ? 0 : 1, bs = (sz && 正規(b['サイズ']) === sz) ? 0 : 1; if (as !== bs) return as - bs; return String(a['品名']).localeCompare(String(b['品名']), 'ja'); });
+    list.sort(function (a, b) { var as = (sz && 正規(a['サイズ']) === sz) ? 0 : 1, bs = (sz && 正規(b['サイズ']) === sz) ? 0 : 1; if (as !== bs) return as - bs; var ua = 回数(a), ub = 回数(b); if (ua !== ub) return ub - ua; return String(a['品名']).localeCompare(String(b['品名']), 'ja'); });   // よく使う紙が上
     return list;
   }
   function 重複(r) { var k = 同じ紙(r); return (紙 || []).filter(function (x) { return x !== r && !統合.別から正[String(x._recordId)] && 同じ紙(x) === k; }); }
@@ -5130,12 +5132,12 @@ tr.pm-sum td{ background:#f8fafc; }
     var b = $('pm-body'); if (!b || !紙) return;
     var list = 候補(), 出す = list.slice(0, 120);
     $('pm-st').textContent = list.length + ' 件' + (list.length > 120 ? '（先頭 120）' : '');
-    var h = '<table><thead><tr><th>種類</th><th>メーカー</th><th>品名</th><th>厚さ</th><th>サイズ</th><th style="text-align:right">単価</th><th>単価の確認日</th><th></th></tr></thead><tbody>';
+    var h = '<table><thead><tr><th>種類</th><th>メーカー</th><th>品名</th><th>厚さ</th><th>サイズ</th><th style="text-align:right">単価</th><th>単価の確認日</th><th style="text-align:right" title="過去 3 年の受注で使った回数">使用</th><th></th></tr></thead><tbody>';
     出す.forEach(function (r) {
       var d = 更新日(r), dup = 重複(r);
       var 古い = !d || (Date.now() - new Date(d).getTime() > 180 * 86400000);
       h += '<tr class="pm-r" data-id="' + esc(r._recordId) + '"><td>' + esc(r['種類']) + '</td><td>' + esc(r['メーカー'] === '情報無し' ? '' : r['メーカー']) + '</td><td><b>' + esc(r['品名']) + '</b></td><td>' + esc(r['厚さ'] === '情報無し' ? '' : r['厚さ']) + '</td><td>' + esc(r['サイズ']) + '</td>'
-        + '<td style="text-align:right" class="pm-edit">' + esc(r['単価']) + '</td><td class="' + (古い ? 'pm-old' : 'pm-new') + '">' + (d || 'まだ') + '</td>'
+        + '<td style="text-align:right" class="pm-edit">' + esc(r['単価']) + '</td><td class="' + (古い ? 'pm-old' : 'pm-new') + '">' + (d || 'まだ') + '</td><td style="text-align:right;color:#475569">' + (回数(r) || '') + '</td>'
         + '<td><button class="pm-ed" title="この紙の単価を直す（FileMaker の用紙マスタ。いつ・誰が・前の単価を記録）">✎ 単価</button>' + (dup.length ? ' <button class="pm-dup" title="同じ品名・厚さ・サイズの紙が ' + (dup.length + 1) + ' 件あります。1 つにまとめる">似た名前 ' + (dup.length + 1) + ' → 統合</button>' : '') + '</td></tr>';
     });
     b.innerHTML = h + '</tbody></table>' + (list.length ? '' : '<div style="padding:12px;color:#64748b">見つかりません（品名の一部で探してください）</div>');

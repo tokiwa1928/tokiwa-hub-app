@@ -1339,6 +1339,7 @@ function handle_(action, req, who) {
     case '用紙注文_保存':     return 用紙注文_保存(req.recordId, req.modId, req.fields);
     case '用紙注文_削除':     return 用紙注文_削除(req.recordId);
     case 'マスタ_配る':       return マスタ_配る(req.layout);
+    case '用紙_使用回数':     return 用紙_使用回数(req['作り直す'] === true || req['作り直す'] === 'true');   // PAPER-USE-1
     case 'マスタ_写す':       return マスタ_写す(req.layout);
     case '毎晩を登録':        { 写し_毎晩を登録(); return { ok: true }; }
     case '写し_毎晩':         return 写し_毎晩(req['以降']);

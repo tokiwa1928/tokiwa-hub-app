@@ -615,3 +615,31 @@ function 写し_差分(日付) {
   });
   return { ok: true, user: who.email, 列: 配る列, 行: out, 件数: out.length, 以降: d, 取った: new Date().toISOString() };
 }
+
+
+// PAPER-USE-1（11/5 本多さん「使用頻度がそれほど高くないものは、あとでまとめて」）: 用紙の使用回数（過去 3 年の受注の 品名1〜9 × サイズ1〜9）。
+//   年別の写しから数えて、保管庫に json で置く（1 日 1 回作り直す）。鍵は 品名|サイズ を正規化したもの
+function 用紙_使用回数_鍵_(品名, サイズ) { var n = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/[\s#＃・\-_\/／()（）\r\n]/g, ''); }; return n(品名) + '|' + n(String(サイズ || '').split(/\r|\n/)[0]); }
+function 用紙_使用回数(作り直す) {
+  var who = 画面_利用者_(); var 名 = '用紙_使用回数.json'; var fo = 写し_フォルダ_();
+  var it = fo.getFilesByName(名);
+  if (it.hasNext() && !作り直す) { var f0 = it.next(); var j0 = JSON.parse(f0.getBlob().getDataAsString('UTF-8')); if (Date.now() - new Date(j0.作った).getTime() < 24 * 3600 * 1000) { j0.ok = true; j0.user = who.email; return j0; } }
+  var y = new Date().getFullYear(), 数 = {}, 最終 = {}, 見た = 0;
+  [y - 2, y - 1, y].forEach(function (yy) {
+    var fit = fo.getFilesByName(写し.年別名 + yy); if (!fit.hasNext()) return;
+    var sh = SpreadsheetApp.open(fit.next()).getSheets()[0]; var last = sh.getLastRow(); if (last < 2) return;
+    var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+    var ci = function (c) { return head.indexOf(c); }; var 日c = ci('起票日');
+    var 日 = 日c >= 0 ? sh.getRange(2, 日c + 1, last - 1, 1).getValues() : null;
+    for (var i = 1; i <= 9; i++) {
+      var a = ci('品名' + i), b = ci('サイズ' + i); if (a < 0) continue;
+      var na = sh.getRange(2, a + 1, last - 1, 1).getValues(), sz = b >= 0 ? sh.getRange(2, b + 1, last - 1, 1).getValues() : null;
+      for (var r = 0; r < na.length; r++) { var nm = String(na[r][0] || '').trim(); if (!nm) continue; var k = 用紙_使用回数_鍵_(nm, sz ? sz[r][0] : ''); 数[k] = (数[k] || 0) + 1; 見た++;
+        var d = 日 ? 日[r][0] : ''; var ds = (d instanceof Date) ? Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM-dd') : (function (v) { var m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(String(v || '')); return m ? m[3] + '-' + m[1] + '-' + m[2] : ''; })(d);
+        if (ds && (!最終[k] || 最終[k] < ds)) 最終[k] = ds; }
+    }
+  });
+  var out = { 作った: new Date().toISOString(), 年: [y - 2, y - 1, y], 数: 数, 最終: 最終, 行数: 見た };
+  var js = JSON.stringify(out); var it2 = fo.getFilesByName(名); if (it2.hasNext()) it2.next().setContent(js); else fo.createFile(名, js, 'application/json');
+  out.ok = true; out.user = who.email; return out;
+}

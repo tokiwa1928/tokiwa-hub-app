@@ -74,7 +74,7 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function 
 function 文字が合う(hay, q) { var groups = String(q).normalize('NFKC').toLowerCase().split(/\s+(?:or|または)\s+|\s*[|｜]\s*/).map(function (g) { return g.split(/[\s　]+/).filter(Boolean); }).filter(function (g) { return g.length; }); if (!groups.length) return true; hay = String(hay).normalize('NFKC').toLowerCase(); return groups.some(function (g) { return g.every(function (t) { if (t.length > 1 && t.charAt(0) === '-') return hay.indexOf(t.slice(1)) < 0; return hay.indexOf(t) >= 0; }); }); }
 // 種類ごとの定義。FM = FileMaker のマスタ（読み込み → 直す → 反映）、Hub = 中継の保管庫だけ
 var 定義 = {
-  '用紙':   { FM: '用紙マスタ', 鍵: ['品名', '種類', 'メーカー'], 数: ['単価', '厚さ'], 履歴: '単価', 触らない: ['単価の確認日', '統合'], 送らない: ['単価の確認日', '統合'] },
+  '用紙':   { FM: '用紙マスタ', 鍵: ['品名', '種類', 'メーカー'], 数: ['単価', '厚さ'], 履歴: '単価', 触らない: ['単価の確認日', '統合', '使用回数(3年)', '最後に使った日'], 送らない: ['単価の確認日', '統合', '使用回数(3年)', '最後に使った日'] },
   '得意先': { FM: '得意先マスタ', 鍵: ['得意先コード', '得意先名'], 数: [], 触らない: ['得意先コード'] },
   '封筒':   { Hub: '封筒', 列: ['型', 'メーカー', '品名', '窓', '色', '仕入単価', '売単価', '有効日', '備考'], 数: ['仕入単価', '売単価'] },
   'ユーザー名': { Hub: 'ユーザー名', 列: ['得意先コード', '得意先名', 'ユーザー名', '読み', '備考'], 数: [] },
@@ -106,13 +106,15 @@ function 読む() {
   var p = d.FM ? FM.呼ぶ('マスタ_配る', [d.FM]).then(function (j) { 列 = []; (j.行 || []).forEach(function (r) { Object.keys(r).forEach(function (k) { if (k !== '_recordId' && 列.indexOf(k) < 0) 列.push(k); }); }); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r._recordId); return o; }); })
                   : FM.呼ぶ('Hubマスタ_一覧', [d.Hub]).then(function (j) { 列 = d.列.slice(); 行 = (j.行 || []).map(function (r) { var o = {}; 列.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]); }); o._id = String(r.id); return o; }); });
   // PAPERM-1: 用紙は「単価の確認日」「統合」を足す（受注入力で使いながら直した日。古い順・まだ に並べると、あとでまとめて直せる）
-  if (今 === '用紙') p = p.then(function () { return Promise.all([FM.呼ぶ('Hubマスタ_一覧', ['用紙単価履歴']).catch(function () { return { 行: [] }; }), FM.呼ぶ('Hubマスタ_一覧', ['用紙統合']).catch(function () { return { 行: [] }; })]).then(function (a) {
+  if (今 === '用紙') p = p.then(function () { return Promise.all([FM.呼ぶ('Hubマスタ_一覧', ['用紙単価履歴']).catch(function () { return { 行: [] }; }), FM.呼ぶ('Hubマスタ_一覧', ['用紙統合']).catch(function () { return { 行: [] }; }), FM.呼ぶ('用紙_使用回数', [false]).catch(function () { return { 数: {}, 最終: {} }; })]).then(function (a) {
     var n = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/[\s#＃・\-_\/／()（）\r\n]/g, ''); }; var 鍵 = function (r) { return [n(r['品名']), n(String(r['サイズ'] || '').split(/\r|\n/)[0]), n(r['種類']), n(r['メーカー'])].join('|'); };
     var h = {}; (a[0].行 || []).forEach(function (x) { var k = 鍵(x), t = String(x['日時'] || x.at || '').slice(0, 10); if (!h[k] || h[k] < t) h[k] = t; });
     var 統 = {}; (a[1].行 || []).forEach(function (g) { (g['別'] || []).forEach(function (rid) { 統[String(rid)] = '→ #' + g['正']; }); 統[String(g['正'])] = 統[String(g['正'])] || '正（' + (g['別'] || []).length + ' 件をまとめた）'; });
-    if (列.indexOf('単価の確認日') < 0) 列.push('単価の確認日'); if (列.indexOf('統合') < 0) 列.push('統合');
-    行.forEach(function (r) { r['単価の確認日'] = h[鍵(r)] || 'まだ'; r['統合'] = 統[r._id] || ''; });
-    行.sort(function (x, y) { var a1 = x['単価の確認日'] === 'まだ' ? '' : x['単価の確認日'], b1 = y['単価の確認日'] === 'まだ' ? '' : y['単価の確認日']; return a1 < b1 ? -1 : a1 > b1 ? 1 : 0; });
+    if (列.indexOf('単価の確認日') < 0) 列.push('単価の確認日'); if (列.indexOf('統合') < 0) 列.push('統合'); if (列.indexOf('使用回数(3年)') < 0) 列.push('使用回数(3年)'); if (列.indexOf('最後に使った日') < 0) 列.push('最後に使った日');
+    var 使 = a[2] || {}, 数 = 使.数 || {}, 終 = 使.最終 || {}; var uk = function (r) { return n(r['品名']) + '|' + n(String(r['サイズ'] || '').split(/\r|\n/)[0]); };
+    行.forEach(function (r) { r['単価の確認日'] = h[鍵(r)] || 'まだ'; r['統合'] = 統[r._id] || ''; r['使用回数(3年)'] = String(数[uk(r)] || 0); r['最後に使った日'] = 終[uk(r)] || ''; });
+    // 並び: 単価を確認していない紙 → 確認日の古い紙。同じなら使用回数の多い順（よく使う紙から直す。使わない紙はあとでまとめて）
+    行.sort(function (x, y) { var a1 = x['単価の確認日'] === 'まだ' ? '' : x['単価の確認日'], b1 = y['単価の確認日'] === 'まだ' ? '' : y['単価の確認日']; if (a1 !== b1) return a1 < b1 ? -1 : 1; return Number(y['使用回数(3年)']) - Number(x['使用回数(3年)']); });
   }); });
   return p.then(function () { 行.forEach(function (r) { 元[r._id] = JSON.stringify(r); }); 描く(); $('st').textContent = ''; }).catch(function (e) { $('out').textContent = String(e.message || e); });
 }
