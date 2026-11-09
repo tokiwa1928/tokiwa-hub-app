@@ -5014,6 +5014,16 @@ async function loadFromCloud() {
   if (Array.isArray(result.data.kaizen)) DB.kaizen = result.data.kaizen;
   if (Array.isArray(result.data.outsourceVendors)) DB.outsourceVendors = result.data.outsourceVendors; // 外注先マスタ
   if (Array.isArray(result.data.costRefMaster)) DB.costRefMaster = result.data.costRefMaster; // 参考原価マスタ(見積指針・別管理)
+  // PAPERID-1／GROUPBASE-1: ID 付き用紙マスタ・グループベース単価は id ごとに更新時刻の新しい方（ツール側の編集を先祖返りさせない）
+  ['paperMaster','groupBase'].forEach(function(k){
+    if (!Array.isArray(result.data[k])) return;
+    var _ts=function(r){ var t=r&&(r._updatedAt||r.updatedAt); var n=t?Date.parse(t):0; return isNaN(n)?0:n; };
+    var byId={}, order=[];
+    var take=function(r){ if(!r||!r.id) return; if(!(r.id in byId)){ order.push(r.id); byId[r.id]=r; } else if(_ts(r)>_ts(byId[r.id])){ byId[r.id]=r; } };
+    (Array.isArray(DB[k])?DB[k]:[]).forEach(take);
+    result.data[k].forEach(take);
+    DB[k]=order.map(function(id){ return byId[id]; });
+  });
   if (Array.isArray(result.data.stockCandidates)) DB.stockCandidates = result.data.stockCandidates; // リピート品(在庫品候補)
   // 経理系(2026-07-04 クラウド同期に追加: 端末間共有＋消失ガード対象)
   if (Array.isArray(result.data.invoices)) DB.invoices = result.data.invoices;
@@ -5563,6 +5573,8 @@ async function _saveToCloudNow_() {
     outsourceVendors: DB.outsourceVendors || [],
     costRefMaster: DB.costRefMaster || [],
     stockCandidates: DB.stockCandidates || [],
+    paperMaster: DB.paperMaster || [],   // PAPERID-1: ID 付き用紙マスタ（tools/paper-master.html）
+    groupBase: DB.groupBase || [],       // GROUPBASE-1: グループベース単価（tools/group-base.html）
     invoices: DB.invoices || [],
     receipts: DB.receipts || [],
     payments: _noArc_(DB.payments),
@@ -28180,6 +28192,12 @@ var TOOLS_REGISTRY = [
   { href: 'tools/keiri.html', icon: '💴', name: '経理仕訳 (JDL IBEX連携)',
     desc: 'JDL仕訳CSVを学習→摘要を打つと借方/貸方/税区を自動提案。請求書・通帳スキャンからAI下書き→承認。JDL形式CSV(Shift_JIS)でエクスポート＋どこまで出したか管理。',
     status: '試作', tag: '経理', companies: [] },
+  { href: 'tools/paper-master.html', icon: '🪪', name: '用紙マスタ（ID付き・表示名と旧名）',
+    desc: 'Hub が持つ用紙マスタの正。1 紙に動かない ID（P0001…）を振り、<b>名前の変更は Hub の表示名だけ</b>（旧名＝FileMaker の品名は残す）。FileMaker から全件を取り込み（用紙統合・使用回数つき）、表示名・単価・統合先・別名をセルで直して履歴に残す。「FileMaker に反映」は 単価・厚さ だけを旧名のまま流し、名前は送らない。グループベース単価の用紙の行はこの ID に紐づく（PAPERID-1）',
+    status: '試作', tag: '見積', cat: 'マスタ', companies: [], place: 'master' },
+  { href: 'tools/group-base.html', icon: '📐', name: 'グループベース単価（4 社共通の基準単価）',
+    desc: '見積の基準単価を 4 社で統一。村山印刷の見積計算書（2025 年以降）の項目別集計を叩き台に、用紙・封筒・印刷・版・製版・加工・製本・利益率の各項目を シート別タブで見て、<b>採用値をセルで直接記入</b>（履歴つき）。有効単価＝採用値（無ければ叩き台）。最新単価が有効単価より高い行は赤で印（値上がりの見落とし防止）。用紙の行は用紙マスタの ID に紐づけ。xlsx → tools/group-base-import.py → JSON 取込、JSON 書出。FileMaker には書かない（GROUPBASE-1）',
+    status: '試作', tag: '見積', cat: 'マスタ', companies: [], place: 'master' },
   { href: 'tools/tanka-master.html', icon: '📚', name: '単価マスタ構築 (ロータス対応・独立保存)',
     desc: '過去見積 (Excel・ロータス1-2-3) を取込→品名・仕様・単価を自動抽出 (文字化け自動修復)→前回単価ありきで蓄積・確定。村山印刷データ基準。Hubとは分離保存・一括移管ボタンあり。',
     status: '試作', tag: '見積', companies: [], place: 'master' },
