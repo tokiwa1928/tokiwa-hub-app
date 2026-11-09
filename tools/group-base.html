@@ -439,14 +439,23 @@ function 描く() {
 }
 window.render = 描く;   // 共有ヘルパーの自動同期が呼ぶ
 function 行の(inp) { var tr = inp.closest('tr'); var id = tr && tr.getAttribute('data-id'); return 行.filter(function (x) { return x.id === id; })[0]; }
-// 用紙 ID の候補: 用紙マスタの fmName・name・別名の部分一致（正の紙を先に、使用回数の多い順）
+// 用紙 ID の候補: 用紙マスタの fmName・name・別名・サイズ・厚さ の部分一致。
+//   表記違い（「上質70K」「上質<70K>A版4切」「上質紙 <70> 8切」）でも同じ紙が出るように、項目名を 名前の語・数字＋単位の語 に分けて、合う語の多い紙から並べる
 var 候補窓 = null;
 function 候補を閉じる() { if (候補窓) { 候補窓.remove(); 候補窓 = null; } }
+function 語に分ける(s) { return (String(s == null ? '' : s).normalize('NFKC').toLowerCase().replace(/[<>（）()\[\]【】,、，\/／・\-_]/g, ' ').match(/[a-z]+\d+(?:\.\d+)?[a-z]*|\d+(?:\.\d+)?[a-z]*|[a-z]+|[^\sa-z0-9]+/g) || []).filter(function (t) { return !/^([a-z]|k|g|kg|判|版|切|メン|面|紙|g\/m2)$/.test(t); }); }
+function 紙の文字(p) { return [p.id, p.fmName, p.name, p.size, p.weight, p.kind, p.maker].concat(p.aliases || []).join(' ').normalize('NFKC').toLowerCase().replace(/[\s<>（）()\[\]【】,、，\/／・\-_]/g, ''); }
 function 候補を出す(inp) {
   候補を閉じる(); var q = inp.value.trim(); var r = 行の(inp); var all = PaperRef.一覧(true); if (!all.length) return;
-  var 語 = q ? q.normalize('NFKC').toLowerCase().split(/[\s　]+/).filter(Boolean) : (r && r.item ? String(r.item).normalize('NFKC').toLowerCase().replace(/[()（）\[\]【】]/g, ' ').split(/[\s　\/／,]+/).filter(function (t) { return t.length >= 2; }).slice(0, 3) : []);
-  var 合う = function (p) { var hay = [p.id, p.fmName, p.name, p.size, p.weight, p.kind, p.maker].concat(p.aliases || []).join(' ').normalize('NFKC').toLowerCase(); if (!語.length) return true; return q ? 語.every(function (t) { return hay.indexOf(t) >= 0; }) : 語.some(function (t) { return hay.indexOf(t) >= 0; }); };
-  var c = all.filter(function (p) { return p.active !== false && 合う(p); }).sort(function (a, b) { return (a.mergedInto ? 1 : 0) - (b.mergedInto ? 1 : 0) || (Number(b.useCount) || 0) - (Number(a.useCount) || 0); }).slice(0, 30);
+  var 語 = 語に分ける(q || (r && r.item) || '');
+  var 名 = 語.filter(function (t) { return /^[^\d]/.test(t) && t.length >= 2; });   // 紙の名前らしい語（数字で始まらない 2 文字以上）
+  var 点 = function (hay) { var s = 0; 語.forEach(function (t) { if (hay.indexOf(t) >= 0) s += (/^\d/.test(t) ? 1 : 2); }); return s; };
+  var c = [];
+  all.forEach(function (p) { if (p.active === false) return; var hay = 紙の文字(p);
+    var 合う = !語.length || (q ? 語.every(function (t) { return hay.indexOf(t) >= 0; }) : (名.length ? 名 : 語).some(function (t) { return hay.indexOf(t) >= 0; }));
+    if (合う) c.push({ p: p, s: 点(hay) }); });
+  c.sort(function (a, b) { return b.s - a.s || (a.p.mergedInto ? 1 : 0) - (b.p.mergedInto ? 1 : 0) || (Number(b.p.useCount) || 0) - (Number(a.p.useCount) || 0); });
+  c = c.slice(0, 30).map(function (x) { return x.p; });
   if (!c.length) return;
   候補窓 = document.createElement('div'); 候補窓.className = 'cand';
   候補窓.innerHTML = c.map(function (p) { return '<div data-id="' + esc(p.id) + '"><b>' + esc(p.id) + '</b>' + esc(p.name || p.fmName) + (p.name && p.name !== p.fmName ? ' <small>旧 ' + esc(p.fmName) + '</small>' : '') + ' <small>' + esc([p.size, p.weight, p.kind, p.maker].filter(Boolean).join(' ')) + (p.useCount ? ' ・' + p.useCount + ' 回' : '') + (p.mergedInto ? ' ・→ ' + esc(p.mergedInto) : '') + '</small></div>'; }).join('');
