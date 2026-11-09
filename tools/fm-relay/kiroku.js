@@ -63,6 +63,20 @@ function 保管_一覧(番号) {
   if (保管_先_() === 'box') { var r = Box_一覧_(String(番号)); r.ok = true; r.user = who.email; r.保管先 = 'Box'; return r; }
   var d = 仕様書_一覧(番号); d.保管先 = 'Google ドライブ'; return d;
 }
+/** 保管したファイルの中身を取る（内校画面が PDF を描くため）。保管先が box なら Box、それ以外は Drive の id */
+function 保管_取る(id, 保管先) {
+  var who = 画面_利用者_(); if (!id) throw new Error('id が要ります');
+  var 先 = String(保管先 || 保管_先_()).toLowerCase();
+  if (先 === 'box') {
+    var meta = Box_呼ぶ_('get', '/files/' + id + '?fields=name,size'); if (meta.code !== 200) throw new Error('Box のファイルを読めません (' + meta.code + ')');
+    if ((meta.j.size || 0) > 30 * 1024 * 1024) throw new Error('30MB を超えています');
+    var res = UrlFetchApp.fetch('https://api.box.com/2.0/files/' + id + '/content', { method: 'get', muteHttpExceptions: true, followRedirects: true, headers: { Authorization: 'Bearer ' + Box_トークン_() } });
+    if (res.getResponseCode() !== 200) throw new Error('Box から取れません (' + res.getResponseCode() + ')');
+    var b = res.getBlob(); return { ok: true, user: who.email, name: meta.j.name, mime: b.getContentType() || 'application/octet-stream', base64: Utilities.base64Encode(b.getBytes()), 保管先: 'Box' };
+  }
+  var f = DriveApp.getFileById(String(id)); if (f.getSize() > 30 * 1024 * 1024) throw new Error('30MB を超えています');
+  var bl = f.getBlob(); return { ok: true, user: who.email, name: f.getName(), mime: bl.getContentType() || f.getMimeType(), base64: Utilities.base64Encode(bl.getBytes()), 保管先: 'Google ドライブ' };
+}
 function 保管_状態() {
   var who = 画面_利用者_(); var p = PropertiesService.getScriptProperties();
   var box = { 鍵: !!(p.getProperty('BOX_CLIENT_ID') && p.getProperty('BOX_CLIENT_SECRET') && p.getProperty('BOX_ENTERPRISE_ID')), 親フォルダ: p.getProperty('BOX_ROOT_FOLDER_ID') || '' };
