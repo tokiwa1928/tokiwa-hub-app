@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>内校</title>
+<!-- NAIKO-1（11/9 本多さん「前回と今回の比較、お客さんの指示、今回の成果物を一度に一画面で比較できる内校画面」）
+     左上=前回の校正、右上=今回の校正（ページ・倍率は連動）、右=お客様の指示（FAX・メール・記録）と AI の反映チェック、下=差分（赤）とテキストの違い。
+     ファイルの出どころ: ①Hub の校正BOX のカード（parent.DB.proofings、Drive）②保管先（Box／Drive、伝票番号）③画面に落としたファイル -->
+<style>
+  :root{ --ink:#1f2937; --sub:#64748b; --line:#e2e8f0; --bg:#eef1f5; --acc:#0f766e; --warn:#b45309; --ng:#b91c1c; --ok:#166534; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--ink); font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif; font-size:13px; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  header{ background:#1f2937; color:#fff; padding:6px 12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  header b{ font-size:14px; }
+  header select, header input{ font:inherit; font-size:12px; padding:3px 6px; border-radius:5px; border:1px solid #475569; background:#fff; color:#111; max-width:260px; }
+  header .sp{ margin-left:auto; }
+  button{ font:inherit; font-size:12px; padding:4px 10px; border-radius:6px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; white-space:nowrap; }
+  button.p{ background:var(--acc); color:#fff; border-color:var(--acc); font-weight:700; }
+  button.w{ background:var(--warn); color:#fff; border-color:var(--warn); font-weight:700; }
+  button.on{ background:#1f2937; color:#fff; border-color:#1f2937; }
+  button:disabled{ opacity:.45; cursor:default; }
+  #main{ flex:1; display:grid; grid-template-columns:1fr 1fr 360px; grid-template-rows:auto 1fr 1fr; gap:6px; padding:6px; min-height:0; }
+  .pane{ background:#fff; border:1px solid var(--line); border-radius:8px; display:flex; flex-direction:column; min-height:0; min-width:0; }
+  .pane .h{ padding:4px 8px; border-bottom:1px solid var(--line); display:flex; gap:6px; align-items:center; font-weight:700; font-size:12px; background:#f8fafc; border-radius:8px 8px 0 0; }
+  .pane .h .s{ font-weight:400; color:var(--sub); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .pane .b{ flex:1; overflow:auto; position:relative; }
+  .pane .b canvas{ display:block; margin:0 auto; box-shadow:0 0 0 1px #e5e7eb; }
+  .drop{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:13px; text-align:center; padding:12px; pointer-events:none; }
+  .pane.over{ outline:3px dashed var(--warn); outline-offset:-3px; }
+  #toolbar{ grid-column:1 / 4; display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:4px 8px; background:#fff; border:1px solid var(--line); border-radius:8px; }
+  #toolbar .g{ display:flex; gap:4px; align-items:center; }
+  #toolbar .g span{ color:var(--sub); font-size:11.5px; }
+  #prev{ grid-column:1; grid-row:2; } #cur{ grid-column:2; grid-row:2; } #inst{ grid-column:3; grid-row:2 / 4; } #diff{ grid-column:1 / 3; grid-row:3; }
+  #inst .b{ padding:8px; font-size:12.5px; }
+  .ins{ border:1px solid #fde68a; background:#fffbeb; border-radius:6px; padding:6px 8px; margin-bottom:6px; }
+  .ins .m{ font-size:11px; color:#92400e; margin-bottom:2px; }
+  .ins img{ max-width:100%; display:block; margin-top:4px; border:1px solid #e5e7eb; cursor:zoom-in; }
+  .ins pre{ margin:0; white-space:pre-wrap; font:inherit; }
+  .chk{ border-top:2px solid #e2e8f0; margin-top:10px; padding-top:8px; }
+  .chk table{ border-collapse:collapse; width:100%; font-size:12px; }
+  .chk td{ border-top:1px solid #f1f5f9; padding:4px 4px; vertical-align:top; }
+  .chk td.j{ white-space:nowrap; font-weight:700; width:64px; }
+  .j.ok{ color:var(--ok); } .j.ng{ color:var(--ng); } .j.un{ color:var(--warn); }
+  .chk .pg{ color:#2563eb; cursor:pointer; text-decoration:underline; font-size:11px; }
+  #tdiff{ font-size:12px; line-height:1.7; padding:8px; white-space:pre-wrap; word-break:break-all; }
+  #tdiff del{ background:#fecaca; color:#7f1d1d; text-decoration:line-through; } #tdiff ins{ background:#bbf7d0; color:#14532d; text-decoration:none; }
+  #st{ color:#cbd5e1; font-size:11.5px; }
+  #decide{ display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  #decide textarea{ width:100%; height:48px; font:inherit; font-size:12px; margin-bottom:6px; }
+  #big{ position:fixed; inset:0; background:rgba(0,0,0,.8); display:none; align-items:center; justify-content:center; z-index:50; cursor:zoom-out; }
+  #big img{ max-width:96vw; max-height:96vh; }
+  @media (max-width:1100px){ #main{ grid-template-columns:1fr 1fr; grid-template-rows:auto 1fr 1fr auto; } #inst{ grid-column:1 / 3; grid-row:4; max-height:40vh; } #toolbar{ grid-column:1 / 3; } }
+</style>
+</head>
+<body>
+<header>
+  <b>🧐 内校</b><span id="ttl" style="opacity:.85"></span>
+  <label>前回 <select id="sel-prev"><option value="">（ファイルを落とす）</option></select></label>
+  <label>今回 <select id="sel-cur"><option value="">（ファイルを落とす）</option></select></label>
+  <span id="st"></span>
+  <span class="sp"></span>
+  <span id="signin"></span>
+  <button id="close" style="background:none;border:0;color:#fff;font-size:20px;line-height:1" title="閉じる">×</button>
+</header>
+<div id="main">
+  <div id="toolbar">
+    <div class="g"><button id="pg-prev">◀</button><span id="pg-n">ページ − / −</span><button id="pg-next">▶</button></div>
+    <div class="g"><span>倍率</span><button data-z="-">−</button><span id="zoom-n">100%</span><button data-z="+">＋</button><button id="fit">幅に合わせる</button></div>
+    <div class="g"><span>下の表示</span><button class="md on" data-m="diff">赤で差分</button><button class="md" data-m="onion">重ねる</button><input type="range" id="onion" min="0" max="100" value="50" style="width:90px;display:none"><button class="md" data-m="text">文字の違い</button></div>
+    <div class="g"><label><input type="checkbox" id="sync" checked> 上の 2 枚のスクロールを連動</label></div>
+    <span class="sp" style="margin-left:auto"></span>
+    <button id="ai" class="w">🤖 指示が反映されたか AI に確認</button>
+  </div>
+  <div class="pane" id="prev"><div class="h">前回<span class="s" id="prev-nm"></span><button data-slot="prev" class="pick">ファイル</button></div><div class="b"><div class="drop">前回の校正（PDF・画像）をここに落とす</div></div></div>
+  <div class="pane" id="cur"><div class="h">今回<span class="s" id="cur-nm"></span><button data-slot="cur" class="pick">ファイル</button></div><div class="b"><div class="drop">今回の校正（PDF・画像）をここに落とす</div></div></div>
+  <div class="pane" id="inst"><div class="h">お客様の指示<span class="s" id="inst-n"></span><button data-slot="inst" class="pick">追加</button></div><div class="b"><div id="inst-list"><div style="color:#94a3b8">指示（FAX・メール・写真・文）をここに落とすか、校正BOX の戻りと案件の記録から自動で出ます</div></div>
+    <div class="chk" id="chk" style="display:none"></div>
+    <div id="decide"><textarea id="memo" placeholder="内校のメモ（直すところ、気づいたこと）"></textarea><button class="p" id="ok">✅ 内校 OK（お客様へ出せる）</button><button class="w" id="ng">↩ 直しあり（制作へ戻す）</button><span id="dst" style="font-size:11.5px;color:var(--sub);align-self:center"></span></div>
+  </div></div>
+  <div class="pane" id="diff"><div class="h">前回 → 今回の違い<span class="s" id="diff-n"></span></div><div class="b"><canvas id="dcv"></canvas><div id="tdiff" style="display:none"></div></div></div>
+</div>
+<div id="big"><img id="big-img" alt=""></div>
+<input type="file" id="fpick" accept=".pdf,image/*" multiple style="display:none">
+<script src="fm-bridge.js"></script>
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function 呼(n, a) { var f = window.FM呼ぶ || (window.FM && window.FM.呼ぶ); return f ? f(n, a) : Promise.reject(new Error('中継がありません')); }
+  var Q = new URLSearchParams(location.search), P = null; try { if (window.parent !== window && window.parent.DB) P = window.parent; } catch (e) {}
+  var HUB_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec', HUB_KEY = 'mitsumori-2024';
+  function hub(action, body) { if (P && typeof P.callCloudAPI === 'function') return P.callCloudAPI(action, {}, body); var u = new URL(HUB_URL); u.searchParams.set('action', action); u.searchParams.set('apiKey', HUB_KEY); return fetch(u.toString(), { method: 'POST', redirect: 'follow', body: JSON.stringify(body) }).then(function (r) { return r.json(); }); }
+  try { FM.サインインのボタンを置く($('signin')); } catch (e) {}
+  function st(t) { $('st').textContent = t || ''; }
+
+  // ---------------------------------------------------------------- ファイル → ページの絵
+  function pdfjs() { if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib); return new Promise(function (res, rej) { var s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'; s.onload = function () { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; res(window.pdfjsLib); }; s.onerror = function () { rej(new Error('PDF を読む部品を読み込めません')); }; document.head.appendChild(s); }); }
+  function b64u8(b64) { var bin = atob(b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+  /** doc = { 種:'pdf'|'img', pdf, img, n, name } */
+  function 開く(name, mime, bytesOrBlob) {
+    var isPdf = /pdf/i.test(mime || '') || /\.pdf$/i.test(name || '');
+    if (isPdf) return pdfjs().then(function (lib) { var data = bytesOrBlob instanceof Blob ? bytesOrBlob.arrayBuffer() : Promise.resolve(bytesOrBlob); return data.then(function (d) { return lib.getDocument({ data: d }).promise; }); }).then(function (pdf) { return { 種: 'pdf', pdf: pdf, n: pdf.numPages, name: name, text: {} }; });
+    return new Promise(function (res, rej) { var img = new Image(); img.onload = function () { res({ 種: 'img', img: img, n: 1, name: name, text: {} }); }; img.onerror = function () { rej(new Error('画像を開けません: ' + name)); }; img.src = bytesOrBlob instanceof Blob ? URL.createObjectURL(bytesOrBlob) : URL.createObjectURL(new Blob([bytesOrBlob], { type: mime || 'image/png' })); });
+  }
+  function 描く(doc, page, scale) {
+    if (!doc) return Promise.resolve(null);
+    if (doc.種 === 'img') { var c = document.createElement('canvas'); c.width = Math.round(doc.img.width * scale); c.height = Math.round(doc.img.height * scale); c.getContext('2d').drawImage(doc.img, 0, 0, c.width, c.height); return Promise.resolve(c); }
+    if (page > doc.n) return Promise.resolve(null);
+    return doc.pdf.getPage(page).then(function (pg) { var vp = pg.getViewport({ scale: scale * 1.5 }); var c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height); return pg.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise.then(function () { return c; }); });
+  }
+  function 文字(doc, page) {
+    if (!doc || doc.種 !== 'pdf' || page > doc.n) return Promise.resolve('');
+    if (doc.text[page] != null) return Promise.resolve(doc.text[page]);
+    return doc.pdf.getPage(page).then(function (pg) { return pg.getTextContent(); }).then(function (tc) { var t = tc.items.map(function (i) { return i.str + (i.hasEOL ? '\n' : ''); }).join(''); doc.text[page] = t; return t; });
+  }
+  function 幅(doc, page) { if (!doc) return Promise.resolve(800); if (doc.種 === 'img') return Promise.resolve(doc.img.width); return doc.pdf.getPage(Math.min(page, doc.n)).then(function (pg) { return pg.getViewport({ scale: 1.5 }).width; }); }
+
+  // ---------------------------------------------------------------- 状態
+  var S = { prev: null, cur: null, page: 1, zoom: 1, mode: 'diff', inst: [], card: null, no: Q.get('no') || '', files: [] };
+  function 最大() { return Math.max(S.prev ? S.prev.n : 0, S.cur ? S.cur.n : 0, 1); }
+  function 載せる(slot, doc) {
+    S[slot] = doc; $(slot + '-nm').textContent = doc ? doc.name + '（' + doc.n + ' ページ）' : '';
+    var b = document.querySelector('#' + slot + ' .b'); b.innerHTML = ''; if (!doc) b.innerHTML = '<div class="drop">ここに落とす</div>';
+    if (S.page > 最大()) S.page = 1; 描き直す();
+  }
+  var 描き中 = false, 待ち = false;
+  function 描き直す() {
+    if (描き中) { 待ち = true; return; } 描き中 = true;
+    var pg = S.page, z = S.zoom;
+    Promise.all([描く(S.prev, pg, z), 描く(S.cur, pg, z)]).then(function (cs) {
+      ['prev', 'cur'].forEach(function (slot, i) { var b = document.querySelector('#' + slot + ' .b'); if (!S[slot]) return; b.innerHTML = ''; if (cs[i]) b.appendChild(cs[i]); else b.innerHTML = '<div class="drop">このページはありません</div>'; });
+      $('pg-n').textContent = 'ページ ' + pg + ' / ' + 最大(); $('zoom-n').textContent = Math.round(z * 100) + '%';
+      return 差分(cs[0], cs[1]);
+    }).catch(function (e) { st('描けません: ' + String(e.message || e)); }).then(function () { 描き中 = false; if (待ち) { 待ち = false; 描き直す(); } });
+  }
+  function 差分(a, b) {
+    var cv = $('dcv'), td = $('tdiff');
+    if (S.mode === 'text') { cv.style.display = 'none'; td.style.display = 'block'; return 文字差分(); }
+    cv.style.display = 'block'; td.style.display = 'none';
+    if (!a && !b) { cv.width = 10; cv.height = 10; $('diff-n').textContent = ''; return; }
+    var W = Math.max(a ? a.width : 0, b ? b.width : 0), H = Math.max(a ? a.height : 0, b ? b.height : 0);
+    function norm(c) { var n = document.createElement('canvas'); n.width = W; n.height = H; var x = n.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); if (c) x.drawImage(c, 0, 0); return n; }
+    var A = norm(a), B = norm(b); cv.width = W; cv.height = H; var x = cv.getContext('2d');
+    if (S.mode === 'onion') { var al = (parseFloat($('onion').value) || 50) / 100; x.drawImage(A, 0, 0); x.globalAlpha = al; x.drawImage(B, 0, 0); x.globalAlpha = 1; $('diff-n').textContent = '前回の上に今回を重ねています（スライダーで透け具合）'; return; }
+    var da = A.getContext('2d').getImageData(0, 0, W, H).data, ib = B.getContext('2d').getImageData(0, 0, W, H), db = ib.data, ch = 0;
+    for (var i = 0; i < da.length; i += 4) { var d = Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]); if (d > 60) { ch++; db[i] = 255; db[i + 1] = 40; db[i + 2] = 40; db[i + 3] = 230; } else { db[i] = 255 - ((255 - db[i]) * 0.35 | 0); db[i + 1] = 255 - ((255 - db[i + 1]) * 0.35 | 0); db[i + 2] = 255 - ((255 - db[i + 2]) * 0.35 | 0); } }
+    x.putImageData(ib, 0, 0); var pct = Math.round(ch / (W * H) * 1000) / 10;
+    $('diff-n').textContent = (!a || !b) ? '片側にこのページがありません' : ('変わった所を赤く（' + pct + '%）' + (pct === 0 ? '　→ このページは同じです' : ''));
+  }
+  function 文字差分() {
+    return Promise.all([文字(S.prev, S.page), 文字(S.cur, S.page)]).then(function (t) {
+      var td = $('tdiff'); if (!t[0] && !t[1]) { td.innerHTML = '<span style="color:#94a3b8">このページから文字を取り出せません（画像の PDF か、画像ファイル）。AI の確認を使ってください</span>'; return; }
+      var A = t[0].split(/(\s+|(?=[、。，．])|(?<=[、。，．]))/).filter(Boolean), B = t[1].split(/(\s+|(?=[、。，．])|(?<=[、。，．]))/).filter(Boolean);
+      if (A.length * B.length > 4e6) { td.textContent = '文字が多すぎて比べられません（AI の確認を使ってください）'; return; }
+      var n = A.length, m = B.length, L = new Int32Array((n + 1) * (m + 1));
+      for (var i = n - 1; i >= 0; i--) for (var j = m - 1; j >= 0; j--) L[i * (m + 1) + j] = A[i] === B[j] ? L[(i + 1) * (m + 1) + j + 1] + 1 : Math.max(L[(i + 1) * (m + 1) + j], L[i * (m + 1) + j + 1]);
+      var h = '', i2 = 0, j2 = 0, ch = 0;
+      while (i2 < n && j2 < m) { if (A[i2] === B[j2]) { h += esc(A[i2]); i2++; j2++; } else if (L[(i2 + 1) * (m + 1) + j2] >= L[i2 * (m + 1) + j2 + 1]) { h += '<del>' + esc(A[i2]) + '</del>'; i2++; ch++; } else { h += '<ins>' + esc(B[j2]) + '</ins>'; j2++; ch++; } }
+      while (i2 < n) { h += '<del>' + esc(A[i2++]) + '</del>'; ch++; } while (j2 < m) { h += '<ins>' + esc(B[j2++]) + '</ins>'; ch++; }
+      td.innerHTML = h; $('diff-n').textContent = ch ? '文字の違い ' + ch + ' か所（赤＝前回だけ、緑＝今回だけ）' : '文字は同じです';
+    });
+  }
+
+  // ---------------------------------------------------------------- 操作
+  $('pg-prev').onclick = function () { if (S.page > 1) { S.page--; 描き直す(); } };
+  $('pg-next').onclick = function () { if (S.page < 最大()) { S.page++; 描き直す(); } };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-z]'), function (b) { b.onclick = function () { S.zoom = Math.max(0.3, Math.min(4, S.zoom * (b.getAttribute('data-z') === '+' ? 1.25 : 0.8))); 描き直す(); }; });
+  $('fit').onclick = function () { var w = document.querySelector('#cur .b').clientWidth - 8; 幅(S.cur || S.prev, S.page).then(function (pw) { S.zoom = Math.max(0.2, w / pw); 描き直す(); }); };
+  Array.prototype.forEach.call(document.querySelectorAll('.md'), function (b) { b.onclick = function () { S.mode = b.getAttribute('data-m'); Array.prototype.forEach.call(document.querySelectorAll('.md'), function (x) { x.classList.toggle('on', x === b); }); $('onion').style.display = S.mode === 'onion' ? 'inline-block' : 'none'; 描き直す(); }; });
+  $('onion').oninput = function () { 描き直す(); };
+  var 連動中 = false; ['prev', 'cur'].forEach(function (slot) { var b = document.querySelector('#' + slot + ' .b'); b.addEventListener('scroll', function () { if (!$('sync').checked || 連動中) return; 連動中 = true; var o = document.querySelector('#' + (slot === 'prev' ? 'cur' : 'prev') + ' .b'); o.scrollTop = b.scrollTop; o.scrollLeft = b.scrollLeft; setTimeout(function () { 連動中 = false; }, 0); }); });
+  document.addEventListener('keydown', function (e) { if (/INPUT|TEXTAREA|SELECT/.test((e.target || {}).tagName)) return; if (e.key === 'ArrowRight') $('pg-next').click(); if (e.key === 'ArrowLeft') $('pg-prev').click(); });
+  $('close').onclick = function () { if (P && typeof P._naikoClose_ === 'function') P._naikoClose_(); else if (history.length > 1) history.back(); else window.close(); };
+  $('big').onclick = function () { $('big').style.display = 'none'; };
+  // 落とす・選ぶ
+  var 選ぶ先 = null;
+  Array.prototype.forEach.call(document.querySelectorAll('.pick'), function (b) { b.onclick = function () { 選ぶ先 = b.getAttribute('data-slot'); $('fpick').multiple = 選ぶ先 === 'inst'; $('fpick').value = ''; $('fpick').click(); }; });
+  $('fpick').onchange = function () { Array.prototype.forEach.call($('fpick').files, function (f) { ファイルを入れる(選ぶ先, f); }); };
+  ['prev', 'cur', 'inst'].forEach(function (slot) { var p = $(slot);
+    p.addEventListener('dragover', function (e) { e.preventDefault(); p.classList.add('over'); }); p.addEventListener('dragleave', function () { p.classList.remove('over'); });
+    p.addEventListener('drop', function (e) { e.preventDefault(); p.classList.remove('over'); Array.prototype.forEach.call(e.dataTransfer.files, function (f, i) { if (slot !== 'inst' && i > 0) return; ファイルを入れる(slot, f); }); }); });
+  document.addEventListener('paste', function (e) { var it = Array.prototype.filter.call((e.clipboardData && e.clipboardData.items) || [], function (x) { return x.kind === 'file'; })[0]; if (!it) return; var f = it.getAsFile(); if (f) ファイルを入れる('inst', new File([f], '貼り付け.' + (f.type.split('/')[1] || 'png'), { type: f.type })); });
+  function ファイルを入れる(slot, f) {
+    if (slot === 'inst') { if (/image/.test(f.type)) { var u = URL.createObjectURL(f); 指示を足す({ 元: 'ファイル', 日: '', 題: f.name, 画像: u, b64: f }); } else if (/pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) { 開く(f.name, f.type, f).then(function (d) { return 描く(d, 1, 0.8); }).then(function (c) { 指示を足す({ 元: 'ファイル', 日: '', 題: f.name, 画像: c.toDataURL('image/jpeg', 0.85) }); }); } else { f.text().then(function (t) { 指示を足す({ 元: 'ファイル', 日: '', 題: f.name, 文: t.slice(0, 4000) }); }); } return; }
+    st(f.name + ' を開いています…'); 開く(f.name, f.type, f).then(function (d) { 載せる(slot, d); st(''); S.files.push({ slot: slot, file: f }); }).catch(function (e) { st(String(e.message || e)); });
+  }
+  function 指示を足す(x) { S.inst.push(x); 指示を描く(); }
+  function 指示を描く() {
+    var L = $('inst-list'); $('inst-n').textContent = S.inst.length ? S.inst.length + ' 件' : '';
+    if (!S.inst.length) { L.innerHTML = '<div style="color:#94a3b8">指示（FAX・メール・写真・文）をここに落とすか、校正BOX の戻りと案件の記録から自動で出ます</div>'; return; }
+    L.innerHTML = S.inst.map(function (x, i) { return '<div class="ins"><div class="m">' + esc(x.元) + (x.日 ? '　' + esc(x.日) : '') + (x.題 ? '　' + esc(x.題) : '') + '<button data-del="' + i + '" style="float:right;padding:0 6px;font-size:11px">✕</button></div>' + (x.文 ? '<pre>' + esc(x.文) + '</pre>' : '') + (x.画像 ? '<img src="' + esc(x.画像) + '" alt="">' : '') + '</div>'; }).join('');
+    Array.prototype.forEach.call(L.querySelectorAll('[data-del]'), function (b) { b.onclick = function () { S.inst.splice(Number(b.getAttribute('data-del')), 1); 指示を描く(); }; });
+    Array.prototype.forEach.call(L.querySelectorAll('img'), function (im) { im.onclick = function () { $('big-img').src = im.src; $('big').style.display = 'flex'; }; });
+  }
+
+  // ---------------------------------------------------------------- 出どころ: 校正BOX のカード（Hub の中）／保管先（伝票番号）
+  function 画像化(bytes, name, mime) { return 開く(name, mime, bytes).then(function (d) { return 描く(d, 1, 0.8); }).then(function (c) { return c.toDataURL('image/jpeg', 0.85); }); }
+  function Driveから(fileId) { return hub('getDriveFileBase64', { fileId: fileId }).then(function (r) { if (!r || !r.success) throw new Error((r && r.error) || 'Drive から取れません'); return { name: r.name || '', mime: r.mime || '', bytes: b64u8(r.base64 || r.data || '') }; }); }
+  function 保管から(id, 先) { return 呼('保管_取る', [id, 先 || '']).then(function (r) { return { name: r.name, mime: r.mime, bytes: b64u8(r.base64) }; }); }
+  var 候補 = [];   // {id, label, 取る:fn}
+  function 候補を出す() {
+    ['sel-prev', 'sel-cur'].forEach(function (id) { var s = $(id); s.innerHTML = '<option value="">（ファイルを落とす）</option>' + 候補.map(function (c, i) { return '<option value="' + i + '">' + esc(c.label) + '</option>'; }).join(''); s.onchange = function () { var c = 候補[Number(s.value)]; if (!c) return; st(c.label + ' を取っています…'); c.取る().then(function (f) { return 開く(f.name || c.label, f.mime, f.bytes); }).then(function (d) { 載せる(id === 'sel-prev' ? 'prev' : 'cur', d); st(''); }).catch(function (e) { st(String(e.message || e)); }); }; });
+    if (候補.length >= 2) { $('sel-prev').value = String(候補.length - 2); $('sel-cur').value = String(候補.length - 1); $('sel-prev').onchange(); $('sel-cur').onchange(); }
+    else if (候補.length === 1) { $('sel-cur').value = '0'; $('sel-cur').onchange(); }
+  }
+  function カードから() {
+    var pid = Q.get('proof'); if (!P || !pid) return false;
+    var card = (P.DB.proofings || []).filter(function (x) { return x.id === pid; })[0]; if (!card) return false; S.card = card; S.no = S.no || card.fmNo || card.slipNo || card.denpyo || '';
+    $('ttl').textContent = (card.custName || '') + '　' + (card.prodName || '');
+    var vs = card.versions || [];
+    vs.forEach(function (v, i) {
+      if (!v || v.mailPdf) return;
+      if (v.kind === 'instruction') { if (v.feedback) 指示を足す({ 元: '校正BOX の戻り', 日: (v.uploadedAt || '').slice(0, 10), 題: '', 文: v.feedback }); if (v.driveFileId && v.fileName !== '返信') Driveから(v.driveFileId).then(function (f) { return 画像化(f.bytes, f.name, f.mime); }).then(function (u) { 指示を足す({ 元: '校正BOX の戻り', 日: (v.uploadedAt || '').slice(0, 10), 題: v.fileName, 画像: u }); }).catch(function () {}); return; }
+      if (v.driveFileId) 候補.push({ id: v.id, label: '第' + (v.round || (i + 1)) + '校' + (v.subVersion > 1 ? '-' + v.subVersion : '') + ' ' + (v.fileName || ''), 取る: function () { return Driveから(v.driveFileId); } });
+    });
+    候補を出す(); return true;
+  }
+  function 保管先から() {
+    if (!S.no) return; $('ttl').textContent = $('ttl').textContent || S.no;
+    呼('保管_一覧', [S.no]).then(function (r) {
+      var 先 = /box/i.test(r.保管先 || '') ? 'box' : 'drive';
+      (r.files || []).slice().reverse().forEach(function (f) { if (/^\[(原稿|FAX|記録|指示)\]/.test(f.name)) { 保管から(f.id, 先).then(function (x) { return /image|pdf/i.test(x.mime) || /\.(pdf|jpe?g|png)$/i.test(x.name) ? 画像化(x.bytes, x.name, x.mime) : null; }).then(function (u) { if (u) 指示を足す({ 元: '保管先（' + (r.保管先 || '') + '）', 日: (f.at || '').slice(0, 10), 題: f.name, 画像: u }); }).catch(function () {}); return; }
+        if (/\.pdf$/i.test(f.name)) 候補.push({ id: f.id, label: f.name, at: f.at || '', 取る: function () { return 保管から(f.id, 先); } }); });
+      候補.sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; });   // 古い→新しい（前回＝新しいほうから 2 つ目、今回＝一番新しい）
+      if (!S.card) 候補を出す();
+    }).catch(function (e) { st('保管先を読めません: ' + String(e.message || e)); });
+    呼('記録_一覧', [[S.no], []]).then(function (r) { (r.行 || []).filter(function (x) { return !x.消; }).forEach(function (x) { 指示を足す({ 元: '案件の記録（' + x.方法 + (x.相手 ? '・' + x.相手 : '') + '）', 日: x.日付, 題: '', 文: x.内容 }); }); }).catch(function () {});
+  }
+
+  // ---------------------------------------------------------------- AI: 指示が反映されたか
+  function 全ページ絵(doc, max) { var ps = []; for (var p = 1; p <= Math.min(doc ? doc.n : 0, max); p++) ps.push(描く(doc, p, 0.6).then(function (c) { return c.toDataURL('image/jpeg', 0.8).split(',')[1]; })); return Promise.all(ps); }
+  function dataURLをb64に(u) { if (!u) return Promise.resolve(null); if (/^data:/.test(u)) return Promise.resolve(u.split(',')[1]); return fetch(u).then(function (r) { return r.blob(); }).then(function (b) { return new Promise(function (res) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result).split(',')[1]); }; fr.readAsDataURL(b); }); }); }
+  var 結果 = null;
+  $('ai').onclick = function () {
+    if (!S.cur) { alert('今回の校正を入れてください'); return; }
+    $('ai').disabled = true; st('AI が前回・今回・指示を見比べています…（30〜60 秒）');
+    var 指示文 = S.inst.filter(function (x) { return x.文; }).map(function (x, i) { return '[' + x.元 + (x.日 ? ' ' + x.日 : '') + ']\n' + x.文; }).join('\n\n');
+    Promise.all([全ページ絵(S.prev, 2), 全ページ絵(S.cur, 3), Promise.all(S.inst.filter(function (x) { return x.画像; }).slice(0, 3).map(function (x) { return dataURLをb64に(x.画像); }))]).then(function (r) {
+      var imgs = [], 説明 = [];
+      r[0].forEach(function (b, i) { imgs.push(b); 説明.push('画像' + imgs.length + ': 前回の校正 ' + (i + 1) + 'ページ目'); });
+      r[1].forEach(function (b, i) { imgs.push(b); 説明.push('画像' + imgs.length + ': 今回の校正 ' + (i + 1) + 'ページ目'); });
+      r[2].forEach(function (b, i) { if (b) { imgs.push(b); 説明.push('画像' + imgs.length + ': お客様の指示（FAX・手書き・メール）'); } });
+      var prompt = '印刷会社の内校（お客様に出す前の社内チェック）です。添付の画像は次のとおりです。\n' + 説明.join('\n') + (指示文 ? '\n\nお客様の指示（文）:\n' + 指示文 : '')
+        + '\n\n次を JSON 1 つだけで返してください（説明文は書かない）。\n{"指示":[{"指示":"お客様の指示を 1 つずつ短く","判定":"反映|未反映|不明","場所":"今回の何ページ目のどこ","補足":""}],"他の変更":["指示に無いのに前回から変わった所"],"気になる点":["誤字・日付・電話番号・価格の不一致など、お客様に出す前に見るべき所"],"総合":"OK|要確認"}\n'
+        + '・指示が画像にしか無い場合は、画像から指示を読み取って列挙する。・判定は今回の校正の絵を見て決める。見えない・判断できないときは「不明」。・気になる点は根拠がある所だけ。';
+      return hub('claudeVision', { prompt: prompt, images: imgs.slice(0, 8), maxTokens: 3000 });
+    }).then(function (j) {
+      if (!j || !j.success) throw new Error((j && j.error) || 'AI から返事がありません'); var t = String(j.text || j.reply || j.result || ''); var a = t.indexOf('{'), b = t.lastIndexOf('}'); if (a < 0) throw new Error('AI の返事を読めません: ' + t.slice(0, 100));
+      結果 = JSON.parse(t.slice(a, b + 1)); 結果を描く(); st('');
+    }).catch(function (e) { st('AI の確認に失敗: ' + String(e.message || e)); }).then(function () { $('ai').disabled = false; });
+  };
+  function 結果を描く() {
+    var c = $('chk'); if (!結果) { c.style.display = 'none'; return; } c.style.display = 'block';
+    var rows = (結果.指示 || []).map(function (x, i) { var cls = x.判定 === '反映' ? 'ok' : x.判定 === '未反映' ? 'ng' : 'un'; var pg = String(x.場所 || '').match(/(\d+)\s*ページ/); return '<tr><td><input type="checkbox" data-i="' + i + '"' + (x.判定 === '反映' ? ' checked' : '') + ' title="自分の目で確かめたらチェック"></td><td>' + esc(x.指示) + (x.補足 ? '<div style="color:#64748b;font-size:11px">' + esc(x.補足) + '</div>' : '') + '</td><td class="j ' + cls + '">' + (x.判定 === '反映' ? '✓ 反映' : x.判定 === '未反映' ? '✗ 未反映' : '? 不明') + '</td><td>' + (pg ? '<span class="pg" data-pg="' + pg[1] + '">' + esc(x.場所) + '</span>' : esc(x.場所 || '')) + '</td></tr>'; }).join('');
+    c.innerHTML = '<div style="font-weight:700;margin-bottom:4px;color:' + (結果.総合 === 'OK' ? 'var(--ok)' : 'var(--ng)') + '">🤖 AI の見立て: ' + esc(結果.総合 || '') + '　<span style="font-weight:400;color:#64748b;font-size:11px">AI の判定は目安です。チェックは自分の目で確かめてから付けてください</span></div>'
+      + (rows ? '<table><tr><td></td><td style="color:#64748b">指示</td><td style="color:#64748b">判定</td><td style="color:#64748b">場所</td></tr>' + rows + '</table>' : '<div style="color:#94a3b8">指示が見つかりませんでした</div>')
+      + ((結果.他の変更 || []).length ? '<div style="margin-top:6px"><b>指示に無い変更:</b><ul style="margin:2px 0 0 18px;padding:0">' + 結果.他の変更.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>' : '')
+      + ((結果.気になる点 || []).length ? '<div style="margin-top:6px;padding:6px 8px;background:#fef2f2;border-left:3px solid #ef4444"><b>気になる点:</b><ul style="margin:2px 0 0 18px;padding:0">' + 結果.気になる点.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>' : '');
+    Array.prototype.forEach.call(c.querySelectorAll('.pg'), function (s) { s.onclick = function () { var p = Number(s.getAttribute('data-pg')); if (p >= 1 && p <= 最大()) { S.page = p; 描き直す(); } }; });
+  }
+
+  // ---------------------------------------------------------------- 決定を残す
+  function 決める(ok) {
+    var memo = $('memo').value.trim();
+    var 済 = 結果 ? Array.prototype.map.call(document.querySelectorAll('#chk input[type=checkbox]'), function (cb, i) { return (cb.checked ? '✓ ' : '□ ') + ((結果.指示[i] || {}).指示 || ''); }) : [];
+    var 文 = (ok ? '【内校 OK】お客様に出せます' : '【内校 直しあり】制作へ戻す') + (S.prev ? '\n前回: ' + S.prev.name : '') + (S.cur ? '\n今回: ' + S.cur.name : '') + (済.length ? '\n指示の確認:\n' + 済.join('\n') : '') + (結果 && (結果.気になる点 || []).length ? '\nAI の気になる点: ' + 結果.気になる点.join('／') : '') + (memo ? '\nメモ: ' + memo : '');
+    $('ok').disabled = $('ng').disabled = true; $('dst').textContent = '残しています…';
+    var ps = [];
+    if (S.no) ps.push(呼('記録_書く', [{ 伝票番号: S.no, 案件ID: '', 日付: new Date().toISOString().slice(0, 10), 方法: '校正', 相手: '社内', 内容: 文, 大事: !ok, 添付: [] }]).catch(function (e) { return { err: e }; }));
+    if (S.card && P) { try { S.card.naiko = S.card.naiko || []; S.card.naiko.push({ at: new Date().toISOString(), by: (P.currentUser && (P.currentUser.name || P.currentUser.email)) || '', ok: ok, memo: 文, items: 結果 ? 結果.指示 : [] }); S.card.lastMoveAt = new Date().toISOString(); if (typeof P.saveDB === 'function') P.saveDB(); if (typeof P.renderProofingList === 'function') P.renderProofingList(); } catch (e) {} }
+    Promise.all(ps).then(function (r) { var bad = r.filter(function (x) { return x && x.err; })[0]; $('dst').textContent = bad ? '校正BOX には残しました（案件の記録は書けず: ' + String(bad.err.message || bad.err) + '）' : '残しました（' + (ok ? '内校 OK' : '直しあり') + '）'; }).then(function () { $('ok').disabled = $('ng').disabled = false; });
+  }
+  $('ok').onclick = function () { 決める(true); }; $('ng').onclick = function () { 決める(false); };
+
+  // ---------------------------------------------------------------- 始める
+  function 始める() { 描き直す(); if (!カードから() && !S.no) { st('校正BOX から開くか、前回・今回のファイルを落としてください'); } if (S.no) 保管先から(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(始める, 300); }); else setTimeout(始める, 300);
+  window.NAIKO = S;
+})();
+</script>
+</body>
+</html>
