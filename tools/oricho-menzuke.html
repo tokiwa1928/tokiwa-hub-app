@@ -261,12 +261,14 @@
           <span id="dropSub">ページ順に並んだ単ページPDF</span>
         </div>
         <input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden>
+        <div id="srcCheck" style="display:none;margin-top:6px;font-size:12px;line-height:1.6;border:1px solid var(--rule);border-radius:2px;padding:6px 8px;background:var(--surface)"></div>
       </div>
       <div class="q-step">
         <div class="q-h"><b>3</b>書き出す</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="primary" id="go" disabled>面付PDFを書き出す</button>
           <button type="button" id="openPdf" style="display:none;font:inherit;font-size:13px;padding:8px 14px;border:1px solid var(--accent);border-radius:2px;background:var(--surface);color:var(--accent-ink);cursor:pointer;font-weight:700" title="書き出した面付 PDF を、このブラウザの新しいタブで開きます（Acrobat を開かずに確認・印刷できます。印刷は「実際のサイズ」で）">👁 ブラウザで開く</button>
+          <button type="button" id="mzCheck" style="display:none;font:inherit;font-size:13px;padding:8px 14px;border:1px solid #0f766e;border-radius:2px;background:#ecfdf5;color:#0f766e;cursor:pointer;font-weight:700" title="書き出した面付PDFを、そのまま面付チェック（並び・解像度・塗り足し）にかけます。保存し直したりアップロードしたりしなくてよい">🔢 書き出したPDFをチェック</button>
           <button type="button" id="numGo" style="font:inherit;font-size:13px;padding:8px 14px;border:1px solid var(--accent);border-radius:2px;background:var(--accent-soft);color:var(--accent-ink);cursor:pointer;font-weight:700" title="今の設定で、ページ番号だけの見本原稿に同じ面付をかけ、表／裏の刷版を画面に並べます（原稿 PDF が無くても使えます）">🔢 数字で面付を確認</button>
         </div>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px"><input type="checkbox" id="pdfx" onchange="document.getElementById('pdfxBox').style.display=this.checked?'block':'none'"> <b>PDF/X-4</b> で書き出す（印刷会社に渡す形式。チェックなし＝ふつうの PDF）</label>
@@ -464,6 +466,7 @@
 <script src="menzuke-auth.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="pdf-check.js"></script>
 <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/opentype.js/1.3.4/opentype.min.js"></script>
 <script>try{ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){}</script>
@@ -1359,6 +1362,7 @@
       $('dropTitle').textContent = file.name;
       $('dropSub').textContent = `${lastPageCount}ページ　${fmt(srcTrim.w)}×${fmt(srcTrim.h)}mm`;
       $('status').textContent = '読み込みました。';
+      原稿チェック(buf);   // PDFCHECK-1: 読み込んだらすぐ 解像度と塗り足しを調べる
     } catch (err) {
       srcBytes = null; srcTrim = null; lastPageCount = 0;
       $('drop').classList.remove('loaded');
@@ -1367,10 +1371,39 @@
     refresh();
   }
 
+  /* ---------- 原稿チェック（PDFCHECK-1: 11/11 本多さん「解像度と裁ち落としも、作るときに一緒に調べられるように」） ---------- */
+  //   原稿を読み込んだら、①画像の解像度（置いた大きさでの実効値）②塗り足し（ページが 仕上がり＋塗り足し か、端の絵柄が外 3mm まで続くか）を調べて、原稿の下に出す
+  let 原稿チェック中 = 0;
+  async function 原稿チェック(buf) {
+    const box = $('srcCheck'); if (!box || typeof PdfCheck === 'undefined' || typeof pdfjsLib === 'undefined') return;
+    const 回 = ++原稿チェック中; box.style.display = 'block'; box.innerHTML = '🔍 原稿を調べています（解像度・塗り足し）…';
+    try {
+      const doc = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+      const n = doc.numPages;
+      const list = await PdfCheck.解像度(doc, { 進む: (i, t) => { if (回 === 原稿チェック中) box.innerHTML = `🔍 解像度を調べています… ${i} / ${t} ページ`; } });
+      const m = PdfCheck.解像度のまとめ(list);
+      const 仕上がり = { w: Number($('pageW').value) || 0, h: Number($('pageH').value) || 0 };
+      const 要 = Number($('bleed').value) || 0;
+      const bl = 仕上がり.w && 仕上がり.h ? await PdfCheck.原稿の塗り足し(doc, 仕上がり, { 進む: (i, t) => { if (回 === 原稿チェック中) box.innerHTML = `🔍 塗り足しを調べています… ${i} / ${t} ページ`; } }) : null;
+      if (回 !== 原稿チェック中) return;
+      const 色 = (ng, warn) => ng ? '#b91c1c' : warn ? '#b45309' : '#166534';
+      let h = '<b>🔍 原稿チェック</b>（' + n + ' ページ）<br>';
+      h += '<span style="color:' + 色(m.低.length, m.注意.length) + ';font-weight:700">' + (!m.画像数 ? '✓ 画像なし（文字と線だけ）' : m.低.length ? '✗ 解像度: 200ppi 未満の画像が ' + m.低.length + ' 個（' + [...new Set(m.低.map(x => x.page))].slice(0, 12).join('・') + ' ページ）' : m.注意.length ? '△ 解像度: 300ppi 未満の画像が ' + m.注意.length + ' 個（' + [...new Set(m.注意.map(x => x.page))].slice(0, 12).join('・') + ' ページ）' : '✓ 解像度: すべて 300ppi 以上') + '</span>' + (m.画像数 ? '<span style="color:var(--muted)">　画像 ' + m.画像数 + ' 個・いちばん低い ' + m.最小 + 'ppi</span>' : '') + '<br>';
+      if (bl) {
+        const pg = `${bl.ページmm.w.toFixed(1)}×${bl.ページmm.h.toFixed(1)}mm`;
+        const 不足p = [...new Set(bl.不足.map(x => x.page))];
+        if (bl.大きさ === '大きさ違い') h += `<span style="color:#b91c1c;font-weight:700">✗ 原稿の大きさ ${pg} が 仕上がり ${仕上がり.w}×${仕上がり.h}mm より小さい</span>`;
+        else if (bl.大きさ === '塗り足しなし') h += 不足p.length ? `<span style="color:#b91c1c;font-weight:700">✗ 塗り足し: 原稿が仕上がりと同じ大きさ（${pg}）で、端まで絵柄があるページが ${不足p.length} ページ（${不足p.slice(0, 12).join('・')}）。塗り足し ${要}mm 付きで書き出し直してもらってください</span>` : `<span style="color:#b45309;font-weight:700">△ 塗り足し: 原稿が仕上がりと同じ大きさ（${pg}）。端まで絵柄のあるページはありません（文字だけなら大丈夫）</span>`;
+        else h += 不足p.length ? `<span style="color:#b91c1c;font-weight:700">✗ 塗り足し: 端の絵柄が外側まで続いていないページが ${不足p.length} ページ（${不足p.slice(0, 12).join('・')}）</span>` : `<span style="color:#166534;font-weight:700">✓ 塗り足し: ${bl.塗り足しmm.toFixed(1)}mm 付き（${pg}）。端の絵柄は外側まで続いています</span>` + (bl.大きさ === '塗り足しが細い' ? '<span style="color:#b45309">（ただし ' + 要 + 'mm より細い）</span>' : '');
+      }
+      box.innerHTML = h;
+    } catch (e) { if (回 === 原稿チェック中) box.innerHTML = '🔍 原稿を調べられませんでした: ' + String(e.message || e); }
+  }
+
   /* ---------- 書き出し ---------- */
   // OPEN-1（本多さん 9/30）: Acrobat を開くとログインを求められるので、書き出した PDF をブラウザのタブで開けるようにする
   let lastPdfUrl = null, lastFileName = '';
-  function keepForOpen(blob) { try { if (lastPdfUrl) URL.revokeObjectURL(lastPdfUrl); lastPdfUrl = URL.createObjectURL(blob); const b = $('openPdf'); if (b) b.style.display = ''; } catch (e) {} }
+  function keepForOpen(blob) { try { window._mzLastBlob = blob; var mc = $('mzCheck'); if (mc) mc.style.display = ''; if (lastPdfUrl) URL.revokeObjectURL(lastPdfUrl); lastPdfUrl = URL.createObjectURL(blob); const b = $('openPdf'); if (b) b.style.display = ''; } catch (e) {} }
   async function saveFile(bytes, filename) {
     const blob = new Blob([bytes], { type: 'application/pdf' }); keepForOpen(blob); lastFileName = filename; try { $('handoff').style.display = 'flex'; } catch (e) {}   // WIZ-1: 渡す
     let dl = null;
@@ -1671,6 +1704,14 @@
   drop.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) loadPdf(f); });
   $('go').addEventListener('click', generate);
   $('openPdf').addEventListener('click', () => { if (lastPdfUrl) window.open(lastPdfUrl, '_blank', 'noopener'); });
+  // PDFCHECK-1: 書き出した PDF を面付チェックの画面へ渡す（相手が「用意できた」と言ってきたら送る）
+  $('mzCheck').addEventListener('click', () => {
+    const blob = window._mzLastBlob; if (!blob) return;
+    const job = String(($('job') || {}).value || '');
+    const w = window.open('menzuke-check.html?from=oricho&job=' + encodeURIComponent(job), '_blank'); if (!w) { alert('新しいタブを開けませんでした（ポップアップを許可してください）'); return; }
+    const h = (ev) => { if (ev.source === w && ev.data && ev.data.type === 'mz-ready') { window.removeEventListener('message', h); w.postMessage({ type: 'mz-pdf', blob, name: lastFileName || 'menzuke.pdf', job }, '*'); } };
+    window.addEventListener('message', h);
+  });
   $('numGo').addEventListener('click', numberPreview);
   $('iccFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (!f) return; const bytes = await f.arrayBuffer(); const u8 = new Uint8Array(bytes); const sig = String.fromCharCode(u8[36], u8[37], u8[38], u8[39]);
     if (sig !== 'acsp') { $('status').textContent = 'ICC プロファイルではないようです（' + f.name + '）'; e.target.value = ''; return; }

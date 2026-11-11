@@ -28,7 +28,7 @@
 <body>
 <div class="wrap">
   <h1>面付チェック</h1>
-  <p class="note">面付済みの PDF を下に落とすと、全ページのノンブル（ページ番号）が正しい位置に入っているかを調べます。<b>ファイルはこの PC の中だけで読み、どこにも送りません</b>。数百 MB でも動きます（少し時間がかかります）。</p>
+  <p class="note">面付済みの PDF を下に落とすと、①全ページのノンブル（ページ番号）が正しい位置か ②画像の解像度 ③裁ち落とし（塗り足し）が足りているか を調べます。<b>ファイルはこの PC の中だけで読み、どこにも送りません</b>。数百 MB でも動きます（少し時間がかかります）。</p>
   <div class="card">
     パターン <select id="pat"></select>
     <div id="drop" style="margin-top:10px">ここに面付済みの PDF を落とす（または押して選ぶ）<input type="file" id="f" accept=".pdf" style="display:none"></div>
@@ -38,21 +38,27 @@
   <div class="card" id="out" style="display:none"></div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="pdf-check.js"></script>
 <script>
 (function () {
   function $(id) { return document.getElementById(id); }
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  var MM = 72 / 25.4;
+  var MM = 72 / 25.4, 並びなし = false;
   // 折丁面付台（oricho-menzuke.html）の 4 ページ折り 4 列×2 段（下の段は天地逆・右綴じ）と同じ並び。表＝上 9,12,1,4／下 16,13,8,5、裏＝上 3,2,11,10／下 6,7,14,15（1 枚ごとに +16）
   var PATS = [
-    { name: '北上 冊子 B6｜ローランド版 740×605 B6 4ページ折り×4丁（紙 625×440）ROLAND-4P-B6', W: 740, H: 605, pw: 128, ph: 182, offX: 85.75, offY: 158, gaps: [0, 56.5, 0], gapY: 6 },
-    { name: '北上 冊子 B6 菊半｜ローランド版 740×605 B6 4ページ折り×4丁（紙 菊半裁 636×469）ROLAND-4P-B6-KIKU', W: 740, H: 605, pw: 128, ph: 182, offX: 83, offY: 140, gaps: [0, 62, 0], gapY: 6 },
-    { name: '北上 冊子 四六判｜ローランド版 740×605 四六 128×188 4ページ折り×4丁', W: 740, H: 605, pw: 128, ph: 188, offX: 85.75, offY: 152, gaps: [0, 56.5, 0], gapY: 6 }
+    { job: 'ROLAND-4P-B6', name: '北上 冊子 B6｜ローランド版 740×605 B6 4ページ折り×4丁（紙 625×440）ROLAND-4P-B6', W: 740, H: 605, pw: 128, ph: 182, offX: 85.75, offY: 158, gaps: [0, 56.5, 0], gapY: 6 },
+    { job: 'ROLAND-4P-B6-KIKU', name: '北上 冊子 B6 菊半｜ローランド版 740×605 B6 4ページ折り×4丁（紙 菊半裁 636×469）ROLAND-4P-B6-KIKU', W: 740, H: 605, pw: 128, ph: 182, offX: 83, offY: 140, gaps: [0, 62, 0], gapY: 6 },
+    { job: 'ROLAND-4P', name: '北上 冊子 四六判｜ローランド版 740×605 四六 128×188 4ページ折り×4丁 ROLAND-4P', W: 740, H: 605, pw: 128, ph: 188, offX: 85.75, offY: 152, gaps: [0, 56.5, 0], gapY: 6 }
   ];
   var FRONT = [[9, 12, 1, 4], [16, 13, 8, 5]], BACK = [[3, 2, 11, 10], [6, 7, 14, 15]];
   $('pat').innerHTML = PATS.map(function (p, i) { return '<option value="' + i + '">' + esc(p.name) + '</option>'; }).join('');
   try { var hint = location.hash.slice(1); if (/KIKU/i.test(hint)) $('pat').value = '1'; } catch (e) {}
+  // PDFCHECK-1: 折丁面付台の「🔢 書き出したPDFをチェック」から来たとき、その PDF を受け取ってすぐ調べる
+  var Q = new URLSearchParams(location.search), 来た作業 = Q.get('job') || '';
+  if (来た作業) { var pi = PATS.map(function (p) { return p.job; }).indexOf(来た作業); if (pi >= 0) $('pat').value = String(pi); }
+  window.addEventListener('message', function (ev) { var d = ev.data || {}; if (d.type !== 'mz-pdf' || !d.blob) return; 調べる(new File([d.blob], d.name || 'menzuke.pdf', { type: 'application/pdf' }), d.job); });
+  if (Q.get('from') === 'oricho' && window.opener) { try { window.opener.postMessage({ type: 'mz-ready' }, '*'); } catch (e) {} $('st').textContent = '折丁面付台から PDF を受け取っています…'; }
   var drop = $('drop');
   drop.onclick = function () { $('f').click(); };
   $('f').onchange = function () { if (this.files[0]) 調べる(this.files[0]); };
@@ -60,8 +66,9 @@
   drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
   drop.addEventListener('drop', function (e) { e.preventDefault(); drop.classList.remove('over'); var f = e.dataTransfer.files[0]; if (f) 調べる(f); });
 
-  function 調べる(file) {
+  function 調べる(file, 作業) {
     var P = PATS[Number($('pat').value)];
+    並びなし = !!(作業 && PATS.every(function (p) { return p.job !== 作業; }));   // このパターンの並びの表はまだ無い → 解像度・塗り足しだけ
     if (/KIKU/i.test(file.name) && P.name.indexOf('KIKU') < 0) { if (confirm('ファイル名に KIKU（菊半）とあります。菊半のパターンで調べますか？')) { $('pat').value = '1'; P = PATS[1]; } }
     $('out').style.display = 'none'; $('bar').style.display = 'block'; $('bar').firstChild.style.width = '0';
     $('st').textContent = file.name + '（' + (file.size / 1048576).toFixed(1) + ' MB）を開いています…';
@@ -97,6 +104,7 @@
     }).catch(function (e) { $('st').textContent = '開けませんでした: ' + String(e.message || e); });
   }
   function 終わり(doc, rows, info, file, P) {
+    if (並びなし) { $('out').innerHTML = '<h3 style="margin:0 0 6px">① ページの並び</h3><div style="color:#b45309">この面付パターンは、並び・塗り足しの確かめ方をまだ入れていません。解像度だけ調べます。</div><div id="q2"></div><div id="q3"></div>'; $('out').style.display = 'block'; その他(doc, P, rows.length, true); return; }
     var ok = 0, ng = [], empty = 0;
     var h = '<table><tr><th>面</th><th>表裏</th><th colspan="4">上の段（左→右）</th><th colspan="4">下の段（左→右）</th></tr>';
     rows.forEach(function (r) {
@@ -116,7 +124,41 @@
     var head = '<div class="big" style="color:' + (ng.length ? 'var(--ng)' : 'var(--ok)') + '">' + (ng.length ? '✗ ' + ng.length + ' 面が違う位置にあります' : '✓ 全部正しい位置です') + '</div>'
       + '<div style="margin:4px 0 10px;color:var(--sub)">' + esc(file.name) + '　' + rows.length + ' 面（' + rows.length / 2 + ' 枚・' + rows.length * 8 + ' ページ分）　ノンブルが合ったページ ' + ok + '／ノンブルの無いページ ' + empty + '（白・扉・図・目次など。かっこの番号が入るはずのページ）' + (made ? '　PDF の作成: ' + esc(made) + '（UTC のことがあります）' : '') + '<br>パターン: ' + esc(P.name) + '</div>';
     if (ng.length) head += '<div style="margin-bottom:8px;color:var(--ng)">' + ng.map(function (x) { return x.面 + ' 面の' + x.段 + 'の段・左から ' + x.位置 + ' 番目：' + x.入っている + '（本来 ' + x.入るべき + '）'; }).join('<br>') + '</div>';
-    $('out').innerHTML = head + h; $('out').style.display = 'block'; $('st').textContent = '調べ終わりました'; $('bar').style.display = 'none';
+    $('out').innerHTML = '<h3 style="margin:0 0 6px">① ページの並び</h3>' + head + h + '<div id="q2"></div><div id="q3"></div>'; $('out').style.display = 'block';
+    その他(doc, P, rows.length);
+  }
+  // PDFCHECK-1: ② 解像度 ③ 塗り足し
+  function その他(doc, P, n, 解像度だけ) {
+    var bar = $('bar').firstChild; $('bar').style.display = 'block';
+    $('st').textContent = '解像度を調べています…';
+    PdfCheck.解像度(doc, { 進む: function (i, t) { bar.style.width = Math.round(i / t * 100) + '%'; $('st').textContent = '解像度を調べています… ' + i + ' / ' + t + ' 面'; } }).then(function (list) {
+      var m = PdfCheck.解像度のまとめ(list);
+      var h = '<h3 style="margin:16px 0 6px">② 画像の解像度</h3>';
+      if (!m.画像数) h += '<div style="color:var(--sub)">画像は入っていません（文字と線だけ）</div>';
+      else {
+        h += '<div class="big" style="color:' + (m.低.length ? 'var(--ng)' : m.注意.length ? '#b45309' : 'var(--ok)') + '">' + (m.低.length ? '✗ 200ppi 未満の画像が ' + m.低.length + ' 個' : m.注意.length ? '△ 300ppi 未満の画像が ' + m.注意.length + ' 個（200 以上）' : '✓ すべて 300ppi 以上') + '</div>'
+          + '<div style="color:var(--sub);margin:2px 0 6px">画像 ' + m.画像数 + ' 個・いちばん低いもの ' + m.最小 + 'ppi（実際に置かれた大きさで計算。写真は 300〜350、文字や線の画像（1bit）は 600 以上が目安）</div>';
+        var bad = m.低.concat(m.注意).sort(function (a, b) { return a.ppi - b.ppi; }).slice(0, 60);
+        if (bad.length) h += '<table><tr><th>面</th><th>解像度</th><th>画素</th><th>置いた大きさ</th><th>場所（左上から）</th></tr>' + bad.map(function (x) { return '<tr><td>' + x.page + '</td><td class="' + (x.ppi < 200 ? 'ng' : '') + '">' + x.ppi + 'ppi</td><td>' + x.w + '×' + x.h + '</td><td>' + x.幅mm.toFixed(1) + '×' + x.高さmm.toFixed(1) + 'mm</td><td>' + (x.x / PdfCheck.MM).toFixed(0) + ', ' + (x.y / PdfCheck.MM).toFixed(0) + 'mm</td></tr>'; }).join('') + '</table>';
+      }
+      $('q2').innerHTML = h;
+      if (解像度だけ) { $('st').textContent = '調べ終わりました（解像度）'; $('bar').style.display = 'none'; return; }
+      // ③ 塗り足し: 仕上がり枠（8 面）の外側。4 ページ折りの組の内側（背）と、組どうしの間に塗り足しは要らない辺を除く
+      var mm = PdfCheck.MM, xs = [P.offX * mm]; for (var g = 0; g < 3; g++) xs.push(xs[g] + P.pw * mm + P.gaps[g] * mm);
+      var up = P.offY * mm, lo = up + P.ph * mm + P.gapY * mm, 枠 = [];
+      [up, lo].forEach(function (y, row) { [0, 1, 2, 3].forEach(function (k) {
+        var e = ['上', '下']; if (k === 0 || k === 2) e.push('左'); if (k === 1 || k === 3) e.push('右');
+        if (P.gapY < 5) e = e.filter(function (x) { return row === 0 ? x !== '下' : x !== '上'; });
+        枠.push({ 名: (row ? '下' : '上') + 'の段・左から ' + (k + 1), x: xs[k], y: y, w: P.pw * mm, h: P.ph * mm, 辺: e }); }); });
+      $('st').textContent = '塗り足しを調べています…'; bar.style.width = '0';
+      return PdfCheck.塗り足し(doc, 枠, { 進む: function (i, t) { bar.style.width = Math.round(i / t * 100) + '%'; $('st').textContent = '塗り足しを調べています… ' + i + ' / ' + t + ' 面'; } }).then(function (ng) {
+        var h3 = '<h3 style="margin:16px 0 6px">③ 裁ち落とし（塗り足し 3mm）</h3>'
+          + '<div class="big" style="color:' + (ng.length ? 'var(--ng)' : 'var(--ok)') + '">' + (ng.length ? '✗ 塗り足しが足りない辺が ' + ng.length + ' か所' : '✓ 端まで絵柄のある辺は、すべて外側 3mm まで続いています') + '</div>'
+          + '<div style="color:var(--sub);margin:2px 0 6px">仕上がり線のすぐ内側に絵柄（写真・色ベタ・罫など）があるのに、外側 1.5〜2.6mm が白い辺を「足りない」としています。文字だけで端に何もない辺は調べません</div>';
+        if (ng.length) h3 += '<table><tr><th>面</th><th>場所</th><th>辺</th><th>内側の色</th><th>外側の色</th></tr>' + ng.slice(0, 80).map(function (x) { return '<tr><td>' + x.page + '</td><td>' + esc(x.枠) + '</td><td>' + x.辺 + '</td><td>' + x.内 + '%</td><td class="ng">' + x.外 + '%</td></tr>'; }).join('') + '</table>';
+        $('q3').innerHTML = h3; $('st').textContent = '調べ終わりました（並び・解像度・塗り足し）'; $('bar').style.display = 'none';
+      });
+    }).catch(function (e) { $('st').textContent = '解像度・塗り足しを調べられませんでした: ' + String(e.message || e); $('bar').style.display = 'none'; });
   }
 })();
 </script>
