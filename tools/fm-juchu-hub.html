@@ -6413,5 +6413,72 @@ body.num-off .num-col{ display:none !important; }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(移す, 500); }); else setTimeout(移す, 500);
 })();
 </script>
+<script>
+// TSUHAN-1（11/11 本多さん「プリントパックやグラフィックの情報を見て、発注金額と発注日、確定日を入れる項目。不備が一番まずいので分かるように」）
+//   参考価格の行の下に「🛒 通販発注」。メール（Hub GAS tsuhanOrders）から この伝票の注文を自動で並べ、不備は赤。手でも足せる（手配.通販 に保存）
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function 呼(n, a) { var f = window.FM呼ぶ || (window.FM && window.FM.呼ぶ); return f ? f(n, a) : Promise.reject(new Error('中継がありません')); }
+  var HUB_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec', HUB_KEY = 'mitsumori-2024';
+  function hub(action, q) { var P = null; try { if (window.parent !== window && window.parent.callCloudAPI) P = window.parent; } catch (e) {} if (P) return Promise.resolve(P.callCloudAPI(action, q || {})); var u = new URL(HUB_URL); u.searchParams.set('action', action); u.searchParams.set('apiKey', HUB_KEY); Object.keys(q || {}).forEach(function (k) { u.searchParams.set(k, q[k]); }); return fetch(u.toString(), { redirect: 'follow' }).then(function (r) { return r.json(); }); }
+  function 円(v) { return v == null || v === '' ? '' : Number(v).toLocaleString() + '円'; }
+  function 日(v) { return v ? String(v).slice(5, 10).replace('-', '/') : ''; }
+  var 色 = { '不備': '#b91c1c', '入稿未完了': '#b45309', '注文のみ': '#b45309', '入稿済': '#1d4ed8', '確定': '#166534', '発送済': '#475569', 'キャンセル': '#94a3b8' };
+  var 今 = { no: '', auto: [], 手: [], 手配: null };
+  function 箱() {
+    var b = $('ts-box'); if (b) return b;
+    var after = $('sp-all') || $('sp-row') || $('smp-row'); if (!after) return null;
+    b = document.createElement('div'); b.id = 'ts-box'; b.style.cssText = 'margin:4px 0 2px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;font-size:12px';
+    b.innerHTML = '<div style="display:flex;gap:8px;align-items:center;padding:3px 8px;flex-wrap:wrap"><b>🛒 通販発注</b><span style="color:#64748b">プリントパック・グラフィックのメールから自動。不備は赤</span><span id="ts-st" style="color:#64748b"></span>'
+      + '<button type="button" id="ts-add" style="margin-left:auto;font-size:11px;padding:1px 8px">＋ 手で入れる</button><button type="button" id="ts-re" style="font-size:11px;padding:1px 8px" title="メールを読み直す">↻</button></div>'
+      + '<div id="ts-list"></div>'
+      + '<div id="ts-form" style="display:none;padding:4px 8px;border-top:1px dashed #cbd5e1;display:none;gap:6px;flex-wrap:wrap;align-items:center">'
+      + '<select id="ts-f-v"><option>プリントパック</option><option>グラフィック</option><option>その他</option></select>'
+      + '<input id="ts-f-no" placeholder="注文番号" style="width:110px"> 発注金額 <input id="ts-f-am" type="number" style="width:80px"> 発注日 <input id="ts-f-od" type="date"> 確定日 <input id="ts-f-cd" type="date"> 発送予定 <input id="ts-f-sd" type="date">'
+      + '<button type="button" id="ts-f-save" style="font-weight:700">保存</button><button type="button" id="ts-f-x">やめる</button></div>';
+    after.parentNode.insertBefore(b, after.nextSibling);
+    $('ts-add').onclick = function () { var f = $('ts-form'); f.style.display = f.style.display === 'flex' ? 'none' : 'flex'; if (!$('ts-f-od').value) $('ts-f-od').value = new Date().toISOString().slice(0, 10); };
+    $('ts-f-x').onclick = function () { $('ts-form').style.display = 'none'; };
+    $('ts-f-save').onclick = 手で保存;
+    $('ts-re').onclick = function () { 読む(true); };
+    return b;
+  }
+  function 描く() {
+    var L = $('ts-list'); if (!L) return;
+    var rows = 今.auto.map(function (o) { return { 自動: true, o: o }; }).concat(今.手.map(function (o, i) { return { 自動: false, o: o, i: i }; }));
+    if (!rows.length) { L.innerHTML = '<div style="padding:2px 8px 4px;color:#94a3b8">この伝票の通販発注はまだありません（品名に伝票番号 ' + esc(今.no) + ' を入れて注文すると、ここに自動で出ます）</div>'; return; }
+    L.innerHTML = '<table style="width:100%;border-collapse:collapse"><tr style="color:#64748b;font-size:11px"><td style="padding:1px 8px">状態</td><td>発注先</td><td>注文番号</td><td style="text-align:right">発注金額</td><td>発注日</td><td>確定日</td><td>発送予定</td><td>発送日</td><td></td></tr>'
+      + rows.map(function (r) { var o = r.o, st = o.状態 || '手入力', c = 色[st] || '#334155'; var last = (o.不備 && o.不備.length) ? o.不備[o.不備.length - 1] : null; var mail = last ? last.url : ((o.メール || []).slice(-1)[0] || {}).url;
+        return '<tr style="border-top:1px solid #e2e8f0' + (st === '不備' ? ';background:#fef2f2' : '') + '"><td style="padding:2px 8px;white-space:nowrap"><b style="color:' + c + '">' + (st === '不備' ? '🚨 ' : '') + esc(st) + '</b></td><td>' + esc(o.発注先) + '</td><td>' + esc(o.注文番号) + '</td><td style="text-align:right">' + esc(円(o.発注金額)) + '</td><td>' + esc(日(o.発注日)) + '</td><td>' + esc(日(o.確定日)) + '</td><td>' + esc(日(o.発送予定日)) + '</td><td>' + esc(日(o.発送日)) + '</td>'
+          + '<td style="white-space:nowrap">' + (mail ? '<a href="' + esc(mail) + '" target="_blank">📧</a> ' : '') + (r.自動 ? '' : '<button type="button" data-del="' + r.i + '" style="font-size:10px;padding:0 5px">✕</button>') + '</td></tr>'
+          + ((o.要対応 || last) ? '<tr><td colspan="9" style="padding:0 8px 3px 24px;color:#7f1d1d;font-size:11.5px">' + esc(o.要対応 || '') + (last && last.抜粋 ? '：' + esc(last.抜粋) : '') + '</td></tr>' : ''); }).join('') + '</table>';
+    Array.prototype.forEach.call(L.querySelectorAll('[data-del]'), function (b) { b.onclick = function () { if (!confirm('この行を消しますか？')) return; 今.手.splice(Number(b.getAttribute('data-del')), 1); 手を書く(); }; });
+  }
+  function 手を書く() {
+    if (!今.no) return Promise.resolve();
+    $('ts-st').textContent = '保存中…';
+    return 呼('手配_読む', [今.no]).then(function (r) { var t = r.手配 || {}; t.通販 = 今.手; return 呼('手配_書く', [今.no, t]); })
+      .then(function () { $('ts-st').textContent = '保存しました'; 描く(); }).catch(function (e) { $('ts-st').textContent = '保存できません: ' + String(e.message || e); });
+  }
+  function 手で保存() {
+    var o = { 発注先: $('ts-f-v').value, 注文番号: $('ts-f-no').value.trim(), 発注金額: $('ts-f-am').value ? Number($('ts-f-am').value) : null, 発注日: $('ts-f-od').value, 確定日: $('ts-f-cd').value, 発送予定日: $('ts-f-sd').value, 状態: $('ts-f-cd').value ? '確定' : '注文のみ', 手入力: true };
+    if (!o.発注金額 && !o.注文番号) { alert('注文番号か発注金額を入れてください'); return; }
+    今.手.push(o); $('ts-form').style.display = 'none'; ['ts-f-no', 'ts-f-am', 'ts-f-cd', 'ts-f-sd'].forEach(function (id) { $(id).value = ''; }); 手を書く();
+  }
+  function 番号() { var r = window.FM現在; if (!r || !r.fields) return ''; return String(r.fields['伝票番号'] || r.fields['見積番号'] || ''); }
+  function 読む(新しく) {
+    if (!箱()) return; var no = 番号(); 今.no = no; 今.auto = []; 今.手 = [];
+    if (!no) { $('ts-list').innerHTML = '<div style="padding:2px 8px 4px;color:#94a3b8">伝票を開くと出ます</div>'; return; }
+    $('ts-st').textContent = '読んでいます…'; 描く();
+    var f = window.FM現在.fields || {}, nos = [f['伝票番号'], f['見積番号']].filter(Boolean).join(',');
+    hub('tsuhanOrders', 新しく ? { nos: nos, fresh: 1 } : { nos: nos }).then(function (r) { if (今.no !== no) return; if (!r || !r.success) { $('ts-st').textContent = (r && r.error === 'unknown_action') ? '（メールの読み取りはまだ準備中です）' : 'メールを読めません'; return; } 今.auto = r.orders || []; $('ts-st').textContent = ''; 描く(); })
+      .catch(function () { $('ts-st').textContent = 'メールを読めません'; });
+    呼('手配_読む', [no]).then(function (r) { if (今.no !== no) return; 今.手 = ((r.手配 || {}).通販) || []; 描く(); }).catch(function () {});
+  }
+  window.addEventListener('fm-loaded', function () { setTimeout(function () { 読む(false); }, 600); });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(箱, 900); }); else setTimeout(箱, 900);
+})();
+</script>
 </body>
 </html>
