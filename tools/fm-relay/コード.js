@@ -1347,6 +1347,7 @@ function handle_(action, req, who) {
     case '保管_置く':         return 保管_置く(req['番号'], req['名'], req.mime, req.base64, req['区分']);   // STORE-1
     case '保管_一覧':         return 保管_一覧(req['番号']);
     case '保管_状態':         return 保管_状態();
+    case '北上はがき':        return 北上はがき_画面(req['する']);   // HAGAKI-1
     case '保管_取る':         return 保管_取る(req.id, req['保管先']);   // NAIKO-1
     case 'ドライブ直下_片付ける': return ドライブ直下_片付ける(req['以降'], req['確認']);
     case 'マスタ_写す':       return マスタ_写す(req.layout);

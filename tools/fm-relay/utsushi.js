@@ -189,6 +189,7 @@ function トリガーを外す_(fn) {
 /** 修正日が昨日以降のものを写し直す（索引・年別の該当行を置き換える） */
 function 写し_毎晩(以降) {   // 以降: 'MM/DD/YYYY' を渡すとその日からの修正を取り込む（止まっていた分の追いつき用）。省略時は昨日から
   var lay = LAYOUTS.juchu;
+  try { 北上はがき_同期(); } catch (e) { Logger.log('北上はがき_同期: ' + e.message); }   // HAGAKI-1: 北上プリントの年賀・喪中を Drive の管理表へ
   try { 索引の列を揃える_(); } catch (e) { Logger.log('索引の列を揃える: ' + e.message); }   // LOT-1: 列が増えていたら先に埋める
   var d = new Date(); d.setDate(d.getDate() - 1);
   var 昨日 = String(以降 || '').trim() || 日付_(d);
