@@ -29,7 +29,7 @@
   var AUTHKEY = 'murayama_auth';
   var GAS = 'https://script.google.com/a/macros/tokiwap-group.com/s/'
           + 'AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
-  var KEY = 'mitsumori-2024';
+  var KEY = '';
   var BASE = location.pathname.indexOf('/tools/') >= 0 ? '../' : './';
 
   function db() { try { return JSON.parse(localStorage.getItem(DBKEY)) || null; } catch (e) { return null; } }

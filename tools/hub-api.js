@@ -3,7 +3,7 @@
 // GAS_URL と API_KEY は Hub 本体（index.html の CLOUD_CONFIG）と同じもの。
 (function () {
   var GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
-  var API_KEY = 'mitsumori-2024';
+  var API_KEY = '';
   function call(action, params, post) {
     var u = new URL(GAS_URL); u.searchParams.set('action', action); u.searchParams.set('apiKey', API_KEY);
     Object.keys(params || {}).forEach(function (k) { u.searchParams.set(k, params[k]); });

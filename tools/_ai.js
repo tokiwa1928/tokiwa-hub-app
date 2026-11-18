@@ -4,7 +4,7 @@
 //  APIキーはGASのスクリプトプロパティに1個だけ設定 (各PCに配らない)。
 // ════════════════════════════════════════════════════════════
 var TQ_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
-var TQ_GAS_KEY = 'mitsumori-2024';
+var TQ_GAS_KEY = '';
 
 // canvas → 長辺1100pxに縮小した base64(jpeg, prefixなし)
 // ※コスト対策: 1400→1100px・品質0.8 (画像トークン約4割減。文字読み取りは実用上ほぼ同等)

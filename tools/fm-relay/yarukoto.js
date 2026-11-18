@@ -13,7 +13,7 @@
  */
 var やること列 = ['id', 'json', 'at', 'by', '消'];
 var やること_会社GAS = 'https://script.google.com/macros/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
-var やること_会社GASの鍵 = 'mitsumori-2024';
+// HUBAUTH-1: 合言葉はやめ、中継自身の Google ログイン（OAuth アクセストークン）で会社 GAS を呼ぶ
 var やること_画面 = 'https://tokiwa1928.github.io/tokiwa-hub-app/tools/teiki.html';
 var やること_種類 = ['定期', 'ひな形', '案件'];
 var やること_単位 = ['年', '月', '週', '日'];
@@ -274,7 +274,7 @@ function やること_メール文_(名前, list, 今日) {
 function やること_メール_(to, 件名, 本文) {
   if (!やること_社内の宛先か_(to)) throw new Error('社内のアドレスではないので送りません: ' + to);
   var res = UrlFetchApp.fetch(やること_会社GAS, { method: 'post', contentType: 'text/plain;charset=utf-8', muteHttpExceptions: true,
-    payload: JSON.stringify({ action: 'forwardInquiryToEmail', apiKey: やること_会社GASの鍵, replyTo: to, subject: 件名, body: 本文, by: 'やること' }) });
+    payload: JSON.stringify({ action: 'forwardInquiryToEmail', accessToken: ScriptApp.getOAuthToken(), replyTo: to, subject: 件名, body: 本文, by: 'やること' }) });
   var r = null; try { r = JSON.parse(res.getContentText()); } catch (e) {}
   if (!r || !r.success) throw new Error('メールを出せませんでした: ' + ((r && r.error) || ('HTTP ' + res.getResponseCode())));
   return true;
@@ -301,4 +301,16 @@ function やること_知らせる_(試しの宛先) {
 function やること_今すぐ知らせる_(who) {
   if (!やること_管理者か_(who)) throw new Error('試しの送信は 本多さん・福永さん だけです');
   return やること_知らせる_(String(who.email || '').toLowerCase());
+}
+
+/** HUBAUTH-1: 中継の画面（Apps Script が配る受注入力）から会社 GAS（Hub）を呼ぶ。開いている人を確かめてから、中継の Google ログインで呼ぶ */
+function ハブ_呼ぶ(action, q, body) {
+  画面_利用者_();
+  var u = やること_会社GAS + '?action=' + encodeURIComponent(action);
+  Object.keys(q || {}).forEach(function (k) { u += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(q[k]); });
+  var o = { muteHttpExceptions: true, method: body ? 'post' : 'get', headers: {} };
+  var b = body ? JSON.parse(JSON.stringify(body)) : {}; b.accessToken = ScriptApp.getOAuthToken();
+  o.method = 'post'; o.contentType = 'text/plain;charset=utf-8'; o.payload = JSON.stringify(b);
+  var res = UrlFetchApp.fetch(u, o);
+  try { return JSON.parse(res.getContentText()); } catch (e) { return { success: false, error: 'HTTP ' + res.getResponseCode() }; }
 }
