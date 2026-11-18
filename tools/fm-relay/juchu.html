@@ -5920,9 +5920,27 @@ body.num-off .num-col{ display:none !important; }
       if (/名刺/.test(品)) { var c = カラー(); var 箱 = c ? 950 : 750, 名 = c ? 'カラー' : 'モノクロ';
         return /箱/.test(単位) ? { 固定: 箱, 説明: 'アート・エスの名刺（' + 名 + '）は 1 箱 ' + 箱 + ' 円' } : { 固定: 箱 / 100, 説明: 'アート・エスの名刺（' + 名 + '）は 1 箱（100 枚）' + 箱 + ' 円 ＝ 1 枚 ' + (箱 / 100) + ' 円' }; }
       if (/年賀|喪中/.test(品)) return { 基: '売価', 率: 0.5 };
-      return null;
-    }
+      return { 基: '前回' };
+    },
+    // SPRICE-5（11/18）: アート・エス（名刺・年賀・喪中以外）・津島・ヤマウチ は 前回の伝票と同じ割合（＝前回の利益率を合わせる）
+    '津島': function () { return { 基: '前回' }; },
+    'ヤマウチ': function () { return { 基: '前回' }; }
   };
+  // 前回の伝票（前回伝票番号）の 関連会社の売価 と トキワの売価単価 を読んで割合を出す。1 伝票 1 回だけ読む
+  var 前回 = {};
+  function 前回を読む(no) {
+    if (!no || 前回[no]) return; 前回[no] = { 読み中: true };
+    var 呼 = window.FM呼ぶ || (window.FM && window.FM.呼ぶ); if (!呼) { 前回[no] = { 無い: '中継がありません' }; return; }
+    Promise.all([呼('先方売価_読む', [no]).catch(function () { return {}; }), 呼('画面_読み込み', [no, true]).catch(function () { return {}; })]).then(function (rs) {
+      var 行 = (rs[0] && (rs[0].行 || rs[0].rows)) || [], 社 = 相手(); var sp = 行.filter(function (x) { return !社 || String(x.会社 || '').indexOf(社) >= 0; })[0] || 行[0] || null;
+      var f = (((rs[1] || {}).record) || {}).fields || {};
+      var tu = Number(String(f['売価単価'] || '').replace(/,/g, '')) || 0, ta = Number(String(f['売価金額'] || '').replace(/,/g, '')) || 0;
+      var su = sp ? Number(String(sp.単価 || '').replace(/,/g, '')) || 0 : 0, sa = sp ? Number(String(sp.金額 || '').replace(/,/g, '')) || 0 : 0;
+      var 割合 = (tu && su) ? tu / su : (ta && sa) ? ta / sa : 0;
+      前回[no] = 割合 ? { 割合: 割合, 売価: su || sa, トキワ: tu || ta, 単価で: !!(tu && su) } : { 無い: !sp ? '前回の伝票に関連会社の売価が入っていません' : '前回の伝票にトキワの売価が入っていません' };
+      try { 打った(true); } catch (e) {}
+    });
+  }
   // カラーが入っているか: 印刷の 1 行目の色数（表・裏）が 2 色以上、または インキに 墨・スミ・黒・K 以外がある
   function カラー() {
     var a = Number(String(($('k1-iro1') || {}).value || '').normalize('NFKC')) || 0, b = Number(String(($('k1-iro2') || {}).value || '').normalize('NFKC')) || 0;
@@ -5944,14 +5962,23 @@ body.num-off .num-col{ display:none !important; }
     if (官製.test(品)) return sp ? { 社: 社, 売価: sp, 単価: sp, 説明: '官製はがきは ' + (社 === 'アート' ? 'アート・エス' : 社) + '売価と同じ' } : null;
     var r = f(品, 単位); if (!r) return null;
     if (r.固定 != null) return { 社: 社, 売価: sp, 単価: r.固定, 説明: r.説明 };
+    if (r.基 === '前回') {
+      var pno = String(($('f-lotno') || {}).value || '').trim(); var 名 = 社 === 'アート' ? 'アート・エス' : 社;
+      if (!pno) return { 社: 社, 売価: sp, 単価: null, 説明: 名 + 'は 前回と同じ割合で出します。前回伝票番号を入れてください' };
+      var P = 前回[pno]; if (!P) { 前回を読む(pno); return { 社: 社, 売価: sp, 単価: null, 説明: '前回 ' + pno + ' を読んでいます…' }; }
+      if (P.読み中) return { 社: 社, 売価: sp, 単価: null, 説明: '前回 ' + pno + ' を読んでいます…' };
+      if (P.無い) return { 社: 社, 売価: sp, 単価: null, 説明: '前回 ' + pno + ': ' + P.無い };
+      if (!sp) return { 社: 社, 売価: 0, 単価: null, 説明: '前回 ' + pno + ' は ' + 名 + '売価 ' + P.売価 + ' → トキワ ' + P.トキワ + '（' + Math.round(P.割合 * 1000) / 10 + '%）。今回の ' + 名 + ' の売価を入れると同じ割合で出します' };
+      return { 社: 社, 売価: sp, 単価: 丸め(sp * P.割合, 1), 説明: '前回 ' + pno + '（' + 名 + '売価 ' + P.売価 + ' → トキワ ' + P.トキワ + '、' + Math.round(P.割合 * 1000) / 10 + '%）と同じ割合 ' + 名 + '売価 × ' + Math.round(P.割合 * 10000) / 10000 };
+    }
     if (r.基 === '仕入') { var g = 原単(); return g ? { 社: 社, 売価: sp, 単価: 丸め(g * r.率, 1), 説明: 'トキワの仕入（製品単価 ' + 丸め(g, 2) + '）× ' + r.率 + '（小数 1 桁に四捨五入）' } : null; }
     return sp ? { 社: 社, 売価: sp, 単価: 丸め(sp * r.率, 1), 説明: (社 === 'アート' ? 'アート・エス' : 社) + '売価 × ' + r.率 + '（小数 1 桁に四捨五入）' } : null;
   }
   function 表示(c, 今) {
     var el = $('sp-rule'); if (!el) { var row = $('sp-row'); if (!row) return; el = document.createElement('span'); el.id = 'sp-rule'; el.style.cssText = 'margin-left:10px;font-size:11.5px;color:#475569'; row.appendChild(el); }
     if (!c) { el.innerHTML = ''; return; }
-    var 違う = 今 !== '' && Number(今) !== c.単価;
-    el.innerHTML = 'トキワ単価 ＝ ' + c.説明 + ' ＝ <b>' + c.単価 + '</b>' + (違う ? '　<span style="color:#b91c1c">今は ' + 今 + '</span> <button type="button" id="sp-rule-go" style="font-size:11px;padding:0 6px">この単価にする</button>' : '');
+    var 違う = c.単価 != null && 今 !== '' && Number(今) !== c.単価;
+    el.innerHTML = c.単価 == null ? '<span style="color:#b45309">' + c.説明 + '</span>' : 'トキワ単価 ＝ ' + c.説明 + ' ＝ <b>' + c.単価 + '</b>' + (違う ? '　<span style="color:#b91c1c">今は ' + 今 + '</span> <button type="button" id="sp-rule-go" style="font-size:11px;padding:0 6px">この単価にする</button>' : '');
     var b = $('sp-rule-go'); if (b) b.onclick = function () { 入れる(c, true); };
   }
   function 入れる(c, トキワも) {
@@ -5959,16 +5986,16 @@ body.num-off .num-col{ display:none !important; }
     // 関連会社の金額（参考価格の金額）＝ 単価 × 数量。手で直した金額も上書きする
     var sa = $('sp-amt'), q = 数量();
     if (sa && q && c.売価) { var v = String(Math.round(c.売価 * q)); if (sa.value !== v) sa.value = v; }   // 11/18 本多さん「手で直した金額も上書きして」: いつも 単価 × 数量
-    if (トキワも && !k.partner) {
+    if (トキワも && !k.partner && c.単価 != null) {
       var fp = $('f-price'); if (fp && String(fp.value) !== String(c.単価)) { fp.value = String(c.単価); try { fp.dispatchEvent(new Event('input', { bubbles: true })); fp.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} try { calc(); } catch (e) {} }
     }
   }
-  function 打った() { var c = 計算(); if (c) 入れる(c, true); 表示(c, String(($('f-price') || {}).value || '').trim()); }
+  function 打った(前回が来た) { if (前回が来た === true) return 開いた(); var c = 計算(); if (c) 入れる(c, true); 表示(c, String(($('f-price') || {}).value || '').trim()); }
   function 開いた() { var c = 計算(); var 今 = String(($('f-price') || {}).value || '').trim(); if (c && (!今 || Number(今) === 0)) 入れる(c, true); else if (c) 入れる(c, false); 表示(計算(), String(($('f-price') || {}).value || '').trim()); }
   function 始める() {
     var su = $('sp-unit'); if (!su) return setTimeout(始める, 500);
     su.addEventListener('input', 打った);
-    ['f-item', 'f-lotunit', 'f-lotset', 'f-perbook', 'f-price', 'c-unit', 'c-total', 'f-unit', 'k1-iro1', 'k1-iro2', 'k1-ink', 'k1-ura'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('input', function () { var c = 計算(); if (c && id !== 'f-price') 入れる(c, /^c-/.test(id)); 表示(c, String(($('f-price') || {}).value || '').trim()); }); });
+    ['f-item', 'f-lotunit', 'f-lotset', 'f-perbook', 'f-price', 'c-unit', 'c-total', 'f-unit', 'k1-iro1', 'k1-iro2', 'k1-ink', 'k1-ura', 'f-lotno'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('input', function () { var c = 計算(); if (c && id !== 'f-price') 入れる(c, /^c-/.test(id)); 表示(c, String(($('f-price') || {}).value || '').trim()); }); });
     var sa = $('sp-amt'); if (sa) sa.addEventListener('input', function () { sa.dataset.auto = ''; });
   }
   window.addEventListener('fm-loaded', function () { var sa = $('sp-amt'); if (sa) sa.dataset.auto = ''; setTimeout(開いた, 2000); });
