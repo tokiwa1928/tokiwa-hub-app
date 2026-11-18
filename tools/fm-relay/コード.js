@@ -435,7 +435,10 @@ function 画面_新規案件(種別, 初期値) {
   var lay = LAYOUTS.juchu;
   if (!段階[種別]) throw new Error('知らない段階です: ' + 種別);
 
-  var rec = 作成_(COPY_LAYOUT, 初期値 || {});
+  // MASSARA-102（11/18）: 初期値には Hub 用の P番号・P番号ヒント・問い合わせID・案件名が入ってくる。
+  // FileMaker の「Hub受注_複製用」にはその項目がなく、そのまま送ると 102 Field is missing で作れない。
+  // 続き・流用新規と同じく、FileMaker には Hub 用の項目を送らない。
+  var rec = 作成_(COPY_LAYOUT, 見積_初期値を分ける_(初期値).fields);
   var 案件ID = String(rec.fields['no'] || '');
   if (!案件ID) {
     削除_(lay, rec.recordId);
