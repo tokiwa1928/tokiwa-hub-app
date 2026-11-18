@@ -6492,7 +6492,7 @@ body.num-off .num-col{ display:none !important; }
   function $(id) { return document.getElementById(id); }
   var コード = { '村山': '5236', '中尾': '5465', '北上': '5463', 'ヤマウチ': '5451', 'アート': '5427', '津島': '5525', 'ソネ': '5364' };
   // SPRICE-3（11/18）: 会社ごとの決まり。基＝'売価'（関連会社の売価＝参考価格）か '仕入'（トキワの原価＝製品単価(原単)）
-  //   村山: 売価×0.95 ／ 中尾: 売価×0.7、名刺は 1 箱 1,000 円、年賀状・喪中はがきは 売価×0.5 ／ 北上: 仕入×1.3。官製はがきはどこも売価と同じ。単価は小数 1 桁に四捨五入
+  //   村山: 売価×0.95 ／ 中尾: 売価×0.7、名刺は 1 箱 1,000 円、年賀状・喪中はがきは 売価×0.5 ／ 北上: 仕入×1.3 ／ アート・エス: 名刺 モノクロ 750・カラー 950（1 箱）、年賀状・喪中 売価×0.5。官製はがきはどこも売価と同じ。単価は小数 1 桁に四捨五入
   var 決まり = {
     '村山': function (品) { return { 基: '売価', 率: 0.95 }; },
     '中尾': function (品, 単位) {
@@ -6500,8 +6500,22 @@ body.num-off .num-col{ display:none !important; }
       if (/年賀|喪中/.test(品)) return { 基: '売価', 率: 0.5 };
       return { 基: '売価', 率: 0.7 };
     },
-    '北上': function (品) { return { 基: '仕入', 率: 1.3 }; }
+    '北上': function (品) { return { 基: '仕入', 率: 1.3 }; },
+    // SPRICE-4（11/18）: アート・エス。名刺はモノクロ（片面・両面とも）1 箱 750 円、カラーが入ったら 1 箱 950 円。年賀状・喪中はがきは売価×0.5。ほかの品目はまだ決まりなし
+    'アート': function (品, 単位) {
+      if (/名刺/.test(品)) { var c = カラー(); var 箱 = c ? 950 : 750, 名 = c ? 'カラー' : 'モノクロ';
+        return /箱/.test(単位) ? { 固定: 箱, 説明: 'アート・エスの名刺（' + 名 + '）は 1 箱 ' + 箱 + ' 円' } : { 固定: 箱 / 100, 説明: 'アート・エスの名刺（' + 名 + '）は 1 箱（100 枚）' + 箱 + ' 円 ＝ 1 枚 ' + (箱 / 100) + ' 円' }; }
+      if (/年賀|喪中/.test(品)) return { 基: '売価', 率: 0.5 };
+      return null;
+    }
   };
+  // カラーが入っているか: 印刷の 1 行目の色数（表・裏）が 2 色以上、または インキに 墨・スミ・黒・K 以外がある
+  function カラー() {
+    var a = Number(String(($('k1-iro1') || {}).value || '').normalize('NFKC')) || 0, b = Number(String(($('k1-iro2') || {}).value || '').normalize('NFKC')) || 0;
+    if (a >= 2 || b >= 2) return true;
+    var inks = []; Array.prototype.forEach.call(document.querySelectorAll('[id^="k1-ink"],[id^="k1-ura"]'), function (el) { var v = String(el.value || '').normalize('NFKC').trim(); if (v) inks = inks.concat(v.split(/[,、，/\s]+/)); });
+    return inks.some(function (x) { return x && !/^(墨|スミ|すみ|黒|K|BK|ブラック)$/i.test(x); });
+  }
   var 官製 = /官製/;
   function 相手() { var cd = String(($('f-custcd') || {}).value || '').trim(); var hit = ''; Object.keys(コード).forEach(function (k) { if (コード[k] === cd) hit = k; }); return hit; }
   function 丸め(x, 桁) { var m = Math.pow(10, 桁); return Math.round(x * m + 1e-9 * (x >= 0 ? 1 : -1)) / m; }
@@ -6513,11 +6527,11 @@ body.num-off .num-col{ display:none !important; }
     var 品 = String(($('f-item') || {}).value || ''), 単位 = '';
     try { var us = $('f-unit'); 単位 = us && us.selectedIndex >= 0 ? String(us.options[us.selectedIndex].text || '') : ''; } catch (e) {}
     var sp = 数('sp-unit');
-    if (官製.test(品)) return sp ? { 社: 社, 売価: sp, 単価: sp, 説明: '官製はがきは ' + 社 + '売価と同じ' } : null;
-    var r = f(品, 単位);
+    if (官製.test(品)) return sp ? { 社: 社, 売価: sp, 単価: sp, 説明: '官製はがきは ' + (社 === 'アート' ? 'アート・エス' : 社) + '売価と同じ' } : null;
+    var r = f(品, 単位); if (!r) return null;
     if (r.固定 != null) return { 社: 社, 売価: sp, 単価: r.固定, 説明: r.説明 };
     if (r.基 === '仕入') { var g = 原単(); return g ? { 社: 社, 売価: sp, 単価: 丸め(g * r.率, 1), 説明: 'トキワの仕入（製品単価 ' + 丸め(g, 2) + '）× ' + r.率 + '（小数 1 桁に四捨五入）' } : null; }
-    return sp ? { 社: 社, 売価: sp, 単価: 丸め(sp * r.率, 1), 説明: 社 + '売価 × ' + r.率 + '（小数 1 桁に四捨五入）' } : null;
+    return sp ? { 社: 社, 売価: sp, 単価: 丸め(sp * r.率, 1), 説明: (社 === 'アート' ? 'アート・エス' : 社) + '売価 × ' + r.率 + '（小数 1 桁に四捨五入）' } : null;
   }
   function 表示(c, 今) {
     var el = $('sp-rule'); if (!el) { var row = $('sp-row'); if (!row) return; el = document.createElement('span'); el.id = 'sp-rule'; el.style.cssText = 'margin-left:10px;font-size:11.5px;color:#475569'; row.appendChild(el); }
@@ -6540,7 +6554,7 @@ body.num-off .num-col{ display:none !important; }
   function 始める() {
     var su = $('sp-unit'); if (!su) return setTimeout(始める, 500);
     su.addEventListener('input', 打った);
-    ['f-item', 'f-lotunit', 'f-lotset', 'f-perbook', 'f-price', 'c-unit', 'c-total', 'f-unit'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('input', function () { var c = 計算(); if (c && id !== 'f-price') 入れる(c, /^c-/.test(id)); 表示(c, String(($('f-price') || {}).value || '').trim()); }); });
+    ['f-item', 'f-lotunit', 'f-lotset', 'f-perbook', 'f-price', 'c-unit', 'c-total', 'f-unit', 'k1-iro1', 'k1-iro2', 'k1-ink', 'k1-ura'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('input', function () { var c = 計算(); if (c && id !== 'f-price') 入れる(c, /^c-/.test(id)); 表示(c, String(($('f-price') || {}).value || '').trim()); }); });
     var sa = $('sp-amt'); if (sa) sa.addEventListener('input', function () { sa.dataset.auto = ''; });
   }
   window.addEventListener('fm-loaded', function () { var sa = $('sp-amt'); if (sa) sa.dataset.auto = ''; setTimeout(開いた, 2000); });
