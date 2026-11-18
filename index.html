@@ -56360,7 +56360,21 @@ function _inqPickCase_(id, kind){
 }
 // AI-KIHYO-3（本多さん 10/30）: 問い合わせ（メール・FAX）から AI で受注／見積を起こす。
 //   本文＋添付の文字（Drive の OCR・AI の費用はかからない）を受注入力／見積入力の「🤖 AIで起こす」に渡して、そのまま読み取りまで進める
-function _inqAiOrder_(id, kind){
+// AI-KIHYO-9（11/18 本多さん「問い合わせをそこに送る。見積なら AI で作成、受注なら AI で自動生成」）:
+//   「🤖 AIにおまかせ」＝ 見積か受注かを決め（振り分け済みならそれ、無ければ Claude に聞く）、受注入力／見積入力で 起票→保存 まで進める
+function _inqAiAuto_(id){
+  var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
+  var bin=(typeof _inqBin_==='function')?_inqBin_(inq):'';
+  if(bin==='受注'||bin==='見積'||bin==='予算見積'){ _inqAiOrder_(id, bin==='受注'?'受注':'見積', true); return; }
+  if(typeof _toastMsg==='function') _toastMsg('🤖 見積の依頼か注文かを AI が判断しています…');
+  var txt='件名: '+String(inq.subject||'')+'\n'+String(inq.body||'').slice(0,3000);
+  var 推測=function(){ return /見積|お見積|概算|いくら|価格|料金|金額を教|費用/.test(txt)?'見積':'受注'; };
+  Promise.resolve(callCloudAPI('claudeText', {}, { prompt:'印刷会社に届いたメールです。「見積の依頼（値段を知りたい）」なら 見積、「注文（作ってほしい・発注・リピート）」なら 受注 と、その 2 文字だけを返してください。\n\n'+txt, maxTokens:10 }))
+    .then(function(r){ var t=String((r&&r.success&&(r.reply||r.text))||''); return /見積/.test(t)?'見積':/受注/.test(t)?'受注':推測(); })
+    .catch(function(){ return 推測(); })
+    .then(function(kind){ if(typeof _toastMsg==='function') _toastMsg('🤖 '+kind+'として起票します'); _inqAiOrder_(id, kind, true); });
+}
+function _inqAiOrder_(id, kind, おまかせ){
   var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
   kind=kind||'受注'; var page=(kind==='受注')?'fmjuchu':'fmmitsu';
   if(!document.getElementById('fm-frame-'+page)){ if(typeof _toastMsg==='function') _toastMsg((kind==='受注'?'受注入力':'見積入力')+'の画面が、この会社の使用範囲に入っていません'); return; }
@@ -56371,7 +56385,7 @@ function _inqAiOrder_(id, kind){
     var head=['件名: '+String(inq.subject||''), '差出人: '+[inq.from_company||inq.custName||'', inq.from_name||'', inq.from_email||''].filter(Boolean).join(' ')].join('\n');
     var seed=[head, String(inq.body||'').slice(0,4000)].concat(texts.filter(Boolean)).join('\n\n');
     try{ localStorage.setItem('fm_ai_seed_'+id, JSON.stringify({ text:seed, at:Date.now() })); }catch(e){}
-    _fmOpenNo_(page, '', '&inq='+encodeURIComponent(id)+'&ai=1&t='+Date.now());
+    _fmOpenNo_(page, '', '&inq='+encodeURIComponent(id)+'&ai=1'+(おまかせ?'&auto=1':'')+'&t='+Date.now());
     try{ if(typeof closeInquiryDetail==='function') closeInquiryDetail(); }catch(e){}
   });
 }
@@ -58580,7 +58594,7 @@ function _inqDetailTopBar_(inq){
     +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%">'+chip+dl+(typeof _inqFlags_==='function'?_inqFlags_(inq):'')+(typeof _inqWaitChip_==='function'?_inqWaitChip_(inq):'')+(inq.linked_project_id?'<span style="font-size:11px;color:#15803d">✅ 案件 '+esc(inq.linked_project_id)+' に転記済</span>':'')+'</div>'
     +((bin==='受注'||bin==='見積'||bin==='予算見積')?'':b(esc(na.label), na.js, true))
     +ent('受注','受注入力へ')+ent('見積','見積書入力へ')+ent('予算見積','予算見積書入力へ')
-    +b('🤖 AIで受注', "_inqAiOrder_('"+esc(inq.id)+"','受注')", false)+b('🤖 AIで見積', "_inqAiOrder_('"+esc(inq.id)+"','見積')", false)   // AI-KIHYO-3: 本文＋添付（FAX）から、リピートを探して起こす   // PICK-3（本多さん 10/2）: 仕分けに関係なく 3 つとも押せる。仕分けと同じものが濃い色
+    +b('🤖 AIにおまかせ', "_inqAiAuto_('"+esc(inq.id)+"')", false)+b('🤖 AIで受注', "_inqAiOrder_('"+esc(inq.id)+"','受注')", false)+b('🤖 AIで見積', "_inqAiOrder_('"+esc(inq.id)+"','見積')", false)   // AI-KIHYO-3: 本文＋添付（FAX）から、リピートを探して起こす   // PICK-3（本多さん 10/2）: 仕分けに関係なく 3 つとも押せる。仕分けと同じものが濃い色
     +(bin!=='校正'?b('🖍 校正BOXへ', "_inqInsertToProofing_('"+esc(inq.id)+"')", false):'')
     +b('🤝 外注へ', "_inqToOutsource_('"+esc(inq.id)+"')", false)   // MAIL-LINK-1: 本文＋添付を外注発注へ
     +b('📁 外注見積書を見積へ', "_inqToQuoteFolder_('"+esc(inq.id)+"')", false)   // QFOLDER-1 ④
