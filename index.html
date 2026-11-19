@@ -48330,18 +48330,39 @@ var CASE_SUBS = ['01_問い合わせ','02_見積','03_受注','04_データ','05
 function _caseDenpyos_(mn){ var out=[]; (DB.projects||[]).forEach(function(p){ if(p&&p.master_no===mn){ var no=(typeof _projFmNo_==='function')?_projFmNo_(p):''; if(no&&out.indexOf(no)<0) out.push(no); } }); return out; }
 function _caseOrg_(p){ return { orgCode: String(p.custCode||p.custcd||(p.fm&&p.fm['fm-custcd'])||''), org: String(p.cust||p.from_company||'') }; }
 // 会社 GAS に作らせて、同じ P番号の案件カード全部に控えを持たせる
+// CASEQUOTA-1（11/19 本多さん「Hub を開くたびに案件フォルダを数十回作ろうとして Drive の上限を使い切っている」）:
+//   案件一覧は行ごとに _caseFolderBlockHTML_ → ここを呼ぶので、描くたびに P番号の数だけ GAS を呼んでいた。失敗しても次の描画でまた呼ぶ。
+//   ・同じ P番号の呼び出しは 1 本にまとめる（終わるまで同じ Promise を返す）
+//   ・失敗した P番号は 30 分呼ばない
+//   ・「上限を超えています」などの上限エラーが出たら、全部の P番号で 1 時間呼ばない（タブを開き直しても続くよう localStorage にも残す）
+var _cfInflight_ = {}, _cfFailAt_ = {}, _cfQuotaKey_ = 'case_folder_quota_until';
+function _cfQuotaUntil_(){ var v = window._cfQuotaUntilMem_ || 0; try{ v = Math.max(v, Number(localStorage.getItem(_cfQuotaKey_) || 0)); }catch(e){} return v; }
+function _cfQuotaHit_(){ var until = Date.now() + 60*60*1000; window._cfQuotaUntilMem_ = until; try{ localStorage.setItem(_cfQuotaKey_, String(until)); }catch(e){} }
 function _caseFolderEnsure_(p, silent){
   if(!p||!p.master_no||typeof callCloudAPI!=='function') return Promise.resolve(null);
   var mn=p.master_no; var known=(DB.projects||[]).find(function(x){ return x&&x.master_no===mn&&x.caseFolder&&x.caseFolder.id; });
   var name=(typeof _ankenName_==='function')?_ankenName_(p):''; if(!name && typeof _ankenNameAuto_==='function'){ try{ name=_ankenNameAuto_(p); }catch(e){} }
   var org=_caseOrg_(p); var denpyos=_caseDenpyos_(mn);
   if(known && known.caseFolder.name===('P'+mn+(name?'_'+name:'')) && (known.caseFolder.denpyos||[]).length>=denpyos.length && Date.now()-new Date(known.caseFolder.at||0).getTime()<6*3600*1000){ p.caseFolder=known.caseFolder; return Promise.resolve(known.caseFolder); }
-  return callCloudAPI('ensureCaseFolder',{},{ pno:String(mn), ankenName:name, orgCode:org.orgCode, org:org.org, denpyos:denpyos }).then(function(r){
+  // CASEQUOTA-1: 上限中・失敗直後は呼ばない（控えがあればそれを返す）
+  var fallback = known ? known.caseFolder : null;
+  if(Date.now() < _cfQuotaUntil_()){ if(fallback) p.caseFolder=fallback; if(!silent) alert('Drive の上限に達しているため、しばらく案件フォルダを作れません（1 時間ほどで戻ります）'); return Promise.resolve(fallback); }
+  if(silent && _cfFailAt_[mn] && Date.now()-_cfFailAt_[mn] < 30*60*1000){ if(fallback) p.caseFolder=fallback; return Promise.resolve(fallback); }
+  if(_cfInflight_[mn]) return _cfInflight_[mn];
+  var pr = callCloudAPI('ensureCaseFolder',{},{ pno:String(mn), ankenName:name, orgCode:org.orgCode, org:org.org, denpyos:denpyos }).then(function(r){
     if(!r||!r.success) throw new Error((r&&r.error)||'案件フォルダを作れません');
     var cf={ id:r.folderId, url:r.url, name:r.name, subs:r.subFolders, denpyos:denpyos, at:new Date().toISOString() };
     (DB.projects||[]).forEach(function(x){ if(x&&x.master_no===mn) x.caseFolder=cf; }); if(typeof saveDB==='function') saveDB();
+    delete _cfFailAt_[mn];
     if(!silent&&typeof _toastMsg==='function') _toastMsg('📁 案件フォルダ '+cf.name); return cf;
-  }).catch(function(e){ console.warn('[案件フォルダ]',e); if(!silent) alert('案件フォルダを作れません: '+String(e.message||e)); return null; });
+  }).catch(function(e){
+    var msg = String((e&&e.message)||e);
+    _cfFailAt_[mn] = Date.now();
+    if(/上限|quota|limit exceeded|Service invoked too many times/i.test(msg)) _cfQuotaHit_();
+    console.warn('[案件フォルダ]',e); if(!silent) alert('案件フォルダを作れません: '+msg); return fallback;
+  }).then(function(v){ delete _cfInflight_[mn]; return v; });
+  _cfInflight_[mn] = pr;
+  return pr;
 }
 // 問い合わせの添付（Drive のファイル）を 01_問い合わせ へ移す
 function _caseFolderMoveAttachments_(p){
@@ -48358,7 +48379,7 @@ function _caseFolderBlockHTML_(r){
 function _caseFolderFill_(r, elId){
   var el=document.getElementById(elId); if(!el) return; var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
   _caseFolderEnsure_(r,true).then(function(cf){
-    if(!cf){ el.innerHTML='<div style="font-weight:700;color:#1e40af">📁 案件フォルダ</div><div style="color:#b91c1c">作れませんでした（Drive のルートが未設定か、権限がありません）</div>'; return; }
+    if(!cf){ var _q = Date.now() < _cfQuotaUntil_(); el.innerHTML='<div style="font-weight:700;color:#1e40af">📁 案件フォルダ</div><div style="color:#b91c1c">'+(_q ? 'Drive の上限に達しているため、いまは作れません（1 時間ほどで自動で戻ります）' : '作れませんでした（Drive のルートが未設定か、権限がありません。30 分後にもう一度試します）')+'</div>'; return; }
     var subs=cf.subs||{}; var head='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-weight:700;color:#1e40af">📁 '+esc(cf.name)+'</span><span style="color:#64748b">Hub から出した見積書・注文書・指示書・校正はここに自動で入ります。Drive を開かなくてもここから見られます</span><a href="'+esc(cf.url)+'" target="_blank" onclick="event.stopPropagation()" style="margin-left:auto;font-size:11px;color:#64748b">Drive で開く（管理用）</a></div>';
     el.innerHTML=head+'<div id="'+elId+'-subs" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px;margin-top:6px"></div>';
     var box=document.getElementById(elId+'-subs');
