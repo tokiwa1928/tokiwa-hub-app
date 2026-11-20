@@ -30,8 +30,10 @@
   ].join('\n');
   // 当社出しのときの -A 伝票: 年賀状の値に上書きするもの（伝票番号・no＝元番号-A、案件ID＝元番号 は自動）
   var 型_ハガキ = ['製品名=官製ハガキ', '売価単価=85'].join('\n');
+  // 喪中はがきのとき: 年賀状の値に上書きするもの（製品名など。-A 伝票はこの上にさらに 型_ハガキ）
+  var 型_喪中 = ['製品名=喪中はがき印刷'].join('\n');
 
-  var 既定 = { 得意先名: '北上プリント', 掛け率: '0.5', 型: 型_年賀, 型A: 型_ハガキ, 見本: 'a109549' };
+  var 既定 = { 得意先名: '北上プリント', 掛け率: '0.5', 型: 型_年賀, 型A: 型_ハガキ, 型喪中: 型_喪中, 見本: 'a109549' };
   var 設定 = 設定を読む();
   function 設定を読む() {
     var s = {}; try { s = JSON.parse(localStorage.getItem(設定の鍵) || '{}') || {}; } catch (e) { s = {}; }
@@ -39,7 +41,11 @@
   }
   function 設定を書く() { try { localStorage.setItem(設定の鍵, JSON.stringify(設定)); return true; } catch (e) { return false; } }   // 満杯でも動く（覚えないだけ）
 
-  var S = { tab: 'fax', file: null, pages: [], rows: [], rep: [], 実行中: false, 校正: { fax: null, rep: null }, 見る: 0, 選: -1 };
+  var S = { tab: 'fax', file: null, pages: [], rows: [], rep: [], 実行中: false, 校正: { nenga: null, mochu: null, rep: null }, 見る: 0, 選: -1 };
+  // FAX の行の種類（年賀状 / 喪中はがき）。伝票の製品名も、校正BOX のカード・LINE WORKS のノートも種類ごとに分ける
+  var 種類の名 = { 年賀: '年賀状', 喪中: '喪中はがき' }, 種類の鍵 = { nenga: '年賀', mochu: '喪中' };
+  function 種類(r) { return r && r.種類 === '喪中' ? '喪中' : '年賀'; }
+  function 製品名(r) { return 伝票の値(r, false)['製品名'] || (種類(r) === '喪中' ? '喪中はがき印刷' : '年賀状印刷'); }
 
   // ---------------------------------------------------------------- 小道具
   function $(id) { return document.getElementById(id); }
@@ -71,7 +77,9 @@
   }
   // 1 行ぶんの伝票の値（はがき=true なら -A 伝票）。空の値は送らない
   function 伝票の値(r, はがき) {
-    var 型 = 型を読む(設定.型); if (はがき) { var a = 型を読む(設定.型A); Object.keys(a).forEach(function (k) { 型[k] = a[k]; }); }
+    var 型 = 型を読む(設定.型), 上書き = function (t) { var a = 型を読む(t); Object.keys(a).forEach(function (k) { 型[k] = a[k]; }); };
+    if (種類(r) === '喪中') 上書き(設定.型喪中);
+    if (はがき) 上書き(設定.型A);
     var 置換 = { お名前: r.お名前, 主文: r.主文, 添文: r.添文, カット: r.カット, 枚数: 数(r.枚数) || '', 単価: 単価(r), 納期: FM日付(r.納期), メモ: r.メモ, 印刷代: 数(r.印刷代) || '' };
     var out = {};
     Object.keys(型).forEach(function (k) {
@@ -118,7 +126,7 @@
     var w = $('fxb'); if (w) { w.style.display = 'flex'; 描く(); return; }
     if (!$('fxb-css')) { var st = document.createElement('style'); st.id = 'fxb-css'; st.textContent = CSS; document.head.appendChild(st); }
     w = document.createElement('div'); w.id = 'fxb';
-    w.innerHTML = '<div class="w"><div class="hd"><b>📠 まとめて起票</b><div class="tabs"><button data-t="fax">FAX 受注票（年賀状）</button><button data-t="rep">リピート（前回と同じ）</button></div>'
+    w.innerHTML = '<div class="w"><div class="hd"><b>📠 まとめて起票</b><div class="tabs"><button data-t="fax">FAX 受注票（年賀状・喪中はがき）</button><button data-t="rep">リピート（前回と同じ）</button></div>'
       + '<span id="fxb-who" style="font-size:11px;color:#cbd5e1"></span><button class="x" id="fxb-x">閉じる</button></div><div class="bd" id="fxb-bd"></div></div>';
     document.body.appendChild(w);
     $('fxb-x').onclick = function () { if (S.実行中 && !confirm('起票の途中です。閉じても裏で続きます（結果はもう一度開くと見えます）。閉じますか？')) return; w.style.display = 'none'; };
@@ -150,7 +158,9 @@
       + '<button class="btn" id="fxb-copy">結果をコピー</button>'
       + '<details style="margin-left:6px"><summary style="cursor:pointer;font-size:12px">⚙ 伝票に入れる値・見本と比べる</summary>' + 設定欄() + '</details></div>'
       + '<div class="msg" id="fxb-gomsg"></div></div>');
-    h.push(校正欄('fax'));
+    var 喪中あり = S.rows.some(function (r) { return 種類(r) === '喪中'; }), 年賀あり = !喪中あり || S.rows.some(function (r) { return 種類(r) === '年賀'; });
+    if (年賀あり) h.push(校正欄('nenga'));
+    if (喪中あり) h.push(校正欄('mochu'));
     bd.innerHTML = h.join('');
     // ファイル
     var drop = $('fxb-drop');
@@ -162,14 +172,14 @@
     $('fxb-ai').onclick = 全部読む;
     $('fxb-addrow').onclick = function () { S.rows.push(空の行(S.rows.length ? S.rows[S.rows.length - 1].page : 0)); FAXを描く(); };
     $('fxb-go').onclick = FAX起票;
-    $('fxb-copy').onclick = function () { 写す(S.rows.filter(function (r) { return r.no; }).map(function (r) { return [r.no, r.noA || '', r.お名前, r.枚数, '主文：' + r.主文, '添文：' + r.添文, 'カット：' + r.カット, r.はがき, r.印刷代, 単価(r), r.納期, r.メモ].join('\t'); }).join('\n'), $('fxb-gomsg')); };
-    表のつなぎ(); 設定のつなぎ(); 校正のつなぎ('fax');
+    $('fxb-copy').onclick = function () { 写す(S.rows.filter(function (r) { return r.no; }).map(function (r) { return [r.no, r.noA || '', 種類の名[種類(r)], r.お名前, r.枚数, '主文：' + r.主文, '添文：' + r.添文, 'カット：' + r.カット, r.はがき, r.印刷代, 単価(r), r.納期, r.メモ].join('\t'); }).join('\n'), $('fxb-gomsg')); };
+    表のつなぎ(); 設定のつなぎ(); if (年賀あり) 校正のつなぎ('nenga'); if (喪中あり) 校正のつなぎ('mochu');
     var pv = $('fxb-pv'); if (pv) pv.onclick = function (e) { if (e.target.tagName === 'IMG') pv.classList.toggle('big'); };
   }
-  function 空の行(page) { return { on: true, page: page || 0, お名前: '', 主文: '', 添文: '', カット: '', 枚数: '', はがき: '', 印刷代: '', 納期: '', メモ: '', 気になる: [], 状態: '', no: '', noA: '' }; }
+  function 空の行(page) { return { on: true, page: page || 0, 種類: '年賀', お名前: '', 主文: '', 添文: '', カット: '', 枚数: '', はがき: '', 印刷代: '', 納期: '', メモ: '', 気になる: [], 状態: '', no: '', noA: '' }; }
   function FAX表() {
     if (!S.rows.length) return '<div style="padding:24px;text-align:center;color:#6b7280">PDF を入れて「AI で全ページを読む」を押すと、ここに 1 ページ 1 行で並びます</div>';
-    var h = ['<table><thead><tr><th>起票</th><th>頁</th><th>お名前</th><th>主文</th><th>添文</th><th>カット</th><th>枚数</th><th>はがき</th><th>北上の印刷代</th><th>単価</th><th>納期</th><th>メモ</th><th>結果</th></tr></thead><tbody>'];
+    var h = ['<table><thead><tr><th>起票</th><th>頁</th><th>種類</th><th>お名前</th><th>主文</th><th>添文</th><th>カット</th><th>枚数</th><th>はがき</th><th>北上の印刷代</th><th>単価</th><th>納期</th><th>メモ</th><th>結果</th></tr></thead><tbody>'];
     S.rows.forEach(function (r, i) {
       var cls = (r.no && (r.はがき !== '当社出し' || r.noA) && r.書いた) ? 'done' : (r.err ? 'ng' : ''); if (!r.on) cls += ' off'; if (i === S.選 ) cls += ' sel';
       var w = function (k) { return (r.気になる || []).indexOf(k) >= 0 ? ' class="warn" title="AI が自信なし"' : ''; };
@@ -177,6 +187,7 @@
       h.push('<tr data-i="' + i + '" class="' + cls + '">',
         '<td style="text-align:center"><input type="checkbox" data-k="on"' + (r.on ? ' checked' : '') + (済 ? ' disabled' : '') + '></td>',
         '<td class="n">' + (r.page ? r.page : '') + '</td>',
+        '<td' + w('種類') + '><select data-k="種類"' + (済 ? ' disabled' : '') + ' style="font-weight:700;color:' + (種類(r) === '喪中' ? '#334155' : '#b91c1c') + '"><option value="年賀"' + (種類(r) === '年賀' ? ' selected' : '') + '>年賀状</option><option value="喪中"' + (種類(r) === '喪中' ? ' selected' : '') + '>喪中</option></select></td>',
         '<td' + w('お名前') + '><input data-k="お名前" value="' + esc(r.お名前) + '" style="min-width:110px"></td>',
         '<td' + w('主文') + '><input data-k="主文" value="' + esc(r.主文) + '" style="width:64px"></td>',
         '<td' + w('添文') + '><input data-k="添文" value="' + esc(r.添文) + '" style="width:64px"></td>',
@@ -210,6 +221,7 @@
         var k = el.getAttribute('data-k');
         el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', function () {
           if (k === 'on') r.on = el.checked; else r[k] = el.value;
+          if (k === '種類') { if (r.気になる) r.気になる = r.気になる.filter(function (x) { return x !== k; }); FAXを描く(); return; }   // 校正BOX の欄が種類ごとに変わる
           if (r.気になる) r.気になる = r.気になる.filter(function (x) { return x !== k; });
           var u = tr.querySelector('[data-u]'); if (u) u.textContent = 単価(r);
           tr.classList.toggle('off', !r.on); var s = $('fxb-sum'); if (s) s.innerHTML = 合計の文();
@@ -219,9 +231,9 @@
   }
   function 合計の文() {
     if (!S.rows.length) return '';
-    var on = S.rows.filter(function (r) { return r.on; }), 枚 = 0, 当社 = 0, 未 = [];
-    on.forEach(function (r, i) { 枚 += 数(r.枚数) || 0; if (r.はがき === '当社出し') 当社++; var miss = 足りない(r); if (miss.length) 未.push((r.お名前 || ('頁' + r.page)) + '：' + miss.join('・')); });
-    return '起票する ' + on.length + ' 件（官製ハガキ -A ' + 当社 + ' 件）・合計 ' + 枚.toLocaleString() + ' 枚'
+    var on = S.rows.filter(function (r) { return r.on; }), 枚 = 0, 当社 = 0, 未 = [], 喪 = 0;
+    on.forEach(function (r, i) { 枚 += 数(r.枚数) || 0; if (種類(r) === '喪中') 喪++; if (r.はがき === '当社出し') 当社++; var miss = 足りない(r); if (miss.length) 未.push((r.お名前 || ('頁' + r.page)) + '：' + miss.join('・')); });
+    return '起票する ' + on.length + ' 件（年賀状 ' + (on.length - 喪) + '・喪中はがき ' + 喪 + '／官製ハガキ -A ' + 当社 + ' 件）・合計 ' + 枚.toLocaleString() + ' 枚'
       + (未.length ? '<br><span class="err">足りない: ' + esc(未.join('　／　')) + '</span>' : '');
   }
   function 足りない(r) { var m = []; if (!String(r.お名前 || '').trim()) m.push('お名前'); if (!(数(r.枚数) > 0)) m.push('枚数'); if (!r.はがき) m.push('はがき'); if (!(数(r.印刷代) > 0)) m.push('印刷代'); if (!FM日付(r.納期)) m.push('納期'); return m; }
@@ -235,7 +247,7 @@
   function 縮める(c, max) { var sc = Math.min(1, max / Math.max(c.width, c.height)); if (sc >= 1) return c; var c2 = document.createElement('canvas'); c2.width = Math.round(c.width * sc); c2.height = Math.round(c.height * sc); c2.getContext('2d').drawImage(c, 0, 0, c2.width, c2.height); return c2; }
   function ファイルを入れる(f) {
     if (S.rows.some(function (r) { return r.no; }) && !confirm('起票した行があります。新しい PDF に入れ替えると、この一覧は消えます（起票した伝票はそのまま）。入れ替えますか？')) return;
-    S.file = f; S.pages = []; S.rows = []; S.校正.fax = null; S.見る = 1; S.選 = -1;
+    S.file = f; S.pages = []; S.rows = []; S.校正.nenga = null; S.校正.mochu = null; S.見る = 1; S.選 = -1;
     var msg = function (t, k) { var m = $('fxb-aimsg'); if (m) { m.textContent = t; m.className = 'msg ' + (k || ''); } };
     FAXを描く(); msg('ページを画像にしています…');
     var 一枚 = function (c) { var big = 縮める(c, 1800); return { url: big.toDataURL('image/jpeg', 0.85), b64: big.toDataURL('image/jpeg', 0.85).split(',')[1] }; };
@@ -258,8 +270,9 @@
   // ---- AI で読む（会社 GAS の claudeVision。1 ページずつ、2 つ並べて）
   function 指示() {
     var t = new Date(), today = t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
-    return '印刷会社に北上プリントから FAX で届いた「年賀はがき受注票」1 ページのスキャンです。書いてある内容だけを、次の JSON 1 つで返してください（説明文は書かない）。\n'
-      + '{"受注票":true,"お名前":"","主文":"","添文":"","カット":"","枚数":0,"はがき":"","印刷代":0,"納期":"","メモ":"","自信がない":[]}\n'
+    return '印刷会社に北上プリントから FAX で届いた「年賀はがき受注票」または「喪中はがき受注票」1 ページのスキャンです。書いてある内容だけを、次の JSON 1 つで返してください（説明文は書かない）。\n'
+      + '{"受注票":true,"種類":"","お名前":"","主文":"","添文":"","カット":"","枚数":0,"はがき":"","印刷代":0,"納期":"","メモ":"","自信がない":[]}\n'
+      + '・種類＝年賀状（年賀はがき）の受注なら "年賀"、喪中はがき（喪中欠礼・年賀欠礼）の受注なら "喪中"。用紙の題名・見本・文面で決める\n'
       + '・お名前＝ご注文のお客様のお名前（様は付けない）。会社名ならそのまま\n'
       + '・主文・添文・カット＝見本の番号・記号を書いてあるとおりに（例 "A-12" "N3"）。無ければ空\n'
       + '・枚数＝印刷する枚数（数字だけ）\n'
@@ -268,7 +281,7 @@
       + '・納期＝YYYY-MM-DD。年が書いていなければ今日（' + today + '）以降でいちばん近い日\n'
       + '・メモ＝手書きの指示・注意・宛名印刷の有無・差出人の住所変更など、上の欄に入らないこと（短く）\n'
       + '・自信がない＝読み取りに自信がない欄の名前の配列（例 ["主文","枚数"]）\n'
-      + '・年賀はがきの受注票でないページ（送付状・白紙など）は {"受注票":false} だけ\n'
+      + '・年賀はがき・喪中はがきの受注票でないページ（送付状・白紙など）は {"受注票":false} だけ\n'
       + '・書いていないことは推測で埋めない';
   }
   function AIで読む(b64) {
@@ -296,11 +309,13 @@
         else {
           ['お名前', '主文', '添文', 'カット', 'メモ'].forEach(function (k) { r[k] = String((o && o[k]) || '').trim(); });
           r.お名前 = r.お名前.replace(/\s*様$/, '');
+          r.種類 = /喪|欠礼/.test(String(o && o.種類 || '')) ? '喪中' : '年賀';
           r.枚数 = 数(o && o.枚数) > 0 ? String(数(o.枚数)) : '';
           r.印刷代 = 数(o && o.印刷代) > 0 ? String(数(o.印刷代)) : '';
           r.はがき = /持/.test(String(o && o.はがき || '')) ? '持参' : /当社|出し|手配|用意/.test(String(o && o.はがき || '')) ? '当社出し' : '';
           r.納期 = 画面日付(o && o.納期);
           r.気になる = Array.isArray(o && o.自信がない) ? o.自信がない.map(String) : [];
+          if (!/年賀|喪|欠礼/.test(String(o && o.種類 || '')) && r.気になる.indexOf('種類') < 0) r.気になる.push('種類');
         }
       }).catch(function (e) { rows[i].err = 'AI: ' + String(e.message || e); 失敗++; })
         .then(function () { 済++; msg('AI で読んでいます… ' + 済 + ' / ' + S.pages.length + (失敗 ? '（失敗 ' + 失敗 + '）' : '')); return 一つ(); });
@@ -332,10 +347,12 @@
     if (不足.length) { msg('足りない欄があります: ' + esc(不足.map(function (r) { return (r.お名前 || ('頁' + r.page)) + '（' + 足りない(r).join('・') + '）'; }).join('　')), 'err'); return; }
     var 名 = {}, 重 = []; S.rows.forEach(function (r) { if (!r.on) return; var k = String(r.お名前).replace(/\s/g, ''); if (名[k]) 重.push(r.お名前); 名[k] = 1; });
     var nA = 対象.filter(function (r) { return r.はがき === '当社出し' && !r.noA; }).length;
-    var 見本 = 伝票の値(対象[0], false);
-    if (!confirm('FileMaker に受注伝票を作ります。\n\n年賀状印刷 ' + 対象.filter(function (r) { return !r.no; }).length + ' 件' + (nA ? '・官製ハガキ（-A）' + nA + ' 件' : '')
+    var 新 = 対象.filter(function (r) { return !r.no; }), 件 = function (k) { return 新.filter(function (r) { return 種類(r) === k; }).length; };
+    var 見本の文 = ['年賀', '喪中'].map(function (k) { var r0 = 対象.filter(function (r) { return 種類(r) === k; })[0]; if (!r0) return ''; var v = 伝票の値(r0, false);
+      return '\n\n' + 種類の名[k] + 'の 1 件目に入れる値:\n' + Object.keys(v).map(function (x) { return '  ' + x + ' = ' + v[x]; }).join('\n'); }).join('');
+    if (!confirm('FileMaker に受注伝票を作ります。\n\n年賀状 ' + 件('年賀') + ' 件・喪中はがき ' + 件('喪中') + ' 件' + (nA ? '・官製ハガキ（-A）' + nA + ' 件' : '')
       + (重.length ? '\n\n⚠ 同じお名前が 2 回あります: ' + 重.join('、') : '')
-      + '\n\n1 件目に入れる値:\n' + Object.keys(見本).map(function (k) { return '  ' + k + ' = ' + 見本[k]; }).join('\n') + '\n\nよろしいですか？')) return;
+      + 見本の文 + '\n\nよろしいですか？')) return;
     S.実行中 = true; var btn = $('fxb-go'); if (btn) btn.disabled = true;
     var i = 0, ok = 0, ng = 0, 注意 = [];
     var 次 = function () {
@@ -351,7 +368,7 @@
     };
     次();
   }
-  // 1 行: 年賀状印刷の伝票 → （当社出しなら）官製ハガキの -A 伝票。途中で止まっても続きから
+  // 1 行: 年賀状印刷（喪中は 喪中はがき印刷）の伝票 → （当社出しなら）官製ハガキの -A 伝票。途中で止まっても続きから
   function 一行起票(r) {
     var 注 = [];
     var 本 = Promise.resolve();
@@ -376,7 +393,8 @@
   function 設定欄() {
     return '<div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:10px;min-width:min(900px,90vw)">'
       + '<div><div class="st">年賀状印刷の伝票（列名=値。{お名前}{主文}{添文}{カット}{枚数}{単価}{納期}{メモ}{印刷代} は一覧から）</div><textarea id="fxb-tpl" rows="16">' + esc(設定.型) + '</textarea></div>'
-      + '<div><div class="st">当社出しの -A 伝票で上書きする値（伝票番号・no＝元番号-A、案件ID＝元番号 は自動）</div><textarea id="fxb-tplA" rows="4">' + esc(設定.型A) + '</textarea>'
+      + '<div><div class="st">当社出しの -A 伝票で上書きする値（伝票番号・no＝元番号-A、案件ID＝元番号 は自動）</div><textarea id="fxb-tplA" rows="3">' + esc(設定.型A) + '</textarea>'
+      + '<div class="st" style="margin-top:8px">喪中はがきの行で上書きする値（-A 伝票はこの上にさらに上の値）</div><textarea id="fxb-tplM" rows="3">' + esc(設定.型喪中) + '</textarea>'
       + '<div class="row" style="margin-top:6px"><label>単価＝印刷代 ×</label><input type="text" id="fxb-rate" value="' + esc(設定.掛け率) + '" style="width:50px"><label>÷ 枚数（小数 2 桁）</label></div>'
       + '<div class="row" style="margin-top:6px"><label>校正BOX の得意先名</label><input type="text" id="fxb-cname" value="' + esc(設定.得意先名) + '" style="width:140px"></div>'
       + '<div class="row" style="margin-top:8px"><button class="btn" id="fxb-save">この値を使う</button><button class="btn" id="fxb-reset">最初の値に戻す</button></div>'
@@ -386,7 +404,7 @@
   }
   function 設定のつなぎ() {
     var sv = $('fxb-save'); if (!sv) return;
-    sv.onclick = function () { 設定.型 = $('fxb-tpl').value; 設定.型A = $('fxb-tplA').value; 設定.掛け率 = $('fxb-rate').value.trim() || '0.5'; 設定.得意先名 = $('fxb-cname').value.trim(); 設定.見本 = $('fxb-sample').value.trim();
+    sv.onclick = function () { 設定.型 = $('fxb-tpl').value; 設定.型A = $('fxb-tplA').value; 設定.型喪中 = $('fxb-tplM').value; 設定.掛け率 = $('fxb-rate').value.trim() || '0.5'; 設定.得意先名 = $('fxb-cname').value.trim(); 設定.見本 = $('fxb-sample').value.trim();
       var ok = 設定を書く(); 描く(); var m = $('fxb-gomsg'); if (m) m.textContent = 'この値で起票します' + (ok ? '' : '（この端末は保存場所が満杯なので、閉じると最初の値に戻ります）'); };
     $('fxb-reset').onclick = function () { if (!confirm('伝票に入れる値を最初の値に戻しますか？')) return; Object.keys(既定).forEach(function (k) { 設定[k] = 既定[k]; }); 設定を書く(); 描く(); };
     $('fxb-cmp').onclick = function () {
@@ -395,7 +413,9 @@
       呼ぶ('画面_読み込み', [no]).then(function (r) {
         var f = (r && r.record && r.record.fields) || {}; if (!r || !r.record) throw new Error(no + ' が見つかりません');
         var 例 = S.rows.filter(function (x) { return x.on; })[0] || { お名前: '（お名前）', 主文: '（主文）', 添文: '（添文）', カット: '（カット）', 枚数: '100', 印刷代: '5000', 納期: '', メモ: '' };
-        var A = /-A$/.test(no), v = 伝票の値(例, A), 型 = 型を読む(設定.型); if (A) { var a = 型を読む(設定.型A); Object.keys(a).forEach(function (k) { 型[k] = a[k]; }); }
+        if (/喪中/.test(String(f['製品名'] || ''))) 例 = Object.assign({}, 例, { 種類: '喪中' });
+        var A = /-A$/.test(no), v = 伝票の値(例, A), 型 = 型を読む(設定.型), 上書き = function (t) { var a = 型を読む(t); Object.keys(a).forEach(function (k) { 型[k] = a[k]; }); };
+        if (種類(例) === '喪中') 上書き(設定.型喪中); if (A) 上書き(設定.型A);
         var h = ['<table><thead><tr><th>列</th><th>このツールの値（' + esc(例.お名前) + '）</th><th>' + esc(no) + ' の値</th><th></th></tr></thead><tbody>'];
         Object.keys(型).forEach(function (k) { var 見 = f[k] == null ? '（列なし）' : String(f[k]); var 同 = /\{/.test(型[k]) ? '—' : (String(v[k] || '') === 見 ? '✓' : '<b style="color:#b91c1c">違う</b>');
           h.push('<tr><td>' + esc(k) + '</td><td>' + esc(v[k] == null ? '' : v[k]) + '</td><td>' + esc(見) + '</td><td style="text-align:center">' + 同 + '</td></tr>'); });
@@ -501,9 +521,10 @@
   }
   function 校正欄(kind) {
     var H = ハブ(), R = S.校正[kind];
-    var h = '<div class="sec"><div class="st">4. 校正BOX・LINE WORKS へ（起票した伝票を 1 枚のカードにまとめる）</div>';
+    var fax = kind !== 'rep';
+    var h = '<div class="sec"><div class="st">4. 校正BOX・LINE WORKS へ' + (fax ? '【' + 種類の名[種類の鍵[kind]] + '】' : '') + '（起票した伝票を 1 枚のカードにまとめる' + (fax ? '。年賀状と喪中はがきは別のカード・別のノート' : '') + '）</div>';
     if (!H) return h + '<div class="msg err">Hub の中で開いた受注登録からだけ使えます（Tokiwa Hub →「受注登録」のタブ）。この画面は単独で開かれています。起票した番号は「結果をコピー」で控えてください</div></div>';
-    h += '<div style="font-size:12px;color:#4b5563">校正BOX にカードを 1 枚作り（伝票は全部 fmNos に）、Drive の校正フォルダの <b>01_入稿データ</b> に ' + (kind === 'fax' ? 'FAX の PDF' : '下で選んだファイル') + ' を置き、LINE WORKS のノートを作ります（本文に 伝票番号・お名前・枚数・見本No・はがき・納期）。</div>';
+    h += '<div style="font-size:12px;color:#4b5563">校正BOX にカードを 1 枚作り（伝票は全部 fmNos に）、Drive の校正フォルダの <b>01_入稿データ</b> に ' + (fax ? 'FAX の PDF' : '下で選んだファイル') + ' を置き、LINE WORKS のノートを作ります（本文に 伝票番号・お名前・枚数・見本No・はがき・納期）。</div>';
     if (kind === 'rep') h += '<div class="row" style="margin-top:6px"><label>入稿データ（任意）</label><input type="file" id="fxr-files" multiple></div>';
     h += '<div class="row" style="margin-top:6px"><label>件名</label><input type="text" id="fxk-title-' + kind + '" value="' + esc(校正の件名(kind)) + '" style="flex:1;min-width:320px">'
       + '<button class="btn p" id="fxk-go-' + kind + '">📸 校正BOX・LINE WORKS へ</button></div>';
@@ -512,18 +533,18 @@
     return h;
   }
   function 起票済み(kind) {
-    if (kind === 'fax') return S.rows.filter(function (r) { return r.no && r.書いた; });
+    if (kind !== 'rep') return S.rows.filter(function (r) { return r.no && r.書いた && 種類(r) === 種類の鍵[kind]; });
     return S.rep.filter(function (r) { return r.no && r.書いた; });
   }
   function 校正の件名(kind) {
     var rs = 起票済み(kind); if (!rs.length) return '';
-    if (kind === 'fax') { var 名 = rs.map(function (r) { return r.お名前; }); var t = '年賀状印刷 ' + rs.length + '件（' + 名.slice(0, 8).join('・') + (名.length > 8 ? ' ほか' : '') + '）'; return t; }
+    if (kind !== 'rep') { var 名 = rs.map(function (r) { return r.お名前 + '様'; }); return (設定.得意先名 ? 設定.得意先名 + ' ' : '') + 製品名(rs[0]) + ' ' + rs.length + '件（' + 名.slice(0, 5).join('・') + (名.length > 5 ? ' ほか' : '') + '）'; }
     return rs.length === 1 ? rs[0].品名 : (rs[0].品名 + ' ほか' + (rs.length - 1) + '件');
   }
   function ノート本文(kind) {
     var rs = 起票済み(kind); if (!rs.length) return '';
     var md = function (v) { var f = FM日付(v); return f ? (+f.split('/')[0]) + '/' + (+f.split('/')[1]) : ''; };
-    if (kind === 'fax') return ['北上プリント 年賀状 ' + rs.length + ' 件（FAX 受注票）'].concat(rs.map(function (r) {
+    if (kind !== 'rep') return [(設定.得意先名 || '北上プリント') + ' ' + 製品名(rs[0]) + ' ' + rs.length + ' 件（FAX 受注票）'].concat(rs.map(function (r) {
       return r.no + '  ' + r.お名前 + ' 様  ' + r.枚数 + '枚  主文：' + (r.主文 || '-') + '  添文：' + (r.添文 || '-') + '  カット：' + (r.カット || '-') + '  はがき：' + r.はがき + (r.noA ? '（' + r.noA + '）' : '') + '  納期 ' + md(r.納期) + (r.メモ ? '  ※' + r.メモ : '');
     })).join('\n');
     return ['リピート（前回と同じ）' + rs.length + ' 件'].concat(rs.map(function (r) {
@@ -549,23 +570,23 @@
       var H = ハブ(); if (!H) return;
       var rs = 起票済み(kind);
       if (!rs.length) { m.innerHTML = '<span class="err">先に起票してください（起票した伝票がありません）</span>'; return; }
-      if (kind === 'fax' && S.rows.some(function (r) { return r.on && !(r.no && r.書いた); }) && !confirm('まだ起票していない（失敗した）行があります。起票した ' + rs.length + ' 件だけで校正BOX に送りますか？')) return;
+      if (kind !== 'rep' && S.rows.some(function (r) { return r.on && 種類(r) === 種類の鍵[kind] && !(r.no && r.書いた); }) && !confirm('まだ起票していない（失敗した）行があります。起票した ' + rs.length + ' 件だけで校正BOX に送りますか？')) return;
       if (H.ready && !H.ready()) { m.innerHTML = '<span class="err">Hub にログインしていません。Hub 本体でログインしてから押してください</span>'; return; }
       var nos = [], items = [];
       rs.forEach(function (r) {
-        if (kind === 'fax') { nos.push(r.no); items.push({ no: r.no, name: '年賀状印刷（' + r.お名前 + '）' }); if (r.noA) { nos.push(r.noA); items.push({ no: r.noA, name: '官製ハガキ（' + r.お名前 + '）' }); } }
+        if (kind !== 'rep') { nos.push(r.no); items.push({ no: r.no, name: 製品名(r) + '（' + r.お名前 + '）' }); if (r.noA) { nos.push(r.noA); items.push({ no: r.noA, name: '官製ハガキ（' + r.お名前 + '）' }); } }
         else { nos.push(r.no); items.push({ no: r.no, name: r.品名 + (r.ユーザー ? '（' + r.ユーザー + '）' : '') }); }
       });
       var 納期 = rs.map(function (r) { return 画面日付(r.納期); }).filter(Boolean).sort()[0] || '';
       var title = ($('fxk-title-' + kind) || {}).value || 校正の件名(kind), body = ($('fxk-body-' + kind) || {}).value || ノート本文(kind);
       b.disabled = true; m.innerHTML = 'ファイルを用意しています…';
-      var files = kind === 'fax' ? (S.file ? [S.file] : []) : Array.prototype.slice.call((($('fxr-files') || {}).files) || []);
+      var files = kind !== 'rep' ? (S.file ? [S.file] : []) : Array.prototype.slice.call((($('fxr-files') || {}).files) || []);
       var big = files.filter(function (f) { return f.size > 25 * 1024 * 1024; }); if (big.length) { m.innerHTML = '<span class="err">25MB を超えるファイルは置けません: ' + esc(big.map(function (f) { return f.name; }).join('、')) + '</span>'; b.disabled = false; return; }
       Promise.all(files.map(function (f, i) { return new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res({ name: 名前を付ける(f, nos[0], kind, i, files.length), mime: f.type || 'application/pdf', base64: String(fr.result).split(',')[1] || '' }); }; fr.onerror = function () { rej(new Error(f.name + ' を読めません')); }; fr.readAsDataURL(f); }); }))
         .then(function (fs) {
           m.innerHTML = '校正BOX にカードを作り、Drive に置いて、LINE WORKS のノートを作っています…（数十秒かかることがあります）';
-          return H.makeCard({ nos: nos, items: items, custCode: kind === 'fax' ? (型を読む(設定.型)['得意先コード'] || '') : '', custName: kind === 'fax' ? 設定.得意先名 : '', prodName: title, dueDate: 納期,
-            note: (kind === 'fax' ? 'FAX 受注票（' + (S.file ? S.file.name : '') + '）から まとめて起票' : 'リピート まとめて起票') + '：' + nos.join('・'), lwComment: body, files: fs });
+          return H.makeCard({ nos: nos, items: items, custCode: kind !== 'rep' ? (型を読む(設定.型)['得意先コード'] || '') : '', custName: kind !== 'rep' ? 設定.得意先名 : '', prodName: title, dueDate: 納期,
+            note: (kind !== 'rep' ? 'FAX 受注票・' + 種類の名[種類の鍵[kind]] + '（' + (S.file ? S.file.name : '') + '）から まとめて起票' : 'リピート まとめて起票') + '：' + nos.join('・'), lwComment: body, files: fs });
         })
         .then(function (R) { S.校正[kind] = R; m.innerHTML = 校正の結果(R); 開く(); b.disabled = false; b.textContent = '📸 もう一度（同じカード・ノートに書き足す）'; })
         .catch(function (e) { var t = String(e.message || e); m.innerHTML = '<span class="err">' + esc(t) + '</span>' + (上限か(t) ? '<div class="full">' + esc(上限の文(t)) + '</div>' : ''); b.disabled = false; });
@@ -573,7 +594,7 @@
   }
   function 名前を付ける(f, no, kind, i, n) {
     var ext = (f.name.match(/\.([^.]+)$/) || ['', 'pdf'])[1];
-    if (kind === 'fax') return no + '_' + (設定.得意先名 || '北上') + '_年賀状受注票_FAX' + (n > 1 ? '_' + (i + 1) : '') + '.' + ext;
+    if (kind !== 'rep') return no + '_' + (設定.得意先名 || '北上') + '_' + 種類の名[種類の鍵[kind]] + '受注票_FAX' + (n > 1 ? '_' + (i + 1) : '') + '.' + ext;
     return no + '_' + f.name;
   }
   function 写す(text, el) {
@@ -587,7 +608,7 @@
     if (document.getElementById('fxb-open')) return true;
     var nb = document.querySelector('.hdrow .btns button[onclick="newRec()"]'); if (!nb) return false;
     var b = document.createElement('button'); b.id = 'fxb-open'; b.className = 'fb'; b.textContent = '📠 まとめて起票';
-    b.title = 'FAX の受注票（年賀状）の PDF を AI で読んで、まとめて起票 → 校正BOX・LINE WORKS へ。名刺などのリピートもまとめて';
+    b.title = 'FAX の受注票（年賀状・喪中はがき）の PDF を AI で読んで、まとめて起票 → 校正BOX・LINE WORKS へ。名刺などのリピートもまとめて';
     b.style.cssText = 'background:#0f766e !important;color:#fff !important;border-color:#0f766e !important;font-weight:700';
     b.onclick = 開く;
     var after = Array.prototype.filter.call(nb.parentNode.children, function (x) { return /AIで起票/.test(x.textContent || ''); })[0] || nb;
