@@ -22269,6 +22269,70 @@ function _lwGas_(data){ var d=Object.assign({ apiKey:CLOUD_CONFIG.API_KEY }, dat
   if(simple){ var u=new URL(CLOUD_CONFIG.GAS_URL); Object.keys(d).forEach(function(k){ if(d[k]!=null && d[k]!=='') u.searchParams.set(k, String(d[k])); });
     if(u.toString().length<6000) return fetch(u.toString(),{ method:'GET', redirect:'follow' }).then(function(r){ return r.text(); }).then(function(t){ try{ return JSON.parse(t); }catch(e){ console.warn('[LWSYNC] GAS の返事が JSON ではありません', t.slice(0,300)); throw e; } }); }
   return fetch(CLOUD_CONFIG.GAS_URL,{ method:'POST', redirect:'follow', body:JSON.stringify(d) }).then(function(r){ return r.text(); }).then(function(t){ try{ return JSON.parse(t); }catch(e){ console.warn('[LWSYNC] GAS の返事が JSON ではありません', t.slice(0,300)); throw e; } }); }
+// ═══ FAXJUCHU-1（11/20 本多さん「Claude に頼んでいた FAX 受注票の起票〜校正BOX〜LINE WORKS を Hub だけで」）═══
+//   受注入力（tools/fm-juchu-hub.html、この画面の iframe）の「まとめて起票」から直接呼ぶ。localStorage の待ち行列（fm_dtp_pending）を通さない
+//   （localStorage が満杯の端末では setItem が黙って失敗し、校正BOX にカードが来なかったため）。
+//   o = { nos:[伝票番号…], items:[{no,name}], custCode, custName, endUser, prodName, dueDate:'YYYY-MM-DD', note, lwComment, files:[{name,mime,base64}] }
+//   戻り値 = { id, folderUrl, uploaded:[名前], lw:{ ok, postId, groupName, error }, errors:[文], driveFull:true/false }
+window.HubFaxBridge = {
+  ver: 1,
+  ready: function(){ return !!(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn); },
+  findCard: function(no){ no=String(no||''); var p=(DB.proofings||[]).find(function(x){ return x && (String(x.fmNo||'')===no || (x.fmNos||[]).map(String).indexOf(no)>=0); }); return p?{ id:p.id, fmNo:p.fmNo, fmNos:p.fmNos||[], prodName:p.prodName||'', folderUrl:p.driveFolderUrl||'', lw:!!p.lwNote }:null; },
+  makeCard: async function(o){
+    o=o||{}; var nos=(o.nos||[]).map(String).filter(function(x,i,a){ return x && a.indexOf(x)===i; });
+    if(!nos.length) throw new Error('伝票番号がありません');
+    if(!Array.isArray(DB.proofings)) DB.proofings=[];
+    var now=new Date().toISOString(), who=(typeof currentAuth!=='undefined'&&currentAuth&&currentAuth.userName)||o.by||'';
+    var out={ id:'', folderUrl:'', uploaded:[], fileIds:[], lw:null, errors:[], driveFull:false };
+    var 上限か=function(m){ return /上限を超えて|storage ?quota|quota ?exceeded|storageQuotaExceeded|insufficient ?storage/i.test(String(m||'')); };
+    var items=(o.items||[]).filter(function(x){ return x&&x.no; }).map(function(x){ return { no:String(x.no), name:String(x.name||'') }; });
+    var p=DB.proofings.find(function(x){ return x && (nos.indexOf(String(x.fmNo||''))>=0 || (x.fmNos||[]).some(function(n){ return nos.indexOf(String(n))>=0; })); });
+    if(p){ var m=(p.fmNos&&p.fmNos.length?p.fmNos:[p.fmNo]).map(String); nos.forEach(function(n){ if(m.indexOf(n)<0) m.push(n); }); p.fmNos=m.length>1?m:undefined;
+      var it=(p.fmItems||[]).slice(); items.forEach(function(x){ if(!it.some(function(y){ return y.no===x.no; })) it.push(x); }); if(it.length) p.fmItems=it; p.lastMoveAt=now; }
+    else {
+      p={ id:'PRF'+Date.now()+Math.floor(Math.random()*1000), custName:o.custName||'', custCode:String(o.custCode||''), fmDate:now.slice(0,10), prodName:o.prodName||'', endUser:o.endUser||'', projectId:'',
+          fmNo:nos[0], fmNos:(nos.length>1?nos:undefined), fmItems:(items.length?items:undefined), status:((typeof _proofStatuses_==='function'&&_proofStatuses_()[0])||{}).key||'s_ask_wait',
+          versions:[], createdAt:now, lastMoveAt:now, dueDate:o.dueDate||'', isDraft:false, note:o.note||'', fromFax:true };
+      DB.proofings.push(p);
+    }
+    out.id=p.id;
+    try{ saveDB(); }catch(e){ out.errors.push('Hub に保存: '+(e&&e.message||e)); }
+    // Drive: 校正フォルダ → 01_入稿データ に PDF
+    var files=(o.files||[]).filter(function(f){ return f&&f.base64; });
+    var ok=null; try{ ok=await ensureProofDriveFolder(p.id, true); }catch(e){ p._driveErr=String(e&&e.message||e); }
+    if(!ok||!p.driveSubFolders){ var de=p._driveErr||'フォルダを作れませんでした'; out.errors.push('Drive フォルダ: '+de); if(上限か(de)) out.driveFull=true; }
+    else {
+      out.folderUrl=p.driveFolderUrl||'';
+      var sub=p.driveSubFolders['01_入稿データ']||p.driveSubFolders[Object.keys(p.driveSubFolders).filter(function(k){ return /入稿/.test(k); })[0]];
+      if(files.length && (!sub||!sub.id)) out.errors.push('Drive: 01_入稿データ のフォルダがありません');
+      for(var i=0;sub&&sub.id&&i<files.length;i++){
+        var f=files[i];
+        try{
+          var r=await callCloudAPI('uploadProofFile',{},{ folderId:sub.id, name:f.name, mime:f.mime||'application/pdf', base64:f.base64 });
+          if(!r||!r.success) throw new Error((r&&r.error)||'置けませんでした');
+          out.uploaded.push(r.name||f.name); out.fileIds.push(r.fileId);
+          p.versions=p.versions||[]; p.versions.push({ id:'VER'+Date.now()+i, fileName:r.name||f.name, kind:'manuscript', round:1, subVersion:1, driveFileId:r.fileId, driveUrl:r.url,
+            drivePreviewUrl:'https://drive.google.com/file/d/'+r.fileId+'/preview', uploadedAt:new Date().toISOString(), shareLink:r.url, feedback:'', annotations:[], folder:'01_入稿データ' });
+        }catch(e){ var em=String(e&&e.message||e); out.errors.push('Drive に '+f.name+' を置けません: '+em); if(上限か(em)) out.driveFull=true; }
+      }
+    }
+    // LINE WORKS ノート（既にノートがあれば書き足し）
+    var title=((p.fmNo?p.fmNo+' ':'')+(p.custName?p.custName+' ':'')+(p.prodName||'')).trim()||'校正';
+    try{
+      var lr=await _lwGas_({ action:'lwSyncInsert', postId:(p.lwNote&&p.lwNote.postId)||'', groupId:(p.lwNote&&p.lwNote.groupId)||'', title:p.lwNote?'':title, kind:'入稿',
+        comment:(o.lwComment?String(o.lwComment)+'\n':'')+'🔗 Tokiwa Hub で詳細: '+_hubLink_('proof', p.id), by:who, fileIds:out.fileIds.filter(Boolean), notify:true });
+      if(!lr||!lr.success) throw new Error((lr&&lr.error)||'応答なし');
+      if(!p.lwNote) p.lwNote={ groupId:lr.groupId||'', groupName:lr.groupName||'', postId:String(lr.postId), title:title };
+      p.lwLog=(p.lwLog||[]).concat([{ at:new Date().toISOString(), by:who, kind:'入稿', auto:true }]).slice(-50);
+      out.lw={ ok:true, postId:String(lr.postId||(p.lwNote&&p.lwNote.postId)||''), groupName:lr.groupName||(p.lwNote&&p.lwNote.groupName)||'' };
+    }catch(e){ var le=String(e&&e.message||e); out.lw={ ok:false, error:le }; out.errors.push('LINE WORKS ノート: '+le); }
+    p.lastMoveAt=new Date().toISOString();
+    try{ saveDB(); }catch(e){}
+    try{ if(typeof renderProofingList==='function') renderProofingList(); }catch(e){}
+    return out;
+  },
+  open: function(id){ try{ if(typeof swPage==='function'){ var b=document.querySelector('.tb-btn[data-page="proofing"]'); swPage('proofing', b); } }catch(e){} setTimeout(function(){ try{ showProofingDetail(id); }catch(e){} }, 200); }
+};
 function _lwAutoPost_(p, o){
   if(!p || window._lwSyncOff_ || !(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn)) return;
   o=o||{}; var who=(currentAuth&&currentAuth.userName)||'';
@@ -23739,6 +23803,7 @@ async function ensureProofDriveFolder(proofingId, silent){
     var _parent = _cf && _cf.subs && _cf.subs['05_校正'] ? _cf.subs['05_校正'].id : '';
     var r = await callCloudAPI('ensureProofFolder', {}, { seiban: seiban, company: company, product: product, parentId: _parent, year: String((p.createdAt||new Date().toISOString()).slice(0,4)) });
     if(r && r.success){
+      delete p._driveErr;
       p.driveFolderId = r.folderId;
       p.driveFolderUrl = r.folderUrl;
       p.driveSubFolders = r.subFolders;
@@ -23748,9 +23813,10 @@ async function ensureProofDriveFolder(proofingId, silent){
       if(!silent && typeof _toastMsg === 'function') _toastMsg('📁 保存先フォルダを用意しました: ' + r.folderName);
       return p;
     } else {
+      p._driveErr = String((r && r.error) || 'unknown');   // FAXJUCHU-1: 失敗の理由を呼んだ側へ（Drive の上限など）
       if(!silent) alert('保存先フォルダの作成に失敗: ' + ((r && r.error) || 'unknown') + '\n(Drive保存先が未設定の場合は 設定 で登録してください)');
     }
-  } catch(e){ if(!silent) alert('⚠ ' + e.message); }
+  } catch(e){ p._driveErr = String((e && e.message) || e); if(!silent) alert('⚠ ' + e.message); }
   return null;
 }
 // STAGE-1: 校ステップ → Driveフォルダ名の対応 (出/戻ペア)
