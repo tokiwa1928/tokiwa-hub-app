@@ -1,7 +1,9 @@
-// 速い中継（Cloudflare Workers）── FAST-5
+// 速い中継（Cloudflare Workers）── FAST-5 ／ HUBDB-1（11/21）: Hub のデータ（D1）からも返す
 //   Hub の受注入力（tools/fm-juchu-hub.html）から fm-bridge.js 経由で呼ばれる。
 //   Apps Script の中継と同じ呼び方（POST JSON { action, idToken, ... }）・同じ返事（{ ok, user, data } / { ok:false, error }）。
 //   受けるのは FileMaker を「読む」だけ: 画面_読み込み（軽く）・画面_recordIdで読む。それ以外は { ok:false, fallback:true } を返し、画面は Apps Script へ回す。
+
+import { 行にする, 列名, UPSERT, 配る列, 日付数 } from './rows.js';
 
 const mem = { idTok: null, idTokAt: 0, session: null, sessionAt: 0, fields: null, fieldsAt: 0, users: new Map() };
 
@@ -10,7 +12,7 @@ export default {
     const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' };
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     const json = (o, status) => new Response(JSON.stringify(o), { status: status || 200, headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
-    if (request.method === 'GET') return json({ ok: true, who: 'tokiwa-fm-fast', actions: ['画面_読み込み', '画面_recordIdで読む'], t: new Date().toISOString() });
+    if (request.method === 'GET') return json({ ok: true, who: 'tokiwa-fm-fast', actions: ['画面_読み込み', '画面_recordIdで読む'].concat(env.DB ? D1の操作 : []), d1: !!env.DB, t: new Date().toISOString() });
     let req = {};
     try { req = JSON.parse(await request.text() || '{}'); } catch (e) { return json({ ok: false, error: '中身が JSON ではありません' }, 400); }
     const t0 = Date.now();
@@ -18,6 +20,12 @@ export default {
       const who = await authorize(req, env);
       const tAuth = Date.now() - t0;
       let data;
+      if (env.DB && D1の操作.indexOf(req.action) >= 0) {   // HUBDB-1
+        const out = await D1で(env, req, who);
+        if (out && out.fallback) return json({ ok: false, fallback: true, error: out.error || 'fallback' });
+        if (out && out.生) return new Response('{"ok":true,"user":' + JSON.stringify(who.email) + ',"data":' + out.生 + '}', { headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+        return json({ ok: true, user: who.email, data: out });
+      }
       if (req.action === '画面_読み込み') data = await 画面_読み込み(env, String(req['番号'] || ''), req['軽く'] === true || req['軽く'] === 'true');
       else if (req.action === '画面_recordIdで読む') data = await 画面_recordIdで読む(env, String(req.recordId || ''));
       else return json({ ok: false, fallback: true, error: 'この中継では受けない操作です: ' + req.action });
@@ -118,4 +126,77 @@ async function 画面_recordIdで読む(env, recordId) {
   const d = (r.response.data || [])[0]; if (!d) throw new Error('レコードが見つかりません');
   const t伝票 = Date.now() - t;
   return { ok: true, writable: (await fieldInfo(env, lay)).writable, record: { recordId: d.recordId, modId: d.modId, fields: d.fieldData }, 付属で: true, 履歴: [], 計時: { 伝票検索: t伝票 } };
+}
+
+// ============================================================ HUBDB-1: Hub のデータ（Cloudflare D1）から返す
+//   取り込みは GitHub Actions「Hub DB 同期」（tools/fm-fast/sync.mjs）。10 分おきの差分＋保存直後の D1_更新 で新しくなる。
+//   返り値は Apps Script の中継（写し_索引を配る・写し_差分・画面_一覧・写し_一覧・写し_読み込み）と同じ形。
+const D1の操作 = ['写し_索引を配る', '写し_差分', '画面_一覧', '写し_一覧', '写し_読み込み', 'D1_更新', 'D1_状態'];
+
+async function D1で(env, req, who) {
+  const db = env.DB, t0 = Date.now();
+  if (req.action === 'D1_状態') {
+    const n = await db.prepare('SELECT COUNT(*) AS n, MAX(synced_at) AS last FROM juchu').first();
+    const logs = await db.prepare('SELECT * FROM sync_log ORDER BY at DESC LIMIT 5').all();
+    const idx = await db.prepare("SELECT made, COUNT(*) AS parts FROM blob WHERE name='index' GROUP BY made").first();
+    return { ok: true, 件数: n && n.n, 最後の書き込み: n && n.last, 索引: idx, 記録: logs.results };
+  }
+  if (req.action === '写し_索引を配る') {
+    const r = await db.prepare("SELECT data FROM blob WHERE name='index' ORDER BY part").all();
+    if (!r.results || !r.results.length) return { fallback: true, error: 'D1 の索引がまだありません' };
+    return { 生: r.results.map(x => x.data).join('') };
+  }
+  if (req.action === '写し_差分') {
+    const d = /^\d\d\/\d\d\/\d{4}$/.test(String(req['日付'] || '')) ? String(req['日付']) : null;
+    const 以降 = d || (() => { const x = new Date(Date.now() - 15 * 3600 * 1000); return String(x.getUTCMonth() + 1).padStart(2, '0') + '/' + String(x.getUTCDate()).padStart(2, '0') + '/' + x.getUTCFullYear(); })();
+    const r = await db.prepare('SELECT idx FROM juchu WHERE shusei_n >= ? ORDER BY recordId').bind(日付数(以降)).all();
+    const rows = (r.results || []).map(x => x.idx);
+    return { 生: '{"ok":true,"列":' + JSON.stringify(配る列) + ',"行":[' + rows.join(',') + '],"件数":' + rows.length + ',"以降":' + JSON.stringify(以降) + ',"取った":' + JSON.stringify(new Date().toISOString()) + ',"源":"D1"}' };
+  }
+  if (req.action === '画面_一覧' || req.action === '写し_一覧') {
+    const c = req['条件'] || {};
+    let 件数 = Number(c['件数'] || 50); if (!(件数 > 0)) 件数 = 50; if (件数 > 200) 件数 = 200;
+    let kw = String(c['キーワード'] || '').trim(), 番号 = String(c['伝票番号'] || '').trim();
+    const cust = String(c['得意先コード'] || '').trim(), 段階 = String(c['段階'] || '').trim();
+    let 日数 = Number(c['日数']); if (isNaN(日数)) 日数 = 90;
+    if (!番号 && /^[a-zA-Z]\d{3,}$/.test(kw)) { 番号 = kw; kw = ''; }
+    const w = [], b = [];
+    if (番号) { w.push('denpyo LIKE ?'); b.push(番号 + '%'); }
+    if (kw) { w.push('seihin LIKE ?'); b.push('%' + kw + '%'); }
+    if (cust) { w.push('tokui = ?'); b.push(cust); }
+    if (段階) { w.push('kubun = ?'); b.push(段階); }
+    if (!w.length && !(日数 > 0)) 日数 = 90;
+    if (日数 > 0) { const x = new Date(Date.now() + 9 * 3600 * 1000 - 日数 * 86400000); w.push('kihyo_n >= ?'); b.push(Number(x.getUTCFullYear() + String(x.getUTCMonth() + 1).padStart(2, '0') + String(x.getUTCDate()).padStart(2, '0'))); }
+    const where = w.length ? ' WHERE ' + w.join(' AND ') : '';
+    const order = 番号 ? ' ORDER BY denpyo ASC' : ' ORDER BY kihyo_n DESC, recordId DESC';
+    const [rows, cnt] = await db.batch([db.prepare('SELECT ichiran FROM juchu' + where + order + ' LIMIT ' + 件数).bind(...b), db.prepare('SELECT COUNT(*) AS n FROM juchu' + where).bind(...b)]);
+    const list = (rows.results || []).map(x => x.ichiran);
+    return { 生: '{"ok":true,"件数":' + list.length + ',"全体":' + ((cnt.results[0] || {}).n || 0) + ',"日数":' + 日数 + ',"ミリ秒":' + (Date.now() - t0) + ',"源":"D1","行":[' + list.join(',') + ']}' };
+  }
+  if (req.action === '写し_読み込み') {
+    const 番号 = String(req['番号'] || '').trim(); if (!番号) throw new Error('番号を入れてください');
+    const r = await db.prepare('SELECT recordId, modId, fields, anken_id FROM juchu WHERE denpyo = ? OR mitsumori = ? LIMIT 1').bind(番号, 番号).first();
+    if (!r) return { ok: true, record: null, 履歴: [], 源: 'D1' };
+    if (/_大きすぎ/.test(r.fields)) return { fallback: true, error: '大きい伝票は Apps Script で' };
+    let 履歴 = [];
+    if (r.anken_id) {
+      const h = await db.prepare('SELECT recordId, kubun, denpyo, mitsumori, kihyo, kihyo_n, ichiran FROM juchu WHERE anken_id = ? ORDER BY kihyo_n, recordId').bind(r.anken_id).all();
+      履歴 = (h.results || []).map(x => { const o = JSON.parse(x.ichiran || '{}'); return { recordId: String(x.recordId), 区分: x.kubun || '（従来の受注）', 番号: x.mitsumori || x.denpyo || '', 起票日: x.kihyo || '', 合計金額: o['合計金額'], 売価金額: o['売価金額'] }; });
+    }
+    return { 生: '{"ok":true,"writable":[],"源":"D1","record":{"recordId":' + JSON.stringify(String(r.recordId)) + ',"modId":' + JSON.stringify(String(r.modId)) + ',"fields":' + r.fields + '},"履歴":' + JSON.stringify(履歴) + '}' };
+  }
+  if (req.action === 'D1_更新') {   // 画面が保存した直後に呼ぶ: FileMaker から 1 件読み直して D1 へ
+    const ids = [].concat(req.recordId || req['recordIds'] || []).map(String).filter(x => /^\d+$/.test(x)).slice(0, 20);
+    const 番号 = String(req['番号'] || '').trim();
+    const recs = [];
+    for (const id of ids) {
+      const r = await fmCall(env, '/layouts/' + encodeURIComponent(env.LAYOUT) + '/records/' + id);
+      if (r.code === '0' && r.response.data && r.response.data[0]) { const d = r.response.data[0]; recs.push({ recordId: d.recordId, modId: d.modId, fields: d.fieldData }); }
+      else if (r.code === '101') await db.prepare('DELETE FROM juchu WHERE recordId = ?').bind(Number(id)).run();   // 消された伝票
+    }
+    if (番号) { const f = await find(env, env.LAYOUT, [{ '伝票番号': '==' + 番号 }], 5); recs.push(...f.records); }
+    if (recs.length) await db.batch(recs.map(rec => { const row = 行にする(rec); return db.prepare(UPSERT).bind(...列名.map(c => row[c])); }));
+    return { ok: true, 更新: recs.length };
+  }
+  return { fallback: true, error: '知らない操作' };
 }

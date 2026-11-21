@@ -1,0 +1,44 @@
+# HUBDB-1（11/21）: FileMaker の受注を Hub のデータベース（Cloudflare D1）へ写す。
+#   10 分おき: 修正日が昨日以降の伝票（変わったものだけ書く）
+#   毎晩 3:20（日本時間）: 索引を作り直す
+#   手で: Actions →「Hub DB 同期」→ Run workflow（mode: full で全件。最初の 1 回）
+name: Hub DB 同期
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+    - cron: '20 18 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'diff（差分）／ full（全件）／ index（索引だけ）'
+        default: 'diff'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hubdb-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/fm-fast
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 同期
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FM_REFRESH_TOKEN: ${{ secrets.FM_REFRESH_TOKEN }}
+          MODE: ${{ github.event.inputs.mode || (github.event.schedule == '20 18 * * *' && 'index' || 'diff') }}
+        working-directory: tools/fm-fast
+        run: |
+          bash d1-setup.sh
+          node sync.mjs "$MODE"
