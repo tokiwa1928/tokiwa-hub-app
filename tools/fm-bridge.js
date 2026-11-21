@@ -31,7 +31,26 @@
     if (!速い中継) return false;
     if (name === '画面_読み込み') return (args || [])[1] === true && /^[a-zA-Z]{1,2}\d{3,}/.test(String((args || [])[0] || '').trim());
     if (name === '画面_recordIdで読む') return /^\d+$/.test(String((args || [])[0] || ''));
+    if (D1で読む[name]) { try { if (localStorage.getItem('hub_d1') === 'off') return false; } catch (e) {} return true; }   // HUBDB-1
     return false;
+  }
+  // HUBDB-1（11/21）: Hub のデータベース（Cloudflare D1）から読む操作。無い・古い・失敗のときは Apps Script へ
+  //   止めたいとき: localStorage.setItem('hub_d1','off')
+  var D1で読む = { '写し_索引を配る': 1, '写し_差分': 1, '画面_一覧': 1, '写し_一覧': 1, '写し_読み込み': 1, 'D1_更新': 1, 'D1_状態': 1 };
+  // 書いたあとに D1 を新しくする操作（recordId の場所）
+  var 書く操作 = { '画面_保存': 0, '画面_外注保存': 0, '画面_削除': 0, '画面_Repeat登録': 0, '画面_流用新規': 0, '画面_新規案件': -1, '画面_新規段階': -1, '見積_受注化': -1, '見積_状態': -1, '見積_種別変更': -1 };
+  function D1に知らせる(name, args, data) {
+    if (!(name in 書く操作) || !速い中継) return;
+    var ids = [], 番号 = '';
+    var i = 書く操作[name]; if (i >= 0 && /^\d+$/.test(String((args || [])[i] || ''))) ids.push(String(args[i]));
+    try {
+      var d = data || {}; var rec = d.record || d.新しい || d;
+      if (rec && /^\d+$/.test(String(rec.recordId || ''))) ids.push(String(rec.recordId));
+      if (d.recordId && /^\d+$/.test(String(d.recordId))) ids.push(String(d.recordId));
+      var f = (rec && rec.fields) || {}; 番号 = String(f['伝票番号'] || d.伝票番号 || d.番号 || '');
+    } catch (e) {}
+    if (!ids.length && !番号) return;
+    setTimeout(function () { 呼ぶ一回_('D1_更新', [ids, 番号]).catch(function () {}); }, 300);
   }
 
   // GCP で作った OAuth クライアントID。秘密ではないのでページに書いてよい。
@@ -125,7 +144,9 @@
     'やること_今すぐ知らせる': [],
     'layoutFind':          ['layout', 'query', 'limit'],
     '外注_見回り':          [],   // GAICHU-CODE-3   // SHIRABE-1: どのレイアウトでも読むだけ（FileMaker の項目しらべ）
-    'layouts':             []
+    'layouts':             [],
+    'D1_更新':             ['recordId', '番号'],   // HUBDB-1
+    'D1_状態':             []
   };
 
   var 置き場 = 'fm_id_token';
@@ -291,7 +312,7 @@
       var body = { action: name, idToken: jwt };
       名.forEach(function (k, i) { body[k] = (args || [])[i]; });
       if (速い中継で(name, args)) {   // FAST-5: まず速い中継。fallback か通信の失敗なら Apps Script へ
-        var ctl = (typeof AbortController === 'function') ? new AbortController() : null; var tm = ctl ? setTimeout(function () { ctl.abort(); }, 8000) : null;
+        var ctl = (typeof AbortController === 'function') ? new AbortController() : null; var tm = ctl ? setTimeout(function () { ctl.abort(); }, name === '写し_索引を配る' ? 30000 : 8000) : null;
         return fetch(速い中継, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined })
           .then(function (res) { return res.text().then(function (t) { var r = null; try { r = JSON.parse(t); } catch (e) {} if (!r || (!r.ok && r.fallback)) throw new Error('FB'); return { status: res.status, text: function () { return Promise.resolve(t); } }; }); })
           .catch(function () { return fetch(中継, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' }); })
@@ -314,6 +335,7 @@
           if (/サインイン|この画面あて/.test(r.error || '')) 忘れる();
           throw new Error(r.error || '不明なエラー');
         }
+        D1に知らせる(name, args, r.data);   // HUBDB-1: 書いたらすぐ D1 にも
         return r.data;
       });
     });
