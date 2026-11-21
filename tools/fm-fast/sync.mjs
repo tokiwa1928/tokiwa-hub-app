@@ -1,6 +1,7 @@
 // HUBDB-1: FileMaker → Cloudflare D1 の同期（GitHub Actions「Hub DB 同期」から動かす）
 //   node sync.mjs diff    修正日が昨日以降の伝票を FileMaker から取り、modId が変わったものだけ D1 に書く（10 分おき）
 //   node sync.mjs full    全件を FileMaker から取り、変わったものだけ書く（最初の 1 回・追いつき用）
+//   node sync.mjs catchup 全件の続き（1 日の書き込みの予算 WRITE_BUDGET 件まで。無料枠のため毎朝少しずつ）
 //   node sync.mjs index   D1 から索引（配る列）を作り直して blob に置く（毎晩・full のあと）
 //   要る環境変数: FM_REFRESH_TOKEN, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID（wrangler が読む）
 import { execFileSync } from 'node:child_process';
@@ -97,7 +98,8 @@ async function full() {
   log('全件:', total);
   let off = Number(process.env.FULL_FROM || 1), seen = 0, w = 0;
   const 空 = Number((d1json('SELECT COUNT(*) AS n FROM juchu')[0] || {}).n || 0) === 0;   // 空なら modId を比べずに全部書く（速い）
-  while (off <= total) {
+  const 予算 = Number(process.env.WRITE_BUDGET || 0);   // 0 は無制限
+  while (off <= total && !(予算 && w >= 予算)) {
     const r = await fm('/layouts/' + encodeURIComponent(LAYOUT) + '/records?_limit=500&_offset=' + off);
     const got = recs(r); if (!got.length) break;
     w += await 書く(got, 空); seen += got.length; off += got.length;
@@ -128,6 +130,7 @@ function index() {
   d1(['--file', new URL('./schema.sql', import.meta.url).pathname]);
   if (mode === 'diff') await diff();
   else if (mode === 'full') { await full(); index(); }
+  else if (mode === 'catchup') { process.env.WRITE_BUDGET = process.env.WRITE_BUDGET || '20000'; await full(); index(); }
   else if (mode === 'index') index();
   else throw new Error('知らないモード: ' + mode);
 })().catch(e => { console.error('::error::' + (e && e.message || e)); process.exit(1); });

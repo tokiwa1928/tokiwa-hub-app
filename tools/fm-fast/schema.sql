@@ -22,11 +22,12 @@ CREATE TABLE IF NOT EXISTS juchu (
   synced_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS juchu_denpyo ON juchu(denpyo);
-CREATE INDEX IF NOT EXISTS juchu_mitsumori ON juchu(mitsumori);
-CREATE INDEX IF NOT EXISTS juchu_anken ON juchu(anken_id);
 CREATE INDEX IF NOT EXISTS juchu_kihyo ON juchu(kihyo_n);
 CREATE INDEX IF NOT EXISTS juchu_shusei ON juchu(shusei_n);
-CREATE INDEX IF NOT EXISTS juchu_tokui ON juchu(tokui);
+-- 無料枠（1 日 10 万行の書き込み）では索引 1 つごとに書き込みが増えるので、要るものだけにする（11/21）
+DROP INDEX IF EXISTS juchu_mitsumori;
+DROP INDEX IF EXISTS juchu_anken;
+DROP INDEX IF EXISTS juchu_tokui;
 
 -- 大きなまとまり（索引の JSON など）を 1MB ごとに分けて置く
 CREATE TABLE IF NOT EXISTS blob (name TEXT, part INTEGER, data TEXT, made TEXT, PRIMARY KEY (name, part));
