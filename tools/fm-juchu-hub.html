@@ -2358,12 +2358,39 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     return (トークン && 期限 - Date.now() > 60 * 1000) ? 中身を読む(トークン).email : '';
   };
 
+  // HUBDB-1（11/21）: 速い中継（Cloudflare）と Hub のデータベース（D1）を使う。失敗・未対応なら Apps Script へ。止めるとき localStorage.setItem('hub_d1','off')
+  var 速い中継 = 'https://tokiwa-fm-fast.tokiwa-group.workers.dev/';
+  var D1で読む = { '写し_索引を配る': 1, '写し_差分': 1, '画面_一覧': 1, '写し_一覧': 1, '写し_読み込み': 1 };
+  var 書く操作 = { '画面_保存': 0, '画面_外注保存': 0, '画面_削除': 0, '画面_Repeat登録': 0, '画面_流用新規': 0, '画面_新規案件': -1, '画面_新規段階': -1, '見積_受注化': -1, '見積_状態': -1, '見積_種別変更': -1 };
+  function 速く(name, args) {
+    try { if (localStorage.getItem('hub_d1') === 'off') return false; } catch (e) {}
+    if (name === '画面_読み込み') return (args || [])[1] === true && /^[a-zA-Z]{1,2}\d{3,}/.test(String((args || [])[0] || '').trim());
+    if (name === '画面_recordIdで読む') return /^\d+$/.test(String((args || [])[0] || ''));
+    return !!D1で読む[name];
+  }
+  function D1に知らせる(name, args, data, jwt) {
+    if (!(name in 書く操作)) return;
+    var ids = [], 番号 = '', i = 書く操作[name];
+    if (i >= 0 && /^\d+$/.test(String((args || [])[i] || ''))) ids.push(String(args[i]));
+    try { var d = data || {}, rec = d.record || d.新しい || d; if (rec && /^\d+$/.test(String(rec.recordId || ''))) ids.push(String(rec.recordId)); 番号 = String(((rec && rec.fields) || {})['伝票番号'] || d.伝票番号 || ''); } catch (e) {}
+    if (!ids.length && !番号) return;
+    setTimeout(function () { fetch(速い中継, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'D1_更新', idToken: jwt, recordId: ids, 番号: 番号 }) }).catch(function () {}); }, 300);
+  }
   window.FM呼ぶ = function (name, args) {
     var 名 = 引数名[name];
     if (!名) return Promise.reject(new Error('知らない操作です: ' + name));
+    var jwt0 = '';
     return トークンを得る().then(function (jwt) {
+      jwt0 = jwt;
       var body = { action: name, idToken: jwt };
       名.forEach(function (k, i) { body[k] = (args || [])[i]; });
+      var GASへ = function () { return fetch(中継, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' }); };
+      if (速く(name, args)) {
+        var ctl = (typeof AbortController === 'function') ? new AbortController() : null; var tm = ctl ? setTimeout(function () { ctl.abort(); }, name === '写し_索引を配る' ? 30000 : 8000) : null;
+        return fetch(速い中継, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined })
+          .then(function (res) { return res.text().then(function (t) { var r = null; try { r = JSON.parse(t); } catch (e) {} if (!r || (!r.ok && r.fallback)) throw new Error('FB'); return { status: res.status, text: function () { return Promise.resolve(t); } }; }); })
+          .catch(GASへ).then(function (res) { if (tm) clearTimeout(tm); return res; });
+      }
       return fetch(中継, {
         method: 'POST',
         // text/plain にしておくと事前確認（preflight）が飛ばない。
@@ -2381,6 +2408,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
           if (/サインイン|この画面あて/.test(r.error || '')) 忘れる();
           throw new Error(r.error || '不明なエラー');
         }
+        D1に知らせる(name, args, r.data, jwt0);   // HUBDB-1
         return r.data;
       });
     });
