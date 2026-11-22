@@ -62,7 +62,7 @@ function d1file(statements) {
 function upsertSql(rec) {
   const row = 行にする(rec);
   let sql = 'INSERT OR REPLACE INTO juchu (' + 列名.join(',') + ') VALUES (' + 列名.map(c => lit(c, row[c])).join(',') + ');';
-  if (sql.length > 95000) { row.fields = '{"_大きすぎ":true}'; sql = 'INSERT OR REPLACE INTO juchu (' + 列名.join(',') + ') VALUES (' + 列名.map(c => lit(c, row[c])).join(',') + ');'; }
+  if (Buffer.byteLength(sql) > 95000) { row.fields = '{"_大きすぎ":true}'; sql = 'INSERT OR REPLACE INTO juchu (' + 列名.join(',') + ') VALUES (' + 列名.map(c => lit(c, row[c])).join(',') + ');'; }
   return sql;
 }
 
@@ -119,9 +119,10 @@ function index() {
   }
   const made = new Date().toISOString();
   const text = JSON.stringify({ ok: true, 列: 配る列, 行: rows, 作った: made, 件数: rows.length, 源: 'D1' });
-  const parts = []; for (let i = 0; i < text.length; i += 80000) parts.push(text.slice(i, i + 80000));
+  // D1 の 1 文は 100KB まで（文字数ではなくバイト。日本語は 1 文字 3 バイト）→ 25000 文字ずつ（最大 75KB）
+  const parts = []; for (let i = 0; i < text.length; i += 25000) parts.push(text.slice(i, i + 25000));
   const stmts = ["DELETE FROM blob WHERE name='index_new';"].concat(parts.map((p, i) => 'INSERT INTO blob VALUES (' + q('index_new') + ',' + i + ',' + q(p) + ',' + q(made) + ');'));
-  for (let k = 0; k < stmts.length; k += 40) d1file(stmts.slice(k, k + 40));
+  for (let k = 0; k < stmts.length; k += 40) d1file(stmts.slice(k, k + 40));   // 1 ファイル 40 文（約 3MB）
   d1(['--command', "DELETE FROM blob WHERE name='index'; UPDATE blob SET name='index' WHERE name='index_new';"]);
   log('索引:', rows.length, '行', (text.length / 1e6).toFixed(1), 'MB', parts.length, '分割');
 }
