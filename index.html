@@ -4920,6 +4920,9 @@ async function loadFromCloud() {
   if (result.data.inqBinRules && typeof result.data.inqBinRules==='object') {
     var _ir=_inqBinRules_(); ['byEmail','byDomain','byFax','byFaxCust'].forEach(function(k){ var src=result.data.inqBinRules[k]||{}; _ir[k]=_ir[k]||{}; Object.keys(src).forEach(function(x){ if(!(x in _ir[k])) _ir[k][x]=src[x]; }); });
   }
+  // AITRIAGE-1: 振り分けの連続回数（新しい方）・毎朝の確認（和集合）
+  if (result.data.inqStreak && typeof result.data.inqStreak==='object') { DB.inqStreak=DB.inqStreak||{}; Object.keys(result.data.inqStreak).forEach(function(k){ var c=result.data.inqStreak[k], m=DB.inqStreak[k]; if(!m || String(c&&c.at||'')>String(m.at||'')) DB.inqStreak[k]=c; }); }
+  if (result.data.inqMorning && typeof result.data.inqMorning==='object') { DB.inqMorning=DB.inqMorning||{}; Object.keys(result.data.inqMorning).forEach(function(k){ if(!DB.inqMorning[k]) DB.inqMorning[k]=result.data.inqMorning[k]; }); }
   // DOC-LINK-1: 外注先に送った書類の覚え（送信・返事は新しい方）
   if (result.data.docSends && typeof result.data.docSends==='object') {
     var _dsm=DB.docSends||{}; Object.keys(result.data.docSends).forEach(function(k){ var a=_dsm[k], b=result.data.docSends[k]; if(!b) return; if(!a){ _dsm[k]=b; return; } ['docId','url','type'].forEach(function(x){ if(!a[x]&&b[x]) a[x]=b[x]; }); ['publishedAt','sentAt','lastReplyAt'].forEach(function(x){ if(String(b[x]||'')>String(a[x]||'')){ a[x]=b[x]; if(x==='sentAt'){ a.to=b.to; a.sentBy=b.sentBy; } if(x==='lastReplyAt') a.reply=b.reply; } }); });
@@ -5555,6 +5558,8 @@ async function _saveToCloudNow_() {
     quoteFolders: DB.quoteFolders || {},   // QFOLDER-1
     docSends: DB.docSends || {},   // DOC-LINK-1
     inqBinRules: DB.inqBinRules || {},   // BULK-SORT-1: 今後もこの箱、の覚え（全 PC で同じに）
+    inqStreak: DB.inqStreak || {},   // AITRIAGE-1: 差出人ごとの続けて同じ振り分けの回数
+    inqMorning: DB.inqMorning || {},   // AITRIAGE-1: 毎朝の振り分けの確認（日 → 誰・いつ）
     aiRules: DB.aiRules || [],   // AI-WIN-1: AI への決まり（今後は全体でこう対応）
     sagyoPrints: (DB.sagyoPrints || []).slice(-8000),                // SEIZO-1: 製造指示書の出力記録（第N回・日時・誰が・変更コメント・写し）
     inquiries: DB.inquiries || [],
@@ -56104,6 +56109,7 @@ function _inqBinAuto_(inq){
   if(!_inqImportant_(inq) && /受け付けました|受付けました|受付いたしました|受付致しました|受注しました|受注いたしました|ご注文ありがとう|注文を承り|自動送信|自動配信|発注確認|注文確認|受領しました|受領いたしました|登録完了|お申し?込みありがとう|配送手配|出荷しました|発送しました/.test(subj+' '+body.slice(0,400)) && !/お願い|下さい|ください|でしょうか|ますか|いただけ/.test(subj+' '+body.slice(0,200))) return { bin:'控え', reason:'受付・確認の通知（発注の記録として残す）' };
   var rules=_inqBinRules_(); if(email&&rules.byEmail[email]) return { bin:rules.byEmail[email], reason:'前に同じ差出人をそう仕分けた' };
   if(dom&&rules.byDomain[dom]) return { bin:rules.byDomain[dom], reason:'前に同じ会社（ドメイン）をそう仕分けた' };
+  var _at=inq.ai_triage; if(_at && _at.bin && src!=='manual') return { bin:_at.bin, reason:'AI'+(_at.reason?'：'+_at.reason:'') };   // AITRIAGE-1: サーバーの Gemini（1 通 1 回）の提案
   // AI-BIN-3: 通知・売り込みの見分け（AI が止まっていても大きく外さない）
   var _nz=_inqNoticeGuess_(inq, subj, body, email, dom); if(_nz) return _nz;
   var kb=_INQ_KIND_BIN_[inq.kind]; if(kb && src!=='manual' && !(inq.kind==='order'||inq.kind==='schedule')){ if(kb==='見積' && /予算/.test(subj)) kb='予算見積'; return { bin:kb, reason:'AI の判定' }; }   // AI-BIN-1（order／schedule は件名の語だけで付くことがあるので言葉の判定に回す）
@@ -56124,19 +56130,21 @@ function _inqBinAuto_(inq){
   if(junk>=3 && !known) return { bin:'ジャンク', reason:'「'+jhit.slice(0,3).join('」「')+'」' };
   return { bin:'その他', reason:known?'知っている相手（言葉では決められず）':'言葉では決められず' };
 }
-const INQ_RULES_V=9;   // AI-BIN-4: 規則を変えたら上げる → 端末に残っている古い自動判定を捨てて全部やり直す
-function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; if(!inq.bin_auto || inq.bin_auto_v!==INQ_RULES_V){ try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } inq.bin_auto_v=INQ_RULES_V; delete inq._impCache; } return inq.bin_auto; }
+const INQ_RULES_V=10;   // AI-BIN-4: 規則を変えたら上げる → 端末に残っている古い自動判定を捨てて全部やり直す
+function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; var _aiAt=(inq.ai_triage&&inq.ai_triage.at)||''; if(!inq.bin_auto || inq.bin_auto_v!==INQ_RULES_V || (inq.bin_auto_ai||'')!==_aiAt){ inq.bin_auto_ai=_aiAt; try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } inq.bin_auto_v=INQ_RULES_V; delete inq._impCache; } return inq.bin_auto; }
 function _inqBinMeta_(k){ return INQ_BINS.find(function(b){ return b.k===k; })||INQ_BINS[6]; }
 // 人が直す: 覚える（差出人のメール）。見積・受注・校正・経営・質問・ジャンク は覚え、その他は覚えない
 function _inqSetBin_(id, bin, how){   // RULE-MENU-1: how = 'one'（この 1 通だけ・既定）／'sender'（この差出人は今後も）／'domain'（この会社は今後も）
   var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return;
   inq.bin=bin; inq.bin_by=(currentAuth&&currentAuth.userName)||''; inq.bin_at=new Date().toISOString();
   var m=_inqBinMeta_(bin); if(m.kind && !inq.kind) inq.kind=m.kind;
-  var moved=0; if(how==='sender'||how==='domain') moved=_inqRememberRule_(inq, bin, how);
+  var moved=0, auto2=false; if(how==='sender'||how==='domain') moved=_inqRememberRule_(inq, bin, how);
+  else if(_inqStreak_(inq, bin)>=2){ moved=_inqRememberRule_(inq, bin, 'sender'); auto2=true; }   // AITRIAGE-1: 2 回続けて同じ → この差出人は以後自動
   window._inqKnownCache_=null;
   if(typeof saveDB==='function') try{ saveDB(); }catch(e){}
   if(typeof callCloudAPI==='function') try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ bin:bin, bin_by:inq.bin_by, bin_at:inq.bin_at, kind:inq.kind||'' } }); }catch(e){}
   try{ renderInquiryList(); }catch(e){}
+  if(auto2 && typeof _toastMsg==='function'){ _toastMsg(m.icon+' '+m.label+' にしました。この差出人は 2 回続けて同じなので、今後は自動で '+m.label+' に入ります（注文・金額・納期などの言葉や添付があるときは承認待ちに出します）'+(moved?'・ほか '+moved+' 通も移しました':'')); } else
   if(typeof _toastMsg==='function') _toastMsg(m.icon+' '+m.label+' にしました'+(how==='sender'?'（この差出人は今後も同じ'+(moved?'・ほか '+moved+' 通も移しました':'')+'）':how==='domain'?'（この会社は今後も同じ'+(moved?'・ほか '+moved+' 通も移しました':'')+'）':''));
 }
 // RULE-MENU-1: 覚えに入れ、同じ差出人／会社の（人が決めていない）メールもその場で判定し直す。戻り値＝影響した通数
@@ -56172,7 +56180,8 @@ function _inqBinChip_(inq){
   var k=_inqBin_(inq), m=_inqBinMeta_(k); var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
   var auto=!inq.bin; var title=(auto?'自動の仕分け':'手で仕分け（'+(inq.bin_by||'')+'）')+(inq.bin_reason?'：'+inq.bin_reason:'');
   // INQ-OUTCOME: 押しやすい普通の選択に（選ぶと差出人を覚えて次から同じ）
-  return '<select onclick="event.stopPropagation()" onchange="event.stopPropagation();_inqSetBin_(\''+esc(inq.id)+'\',this.value)" title="'+esc(title)+'" style="font:inherit;font-size:11.5px;font-weight:700;color:'+m.color+';border:1.5px solid '+m.color+';background:#fff;padding:2px 6px;min-height:26px;width:auto;max-width:170px;flex:0 0 auto">'+INQ_BINS.map(function(b){ return '<option value="'+b.k+'" style="color:#111"'+(b.k===k?' selected':'')+'>'+b.icon+' '+esc(b.label)+(b.k===k&&auto?'（自動）':'')+'</option>'; }).join('')+'</select>';
+  return '<select onclick="event.stopPropagation()" onchange="event.stopPropagation();_inqSetBin_(\''+esc(inq.id)+'\',this.value)" title="'+esc(title)+'" style="font:inherit;font-size:11.5px;font-weight:700;color:'+m.color+';border:1.5px solid '+m.color+';background:#fff;padding:2px 6px;min-height:26px;width:auto;max-width:170px;flex:0 0 auto">'+INQ_BINS.map(function(b){ return '<option value="'+b.k+'" style="color:#111"'+(b.k===k?' selected':'')+'>'+b.icon+' '+esc(b.label)+(b.k===k&&auto?'（自動）':'')+'</option>'; }).join('')+'</select>';
+
 }
 function setInqBin(k){ window._inqBinSel_ = (window._inqBinSel_===k) ? '' : k; try{ renderInquiryList(); }catch(e){} try{ renderInquiryFolderList(); }catch(e){} }
 // ═══════════ INQ-SLACK: Slack 風の流れ・期限・後で・今日やること ═══════════
@@ -56298,7 +56307,7 @@ function _renderInqBinTabs_(){
   var total=cnt.pre||0; INQ_BINS.forEach(function(b){ total+=(cnt[b.k]||0); });
   // SORT-STAGE-1: 振り分け前 ｜ 振り分け後: 各箱 ｜ 待ち ｜ すべて
   var preOn=window._inqBinSel_==='__pre'&&!window._inqWaitSel_;
-  var h='<button onclick="setInqBin(\'__pre\')" title="人がまだ振り分けを決めていないもの（自動の提案だけ）。札の「✔ この振り分けで OK」か振り分けのボタンで決めると、振り分け後へ移ります" style="font-size:13px;font-weight:900;padding:6px 14px;border:2px solid #b45309;background:'+(preOn?'#b45309':'#fffbeb')+';color:'+(preOn?'#fff':'#b45309')+';cursor:pointer">📥 振り分け前 <span style="font-size:15px">'+(cnt.pre||0)+'</span></button>'
+  var h=_inqMorningBanner_()+'<button onclick="setInqBin(\'__pre\')" title="人がまだ振り分けを決めていないもの（自動の提案だけ）。札の「✔ この振り分けで OK」か振り分けのボタンで決めると、振り分け後へ移ります" style="font-size:13px;font-weight:900;padding:6px 14px;border:2px solid #b45309;background:'+(preOn?'#b45309':'#fffbeb')+';color:'+(preOn?'#fff':'#b45309')+';cursor:pointer">📥 承認待ち <span style="font-size:15px">'+(cnt.pre||0)+'</span></button>'
     +(( (function(){ try{ return localStorage.getItem('inq_ai_btn')==='1'; }catch(e){ return false; } })() ) ? '<button id="inq-ai-sort-btn" onclick="if(window._inqAiSortStop_===false){window._inqAiSortStop_=true;return;}_inqAiSortRun_()" title="振り分け前と、言葉の当たりだけで自動に入っているものを Claude に 10 通ずつ聞いて判定し直します（新しい順に 200 件ずつ・少額の利用料）。人が決めたもの・覚えている差出人は触りません" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #7c3aed;background:#fff;color:#7c3aed;cursor:pointer;margin-left:6px">🤖 AI で判定</button>' : '')   // AI-OFF-1: AI は使わない方針（10/28）。戻すときは localStorage.setItem('inq_ai_btn','1')
     +'<button onclick="_inqBulkOpen_()" title="振り分け前を送り元ごとにまとめて振り分け、今後も同じ箱に入るよう覚える" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1.5px solid #0f766e;background:#ccfbf1;color:#0f766e;border-radius:7px;cursor:pointer;margin-left:6px">📥 送り元ごとにまとめて振り分け</button>'
     +'<button onclick="_inqRulesEdit_()" title="今後もこの箱、の覚えを見る・消す" style="font-size:11.5px;padding:5px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:7px;cursor:pointer;margin-left:4px">🧠 覚え</button>'
@@ -56642,7 +56651,15 @@ function _inqSortRow_(q){
     return '<span style="display:inline-flex;align-items:stretch">'+core+caret+'</span>'; };
   var reason=String(q.bin_reason||'').slice(0,40); var byRule=/^前に同じ/.test(String(q.bin_reason||''));
   var now;
-  if(!sorted){
+  if(!sorted && cur!=='その他'){   // AITRIAGE-1: 提案つきの承認待ち。押すだけで決まる（2 回続けて同じなら以後は自動）
+    var _em=String(q.from_email||q.email||'').trim().toLowerCase(), _st=(DB.inqStreak||{})[_em], _eye=_inqNeedsEye_(q);
+    var _ok=cur==='ジャンク'?"_markInqSpam2_('"+id+"','one')":cur==='控え'?"_inqRefDo_('"+id+"','one')":"_inqSetBin_('"+id+"','"+_inqEsc_(cur)+"')";
+    var _note=_eye?'（'+_inqEsc_(_eye)+' があるので毎回確認します）':(_st&&_st.bin===cur&&_st.n>=1&&cur!=='ジャンク'&&cur!=='控え'?'（もう 1 回でこの差出人は自動に）':'');
+    now='<span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:#334155;background:#fffbeb;border:1.5px dashed '+cm.color+';padding:4px 10px;line-height:1.5" title="'+_inqEsc_(q.bin_reason||'')+'"><span style="color:#64748b">🤖 提案:</span> <b style="color:'+cm.color+';font-size:13px">'+cm.icon+' '+_inqEsc_(cm.label)+'</b>'
+      +(reason?'<span style="color:#64748b">（'+_inqEsc_(reason)+'）</span>':'')
+      +'<button class="btn" style="font-size:12.5px;font-weight:900;padding:5px 14px;min-height:34px;border:2px solid '+cm.color+';color:#fff;background:'+cm.color+';margin-left:4px" title="この提案のとおりに決めます。違うときは左のボタンで" onclick="event.stopPropagation();'+_ok+'">✔ 承認</button>'
+      +(_note?'<span style="font-size:11px;color:#92400e">'+_note+'</span>':'')+'</span>';
+  } else if(!sorted){
     now='<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#334155;background:#fffbeb;border:1.5px dashed #b45309;padding:4px 10px;line-height:1.5" title="'+_inqEsc_(q.bin_reason||'')+'"><span style="color:#64748b">🤖 自動では決められず'+(reason?'（'+_inqEsc_(reason)+'）':'')+'　→ 左のボタンで振り分け</span>'
       +'<button class="btn" style="font-size:12px;font-weight:700;padding:5px 12px;min-height:34px;border:1.5px solid #6b7280;color:#374151;background:#fff;margin-left:6px" title="どれでもない連絡として「その他」に入れます（振り分け後へ）" onclick="event.stopPropagation();_inqSetBin_(\''+id+'\',\'その他\')">📄 その他で OK</button></span>';
   } else if(!manual && !byRule){
@@ -56676,7 +56693,67 @@ function _inqSortRow_(q){
     +'</div>';
 }
 // SORT-STAGE-1: 振り分けが「決まっている」か。人が押したか、覚えている差出人（前に同じ差出人／会社をそう仕分けた）なら決まり。それ以外の自動は提案だけ
-function _inqSorted_(q){ if(!q) return false; if(q.bin) return true; return _inqBin_(q)!=='その他'; }   // SORT-STAGE-2: 自動で決まったものは振り分け後。決められなかった「その他」だけ振り分け前
+// AITRIAGE-1（11/22 本多さん「一旦全部 AI 振り分け承認前にして、2 回続けて承認したら承認不要。迷惑は迷惑へ」「作る作業はなくし、確認は充実」）
+//   3 つの道: 人が決めた（human）／自動で確定（auto: 2 回続けて同じに承認した差出人・社内・控え）／迷惑（junk）／それ以外は承認待ち（review）
+//   ただし 注文・見積・金額・納期・至急・クレーム・校正 などの言葉や添付があるものは、覚えている差出人でも必ず承認待ちに出す
+var INQ_EYE_RE=/注文|発注|見積|金額|価格|料金|予算|納期|至急|急ぎ|クレーム|苦情|お詫び|校正|赤字|校了|キャンセル|取り消し|取消|変更|請求|入金|振込/;
+function _inqNeedsEye_(q){ if(!q) return ''; var t=String(q.subject||'')+' '+String(q.body||q.summary||'').slice(0,1500); var m=INQ_EYE_RE.exec(t); if(m) return '「'+m[0]+'」';
+  var at=[]; try{ at=(typeof _inqAttachLite_==='function')?_inqAttachLite_(q):(q.attachments||[]); }catch(e){} if(at&&at.length) return '添付あり';
+  try{ if(_inqImportant_(q)) return '要対応の文言'; }catch(e){} return ''; }
+function _inqLane_(q){
+  if(!q) return 'review'; if(q.bin) return 'human';
+  var bin=_inqBin_(q), why=String(q.bin_reason||''), src=q.source_type||'';
+  if(src==='internal_msg'||src==='interco'||/^社内|^社間の発注/.test(why)) return 'auto';
+  var eye=_inqNeedsEye_(q);
+  if(bin==='ジャンク'){ if(eye) return 'review'; if(/^AI/.test(why) && q.ai_triage && Number(q.ai_triage.confidence||0)<0.8) return 'review'; return 'junk'; }
+  if(eye) return 'review';
+  if(/^前に同じ/.test(why)) return 'auto';
+  if(bin==='控え' && !/^AI/.test(why)) return 'auto';
+  return 'review';
+}
+function _inqSorted_(q){ return _inqLane_(q)!=='review'; }   // SORT-STAGE-2 → AITRIAGE-1: 承認待ち以外は振り分け後
+// 2 回続けて同じ振り分けを人が決めた差出人は、以後自動（覚えに入れる）。違う箱にしたら数え直し
+function _inqStreak_(inq, bin){
+  var email=String(inq.from_email||inq.email||'').trim().toLowerCase(); if(!email || bin==='その他') return 0;
+  try{ if(_inqOwnDomains_()[_inqDomain_(email)]) return 0; }catch(e){}
+  DB.inqStreak=DB.inqStreak||{}; var cur=DB.inqStreak[email];
+  if(cur && cur.bin===bin && cur.last!==inq.id) cur.n=(cur.n||1)+1; else if(!cur || cur.bin!==bin) cur={ bin:bin, n:1 };
+  cur.last=inq.id; cur.at=new Date().toISOString(); DB.inqStreak[email]=cur; return cur.n;
+}
+// 毎朝の確認: 前回確認した日の翌日〜昨日（最大 4 日。月曜は金〜日）に届いたものの振り分けを見る
+function _inqYmd_(d){ var j=new Date(new Date(d).getTime()+9*3600*1000); return j.toISOString().slice(0,10); }
+function _inqMorningRange_(){
+  var today=_inqYmd_(Date.now()), y=_inqYmd_(Date.now()-86400000); DB.inqMorning=DB.inqMorning||{};
+  var days=[]; for(var i=1;i<=4;i++){ var d=_inqYmd_(Date.now()-i*86400000); if(DB.inqMorning[d]) break; days.push(d); }
+  return { today:today, y:y, days:days.reverse() };
+}
+function _inqMorningItems_(days){ var set={}; days.forEach(function(d){ set[d]=1; });
+  return (DB.inquiries||[]).filter(function(q){ var t=q.received_at||q.createdAt; return t && set[_inqYmd_(t)]; }); }
+function _inqMorningBanner_(){
+  var r=_inqMorningRange_(); if(!r.days.length){ var c=DB.inqMorning[r.y]; return c?'<span style="font-size:11.5px;color:#065f46;font-weight:700;margin-right:8px" title="'+_inqEsc_(c.at||'')+'">🌅 昨日の振り分け確認 ✓ '+_inqEsc_(c.by||'')+'</span>':''; }
+  var it=_inqMorningItems_(r.days), n={ auto:0, junk:0, review:0, human:0 }; it.forEach(function(q){ if(q.isSpam&&!q.bin){ n.junk++; return; } n[_inqLane_(q)]++; });
+  return '<button onclick="_inqMorningOpen_()" title="自動で確定したもの・迷惑に入ったものに間違いがないか見ます。見終わったら「確認しました」" style="font-size:13px;font-weight:900;padding:6px 14px;border:2px solid #c2410c;background:#fff7ed;color:#c2410c;cursor:pointer;margin-right:8px">🌅 '+(r.days.length>1?r.days[0].slice(5)+'〜':'')+'昨日の振り分けを確認（自動 '+n.auto+'・迷惑 '+n.junk+'・承認待ち '+n.review+'）</button>';
+}
+function _inqMorningOpen_(){
+  var r=_inqMorningRange_(), days=r.days.length?r.days:[r.y], it=_inqMorningItems_(days); var esc=_inqEsc_;
+  var lanes=[['auto','🤖 自動で確定','#0f766e'],['junk','🗑 迷惑・ジャンク','#6b7280'],['review','📥 まだ承認待ち','#b45309'],['human','✋ 人が決めた','#334155']];
+  var by={ auto:[], junk:[], review:[], human:[] }; it.forEach(function(q){ by[(q.isSpam&&!q.bin)?'junk':_inqLane_(q)].push(q); });
+  var row=function(q){ var b=q.isSpam&&!q.bin?'ジャンク':_inqBin_(q), m=_inqBinMeta_(b);
+    return '<tr style="border-top:1px solid #f1f5f9"><td style="padding:4px 6px;white-space:nowrap;color:#64748b">'+esc(String(q.received_at||'').slice(5,16).replace('T',' '))+'</td><td style="padding:4px 6px">'+esc(q.from_company||q.from_name||q.from_email||'')+'</td><td style="padding:4px 6px">'+esc(String(q.subject||'').slice(0,60))+'</td>'
+      +'<td style="padding:4px 6px;white-space:nowrap;color:'+m.color+';font-weight:700">'+m.icon+' '+esc(m.label)+'</td><td style="padding:4px 6px;color:#64748b;font-size:11px">'+esc(q.bin?('✋ '+(q.bin_by||'')):String(q.bin_reason||'').slice(0,30))+'</td>'
+      +'<td style="padding:4px 6px;white-space:nowrap"><button class="btn" style="font-size:11px;padding:2px 8px" onclick="document.getElementById(\'inq-morning\').remove();_inqOpenById_(\''+esc(q.id)+'\')">開く・直す</button></td></tr>'; };
+  var h='<div style="background:#fff;width:min(980px,96vw);max-height:90vh;overflow:auto;padding:16px 18px;font-size:12.5px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:16px;font-weight:900;margin-bottom:4px">🌅 振り分けの確認（'+esc(days[0])+(days.length>1?' 〜 '+esc(days[days.length-1]):'')+'・'+it.length+' 通）</div>'
+    +'<div style="color:#64748b;margin-bottom:8px">自動で確定したもの・迷惑に入ったものに、注文や大事な連絡が混ざっていないかだけ見てください。違っていたら「開く・直す」。</div>';
+  lanes.forEach(function(l){ var a=by[l[0]]; if(!a.length) return; h+='<details'+(l[0]==='auto'||l[0]==='junk'?' open':'')+' style="margin:6px 0"><summary style="font-weight:900;color:'+l[2]+';cursor:pointer">'+l[1]+' '+a.length+' 通</summary><table style="width:100%;border-collapse:collapse">'+a.map(row).join('')+'</table></details>'; });
+  h+='<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="document.getElementById(\'inq-morning\').remove()">あとで</button>'
+    +'<button class="btn" style="font-weight:900;background:#c2410c;color:#fff;border-color:#c2410c" onclick="_inqMorningDone_(['+days.map(function(d){ return '\''+d+'\''; }).join(',')+'])">✓ 確認しました</button></div></div>';
+  var old=document.getElementById('inq-morning'); if(old) old.remove();
+  var d=document.createElement('div'); d.id='inq-morning'; d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px'; d.innerHTML=h; d.onclick=function(e){ if(e.target===d) d.remove(); }; document.body.appendChild(d);
+}
+function _inqMorningDone_(days){ DB.inqMorning=DB.inqMorning||{}; var who=(currentAuth&&currentAuth.userName)||'', at=new Date().toISOString(); days.forEach(function(d){ DB.inqMorning[d]={ by:who, at:at }; });
+  if(typeof saveDB==='function') try{ saveDB(); }catch(e){} var el=document.getElementById('inq-morning'); if(el) el.remove(); try{ _renderInqBinTabs_(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('🌅 振り分けの確認を記録しました'); }
+function _inqOpenById_(id){ try{ if(typeof openInquiry==='function') return openInquiry(id); if(typeof openInquiryDetail==='function') return openInquiryDetail(id); }catch(e){} }   // SORT-STAGE-2: 自動で決まったものは振り分け後。決められなかった「その他」だけ振り分け前
 // 手で決めた振り分けを消して自動に戻す（差出人の覚えも消す）
 function _inqBinAutoReset_(id){ var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return; var email=String(inq.from_email||inq.email||'').toLowerCase(); var dom=_inqDomain_(email); var had=inq.bin||inq.bin_auto||'';
   try{ var r=_inqBinRules_(); if(email && r.byEmail[email] && (!inq.bin || r.byEmail[email]===inq.bin)) delete r.byEmail[email]; if(!inq.bin && dom && r.byDomain[dom]===had) delete r.byDomain[dom]; }catch(e){}
