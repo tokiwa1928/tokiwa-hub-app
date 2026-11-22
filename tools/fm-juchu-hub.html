@@ -2133,6 +2133,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   <div id="kn-advice" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:3px"></div>
   <div id="kn-souba" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:3px"></div>
   <div id="kn-yosan" style="display:none;margin-top:4px;padding:5px 8px;border:1px solid #93c5fd;background:#eff6ff;border-radius:3px"></div>
+  <div id="kn-aicheck" style="margin-top:4px"><button type="button" id="kn-aicheck-btn" style="font:inherit;font-size:12px;padding:3px 10px;border:1px solid #7c3aed;background:#f5f3ff;color:#5b21b6;border-radius:4px;cursor:pointer" title="今の金額を、同じ得意先・似た品名の過去の伝票、相場、前回との原価差と比べて、AI が妥当かどうかを一言で見ます（1 回 1 円ほど。押したときだけ）">🤖 過去の金額で確認（AI）</button> <span id="kn-aicheck-out"></span></div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:3px"><span>この案件の段階:</span><span id="kn-stages">（索引を読んでから出ます）</span><span id="kn-result" style="font-weight:700"></span></div>
   <details style="margin-top:3px"><summary style="cursor:pointer;color:#334155">外注見積（業者と金額。FileMaker の 見積業者1〜5・見積金額1）</summary>
     <table class="gq"><thead><tr><th>#</th><th>業者</th><th>金額</th><th>数量</th><th>単価</th><th>見積日</th></tr></thead><tbody>
@@ -3158,6 +3159,70 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       + hits.map(function (x) { var r = x.r; return '<tr' + (x.同 ? ' style="background:#f0fdf4"' : '') + '><td style="text-align:left">' + esc(r[P['伝票番号']]) + (x.同 ? ' <span style="color:#166534;font-size:10px">同じ得意先</span>' : '') + '</td><td style="text-align:left">' + esc(日付(r[P['起票日']])) + '</td><td style="text-align:left">' + esc(String(r[P['製品名']] || '').slice(0, 28)) + '</td><td>' + 円整(x.数) + '</td><td>' + x.単.toFixed(1) + '</td><td>¥' + 円整(数値(r[P['売価金額']])) + '</td></tr>'; }).join('')
       + '</tbody></table>';
   }
+  // ---- AICHECK-1（11/22 本多さん「見積書を作ったときに、過去の金額から見てどうかを AI で確認したい」）
+  //   今の金額（売価・単価・数量・仕様）を、同じ得意先／似た品名の過去の伝票（予算見積・見積・受注・失注）、相場、前回との原価差と並べて AI に渡し、
+  //   「妥当／高め／安め」と目安・理由を返してもらう。押したときだけ 1 回（同じ金額なら 2 回目は控えを使う）。費用は 1 回 1 円ほど
+  var AI確認控え = {};
+  function AI確認の材料() {
+    var v = function (id) { var e = $(id); return e ? String(e.value || '').trim() : ''; };
+    var 今回 = { 区分: v('f-kubun'), 得意先: v('f-cust') || v('f-custcd'), ユーザー: v('f-user'), 品名: v('f-item'),
+      数量: 数値(v('f-lotunit')) || 数値(v('p1-tot')), 売価金額: 数値(v('f-amt')), 単価: 数値(v('f-price')),
+      仕様: [v('f-hinshu2'), (v('f-w') && v('f-h')) ? v('f-w') + '×' + v('f-h') + 'mm' : '', v('k1-iro1') ? v('k1-iro1') + (v('k1-iro2') ? '/' + v('k1-iro2') : '') + '色' : '', v('f-parts') ? v('f-parts') + 'P' : ''].filter(Boolean).join(' ') };
+    var 過去 = [];
+    if (索引 && 索引.行) {
+      var 芯 = function (x) { return String(x || '').normalize('NFKC').replace(/[（(][^）)]*[）)]/g, '').replace(/[\d\s・\-ー_\/／.,、。]+/g, ''); };
+      var 字 = function (x) { var o = {}; for (var k = 0; k < x.length - 1; k++) o[x.substr(k, 2)] = 1; if (x.length === 1) o[x] = 1; return o; };
+      var g = 字(芯(今回.品名)), gn = Object.keys(g).length, cust = v('f-custcd'), P = 索引位置, me = 現在 ? String(現在.fields['伝票番号'] || '') : '';
+      var 結果 = (typeof 案件の結果表 === 'function') ? 案件の結果表() : {};
+      for (var i = 0; gn && i < 索引.行.length; i++) { var r = 索引.行[i];
+        if (String(r[P['伝票番号']]) === me) continue;
+        var 売 = 数値(r[P['売価金額']]), 数 = 数値(r[P['ロット契約単位']]) || 数値(r[P['合計数1']]); if (!(売 > 0) || !(数 > 0)) continue;
+        var h2 = 字(芯(r[P['製品名']])); var 共 = 0, n2 = 0; for (var k in h2) { n2++; if (g[k]) 共++; }
+        var j = 共 / (gn + n2 - 共); if (j < 0.35) continue;
+        var 同 = String(r[P['得意先コード']]) === cust; var id = String(r[P['案件ID']] || '');
+        過去.push({ s: j + (同 ? 1 : 0), 伝票: String(r[P['伝票番号']] || r[P['見積番号']] || ''), 起票日: String(r[P['起票日']] || ''), 区分: String(r[P['案件区分']] || '受注'),
+          同じ得意先: 同, 品名: String(r[P['製品名']] || '').slice(0, 40), 数量: 数, 単価: Math.round(売 / 数 * 100) / 100, 売価金額: 売, 案件の結果: (結果[id] && 結果[id].結果) || '' });
+      }
+      過去.sort(function (a, b) { return b.s - a.s; }); 過去 = 過去.slice(0, 10).map(function (x) { delete x.s; return x; });
+    }
+    var 文 = function (id) { var e = $(id); return (e && e.style.display !== 'none') ? String(e.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 600) : ''; };
+    return { 今回: 今回, 過去の伝票: 過去, 前回との原価差: 文('kn-advice'), この仕様の相場: 文('kn-souba'), 予算見積の積み上げ: 文('kn-yosan') };
+  }
+  function AI確認() {
+    var out = $('kn-aicheck-out'), btn = $('kn-aicheck-btn'); if (!out || !現在) return;
+    var 材料 = AI確認の材料();
+    if (!(材料.今回.売価金額 > 0)) { out.innerHTML = '<span style="color:#b45309">売価（金額）を入れてから押してください</span>'; return; }
+    var 鍵 = JSON.stringify([材料.今回.品名, 材料.今回.数量, 材料.今回.売価金額, 材料.今回.区分]);
+    if (AI確認控え[鍵]) { out.innerHTML = AI確認控え[鍵]; return; }
+    var prompt = 'あなたは印刷会社の見積担当の先輩です。今回つけようとしている金額が、過去の金額から見て妥当かを判断してください。\n'
+      + '・同じ得意先の同じ品名（リピート）の過去の単価がいちばん大事な目安。数量が違えば、数量が多いほど単価は下がるのが普通\n'
+      + '・予算見積は概算なので見積より高めでもよい。失注した案件の金額は「高すぎた」可能性がある\n'
+      + '・相場や原価差の助言の文があれば参考にする。根拠が少なければ「判断できない」\n'
+      + '次の JSON だけを返す（説明文は書かない）: {"判定":"妥当|高め|安め|判断できない","目安単価":0,"目安金額":0,"理由":["",""],"気をつけること":[""]}\n\n'
+      + JSON.stringify(材料);
+    btn.disabled = true; out.innerHTML = '<span style="color:#64748b">🤖 過去の金額と比べています…</span>';
+    var u = new URL(AI_GAS_URL); u.searchParams.set('action', 'claudeText');
+    var 頼む = function (action, body) { u.searchParams.set('action', action); return fetch(u.toString(), { method: 'POST', redirect: 'follow', body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (j) { if (!j || !j.success) throw new Error((j && j.error) || '応答なし'); return String(j.text || j.reply || ''); }); };
+    頼む('claudeText', { prompt: prompt, maxTokens: 600 })
+      .catch(function (e1) { if (/daily_limit|ai_disabled/.test(String(e1.message))) throw e1; return 頼む('geminiSummary', { text: prompt }); })
+      .then(function (t) {
+        var a = t.indexOf('{'), b = t.lastIndexOf('}'); var j = JSON.parse(t.slice(a, b + 1));
+        var 色 = { '妥当': '#166534', '高め': '#b91c1c', '安め': '#1d4ed8' }[j['判定']] || '#475569';
+        var h = '<div style="margin-top:4px;padding:6px 10px;border:1px solid #c4b5fd;background:#faf5ff;border-radius:4px;line-height:1.6">'
+          + '<b style="color:' + 色 + ';font-size:14px">' + esc(j['判定'] || '') + '</b>'
+          + (j['目安単価'] ? '　目安 単価 <b>' + esc(String(j['目安単価'])) + '</b>' : '') + (j['目安金額'] ? '　金額 <b>' + 円表示(数値(j['目安金額'])) + '</b>' : '')
+          + '　<span style="color:#64748b;font-size:11px">（過去の伝票 ' + 材料.過去の伝票.length + ' 件から・AI の判断なので最後は人が決めてください）</span>'
+          + ((j['理由'] || []).length ? '<ul style="margin:3px 0 0 18px;padding:0">' + j['理由'].map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '')
+          + ((j['気をつけること'] || []).filter(Boolean).length ? '<div style="color:#b45309;margin-top:2px">⚠ ' + j['気をつけること'].filter(Boolean).map(esc).join('／') + '</div>' : '')
+          + (j['目安金額'] ? '<div style="margin-top:3px"><button type="button" class="kn-aicheck-set" style="font:inherit;font-size:11px;padding:1px 8px;cursor:pointer">この目安の金額を売価に入れる</button></div>' : '')
+          + '</div>';
+        AI確認控え[鍵] = h; out.innerHTML = h;
+        var sb = out.querySelector('.kn-aicheck-set'); if (sb) sb.onclick = function () { if ($('f-amt')) { $('f-amt').value = 数値(j['目安金額']); $('f-amt').dispatchEvent(new Event('input', { bubbles: true })); } };
+      })
+      .catch(function (e) { var m = String(e.message || e); if (/daily_limit/.test(m)) m = '今日の AI の上限に達しました（明日 0 時に戻ります）'; out.innerHTML = '<span style="color:#b91c1c">確認できませんでした: ' + esc(m.slice(0, 160)) + '</span>'; })
+      .then(function () { btn.disabled = false; });
+  }
+  document.addEventListener('click', function (e) { if (e.target && e.target.id === 'kn-aicheck-btn') AI確認(); });
   // ---- 前回の見積書（保管庫「見積実績」）: 得意先名＋品名で引いて、受注との突合結果を並べる
   var 得意先マスタ = null;
   function 得意先マスタを用意() {
