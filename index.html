@@ -56095,6 +56095,7 @@ function _inqBinAuto_(inq){
   if(src==='internal_msg') return { bin:'その他', reason:'社内連絡' };
   if(src==='interco') return { bin:'受注', reason:'社間の発注' };
   var _fx=_inqFaxNo_(inq); if(_fx){ var _fr=_inqBinRules_(); if(_fr.byFax[_fx]){ if(_fr.byFaxCust[_fx] && !inq.from_company) inq.from_company=_fr.byFaxCust[_fx]; return { bin:_fr.byFax[_fx], reason:'前に同じ FAX 番号（'+_fx+'）をそう仕分けた' }; } }   // BULK-SORT-1
+  var _sa=inq.ai_triage; if(_sa && _sa.bin && _sa.att && src!=='manual') return { bin:_sa.bin, reason:'AI（スキャンを読んで）'+(_sa.reason?'：'+_sa.reason:'') };   // AITRIAGE-4: 添付を読んだ AI の判定は FAX・複合機の決まりより先
   if(/^(Message from\b|.*FAX image from)/i.test(subj)) return { bin:'その他', reason:'複合機・FAX の転送（中身を見て振り分け）' };   // AI-BIN-3
   // AI-BIN-TRIAL-2: AI が決めた種類は規則より先（件名の語でも付く quote_req／proof_return は後ろのまま）
   var _aiK={ budget_quote:1, question:1, mgmt:1, notice:1, junk:1, order_ai:1 }; if(_aiK[inq.kind] && src!=='manual' && !inq.bin) return { bin:_INQ_KIND_BIN_[inq.kind], reason:'AI の判定' };
@@ -56658,7 +56659,8 @@ function _inqSortRow_(q){
     now='<span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:#334155;background:#fffbeb;border:1.5px dashed '+cm.color+';padding:4px 10px;line-height:1.5" title="'+_inqEsc_(q.bin_reason||'')+'"><span style="color:#64748b">🤖 提案:</span> <b style="color:'+cm.color+';font-size:13px">'+cm.icon+' '+_inqEsc_(cm.label)+'</b>'
       +(reason?'<span style="color:#64748b">（'+_inqEsc_(reason)+'）</span>':'')
       +'<button class="btn" style="font-size:12.5px;font-weight:900;padding:5px 14px;min-height:34px;border:2px solid '+cm.color+';color:#fff;background:'+cm.color+';margin-left:4px" title="この提案のとおりに決めます。違うときは左のボタンで" onclick="event.stopPropagation();'+_ok+'">✔ 承認</button>'
-      +(_note?'<span style="font-size:11px;color:#92400e">'+_note+'</span>':'')+'</span>';
+      +(_note?'<span style="font-size:11px;color:#92400e">'+_note+'</span>':'')+'</span>'
+      +(q.ai_triage&&q.ai_triage.scan?'<div style="font-size:12.5px;color:#0f172a;background:#f0f9ff;border-left:3px solid #0284c7;padding:4px 10px;margin-top:4px">📄 スキャンの中身（AI が読んだ）: <b>'+_inqEsc_(q.ai_triage.scan)+'</b></div>':'');
   } else if(!sorted){
     now='<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#334155;background:#fffbeb;border:1.5px dashed #b45309;padding:4px 10px;line-height:1.5" title="'+_inqEsc_(q.bin_reason||'')+'"><span style="color:#64748b">🤖 自動では決められず'+(reason?'（'+_inqEsc_(reason)+'）':'')+'　→ 左のボタンで振り分け</span>'
       +'<button class="btn" style="font-size:12px;font-weight:700;padding:5px 12px;min-height:34px;border:1.5px solid #6b7280;color:#374151;background:#fff;margin-left:6px" title="どれでもない連絡として「その他」に入れます（振り分け後へ）" onclick="event.stopPropagation();_inqSetBin_(\''+id+'\',\'その他\')">📄 その他で OK</button></span>';
@@ -56670,6 +56672,7 @@ function _inqSortRow_(q){
                : '🤖 覚えている差出人'+(reason?'<span style="color:#64748b">（'+_inqEsc_(reason)+'）</span>':'')+'<button class="btn" style="font-size:11px;padding:2px 8px;margin-left:4px" title="この差出人の覚えを消して振り分け前に戻します" onclick="event.stopPropagation();_inqBinAutoReset_(\''+id+'\')">覚えを消す</button>')
       +'</span>';
   }
+  if(q.ai_triage&&q.ai_triage.scan&&now.indexOf('📄 スキャンの中身')<0) now+='<div style="font-size:12.5px;color:#0f172a;background:#f0f9ff;border-left:3px solid #0284c7;padding:4px 10px;margin-top:4px">📄 スキャンの中身（AI が読んだ）: <b>'+_inqEsc_(q.ai_triage.scan)+'</b></div>';   // AITRIAGE-4
   // SORT-UI-2（11/10 本多さん「振り分け前と後をもっと分かりやすく。後のものは『振り分け変更』で出す。両方に同じ表示は分かりにくい」）
   //   振り分け前: 黄色の帯に大きく「どこに入れますか？」＋ 5 つのボタン。振り分け後: 「✅ 振り分け済み: ○○」だけ出し、ボタンは「↩ 振り分けを変更」を押したときだけ出す
   var btns=b('見積依頼','📝','#1d4ed8',"_inqSetBin_('"+id+"','見積')",cur==='見積'||cur==='予算見積','見積書を作る仕事に入れます','見積')
@@ -56739,7 +56742,7 @@ function _inqMorningOpen_(){
   var lanes=[['auto','🤖 自動で確定','#0f766e'],['junk','🗑 迷惑・ジャンク','#6b7280'],['review','📥 まだ承認待ち','#b45309'],['human','✋ 人が決めた','#334155']];
   var by={ auto:[], junk:[], review:[], human:[] }; it.forEach(function(q){ by[(q.isSpam&&!q.bin)?'junk':_inqLane_(q)].push(q); });
   var row=function(q){ var b=q.isSpam&&!q.bin?'ジャンク':_inqBin_(q), m=_inqBinMeta_(b);
-    return '<tr style="border-top:1px solid #f1f5f9"><td style="padding:4px 6px;white-space:nowrap;color:#64748b">'+esc(String(q.received_at||'').slice(5,16).replace('T',' '))+'</td><td style="padding:4px 6px">'+esc(q.from_company||q.from_name||q.from_email||'')+'</td><td style="padding:4px 6px">'+esc(String(q.subject||'').slice(0,60))+'</td>'
+    return '<tr style="border-top:1px solid #f1f5f9"><td style="padding:4px 6px;white-space:nowrap;color:#64748b">'+esc(String(q.received_at||'').slice(5,16).replace('T',' '))+'</td><td style="padding:4px 6px">'+esc(q.from_company||q.from_name||q.from_email||'')+'</td><td style="padding:4px 6px">'+esc(String(q.subject||'').slice(0,60))+(q.ai_triage&&q.ai_triage.scan?'<div style="font-size:11px;color:#0369a1">📄 '+esc(q.ai_triage.scan)+'</div>':'')+'</td>'
       +'<td style="padding:4px 6px;white-space:nowrap;color:'+m.color+';font-weight:700">'+m.icon+' '+esc(m.label)+'</td><td style="padding:4px 6px;color:#64748b;font-size:11px">'+esc(q.bin?('✋ '+(q.bin_by||'')):String(q.bin_reason||'').slice(0,30))+'</td>'
       +'<td style="padding:4px 6px;white-space:nowrap"><button class="btn" style="font-size:11px;padding:2px 8px" onclick="document.getElementById(\'inq-morning\').remove();_inqOpenById_(\''+esc(q.id)+'\')">開く・直す</button></td></tr>'; };
   var h='<div style="background:#fff;width:min(980px,96vw);max-height:90vh;overflow:auto;padding:16px 18px;font-size:12.5px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
