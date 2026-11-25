@@ -56341,7 +56341,7 @@ function _inqOutcomeSelect_(inq, big){ var esc=function(v){ return String(v==nul
 // 添付: Drive のサムネイル（触らなくても見える）。画像・PDF・Office はサムネイルが出る。開けないときはファイル名
 function _inqAttachThumbs_(inq, w, h){ var atts=(typeof _inqAttachLite_==='function')?_inqAttachLite_(inq):[]; if(!atts.length) return ''; var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }; var max=h>150?8:5;
   var iid=esc(inq&&inq.id||'');
-  return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+atts.slice(0,max).map(function(a, idx){ var id=a.driveFileId; var url=id?('https://drive.google.com/file/d/'+id+'/view'):(a.url||'#'); var name=a.name||'ファイル'; if(!id) return '<a href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:11px;padding:4px 8px;border:1px solid #e2e8f0;background:#fff;color:#0369a1;text-decoration:none">📎 '+esc(name)+'</a>';
+  return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+atts.slice(0,max).map(function(a, idx){ var id=a.driveFileId; var url=id?('https://drive.google.com/file/d/'+id+'/view'):(a.url||'#'); var name=a.name||'ファイル'; if(!id){ if(!url||url==='#'||/^https:\/\/app\.box\.com\//.test(url)) return '<a href="#" onclick="event.stopPropagation();event.preventDefault();_inqAttachFetchView_(\''+iid+'\','+idx+')" title="元のメールから取り出して画面で見ます" style="font-size:11px;padding:4px 8px;border:1px solid #e2e8f0;background:#fff;color:#0369a1;text-decoration:none">📎 '+esc(name)+' 👁</a>'; return '<a href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()" style="font-size:11px;padding:4px 8px;border:1px solid #e2e8f0;background:#fff;color:#0369a1;text-decoration:none">📎 '+esc(name)+'</a>'; }
     return '<a href="'+esc(url)+'" target="_blank" class="inq-thumb" onmouseenter="_inqThumbHover_(this,event)" onmousemove="_inqThumbHover_(this,event)" onmouseleave="_inqThumbHoverOff_()" onclick="event.stopPropagation();event.preventDefault();_inqThumbHoverOff_();_inqAttachView_(\''+iid+'\','+idx+')" title="'+esc(name)+'（載せると大きく・押すと画面の中で見る）" style="display:inline-block;border:1px solid #e2e8f0;background:#fff;text-decoration:none;color:#334155"><img src="'+(window._inqDriveThumbBad_?'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7':('https://drive.google.com/thumbnail?id='+esc(id)+'&sz=w'+w))+'" data-fid="'+esc(id)+'" data-w="'+w+'" loading="lazy" alt="'+esc(name)+'" style="display:block;height:'+h+'px;max-width:'+w+'px;object-fit:contain;background:#f8fafc" onerror="_inqThumbFallback_(this)"'+(window._inqDriveThumbBad_?' onload="if(!this.dataset.gas)_inqThumbFallback_(this)"':'')+'><div style="font-size:10px;max-width:'+w+'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 4px">📎 '+esc(name)+'</div></a>'; }).join('')+(atts.length>max?'<span style="font-size:11px;color:#64748b;align-self:center">ほか '+(atts.length-max)+' 件</span>':'')+'</div>'; }
 // ═══════════ INQ-TABS: 上のカテゴリの段と既定の選択 ═══════════
 function _renderInqBinTabs_(){
@@ -56893,6 +56893,26 @@ function _inqThumbHover_(a, ev){
 function _inqThumbHoverOff_(){ var box=document.getElementById('inq-hover-prev'); if(box) box.style.display='none'; }
 function _inqThumbNoImg_(img){ img.style.display='none'; var n=img.nextSibling; if(n&&n.style&&!/絵を取れません/.test(n.textContent||'')) n.textContent=(n.textContent||'')+'　⚠ 絵を取れません（Drive の権限か、まだ取り込み中）'; }
 // ATTACH-VIEW-1: 画面の中で見る枠（PDF は Drive の preview、絵は 1 ページ目の絵）
+// ATTVIEW-1（11/26 本多さん「これプレビューでファイルみれないけど」）: Drive に無い添付（メール・Box から取り込んだもの）は、
+//   Hub が元のメールから取り出して返したものを、この画面の中で開く（Drive にはコピーしない）
+async function _inqAttachFetchView_(inqId, idx){
+  var inq=(DB.inquiries||[]).find(function(x){ return x.id===inqId; }); if(!inq) return;
+  var atts=_inqAttachLite_(inq); var a=atts[idx]||{}; var name=String(a.name||'').replace(/^.*\//,'');
+  if(typeof _toastMsg==='function') _toastMsg('📎 '+name+' を取り出しています…');
+  var r=null; try{ r=await callCloudAPI('comAttachmentGet',{},{ id:inqId, name:name, idx:idx }); }catch(e){ r={ success:false, error:String(e) }; }
+  if(!r||!r.success||!r.base64){ alert('添付を開けませんでした: '+((r&&r.error)||'通信の失敗')); return; }
+  var bin=atob(r.base64), u8=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+  var url=URL.createObjectURL(new Blob([u8],{ type:r.mime||'application/octet-stream' }));
+  var isImg=/^image\//.test(r.mime||''), isPdf=/pdf/.test(r.mime||'')||/\.pdf$/i.test(r.name||'');
+  var old=document.getElementById('inq-attach-view'); if(old) old.remove();
+  var v=document.createElement('div'); v.id='inq-attach-view'; v.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.82);display:flex;flex-direction:column';
+  var btn='font:inherit;font-size:13px;font-weight:700;padding:6px 12px;min-height:36px;border:1px solid #cbd5e1;background:#fff;color:#0f172a;cursor:pointer;text-decoration:none';
+  v.innerHTML='<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#0f172a;color:#fff;flex-wrap:wrap"><b style="font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60vw">📎 '+_inqEsc_(r.name||name)+'</b>'
+    +'<span style="margin-left:auto;display:flex;gap:6px"><a style="'+btn+'" href="'+url+'" download="'+_inqEsc_(r.name||name)+'">⬇ 保存</a><a style="'+btn+'" href="'+url+'" target="_blank">↗ 別のタブ</a><button style="'+btn+'" onclick="document.getElementById(\'inq-attach-view\').remove()">✕ 閉じる</button></span></div>'
+    +'<div style="flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;padding:8px">'
+    +(isImg?'<img src="'+url+'" style="max-width:100%;max-height:100%;background:#fff">':isPdf?'<iframe src="'+url+'" style="width:100%;height:100%;border:0;background:#fff"></iframe>':'<div style="color:#fff;font-size:14px">この形式は画面で開けません。「⬇ 保存」で開いてください。</div>')+'</div>';
+  v.onclick=function(e){ if(e.target===v) v.remove(); }; document.body.appendChild(v);
+}
 function _inqAttachView_(inqId, idx){
   var inq=(DB.inquiries||[]).find(function(x){ return x.id===inqId; }); if(!inq) return;
   var atts=_inqAttachLite_(inq).filter(function(a){ return a.driveFileId; }); if(!atts.length) return;
