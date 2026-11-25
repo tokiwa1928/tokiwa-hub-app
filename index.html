@@ -4118,7 +4118,8 @@ let DB={
 // 認証情報の読み込み
 function loadAuth(){
   try{
-    const s=localStorage.getItem(AUTH_KEY);
+    // COTAB-1: タブごとに会社を持てるよう、このタブの分（sessionStorage）があればそちらを先に使う
+    var s=null; try{ s=sessionStorage.getItem(AUTH_KEY); }catch(x){} if(!s) s=localStorage.getItem(AUTH_KEY);
     if(s){ currentAuth=JSON.parse(s); }
   }catch(e){ currentAuth={companyId:null,companyCode:null,companyName:null,role:'viewer',loggedIn:false}; }
 }
@@ -4126,6 +4127,7 @@ function loadAuth(){
 // 認証情報の保存
 function saveAuth(){
   try{ localStorage.setItem(AUTH_KEY,JSON.stringify(currentAuth)); }catch(e){}
+  try{ sessionStorage.setItem(AUTH_KEY,JSON.stringify(currentAuth)); }catch(e){}   // COTAB-1: このタブの会社
 }
 
 // メールアドレスでユーザーを検索
@@ -51505,13 +51507,38 @@ function showCompanySwitcher(){
 var COQUICK_EMAILS = ['honda@tokiwap.co.jp', 'fukunaga@tokiwap.co.jp'];
 var COQUICK_LIST = [ { m:/トキワ/, label:'トキワ', color:'#65a30d' }, { m:/村山/, label:'村山', color:'#6d28d9' }, { m:/アート/, label:'アート・エス', color:'#1d4ed8' }, { m:/中尾/, label:'中尾', color:'#9f1239' } ];
 function _coQuickAllowed_(){ try{ var e=String((currentAuth&&(currentAuth.userEmail||currentAuth.email))||'').toLowerCase(); return !!(currentAuth&&currentAuth.loggedIn) && COQUICK_EMAILS.indexOf(e)>=0; }catch(x){ return false; } }
+// COTAB-1（11/25 本多さん「アカウントを押したら別のタブにできますか」）: 会社ごとに別のタブ。同じ会社のタブがあればそこへ
+function _coQuickGo_(code, ev){
+  var cur=(DB.companies||[]).find(function(x){ return x.id===currentAuth.companyId; });
+  if(cur && String(cur.code)===String(code)) return;
+  if(ev && ev.shiftKey){ switchCompany(code); return; }
+  var u=new URL(location.href); u.searchParams.set('co', code); u.hash='';
+  var w=window.open(u.toString(), 'tokiwa_hub_'+code); if(w) try{ w.focus(); }catch(e){}
+  else switchCompany(code);   // ポップアップが止められたときは、このタブで切り替え
+}
+// 開いたタブ: ?co=会社コード があれば、ログインと会社の一覧がそろったところで、その会社に切り替える（このタブだけ）
+(function(){ try{
+  var code=new URLSearchParams(location.search).get('co'); if(!code) return;
+  var n=0, t=setInterval(function(){ n++;
+    if(n>60){ clearInterval(t); return; }
+    if(typeof currentAuth==='undefined' || !currentAuth || !currentAuth.loggedIn || typeof DB==='undefined' || !(DB.companies&&DB.companies.length)) return;
+    clearInterval(t);
+    try{ var u=new URL(location.href); u.searchParams.delete('co'); history.replaceState(null,'',u.toString()); }catch(e){}
+    if(!_coQuickAllowed_()) return;
+    var c=DB.companies.find(function(x){ return String(x.code)===String(code); });
+    if(c && c.id!==currentAuth.companyId) switchCompany(code);
+  }, 500);
+}catch(e){} })();
 function _renderCoQuick_(){
   var el=document.getElementById('hs-co-quick'); if(!el) return;
   if(!_coQuickAllowed_()){ el.innerHTML=''; el.className=''; return; }
   var cos=DB.companies||[], cur=currentAuth.companyId, h='';
   COQUICK_LIST.forEach(function(q){ var c=cos.find(function(x){ return q.m.test(String(x.name||'')); }); if(!c) return;
-    h+='<button type="button" class="'+(c.id===cur?'on':'')+'" style="--c:'+q.color+'" title="'+String(c.name).replace(/"/g,'&quot;')+' に切り替える" onclick="event.stopPropagation();'+(c.id===cur?'':'switchCompany(\''+String(c.code).replace(/'/g,"\\'")+'\')')+'">'+q.label+'</button>'; });
+    var code=String(c.code).replace(/'/g,"\\'");
+    h+='<button type="button" class="'+(c.id===cur?'on':'')+'" style="--c:'+q.color+'" title="'+String(c.name).replace(/"/g,'&quot;')+'：押すと別のタブで開く（開いていればそのタブへ）。Shift を押しながらだと、このタブで切り替え" onclick="event.stopPropagation();_coQuickGo_(\''+code+'\', event)">'+q.label+(c.id===cur?'':' ↗')+'</button>'; });
   el.className='hs-coq'; el.innerHTML=h;
+  // タブの名前に会社を出す（どのタブがどの会社か分かるように）
+  try{ var me=COQUICK_LIST.find(function(q){ return q.m.test(String(currentAuth.companyName||'')); }); var base=document.title.replace(/^【[^】]*】/,''); document.title=(me?'【'+me.label+'】':'')+base; }catch(e){}
 }
 async function switchCompany(code){
   document.getElementById('company-switch-modal')?.remove();
