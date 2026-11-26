@@ -56454,11 +56454,13 @@ function _inqAiOrder_(id, kind, おまかせ){
   kind=kind||'受注'; var page=(kind==='受注')?'fmjuchu':'fmmitsu';
   if(!document.getElementById('fm-frame-'+page)){ if(typeof _toastMsg==='function') _toastMsg((kind==='受注'?'受注入力':'見積入力')+'の画面が、この会社の使用範囲に入っていません'); return; }
   var atts=(inq.attachments||[]).filter(function(a){ return a && a.driveFileId && /pdf|image|tif|png|jpe?g|gif|bmp/i.test(String(a.mimeType||a.type||'')+' '+String(a.name||a.filename||'')); }).slice(0,3);
-  if(typeof _toastMsg==='function') _toastMsg('📄 本文'+(atts.length?'と添付 '+atts.length+' 件（FAX など）':'')+'を読んでいます…');
-  Promise.all(atts.map(function(a){ return Promise.resolve(callCloudAPI('extractPdfText',{ fileId:a.driveFileId })).then(function(r){ return (r&&r.success&&r.text)?('【添付: '+(a.name||a.filename||'')+'】\n'+String(r.text).slice(0,6000)):''; }).catch(function(){ return ''; }); }))
+  // ATTVIEW-2（11/26 本多さん「スキャンから AI 起票ができない」）: Drive に無い添付（メールの FAX・スキャン）は、Hub が元のメールから取り出して AI で書き起こす
+  var mailAtts=(inq.attachments||[]).map(function(a,i){ return { a:a, i:i }; }).filter(function(x){ var a=x.a; return a && !a.driveFileId && /pdf|image|png|jpe?g/i.test(String(a.mimeType||a.type||'')+' '+String(a.name||a.filename||'')); }).slice(0,2);
+  if(typeof _toastMsg==='function') _toastMsg('📄 本文'+((atts.length+mailAtts.length)?'と添付 '+(atts.length+mailAtts.length)+' 件（FAX など）':'')+'を読んでいます…');
+  Promise.all(mailAtts.map(function(x){ var nm=String(x.a.name||x.a.filename||''); return Promise.resolve(callCloudAPI('comAttachmentText',{},{ id:inq.id, name:nm, idx:x.i })).then(function(r){ return (r&&r.success&&r.text)?('【添付: '+nm+'（AI が読んだ）】\n'+String(r.text).slice(0,4000)):''; }).catch(function(){ return ''; }); }).concat(atts.map(function(a){ return Promise.resolve(callCloudAPI('extractPdfText',{ fileId:a.driveFileId })).then(function(r){ return (r&&r.success&&r.text)?('【添付: '+(a.name||a.filename||'')+'】\n'+String(r.text).slice(0,6000)):''; }).catch(function(){ return ''; }); })))
   .then(function(texts){
     var head=['件名: '+String(inq.subject||''), '差出人: '+[inq.from_company||inq.custName||'', inq.from_name||'', inq.from_email||''].filter(Boolean).join(' ')].join('\n');
-    var seed=[head, String(inq.body||'').slice(0,4000)].concat(texts.filter(Boolean)).join('\n\n');
+    var seed=[head, String(inq.body||'').slice(0,4000), (inq.ai_triage&&inq.ai_triage.scan)?'【スキャンの要約（AI）】'+inq.ai_triage.scan:''].concat(texts.filter(Boolean)).filter(Boolean).join('\n\n');
     try{ localStorage.setItem('fm_ai_seed_'+id, JSON.stringify({ text:seed, at:Date.now() })); }catch(e){}
     _fmOpenNo_(page, '', '&inq='+encodeURIComponent(id)+'&ai=1'+(おまかせ?'&auto=1':'')+'&t='+Date.now());
     try{ if(typeof closeInquiryDetail==='function') closeInquiryDetail(); }catch(e){}
