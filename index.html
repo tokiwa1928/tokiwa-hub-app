@@ -22467,6 +22467,40 @@ window._sagyoToLw_ = function(no, type){
       .then(function(r){ if(!r||!r.success) throw new Error((r&&r.error)||'ノートに書けませんでした'); DB.lwSlipNotes[no]={ postId:String(r.postId||m.postId||''), groupId:r.groupId||m.groupId||'', at:new Date().toISOString() }; try{ saveDB(); }catch(e){} toast('📨 '+label+'をノートへ送りました（'+title+'）'); return true; });
   }).catch(function(e){ try{ fr.remove(); }catch(x){} alert('ノートへ送れませんでした: '+String(e&&e.message||e)); return false; });
 };
+// KITAORDER-1（11/26 本多さん「tokiwahub で発注依頼もかけられるように。北上プリントの場合は、トキワ印刷案件（トキワ→北上）にノート作成して、
+//   ファイルメーカーから外注指示書の pdf を貼り付けて『印刷をお願いします』と。あと案件管理表（トキワ→北上）の最後の行に入れて」）
+//   受注入力の「🏭 北上へ発注依頼」→ 外注指示書を裏で描いて PDF に（案件フォルダの 06_指示書、無ければ Drive の「外注指示書（トキワ→北上）」）→ Hub がノートと管理表へ
+window._kitakamiOrder_ = function(o){
+  o=o||{}; var no=String(o.no||'').trim(); if(!no){ alert('伝票番号がありません'); return Promise.resolve(false); }
+  if(!(typeof currentAuth!=='undefined' && currentAuth && currentAuth.loggedIn)){ alert('Hub にログインしてから押してください'); return Promise.resolve(false); }
+  var toast=function(m){ try{ if(typeof _toastMsg==='function') _toastMsg(m); }catch(e){} };
+  toast('📄 外注指示書を描いています…');
+  var fr=document.createElement('iframe'); fr.style.cssText='position:fixed;left:-9999px;top:0;width:900px;height:1300px;border:0;opacity:0'; fr.src='tools/sagyo.html?no='+encodeURIComponent(no);
+  document.body.appendChild(fr);
+  var waitPaper=new Promise(function(res, rej){ var t0=Date.now(); (function poll(){ try{ var d=fr.contentDocument, p=d&&d.getElementById('paper'); var tx=p?String(p.innerText||''):''; if(p && tx.length>300 && tx.indexOf(no)>=0 && !/読み込んでいます|取得中/.test(tx)){ res(d); return; } }catch(e){} if(Date.now()-t0>30000){ rej(new Error('外注指示書を描けませんでした（受注入力で伝票を開いて、ログインしているか確かめてください）')); return; } setTimeout(poll, 500); })(); });
+  var fileId='', fileUrl='';
+  return waitPaper.then(function(d){
+    var css=Array.prototype.map.call(d.querySelectorAll('style'), function(s){ return s.textContent; }).join('\n');
+    var paper=d.getElementById('paper'); var html='<style>@page{size:A4;margin:0} body{padding:0!important;margin:0;background:#fff} #paper{margin:0!important;box-shadow:none!important;width:210mm;min-height:297mm}'+css+'</style>'+paper.outerHTML;
+    try{ fr.remove(); }catch(e){}
+    return callCloudAPI('caseFolderByDenpyo',{},{ denpyo:no }).then(function(cf){ var sub=cf&&cf.success&&cf.found&&cf.subFolders&&cf.subFolders['06_指示書']; if(sub&&sub.id) return sub.id;
+        return callCloudAPI('kitakamiOrderFolder',{},{}).then(function(r){ return (r&&r.success&&r.folderId)||''; }); })
+      .then(function(folderId){ if(!folderId) throw new Error('外注指示書の置き場所を用意できませんでした');
+        toast('📄 PDF にしています…');
+        return callCloudAPI('saveHtmlAsPdf',{},{ folderId:folderId, name:no+'_外注指示書_'+new Date().toISOString().slice(0,10), html:html }); })
+      .then(function(r){ if(!r||!r.success) throw new Error((r&&r.error)||'PDF にできませんでした'); fileId=r.fileId; fileUrl=r.url||''; });
+  }).then(function(){
+    toast('📨 北上へ発注依頼を送っています…');
+    var body={}; Object.keys(o).forEach(function(k){ body[k]=o[k]; }); body.no=no; body.fileId=fileId; body.fileUrl=fileUrl;
+    return callCloudAPI('kitakamiOrder',{},body);
+  }).then(function(r){
+    if(!r||!r.success){ alert('発注依頼を送れませんでした: '+((r&&r.error)||'通信の失敗')); return false; }
+    var n=r.note||{}, sh=r.sheet||{};
+    alert('🏭 北上へ発注依頼（'+no+'）\n・ノート: '+(n.ok?'作りました（'+(n.group||'')+'）':'できませんでした（'+(n.error||'')+'）')
+      +'\n・案件管理表: '+(sh.added?(sh.row+' 行目に入れました'+(sh.send?'':'（送り先は空です。入れてください）')):'入れていません（'+(sh.reason||sh.error||'')+'）')+'\n・外注指示書: '+(fileUrl||''));
+    return true;
+  }).catch(function(e){ try{ fr.remove(); }catch(x){} alert('発注依頼を送れませんでした: '+String(e&&e.message||e)); return false; });
+};
 // HUBLINK-1: Hub の詳細を開くリンク（GitHub Pages でも、アプリとして入れた Hub でも同じ所を指す）
 function _hubLink_(key, val){ return location.origin+location.pathname.replace(/[^/]*$/,'')+'?'+key+'='+encodeURIComponent(String(val||'')); }
 function _proofLwHtml_(p){
