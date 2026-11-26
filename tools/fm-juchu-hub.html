@@ -3414,6 +3414,10 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     var m = DTP記録()[no] || {}, note = $('dtp-note').value.trim();
     if (!m.at || m.dtp !== '有' || (m.note || '') !== note) $('dtp-msg').textContent = DTP送信(現在.fields, '有', note);
     try { new BroadcastChannel('tokiwa-hub-tools').postMessage({ type: 'dtp-open', 伝票番号: no }); } catch (e) {}   // Hub で校正BOX のカードを開く
+    // AI-KIHYO-14: AI が DTP を「有」にした伝票は、保存して校正BOX に入ったあと、続けて LINE WORKS のノートへ指示書を送る（1 回だけ）
+    if (window.AI起票 && window.AI起票.自動ノート) { window.AI起票.自動ノート = false;
+      var sz = String(($('f-seizo') || {}).value || ''), t = (sz === '完全外製' || sz === '部分外製' || sz === '分離外製') ? 'gaichu' : 'seizo';
+      setTimeout(function () { try { if (window.parent && window.parent !== window && typeof window.parent._sagyoToLw_ === 'function') window.parent._sagyoToLw_(no, t); } catch (e) {} }, 1500); }
   };
   window.DTP送信 = DTP送信; window.DTP状態 = DTP状態;
   $('hs-go').onclick = function () {
@@ -4445,7 +4449,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   // 起こしたあと、読み取った品名・数量などを欄に入れるだけ（保存は人が押す）。AI は会社 GAS の claudeText（使用量の上限つき）
   var AI_GAS_URL = 'https://script.google.com/a/macros/tokiwap-group.com/s/AKfycbw9-8Nnq3jV9lCDUEf7JOvQM_yAy1ZYnOIab-TYP3TZ-BtH7RosxKSeXmr-FvkxMVhv/exec';
   var AI_GAS_KEY = '';
-  var AI起票 = { 行: [] };
+  var AI起票 = { 行: [] }; window.AI起票 = AI起票;   // AI-KIHYO-14: 保存のあと（別の場所）からも見る
   function AI文字(s) { return String(s == null ? '' : s).normalize('NFKC').toLowerCase().replace(/[\s　・,，、()（）「」『』【】\[\]"'_\-－ー]/g, ''); }
   function AIに読ませる(文) {
     var prompt = '印刷会社の受注・見積の依頼です。次の文から、注文を 1 件ずつ取り出して JSON の配列だけを返してください（説明文は書かない）。\n'
@@ -4623,7 +4627,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
   }
   // 読み取った値を欄に入れる（変わった欄は「保存」で FileMaker に書かれる）。得意先は新規のときだけ
   function AIの値を入れる(o, 新規, ロット, 元) {
-    var 入れた = [];
+    var 入れた = []; AI起票.回変更 = '';
     var put = function (id, v, 名) { var el = $(id); if (!el || v == null || v === '') return; v = String(v); if (String(el.value) === v) return; el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); el.style.outline = '2px solid #f59e0b'; 入れた.push(名); };
     // AI-KIHYO-8: ユーザー名は ㈱・株式会社 の有無だけの違いなら元の書き方のまま。数量は Hub の「数量」＝ロット契約単位にも入れ、注残数も合わせる
     var 社名 = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)|様|御中/g, '').replace(/[\s　・()（）]/g, ''); };
@@ -4639,7 +4643,7 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
       var 元回 = Number(半(回m[1])), 文 = 半(String(AI起票.原文 || '') + ' ' + String(o.品名 || '') + ' ' + String(o.仕様 || ''));
       var 依頼回m = /第\s*(\d{1,4})\s*回/.exec(文) || /回数\s*[:：は]?\s*(\d{1,4})/.exec(文);
       var 新回 = 依頼回m ? Number(依頼回m[1]) : 元回 + 1;
-      if (新回 > 0 && 新回 !== 元回) { o.品名 = 元品名.replace(回m[0], '第' + 新回 + '回'); } else if (新回 === 元回 && !依頼回m) { o.品名 = 元品名; } }
+      if (新回 > 0 && 新回 !== 元回) { o.品名 = 元品名.replace(回m[0], '第' + 新回 + '回'); AI起票.回変更 = '第' + 元回 + '回 → 第' + 新回 + '回'; } else if (新回 === 元回 && !依頼回m) { o.品名 = 元品名; } }
     put('f-item', o.品名, '品名'); if (!(o.ユーザー && 社名(o.ユーザー) === 社名(($('f-user') || {}).value))) put('f-user', o.ユーザー, 'ユーザー');
     if (Number(o.数量) > 0) { put('f-lotunit', o.数量, '数量'); var zn = $('f-zan'); if (zn && (!String(zn.value || '') || String(zn.value) === 元数量)) put('f-zan', o.数量, '注残数'); }
     put('p1-tot', o.数量, '合計数'); put('f-unit', o.単位, '単位');
@@ -4647,6 +4651,22 @@ html body :is(div,section,article,aside,form,fieldset,details):is(:has(> table),
     if (o.納期 && /^\d{4}-\d\d-\d\d$/.test(o.納期)) put('f-due', o.納期, '納期');
     if (ロット) put('f-lotkind', ロット, 'ロット区分（' + ロット + '）');
     if (新規 && o.得意先) { var cs = 得意先コードを名前で(o.得意先) || {}, ks = Object.keys(cs); if (ks.length === 1) put('f-custcd', ks[0], '得意先'); }
+    // AI-KIHYO-14（11/26 本多さん「原稿に修正指示があったりする場合には、自動で DTP ありにして」）:
+    //   回数が変わった／依頼に 修正・変更・差し替え・赤字・追加・削除・校正 などの指示があれば、DTP を「有」・版下変更を「有」にし、
+    //   校正の内容に直すところを書いておく。保存すると校正BOX に入り、続けて LINE WORKS のノートへ指示書を送る（AI起票.自動ノート）
+    try {
+      var 原 = String(AI起票.原文 || ''), 指示語 = /修正|訂正|変更|差し?替|赤字|追加|削除|直し|校正|改訂|新しい原稿|原稿|開催なし|実施なし|中止/;
+      var 行 = 原.split(/\r?\n|。/).map(function (x) { return x.trim(); }).filter(function (x) { return x && !/^(件名|差出人)[:：]/.test(x) && (指示語.test(x) || /\d{4}\s*年|\d{1,2}\s*月\s*\d{1,2}\s*日|第\s*\d+\s*回|回数/.test(x)); }).slice(0, 6).map(function (x) { return x.slice(0, 80); });
+      var 要る = !!AI起票.回変更 || 指示語.test(原) || String(($('f-platechg') || {}).value || '') === '有';
+      if (要る && $('dtp-yn') && $('dtp-yn').value !== '有') {
+        var メモ = [AI起票.回変更].concat(行).filter(Boolean).filter(function (x, i, a) { return a.indexOf(x) === i; }).join('\n') || '依頼の文に修正の指示があります（中身を確かめてください）';
+        if ($('f-platechg') && String($('f-platechg').value || '') !== '有') put('f-platechg', '有', '版下変更');
+        $('dtp-yn').value = '有'; Array.prototype.forEach.call(document.querySelectorAll('input[name="dtp-yn-r"]'), function (r) { r.checked = (r.value === '有'); });
+        if ($('dtp-note') && !String($('dtp-note').value || '').trim()) $('dtp-note').value = メモ;
+        $('dtp-msg').textContent = '🤖 修正の指示があるので DTP を「有」にしました。保存すると校正BOX → ノートへ入ります';
+        AI起票.自動ノート = true; 入れた.push('DTP 有（校正の内容）');
+      }
+    } catch (e) { console.warn('[AI-KIHYO-14]', e); }
     状態(stat.textContent + (入れた.length ? '　AI が入れた欄: ' + 入れた.join('・') + '（オレンジ枠）。仕様「' + (o.仕様 || '—') + '」を確かめて保存' : '　仕様「' + (o.仕様 || '—') + '」を確かめて保存'), 'ok');
   }
   (function () {   // AI-KIHYO-3: Hub の問い合わせから ?ai=1&inq=… で来たら、本文＋添付の文字を入れて読み取りまで進める
