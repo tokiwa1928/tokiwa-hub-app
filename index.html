@@ -1401,6 +1401,7 @@ setTimeout(_removeBootLoader_, 5000);
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px">
     <div>
+      <div id="pay-suggest"></div>
       <div class="st" style="margin-bottom:6px">💰 入金記録</div>
       <div id="payments-list"></div>
     </div>
@@ -4930,6 +4931,7 @@ async function loadFromCloud() {
   }
   // AITRIAGE-1: 振り分けの連続回数（新しい方）・毎朝の確認（和集合）
   if (result.data.inqStreak && typeof result.data.inqStreak==='object') { DB.inqStreak=DB.inqStreak||{}; Object.keys(result.data.inqStreak).forEach(function(k){ var c=result.data.inqStreak[k], m=DB.inqStreak[k]; if(!m || String(c&&c.at||'')>String(m.at||'')) DB.inqStreak[k]=c; }); }
+  if (result.data.payerMap && typeof result.data.payerMap==='object') { DB.payerMap=Object.assign({}, result.data.payerMap, DB.payerMap||{}); }   // PAYIN-1
   if (result.data.submitPrefs && typeof result.data.submitPrefs==='object') { DB.submitPrefs=DB.submitPrefs||{}; Object.keys(result.data.submitPrefs).forEach(function(k){ var c=result.data.submitPrefs[k], m=DB.submitPrefs[k]; if(!m || String(c&&c.at||'')>String(m.at||'')) DB.submitPrefs[k]=c; }); }   // FLOW-1
   if (result.data.inqMorning && typeof result.data.inqMorning==='object') { DB.inqMorning=DB.inqMorning||{}; Object.keys(result.data.inqMorning).forEach(function(k){ if(!DB.inqMorning[k]) DB.inqMorning[k]=result.data.inqMorning[k]; }); }
   // DOC-LINK-1: 外注先に送った書類の覚え（送信・返事は新しい方）
@@ -5569,6 +5571,7 @@ async function _saveToCloudNow_() {
     inqBinRules: DB.inqBinRules || {},   // BULK-SORT-1: 今後もこの箱、の覚え（全 PC で同じに）
     inqStreak: DB.inqStreak || {},   // AITRIAGE-1: 差出人ごとの続けて同じ振り分けの回数
     inqMorning: DB.inqMorning || {},
+    payerMap: DB.payerMap || {},   // PAYIN-1: 振込の名義 → 得意先（消込で覚えたもの）
     submitPrefs: DB.submitPrefs || {},   // FLOW-1: 会社・担当者ごとの提出方法（メール／FAX…）   // AITRIAGE-1: 毎朝の振り分けの確認（日 → 誰・いつ）
     aiRules: DB.aiRules || [],   // AI-WIN-1: AI への決まり（今後は全体でこう対応）
     sagyoPrints: (DB.sagyoPrints || []).slice(-8000),                // SEIZO-1: 製造指示書の出力記録（第N回・日時・誰が・変更コメント・写し）
@@ -31604,7 +31607,109 @@ function _importGenPayments_(){
   }).catch(function(e){ alert('取り込めませんでした: '+(e&&e.message||e)); });
 }
 
+// ═══ PAYIN-1（11/28 本多さん「入金があったら CSV と FAX・スキャンを取り込んで、入金リストで付け合わせる（消込）」）═══
+//   ① 銀行の CSV／FAX・スキャン（AI が読む）→ 中身を見てから入金記録に入れる　② 未入金の請求書と自動で付け合わせて候補を出す（金額・名義）
+//   ③ 人が「✓ 消込」を押す（名義と得意先の組み合わせは覚えて、次から「確実」に出す）。作業はなくし、確認だけ残す
+function _payNorm_(s){ s=String(s==null?'':s); try{ s=s.normalize('NFKC'); }catch(e){} return s.toUpperCase().replace(/株式会社|有限会社|合同会社|一般社団法人|公益社団法人|\(株\)|\(有\)|\(カ\)|カ\)|\(ユ\)|ユ\)|カブシキガイシヤ|カブシキガイシャ|ユウゲンガイシヤ|ユウゲンガイシャ|[\s　・,、。.\-ー()（）\/]/g,''); }
+function _payDate_(v){ var s=String(v==null?'':v).trim(); try{ s=s.normalize('NFKC'); }catch(e){} var m;
+  if((m=/^(\d{4})[\/\-.年](\d{1,2})[\/\-.月](\d{1,2})/.exec(s))) return m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2);
+  if((m=/^(\d{4})(\d{2})(\d{2})$/.exec(s))) return m[1]+'-'+m[2]+'-'+m[3];
+  if((m=/^(R|令和)\s*(\d{1,2})[\/\-.年](\d{1,2})[\/\-.月](\d{1,2})/i.exec(s))) return (2018+Number(m[2]))+'-'+('0'+m[3]).slice(-2)+'-'+('0'+m[4]).slice(-2);
+  if((m=/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/.exec(s))){ var y=Number(m[1]), cy=new Date().getFullYear(), yy=(Math.abs(2018+y-cy)<=1)?2018+y:2000+y; return yy+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2); }
+  if((m=/^(\d{1,2})[\/月](\d{1,2})/.exec(s))) return new Date().getFullYear()+'-'+('0'+m[1]).slice(-2)+'-'+('0'+m[2]).slice(-2);
+  return ''; }
+function _payNum_(v){ var s=String(v==null?'':v); try{ s=s.normalize('NFKC'); }catch(e){} var n=Number(s.replace(/[^\d.\-]/g,'')); return isFinite(n)?n:0; }
+function _payCsvRows_(text){ var rows=[], row=[], cur='', q=false; text=String(text||'').replace(/^﻿/,'');
+  for(var i=0;i<text.length;i++){ var c=text[i]; if(q){ if(c==='"'){ if(text[i+1]==='"'){ cur+='"'; i++; } else q=false; } else cur+=c; }
+    else if(c==='"') q=true; else if(c===','||c==='\t'){ row.push(cur); cur=''; } else if(c==='\n'){ row.push(cur); rows.push(row); row=[]; cur=''; } else if(c!=='\r') cur+=c; }
+  if(cur!==''||row.length){ row.push(cur); rows.push(row); } return rows.filter(function(r){ return r.some(function(x){ return String(x).trim()!==''; }); }); }
+// 銀行の入出金明細 CSV → [{ date, payer, amount, memo }]（入金の行だけ）。見出しの言葉で列を探す
+function _payCsvParse_(text){ var rows=_payCsvRows_(text), hi=-1;
+  for(var i=0;i<Math.min(rows.length,15);i++){ var j=rows[i].join('|'); if(/日付|年月日|取引日|入金日|勘定日|起算日/.test(j) && /金額|入金|預り|預入/.test(j)){ hi=i; break; } }
+  if(hi<0) return { error:'見出しの行（日付・金額）が見つかりません。銀行の明細の CSV をそのまま入れてください', rows:[] };
+  var H=rows[hi].map(function(x){ return String(x).trim(); }), find=function(re, not){ for(var k=0;k<H.length;k++){ if(re.test(H[k]) && !(not&&not.test(H[k]))) return k; } return -1; };
+  var cD=find(/取引日|入金日|日付|年月日|勘定日/), cIn=find(/入金|お預り|預り|預入/, /日|区分|種別/), cAmt=cIn>=0?-1:find(/金額/), cKb=find(/入出金|入払|区分/), cOut=find(/出金|お支払|支払|引出/, /日|区分/);
+  var cMemo=[]; H.forEach(function(h, k){ if(/摘要|内容|依頼人|振込人|名義|備考|メモ/.test(h)) cMemo.push(k); });
+  var out=[]; for(var r=hi+1;r<rows.length;r++){ var R=rows[r], d=_payDate_(R[cD]); if(!d) continue; var amt=0;
+    if(cIn>=0) amt=_payNum_(R[cIn]); else if(cAmt>=0){ amt=_payNum_(R[cAmt]); if(cKb>=0 && !/入金|預入|入|1/.test(String(R[cKb]||''))) amt=0; if(cOut>=0 && _payNum_(R[cOut])>0) amt=0; }
+    if(!(amt>0)) continue; var memo=cMemo.map(function(k){ return String(R[k]||'').trim(); }).filter(Boolean).join(' ');
+    var payer=memo.replace(/^(振込|フリコミ|ﾌﾘｺﾐ|振込入金|入金)\s*\d*\s*/,'').trim(); out.push({ date:d, payer:payer||memo, amount:amt, memo:memo }); }
+  return { rows:out, header:H }; }
+function _payKey_(p){ return String(p.receivedAt||p.date||'')+'|'+Number(p.amount||0)+'|'+_payNorm_(p.payer||p.cust||''); }
+function _payCsvPick_(){ var inp=document.createElement('input'); inp.type='file'; inp.accept='.csv,.txt,.tsv'; inp.multiple=true;
+  inp.onchange=async function(){ var all=[], errs=[]; for(var i=0;i<inp.files.length;i++){ var f=inp.files[i]; try{ var buf=await f.arrayBuffer(), text='';
+        try{ text=new TextDecoder('utf-8',{ fatal:true }).decode(buf); }catch(e){ text=new TextDecoder('shift_jis').decode(buf); }
+        var r=_payCsvParse_(text); if(r.error) errs.push(f.name+': '+r.error); else r.rows.forEach(function(x){ x.src='CSV '+f.name; all.push(x); }); }catch(e){ errs.push(f.name+': '+(e&&e.message||e)); } }
+    if(errs.length) alert('読めなかったファイルがあります\n'+errs.join('\n')); if(all.length) _payPreview_(all, '銀行の CSV'); else if(!errs.length) alert('入金の行がありませんでした'); };
+  inp.click(); }
+// FAX・スキャン（振込の通知・通帳のコピーなど）を AI が読む。読んだ中身は必ず人が見てから入れる
+function _payScanPick_(){ var inp=document.createElement('input'); inp.type='file'; inp.accept='.pdf,image/*'; inp.multiple=true;
+  inp.onchange=async function(){ if(!inp.files.length) return; if(typeof _toastMsg==='function') _toastMsg('📠 AI がスキャンを読んでいます…（数十秒）');
+    try{ var imgs=[]; for(var i=0;i<inp.files.length && imgs.length<8;i++){ var f=inp.files[i], b64=await new Promise(function(res, rej){ var fr=new FileReader(); fr.onload=function(){ res(String(fr.result).split(',')[1]); }; fr.onerror=rej; fr.readAsDataURL(f); });
+        if(/pdf$/i.test(f.type)||/\.pdf$/i.test(f.name)){ await _kpLoadPdfjs_(); var doc=await pdfjsLib.getDocument({ data:_b64ToU8_(b64) }).promise; for(var pg=1;pg<=Math.min(doc.numPages,4) && imgs.length<8;pg++){ var cv=await _kpRenderPage_(doc, pg, 1400); imgs.push(cv.toDataURL('image/jpeg',0.85).split(',')[1]); } }
+        else imgs.push(b64); }
+      var r=await callCloudAPI('claudeVision',{},{ maxTokens:3000, images:imgs, prompt:'これは入金（振込）の通知・通帳のコピー・入金明細の FAX またはスキャンです。入金の行だけを全部読み取り、JSON の配列だけで返してください（説明は書かない）。\n形: [{"date":"YYYY-MM-DD","payer":"振込した人・会社の名前（書いてあるとおり）","amount":数字,"memo":"摘要や請求書番号があれば"}]\n出金・残高・合計の行は入れない。年が和暦なら西暦に直す。読めない数字は推測せず、その行に "unsure":true を付ける。今日は '+new Date().toISOString().slice(0,10)+' です。' });
+      if(!r||!r.success) throw new Error((r&&r.error)||'AI が読めませんでした');
+      var m=String(r.reply||'').match(/\[[\s\S]*\]/), arr=[]; try{ arr=JSON.parse(m?m[0]:'[]'); }catch(e){}
+      var rows=arr.map(function(x){ return { date:_payDate_(x.date), payer:String(x.payer||'').trim(), amount:_payNum_(x.amount), memo:String(x.memo||'').trim(), unsure:!!x.unsure, src:'スキャン（AI）' }; }).filter(function(x){ return x.amount>0; });
+      if(!rows.length){ alert('入金の行を読み取れませんでした。\n\nAI の返事:\n'+String(r.reply||'').slice(0,300)); return; }
+      _payPreview_(rows, 'FAX・スキャン（AI が読んだもの。数字を必ず確かめてください）');
+    }catch(e){ alert('読めませんでした: '+(e&&e.message||e)); } };
+  inp.click(); }
+function _payPreview_(rows, title){ var esc=_escDiff, have={}; (DB.payments||[]).forEach(function(p){ have[_payKey_(p)]=1; });
+  rows.forEach(function(x){ x.dup=!!have[_payKey_({ receivedAt:x.date, amount:x.amount, payer:x.payer })]; }); window._payPrevRows_=rows;
+  var old=document.getElementById('pay-prev'); if(old) old.remove(); var d=document.createElement('div'); d.id='pay-prev'; d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px';
+  var td='padding:4px 8px;border:1px solid #e2e8f0;font-size:12.5px';
+  d.innerHTML='<div style="background:#fff;width:min(860px,97vw);max-height:90vh;overflow:auto;padding:14px 16px"><div style="font-size:16px;font-weight:900">📥 入金の取り込み：'+esc(title)+'</div><div style="font-size:12px;color:#64748b;margin:2px 0 8px">'+rows.length+' 行。チェックの付いた行を入金記録に入れます。同じ日・同じ金額・同じ名義がすでにある行は外してあります。日付・名義・金額はここで直せます。</div>'
+    +'<table style="border-collapse:collapse;width:100%"><tr style="background:#f1f5f9"><th style="'+td+'">入れる</th><th style="'+td+'">入金日</th><th style="'+td+'">名義（振込した人）</th><th style="'+td+'">金額</th><th style="'+td+'">摘要</th></tr>'
+    +rows.map(function(x, i){ return '<tr style="background:'+(x.dup?'#f1f5f9':x.unsure?'#fef9c3':'#fff')+'"><td style="'+td+';text-align:center"><input type="checkbox" class="pp-c" data-i="'+i+'" style="width:auto"'+(x.dup?'':' checked')+'>'+(x.dup?'<div style="font-size:10px;color:#64748b">すでにある</div>':x.unsure?'<div style="font-size:10px;color:#b45309;font-weight:800">AI 自信なし</div>':'')+'</td>'
+      +'<td style="'+td+'"><input class="pp-d" data-i="'+i+'" value="'+esc(x.date)+'" style="width:110px;font:inherit"></td><td style="'+td+'"><input class="pp-p" data-i="'+i+'" value="'+esc(x.payer)+'" style="width:100%;box-sizing:border-box;font:inherit"></td>'
+      +'<td style="'+td+'"><input class="pp-a" data-i="'+i+'" value="'+x.amount+'" style="width:100px;font:inherit;text-align:right"></td><td style="'+td+';font-size:11.5px;color:#475569">'+esc(x.memo||'')+'</td></tr>'; }).join('')+'</table>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="document.getElementById(\'pay-prev\').remove()">やめる</button><button class="btn" style="background:#0f766e;color:#fff;border-color:#0f766e;font-weight:900" onclick="_payPreviewSave_()">入金記録に入れて、付け合わせる</button></div></div>';
+  document.body.appendChild(d); }
+function _payPreviewSave_(){ var d=document.getElementById('pay-prev'), rows=window._payPrevRows_||[]; if(!d) return; if(!Array.isArray(DB.payments)) DB.payments=[]; var n=0, M=DB.payerMap||{};
+  d.querySelectorAll('.pp-c').forEach(function(c){ if(!c.checked) return; var i=c.dataset.i, x=rows[i]; var date=_payDate_(d.querySelector('.pp-d[data-i="'+i+'"]').value), payer=String(d.querySelector('.pp-p[data-i="'+i+'"]').value||'').trim(), amt=_payNum_(d.querySelector('.pp-a[data-i="'+i+'"]').value);
+    if(!date||!(amt>0)) return; var known=M[_payNorm_(payer)]||'';
+    DB.payments.push({ id:_nextPaymentNo_(), cust:known||payer, payer:payer, amount:amt, receivedAt:date, method:'振込', bank:'', memo:[x.memo&&x.memo!==payer?x.memo:'', x.src||''].filter(Boolean).join(' ／ '), matchedInvoiceId:null, _src:/CSV/.test(x.src||'')?'csv':'scan', _at:new Date().toISOString() }); n++; });
+  d.remove(); try{ saveDB(); }catch(e){} renderPayments(); if(typeof _toastMsg==='function') _toastMsg('📥 入金 '+n+' 件を入れました。下の「消込の候補」を確かめてください'); }
+// 付け合わせ: まだ消し込んでいない入金 × 未入金の請求書
+var PAY_FEES=[110,165,220,275,330,385,440,495,550,660,770,880];
+function _payUnpaid_(){ var out=[]; (DB.invoices||[]).forEach(function(v){ if(!v||v.status==='paid') return; var rem=(+v.total||0)-(+v.paidTotal||0); if(rem>0) out.push({ id:v.id, cust:v.cust||'', remain:rem, total:+v.total||0, due:v.dueDate||'', inv:v }); });
+  (DB.seikyusho||[]).forEach(function(sk){ if(!sk||sk.入金) return; out.push({ id:sk.番号, cust:sk.宛名||'', remain:+sk.合計||0, total:+sk.合計||0, due:sk.日付||'', sk:sk }); }); return out; }
+function _paySuggest_(){ var unpaid=_payUnpaid_(), M=DB.payerMap||{}, used={}, out=[];
+  (DB.payments||[]).filter(function(p){ return p && !p.matchedInvoiceId && (+p.amount>0); }).forEach(function(p){ var pn=_payNorm_(p.payer||p.cust), learned=M[pn]||'', best=null;
+    unpaid.forEach(function(u){ if(used[u.id]) return; if((p._noSug||[]).indexOf(u.id)>=0) return; var un=_payNorm_(u.cust), nameS=0, amtS=0, why=[], fee=0;
+      if(learned && _payNorm_(learned)===un){ nameS=3; why.push('名義を覚えている'); } else if(pn && un && (pn.indexOf(un)>=0||un.indexOf(pn)>=0)){ nameS=2; why.push('名前が同じ'); }
+      if(p.invoiceNo && String(p.invoiceNo)===String(u.id)){ nameS=Math.max(nameS,3); why.push('請求書番号が同じ'); }
+      var diff=u.remain-(+p.amount); if(diff===0){ amtS=3; why.push('金額が同じ'); } else if(PAY_FEES.indexOf(diff)>=0){ amtS=2; fee=diff; why.push('振込手数料 ¥'+diff+' を引いた額'); }
+      if(!amtS && nameS<2) return; if(!amtS){ why.push('金額が違う（請求 ¥'+u.remain.toLocaleString()+'）'); }
+      var s=nameS*2+amtS; if(!nameS){ var same=unpaid.filter(function(z){ return z.remain===u.remain; }).length; if(same>1) s-=2; else why.push('この金額の請求書は 1 つだけ'); }
+      if(!best||s>best.s) best={ p:p, u:u, s:s, nameS:nameS, amtS:amtS, fee:fee, why:why }; });
+    if(best && best.s>=2){ best.sure=(best.nameS>=2 && best.amtS>=2); used[best.u.id]=1; out.push(best); } });
+  return out.sort(function(a,b){ return (b.sure-a.sure)||(b.s-a.s); }); }
+function _payApply_(payId, invId, fee, quiet){ var pay=(DB.payments||[]).find(function(p){ return p.id===payId; }), u=_payUnpaid_().find(function(x){ return String(x.id)===String(invId); }); if(!pay||!u) return false;
+  var now=new Date().toISOString(), amt=Math.min(+pay.amount+(fee||0), u.remain);
+  if(u.sk){ u.sk.入金=pay.id; u.sk._updatedAt=now; } else { var inv=u.inv; inv.paidTotal=(+inv.paidTotal||0)+amt; inv.matchedPaymentId=pay.id; if(inv.paidTotal>=(+inv.total||0)){ inv.status='paid'; inv.paidAt=now; } else inv.status='partial'; }
+  pay.matchedInvoiceId=u.id; pay.matchedAt=now; pay.appliedAmount=amt; pay.matchedBy=(currentAuth&&currentAuth.userName)||''; if(fee){ pay.fee=fee; pay.memo=[pay.memo,'振込手数料 ¥'+fee+' 差引'].filter(Boolean).join(' ／ '); }
+  var pn=_payNorm_(pay.payer||pay.cust); if(pn && u.cust){ DB.payerMap=DB.payerMap||{}; DB.payerMap[pn]=u.cust; pay.cust=u.cust; }   // 名義 → 得意先 を覚える
+  if(!quiet){ try{ saveDB(); }catch(e){} renderPayments(); if(typeof _toastMsg==='function') _toastMsg('✅ 消込しました: '+u.id+'（'+u.cust+'）'); } return true; }
+function _payNo_(payId, invId){ var pay=(DB.payments||[]).find(function(p){ return p.id===payId; }); if(!pay) return; pay._noSug=(pay._noSug||[]).concat([invId]); try{ saveDB(); }catch(e){} renderPayments(); }
+function _payApplySure_(){ var list=_paySuggest_().filter(function(x){ return x.sure; }); if(!list.length) return; if(!confirm('名前と金額の両方が合っている '+list.length+' 件を、まとめて消込しますか？')) return;
+  var n=0; list.forEach(function(x){ if(_payApply_(x.p.id, x.u.id, x.fee, true)) n++; }); try{ saveDB(); }catch(e){} renderPayments(); if(typeof _toastMsg==='function') _toastMsg('✅ '+n+' 件を消込しました'); }
+function _paySuggestHtml_(){ var esc=_escDiff, list=_paySuggest_(), un=(DB.payments||[]).filter(function(p){ return p && !p.matchedInvoiceId; }).length;
+  var head='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><button class="btn" style="font-weight:900;background:#1d4ed8;color:#fff;border-color:#1d4ed8" onclick="_payCsvPick_()">📥 銀行の CSV を取り込む</button><button class="btn" style="font-weight:900;background:#7c3aed;color:#fff;border-color:#7c3aed" onclick="_payScanPick_()">📠 FAX・スキャンを取り込む（AI が読む）</button><span style="font-size:11.5px;color:#64748b">取り込む前に中身を見られます。未消込の入金 '+un+' 件</span></div>';
+  if(!list.length) return head+(un?'<div style="padding:8px 10px;border:1px solid #e2e8f0;background:#f8fafc;font-size:12.5px;margin-bottom:10px">付け合わせの候補はありません（未消込の入金は、下の一覧の「→ 消込」で請求書を選べます）</div>':'');
+  var sure=list.filter(function(x){ return x.sure; }).length, td='padding:6px 8px;border:1px solid #e2e8f0;font-size:12.5px;vertical-align:top';
+  return head+'<div style="border:2px solid #0f766e;background:#f0fdfa;padding:8px 10px;margin-bottom:12px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:14px;color:#0f766e">🤖 消込の候補 '+list.length+' 件</b><span style="font-size:12px;color:#475569">入金と未入金の請求書を付け合わせました。合っていれば「✓ 消込」を押すだけです</span>'
+    +(sure?'<button class="btn" style="margin-left:auto;font-weight:900" onclick="_payApplySure_()">✓ 確実な '+sure+' 件をまとめて消込</button>':'')+'</div>'
+    +'<table style="border-collapse:collapse;width:100%;background:#fff"><tr style="background:#f1f5f9;text-align:left"><th style="'+td+'">確かさ</th><th style="'+td+'">入金</th><th style="'+td+'">請求書</th><th style="'+td+'">合っている理由</th><th style="'+td+'"></th></tr>'
+    +list.map(function(x){ var p=x.p, u=x.u; return '<tr><td style="'+td+';white-space:nowrap">'+(x.sure?'<b style="color:#15803d">● 確実</b>':'<b style="color:#b45309">▲ たぶん</b>')+'</td>'
+      +'<td style="'+td+'">'+esc(p.receivedAt||'')+'<br><b>'+esc(p.payer||p.cust||'')+'</b><br><b style="font-family:monospace">¥'+(+p.amount).toLocaleString()+'</b></td>'
+      +'<td style="'+td+'"><span style="font-family:monospace">'+esc(u.id)+'</span><br><b>'+esc(u.cust)+'</b><br><b style="font-family:monospace">¥'+u.remain.toLocaleString()+'</b>'+(u.due?' <span style="font-size:11px;color:#64748b">'+esc(String(u.due).slice(0,10))+'</span>':'')+'</td>'
+      +'<td style="'+td+';font-size:12px">'+x.why.map(esc).join('<br>')+'</td>'
+      +'<td style="'+td+';white-space:nowrap"><button class="btn" style="font-weight:900;background:#0f766e;color:#fff;border-color:#0f766e" onclick="_payApply_(\''+esc(p.id)+'\',\''+esc(u.id)+'\','+(x.fee||0)+')">✓ 消込</button> <button class="btn" style="font-size:12px" onclick="_payNo_(\''+esc(p.id)+'\',\''+esc(u.id)+'\')">✗ 違う</button></td></tr>'; }).join('')+'</table></div>'; }
 function renderPayments(){
+  try{ var _sg=document.getElementById('pay-suggest'); if(_sg) _sg.innerHTML=_paySuggestHtml_(); }catch(e){ console.warn('[PAYIN-1]', e); }
   var el = document.getElementById('payments-list');
   var unEl = document.getElementById('unmatched-invoices');
   if(!el) return;
@@ -57071,8 +57176,14 @@ function _todoChain_(q){
   var has=function(v){ return v!=null && v!=='' && v!==false && !(Array.isArray(v)&&!v.length); };
   var deli=prj&&(has(prj.shipDate)||has(prj.deliveredAt)||has(prj.deliveryDate)&&prj.status==='delivered'), nohin=prj&&(has(prj.deliveryNoteNo)||has(prj.nohinNo)), inv=prj&&(has(prj.invoiceId)||has(prj.invoiceNo)||has(prj.billedAt)), paid=prj&&(has(prj.paidAt)||prj.paid===true);
   var st=[ ['問い合わせ', true, _todoNo_(q)], ['見積書', !!qt, qt], ['案件', !!(pj||(q.outcome==='ordered'&&no)), pj||no], ['配送', !!deli, ''], ['納品書', !!nohin, ''], ['請求書', !!inv, ''], ['入金', !!paid, ''] ];
-  return '<span style="display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap">'+st.map(function(x){ return '<span title="'+_inqEsc_(x[0]+(x[2]?' '+x[2]:(x[1]?'':'（まだ）')))+'" style="font-size:10.5px;padding:1px 5px;border:1px solid '+(x[1]?'#15803d':'#e2e8f0')+';background:'+(x[1]?'#dcfce7':'#fff')+';color:'+(x[1]?'#166534':'#cbd5e1')+';font-weight:'+(x[1]?800:500)+'">'+x[0]+(x[1]&&x[2]&&x[0]!=='問い合わせ'?' '+_inqEsc_(String(x[2]).slice(0,10)):'')+'</span>'; }).join('<span style="color:#cbd5e1;font-size:9px">›</span>')+'</span>';
+  var docNo=/^[aA]\d{5,7}$/.test(no)?no:(/^[aA]\d{5,7}$/.test(pj)?pj:'');
+  var docBtn=docNo?'<button class="btn" style="font-size:11px;padding:2px 8px;margin-top:3px;font-weight:800" title="受注登録で '+_inqEsc_(docNo)+' を開き、納品書（3 連）・請求書・領収書 の窓を出します" onclick="event.stopPropagation();_todoDocs_(\''+_inqEsc_(docNo)+'\')">🧾 納品書・請求書</button>':'';
+  return '<span style="display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap">'+st.map(function(x){ return '<span title="'+_inqEsc_(x[0]+(x[2]?' '+x[2]:(x[1]?'':'（まだ）')))+'" style="font-size:10.5px;padding:1px 5px;border:1px solid '+(x[1]?'#15803d':'#e2e8f0')+';background:'+(x[1]?'#dcfce7':'#fff')+';color:'+(x[1]?'#166534':'#cbd5e1')+';font-weight:'+(x[1]?800:500)+'">'+x[0]+(x[1]&&x[2]&&x[0]!=='問い合わせ'?' '+_inqEsc_(String(x[2]).slice(0,10)):'')+'</span>'; }).join('<span style="color:#cbd5e1;font-size:9px">›</span>')+'</span>'+(docBtn?'<br>'+docBtn:'');
 }
+// DOCS-2（11/28 本多さん「納品書と請求書が出せる仕組み・配送表が出せるように」）: ToDo から、伝票の帳票の窓と、今日の配送表を開く
+function _todoDocs_(no){ try{ _fmOpenNo_('fmjuchu', String(no).toLowerCase(), '&docs=1&t='+Date.now()); if(typeof _toastMsg==='function') _toastMsg('🧾 受注登録で '+no+' を開き、納品書・請求書・領収書の窓を出します'); }catch(e){ alert('開けませんでした: '+(e&&e.message||e)); } }
+function _todoHaisoSheet_(){ var d=new Date(), iso=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); var v=prompt('どの日の配送表を出しますか？（YYYY-MM-DD）', iso); if(!v) return; if(!/^\d{4}-\d\d-\d\d$/.test(v)){ alert('日付の形が違います（例: '+iso+'）'); return; }
+  window.open('tools/haiso-calendar.html?v='+encodeURIComponent('日')+'&d='+v, '_blank'); }
 function _todoBtn_(q){
   var id=_inqEsc_(q.id), bin=_inqBin_(q), F=INQ_FLOW[bin]||INQ_FLOW['その他'], st=_todoStep_(q), fl=q.flow||{}, pref=_inqPref_(q), meth=fl.method||pref.method||'';
   var b=function(label, js, title, sub){ return '<button class="btn" title="'+_inqEsc_(title||'')+'" style="font-size:12.5px;font-weight:900;padding:5px 12px;min-height:34px;white-space:nowrap;'+(sub?'background:#fff;color:#0f766e;border:1.5px solid #0f766e':'background:#0f766e;color:#fff;border:2px solid #0f766e')+'" onclick="event.stopPropagation();'+js+'">'+label+'</button>'; };
@@ -57115,7 +57226,8 @@ function renderTodoPage(){
     +'<input placeholder="🔍 会社・件名・ID" value="'+esc(window._todoQ_||'')+'" style="min-width:180px;font:inherit;padding:5px 8px;margin-left:8px" onchange="window._todoQ_=this.value;renderTodoPage()">'
     +'<label style="font-size:12px"><input type="checkbox" style="width:auto" '+(mine?'checked':'')+' onchange="window._todoMine_=this.checked;renderTodoPage()"> 自分の担当だけ</label>'
     +'<label style="font-size:12px"><input type="checkbox" style="width:auto" '+(allP?'checked':'')+' onchange="window._todoAllPeriod_=this.checked;renderTodoPage()"> 45 日より前も</label>'
-    +'<button class="btn" style="margin-left:auto;font-weight:900;background:#1d4ed8;color:#fff;border-color:#1d4ed8" onclick="_todoPhoneNew_()">📞 電話・口頭を登録</button></div>';
+    +'<button class="btn" style="margin-left:auto;font-weight:800" title="今日の配送表（配送カレンダーの 1 日分）を開きます。右上の「印刷」で紙に出せます" onclick="_todoHaisoSheet_()">🚚 配送表</button>'
+    +'<button class="btn" style="font-weight:900;background:#1d4ed8;color:#fff;border-color:#1d4ed8" onclick="_todoPhoneNew_()">📞 電話・口頭を登録</button></div>';
   h+=_todoStuck_();
   if(S==='__todo') list=base.filter(function(q){ return (!T||_inqBin_(q)===T) && _todoStep_(q)===''; }).sort(function(a,b){ return tm(b)-tm(a); });
   var MAX=200, shown=list.slice(0, MAX);
