@@ -56017,7 +56017,11 @@ const INQ_BINS = [
   { k:'受注',     label:'受注',     icon:'✅', color:'#065f46', kind:'order' },
   { k:'見積',     label:'見積書',   icon:'📝', color:'#1d4ed8', kind:'quote_req' },
   { k:'予算見積', label:'予算見積', icon:'📘', color:'#1e40af', kind:'quote_req' },
-  { k:'校正',     label:'校正',     icon:'🖍', color:'#7c3aed', kind:'proof_return' },
+  { k:'校正',     label:'校正戻り', icon:'🖍', color:'#7c3aed', kind:'proof_return' },
+  { k:'校了',     label:'校了',     icon:'🎉', color:'#15803d', kind:'proof_done' },   // BINS-2（11/28 本多さん「振り分けをもう少し増やしたい」）
+  { k:'納期確認', label:'お客様へ回答（納期）', icon:'❔', color:'#c2410c', kind:'question' },
+  { k:'納期変更', label:'納期の指定・変更', icon:'📅', color:'#9333ea', kind:'schedule' },
+  { k:'配送',     label:'配送・納品', icon:'🚚', color:'#0e7490', kind:'delivery' },
   { k:'質問',     label:'質問',     icon:'❓', color:'#0891b2', kind:'general' },
   { k:'経営',     label:'経営',     icon:'🏢', color:'#b45309', kind:'' },
   { k:'その他',   label:'その他',   icon:'📄', color:'#6b7280', kind:'' },
@@ -56107,8 +56111,8 @@ function _inqRulesEdit_(){
 
 // 自動仕分け。{ bin, reason }
 // AI-BIN-1: 取り込み側（メール振り分け）の AI 判定は kind に載って来る。kind ↔ 箱
-const _INQ_KIND_BIN_ = { quote_req:'見積', budget_quote:'予算見積', proof_return:'校正', order:'受注', order_ai:'受注', question:'質問', mgmt:'経営', notice:'控え', junk:'ジャンク', schedule:'質問' };
-const _INQ_BIN_KIND_ = { '見積':'quote_req', '予算見積':'budget_quote', '校正':'proof_return', '受注':'order_ai', '質問':'question', '経営':'mgmt', '控え':'notice', 'ジャンク':'junk', 'その他':'general' };
+const _INQ_KIND_BIN_ = { proof_done:'校了', delivery:'配送', quote_req:'見積', budget_quote:'予算見積', proof_return:'校正', order:'受注', order_ai:'受注', question:'質問', mgmt:'経営', notice:'控え', junk:'ジャンク', schedule:'質問' };
+const _INQ_BIN_KIND_ = { '校了':'proof_done', '納期確認':'question', '納期変更':'schedule', '配送':'delivery', '見積':'quote_req', '予算見積':'budget_quote', '校正':'proof_return', '受注':'order_ai', '質問':'question', '経営':'mgmt', '控え':'notice', 'ジャンク':'junk', 'その他':'general' };
 // 振り分け前にたまっている分を 10 通ずつ Claude（会社 GAS claudeText）に聞いて kind に保存する
 async function _inqAiSortRun_(){
   var list=(window._inqAllForCounts_||DB.inquiries||[]).filter(function(q){ if(!q || q.isSpam || q.status==='done' || q.outcome || q.bin || q._aiTried) return false; _inqBin_(q); return !/^(前に同じ|AI の判定|社間の発注|社内連絡)/.test(String(q.bin_reason||'')); })
@@ -56175,6 +56179,12 @@ function _inqBinAuto_(inq){
   if(/^(Message from\b|.*FAX image from)/i.test(subj)) return { bin:'その他', reason:'複合機・FAX の転送（中身を見て振り分け）' };   // AI-BIN-3
   // AI-BIN-TRIAL-2: AI が決めた種類は規則より先（件名の語でも付く quote_req／proof_return は後ろのまま）
   var _aiK={ budget_quote:1, question:1, mgmt:1, notice:1, junk:1, order_ai:1 }; if(_aiK[inq.kind] && src!=='manual' && !inq.bin) return { bin:_INQ_KIND_BIN_[inq.kind], reason:'AI の判定' };
+  // BINS-2（11/28 本多さん）: 校了・納期の指定／変更・納期の問い合わせ・配送（サンプルの受け渡し）は言葉で先に見分ける（AI の判定があればそちらを使う）
+  if(!(inq.ai_triage&&inq.ai_triage.bin)){ var _ph=subj+' '+body.slice(0,800);
+    if(/校了|校正\s*(OK|ＯＫ|オッケー|問題(なし|ありません))|このまま(進めて|印刷|で(大丈夫|結構|お願い))/i.test(_ph)) return { bin:'校了', reason:'「校了」など' };
+    if(/納期.{0,8}(変更|延ば|早め|前倒し|遅らせ|ずら)|納期.{0,4}(\d{1,2}\s*月\s*\d{1,2}\s*日|\d{1,2}[\/／]\d{1,2}).{0,8}(で|に|まで)?.{0,4}(お願い|して|変更)|(\d{1,2}\s*月\s*\d{1,2}\s*日|\d{1,2}[\/／]\d{1,2}).{0,10}(納品|納期|まで|着).{0,12}(お願い|して|変更|に)/.test(_ph)) return { bin:'納期変更', reason:'納期の指定・変更' };
+    if(/納期.{0,8}(いつ|教えて|確認|どう|何日|わか|知りたい)|いつ(頃|ごろ)?.{0,6}(でき|届|納品|仕上が|上が)|進捗|進み具合|進行状況/.test(_ph)) return { bin:'納期確認', reason:'納期・進み具合の問い合わせ' };
+    if(/サンプル.{0,12}(渡|届け|持って|送って|ください)|取りに(来|伺|行)|引き?取り|お届け|持参|配達|納品先|集荷|受け取り/.test(_ph)) return { bin:'配送', reason:'受け渡し・配送の依頼' }; }
   // SORT-NO-1: 件名に 製番（a123456）か 見積番号（M123456）→ 既にある仕事の連絡。新しい受注ではない
   var _no=/(?:^|[^A-Za-z0-9])([aA]\d{6}|[mM]\d{6})(?![0-9])/.exec(subj);
   if(_no){ var _n=_no[1], _isM=/^m/i.test(_n), _hb=subj+' '+body.slice(0,400);
@@ -56207,9 +56217,9 @@ function _inqBinAuto_(inq){
   if(junk>=3 && !known) return { bin:'ジャンク', reason:'「'+jhit.slice(0,3).join('」「')+'」' };
   return { bin:'その他', reason:known?'知っている相手（言葉では決められず）':'言葉では決められず' };
 }
-const INQ_RULES_V=10;   // AI-BIN-4: 規則を変えたら上げる → 端末に残っている古い自動判定を捨てて全部やり直す
+const INQ_RULES_V=11;   // AI-BIN-4: 規則を変えたら上げる → 端末に残っている古い自動判定を捨てて全部やり直す
 function _inqBin_(inq){ if(!inq) return 'その他'; if(inq.bin) return inq.bin; var _aiAt=(inq.ai_triage&&inq.ai_triage.at)||''; if(!inq.bin_auto || inq.bin_auto_v!==INQ_RULES_V || (inq.bin_auto_ai||'')!==_aiAt){ inq.bin_auto_ai=_aiAt; try{ var a=_inqBinAuto_(inq); inq.bin_auto=a.bin; inq.bin_reason=a.reason; }catch(e){ inq.bin_auto='その他'; inq.bin_reason=''; } inq.bin_auto_v=INQ_RULES_V; delete inq._impCache; } return inq.bin_auto; }
-function _inqBinMeta_(k){ return INQ_BINS.find(function(b){ return b.k===k; })||INQ_BINS[6]; }
+function _inqBinMeta_(k){ return INQ_BINS.find(function(b){ return b.k===k; })||INQ_BINS.find(function(b){ return b.k==='その他'; }); }
 // 人が直す: 覚える（差出人のメール）。見積・受注・校正・経営・質問・ジャンク は覚え、その他は覚えない
 function _inqSetBin_(id, bin, how){   // RULE-MENU-1: how = 'one'（この 1 通だけ・既定）／'sender'（この差出人は今後も）／'domain'（この会社は今後も）
   var inq=(DB.inquiries||[]).find(function(x){ return x.id===id; }); if(!inq) return;
@@ -56318,7 +56328,7 @@ function _inqSetDeadline_(id){ var inq=(DB.inquiries||[]).find(function(x){ retu
 function _inqDlChip_(inq){ var d=_inqDeadline_(inq); var esc=function(v){ return String(v==null?'':v).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }; if(!d) return '<span onclick="event.stopPropagation();_inqSetDeadline_(\''+esc(inq.id)+'\')" title="期限を入れる" style="font-size:10px;color:#94a3b8;cursor:pointer;border:1px dashed #cbd5e1;padding:0 6px">期限なし</span>'; var c=d.days<=0?'#dc2626;color:#fff':d.days<=1?'#f97316;color:#fff':d.days<=3?'#fde047;color:#713f12':'#e2e8f0;color:#334155'; var tip=d.confirmed?'確定した期限。押すと直せます':('本文の「'+(d.snippet||d.text||'')+'」から読みました（要確認）。押して そのまま OK なら確定、違えば直せます'+((d.others&&d.others.length)?'\nほかの候補: '+d.others.map(function(o){ return o.label+'（'+o.snippet+'）'; }).join(' / '):'')); return '<span onclick="event.stopPropagation();_inqSetDeadline_(\''+esc(inq.id)+'\')" title="'+esc(tip)+'" style="font-size:11px;font-weight:700;padding:1px 7px;cursor:pointer;background:'+c+';'+(d.confirmed?'':'outline:2px dashed #94a3b8;outline-offset:-2px')+'">'+(d.confirmed?'✔ ':'')+esc(d.label)+(d.days<=0?'（今日／過ぎ）':d.days===1?'（明日）':d.days<=3?'（'+d.days+' 日後）':'')+(d.confirmed?'':'<span style="font-weight:400;opacity:.85"> 要確認</span>')+'</span>'; }
 function _inqSummary_(inq){ var b=String(inq.body||inq.summary||'').replace(/\r/g,'').replace(/^(>.*\n?)+/gm,'').replace(/\n{2,}/g,'\n').replace(/^(いつも|平素|お世話にな|拝啓|株式会社|有限会社).*$/gm,'').replace(/\s+/g,' ').trim(); if(!b) return '（本文なし）'; return b.slice(0,140)+(b.length>140?'…':''); }
 function _inqQtyChips_(inq){ var t=String(inq.subject||'')+' '+String(inq.body||'').slice(0,1500); var out=[]; var q=t.match(/(\d{1,3}(?:,\d{3})+|\d{2,6})\s*(部|枚|冊|セット|通|箱|個)/); if(q) out.push({ t:q[1]+' '+q[2] }); if(/リピート|前回と同じ|同じ内容で|増刷/.test(t)) out.push({ t:'リピート' }); if(/至急|大至急|急ぎ|なるべく早く/.test(t)) out.push({ t:'至急', red:true }); return out; }
-function _inqNextAction_(inq){ var b=_inqBin_(inq); var esc=function(v){ return String(v==null?'':v).replace(/'/g,"\\'"); }; if(b==='受注') return { label:'🤖 AIで受注入力', js:"_inqAiOrder_('"+esc(inq.id)+"','受注')", attach:true }; if(b==='見積'||b==='予算見積') return { label:'🤖 AIで見積作成', js:"_inqAiOrder_('"+esc(inq.id)+"','見積')", attach:true }; /* AI-KIHYO-11（11/26 本多さん「受注入力へを AI で受注入力をメインに」） */ if(b==='校正') return { label:'校正BOXへ', js:"_inqInsertToProofing_('"+esc(inq.id)+"')" }; if(b==='ジャンク') return { label:'ジャンクのまま', js:"_inqMarkDone_('"+esc(inq.id)+"')" }; return { label:'返信', js:"_inqFocusReply_('"+esc(inq.id)+"')" }; }
+function _inqNextAction_(inq){ var b=_inqBin_(inq); var esc=function(v){ return String(v==null?'':v).replace(/'/g,"\\'"); }; if(b==='受注') return { label:'🤖 AIで受注入力', js:"_inqAiOrder_('"+esc(inq.id)+"','受注')", attach:true }; if(b==='見積'||b==='予算見積') return { label:'🤖 AIで見積作成', js:"_inqAiOrder_('"+esc(inq.id)+"','見積')", attach:true }; /* AI-KIHYO-11（11/26 本多さん「受注入力へを AI で受注入力をメインに」） */ if(b==='校正') return { label:'🖍 校正BOX：修正待ちに', js:"_inqProofBack_('"+esc(inq.id)+"')" }; if(b==='校了') return { label:'🎉 校了にする', js:"_inqProofDone_('"+esc(inq.id)+"')" }; if(b==='納期確認') return { label:'❔ 納期を調べて返信', js:"_inqDueAnswer_('"+esc(inq.id)+"')" }; if(b==='納期変更') return { label:'📅 案件の納期を直す', js:"_inqDueSet_('"+esc(inq.id)+"')" }; if(b==='配送') return { label:'🚚 配送カレンダーへ', js:"_inqToHaisoAuto_('"+esc(inq.id)+"')" }; if(b==='ジャンク') return { label:'ジャンクのまま', js:"_inqMarkDone_('"+esc(inq.id)+"')" }; return { label:'返信', js:"_inqFocusReply_('"+esc(inq.id)+"')" }; }
 // INQ-THREAD: 同じ件名の芯 ＋ 同じ相手（メールのドメイン。フリーメールなら会社名かアドレス）
 function _inqThreadKey_(q){ if(!q) return ''; var core=(typeof _inqSubjectCore_==='function')?_inqSubjectCore_(q.subject):String(q.subject||'').toLowerCase(); var e=String(q.from_email||q.email||'').toLowerCase(); var d=_inqDomain_(e); if(/gmail\.com|yahoo\.co\.jp|yahoo\.com|outlook\.com|hotmail\.com|icloud\.com|docomo\.ne\.jp|ezweb\.ne\.jp|softbank\.ne\.jp|au\.com/.test(d)) d=String(q.from_company||e).toLowerCase(); if(!core) return 'id:'+q.id; return core+'|'+(d||String(q.from_company||'').toLowerCase()); }
 function _inqThreads_(list){ var by={}, order=[]; (list||[]).forEach(function(q){ var k=_inqThreadKey_(q); if(!by[k]){ by[k]=[]; order.push(k); } by[k].push(q); }); return order.map(function(k){ var arr=by[k].slice().sort(function(a,b){ return new Date(b.received_at||b.createdAt||0)-new Date(a.received_at||a.createdAt||0); }); return { key:k, head:arr[0], older:arr.slice(1), all:arr, unread:arr.filter(function(x){ return !x.readAt; }).length }; }); }
@@ -56502,6 +56512,68 @@ function _inqAiOrder_(id, kind, おまかせ){
 }
 // 受注入力／見積入力で AI から伝票を起こしたら呼ばれる: メールを案件に結ぶ・添付を案件フォルダへ・振り分け済み（受注なら「受注に進んだ」で済み）
 // AI-KIHYO-11: もう作ってある伝票に、この問い合わせ（本文・添付）を付ける。添付は伝票の保管（Box／Drive）へ、本文は「案件の記録」へ
+// ═══ BINS-2（11/28 本多さん「振り分けを増やして、配送・案件管理・校正BOX などに回したい。ほぼ自動で、管理・確認していく」）═══
+//   伝票番号・日付・届け先は AI（ai_triage の slip・due・place）か本文から拾い、行き先の画面を開いて入れておく。最後に人が確かめる
+function _inqSlipNo_(inq){ var t=String(inq.subject||'')+' '+String(inq.body||'').slice(0,3000); var a=inq.ai_triage||{};
+  var m=/(?:^|[^A-Za-z0-9])([aA]\d{6}(?:-[A-Za-z0-9]+)?)(?![0-9])/.exec(t); return String((a.slip&&/^[aA]\d{6}/.test(a.slip)&&a.slip)||(m&&m[1])||inq.linked_fm_no||'').toLowerCase(); }
+function _inqDue_(inq){ var a=inq.ai_triage||{}; if(/^\d{4}-\d{2}-\d{2}$/.test(String(a.due||''))) return a.due;
+  var t=String(inq.subject||'')+' '+String(inq.body||'').slice(0,2000), m=/(\d{1,2})\s*月\s*(\d{1,2})\s*日/.exec(t)||/(?:^|[^\d])(\d{1,2})[\/／](\d{1,2})(?![\d\/])/.exec(t); if(!m) return '';
+  var now=new Date(), y=now.getFullYear(), mo=Number(m[1]), d=Number(m[2]); if(mo<1||mo>12||d<1||d>31) return '';
+  var dt=new Date(y, mo-1, d); if(dt < new Date(now.getTime()-60*86400000)) y++; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+function _inqProject_(inq, no){ var ps=DB.projects||[]; return ps.find(function(p){ return p && ((no && p.fm && String(p.fm['fm-denpyo']||'').toLowerCase()===no) || (inq.linked_project_id && p.id===inq.linked_project_id)); })||null; }
+function _inqProofFor_(inq){ var no=_inqSlipNo_(inq), pid=inq.linked_project_id||'', co=String(inq.from_company||inq.custName||'').replace(/株式会社|有限会社|\s/g,'');
+  var live=(DB.proofings||[]).filter(function(p){ return p && !(_proofStatusMeta_(_normProofStatus_(p.status))||{}).done; });
+  return live.find(function(p){ return no && (String(p.fmNo||'').toLowerCase()===no || (p.fmNos||[]).map(function(x){ return String(x).toLowerCase(); }).indexOf(no)>=0); })
+    || live.find(function(p){ return pid && p.projectId===pid; })
+    || (co ? live.filter(function(p){ return String(p.custName||p.customer||'').replace(/株式会社|有限会社|\s/g,'').indexOf(co)>=0; }).sort(function(a,b){ return String(b.lastMoveAt||b.createdAt||'').localeCompare(String(a.lastMoveAt||a.createdAt||'')); })[0] : null) || null; }
+function _inqNote_(inq, text, type){ var who=(currentAuth&&currentAuth.userName)||''; if(!inq.timeline) inq.timeline=[]; inq.timeline.push({ at:new Date().toISOString(), by:who, type:type||'route', text:text }); try{ saveDB(); }catch(e){} try{ callCloudAPI('updateCommunication',{},{ id:inq.id, patch:{ timeline:inq.timeline, bin:inq.bin||'' } }); }catch(e){} }
+function _inqProofSet_(id, mode){
+  var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
+  var card=_inqProofFor_(inq); if(!card){ if(confirm('この問い合わせにつながる校正BOX のカードが見つかりません。校正BOX で選びますか？')) _inqInsertToProofing_(id); return; }
+  var st=_proofStatuses_(), key='';
+  if(mode==='done') key=((st.find(function(x){ return x.done; })||{}).key)||'s_done';
+  else key=((st.find(function(x){ return /修正/.test(x.label||''); })||st.find(function(x){ return x.key==='s_proof'; })||{}).key)||'s_proof';
+  var lab=((st.find(function(x){ return x.key===key; })||{}).label)||key;
+  if(!confirm('校正BOX「'+(card.title||card.prodName||card.fmNo||'')+'」を「'+lab+'」にします。よろしいですか？')) return;
+  card.status=key; card.lastMoveAt=new Date().toISOString(); card.log=card.log||[]; card.log.push({ at:card.lastMoveAt, by:(currentAuth&&currentAuth.userName)||'', text:'📧 問い合わせ「'+String(inq.subject||'').slice(0,40)+'」から '+lab });
+  if(mode!=='done' && String(inq.body||'').trim()){ card.feedbackMail=String(inq.body||'').slice(0,3000); }
+  try{ saveDB(); }catch(e){} try{ if(typeof renderProofingList==='function') renderProofingList(); }catch(e){}
+  inq.linked_project_id=inq.linked_project_id||card.projectId||''; _inqNote_(inq, '🖍 校正BOX「'+(card.title||card.fmNo||'')+'」を '+lab+' にしました', 'proof');
+  if(typeof _toastMsg==='function') _toastMsg((mode==='done'?'🎉 ':'🖍 ')+'校正BOX を「'+lab+'」にしました');
+}
+function _inqProofBack_(id){ _inqProofSet_(id, 'back'); }
+function _inqProofDone_(id){ _inqProofSet_(id, 'done'); }
+function _inqDueSet_(id){
+  var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
+  var no=_inqSlipNo_(inq); if(!no){ no=String(prompt('納期を直す伝票番号を入れてください（例: a109613）','')||'').trim().toLowerCase(); if(!no) return; }
+  var due=_inqDue_(inq); var v=String(prompt('伝票 '+no+' の新しい納期（YYYY-MM-DD）', due)||'').trim(); if(!v) return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ alert('日付の形が違います（例: 2026-12-18）'); return; }
+  var p=_inqProject_(inq, no); if(p){ p.dueDate=v; try{ saveDB(); }catch(e){} }
+  _inqNote_(inq, '📅 伝票 '+no+' の納期を '+v+' に（案件'+(p?'管理も直しました':'は見つからず')+'）', 'due');
+  // 受注入力を開いて納期の欄に入れておく（保存は人が）
+  _fmOpenNo_('fmjuchu', no, '&due='+encodeURIComponent(v)+'&t='+Date.now());
+  if(typeof _toastMsg==='function') _toastMsg('📅 受注入力で '+no+' を開き、納期に '+v+' を入れます。確かめて保存してください');
+}
+function _inqDueAnswer_(id){
+  var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
+  var no=_inqSlipNo_(inq), p=_inqProject_(inq, no), due=p&&p.dueDate?String(p.dueDate).slice(0,10):'';
+  var name=String(inq.from_name||inq.custName||'').trim();
+  var txt=(name?name+' 様\n\n':'')+'いつもお世話になっております。\nお問い合わせの件'+(no?'（'+no+'）':'')+'、納期は'+(due?' '+due.replace(/^(\d{4})-(\d{2})-(\d{2})$/,function(_,y,m,d){ return Number(m)+'月'+Number(d)+'日'; })+' の予定です。':' ○月○日 の予定です。')+'\n引き続きよろしくお願いいたします。';
+  if(!due && typeof _toastMsg==='function') _toastMsg('❔ 案件の納期が見つからないので「○月○日」を直してください');
+  _inqNote_(inq, '❔ 納期の問い合わせに返信を用意'+(due?'（'+due+'）':''), 'reply');
+  if(typeof showEmailReplyModal==='function') showEmailReplyModal(id, txt);
+}
+function _inqToHaisoAuto_(id){
+  var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
+  var t=String(inq.subject||'')+' '+String(inq.body||'').slice(0,1500), a=inq.ai_triage||{};
+  var cls=/取りに|引き?取|集荷|受け取|回収/.test(t)?'受取':'届け';
+  var co=String(inq.from_company||inq.custName||inq.from_name||'');
+  var subj=String(inq.subject||'').replace(/^(re|fw|fwd)[:：]\s*/i,'').slice(0,60);
+  var addr=a.place||'';
+  if(!addr){ var m=/(〒?\s*\d{3}-?\d{4}\s*)?((?:北海道|東京都|(?:京都|大阪)府|[一-龥]{2,3}県)[^\s\n]{2,40})/.exec(String(inq.body||'')); if(m) addr=m[2]; }
+  _haisoAdd_({ class:cls, name:co, addr:addr, date:_inqDue_(inq), memo:'問い合わせ: '+subj+(inq.from_name&&inq.from_name!==co?'（'+inq.from_name+' 様）':'') });
+  _inqNote_(inq, '🚚 配送カレンダーに'+cls+'の予定を足す画面を開きました', 'haiso');
+}
 async function _inqAttachToExisting_(id){
   var inq=(DB.inquiries||[]).find(function(x){ return x && x.id===id; }); if(!inq) return;
   if(!(window.FM && typeof FM.名乗っている==='function' && FM.名乗っている())){ alert('FileMaker につながっていません。受注入力の画面を一度開いてログインしてから、もう一度押してください'); return; }
