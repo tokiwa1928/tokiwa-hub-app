@@ -80,6 +80,8 @@
   body.color .chgbox.none{ border-color:#15803d; background:#f0fdf4; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .chgbox b.t{ margin-right:2mm; letter-spacing:.1em; } .chgbox .it{ display:inline-block; margin-right:3mm; white-space:nowrap; }
   body.color #paper table.box th, body.color #paper table.box td.lbl{ background:#f1f5f9; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .shunote{ font-size:7.5pt; color:#475569; margin:0.6mm 0 0; } .needbox{ border:0.5mm solid #b91c1c; padding:0.9mm 2.4mm; margin:0 0 1.2mm; font-size:9pt; font-weight:900; }
+  body.color .needbox{ background:#fee2e2; color:#7f1d1d; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .legend{ font-size:7.5pt; margin:0 0 1mm; display:none; } body.color .legend{ display:block; }
   .legend i{ display:inline-block; width:3mm; height:3mm; vertical-align:-0.4mm; margin:0 1mm 0 3mm; border:0.2mm solid #555; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   #rec{ display:flex; justify-content:space-between; align-items:flex-start; gap:6mm; margin:0 0 2mm; font-size:8.5pt; }
@@ -126,6 +128,7 @@
   <button id="pr" title="製造指示書は、印刷するたびに 第N回・日時・誰が・変更コメント を記録します">🖨 印刷</button>
   <button id="pt" title="記録を残さずに印刷します（紙に「テスト出力」の帯が入ります）" style="border-color:#f87171;color:#b91c1c">🧪 テスト出力</button>
   <button id="ps" title="まとめて出したとき、伝票ごとに別の印刷（別の PDF）にします。出力の記録は 1 件ずつ付きます" style="display:none">🖨 1 枚ずつ印刷</button>
+  <select id="shu" title="種別。種別で使わない項目（中身が空のもの）を紙から省きます。「自動」は品名と中身から決めます。中身が入っている項目は、どの種別でも必ず出ます" style="font:inherit;font-size:12px;padding:2px 4px"></select>
   <label style="color:#e5e7eb;font-size:12px;display:inline-flex;align-items:center;gap:3px;cursor:pointer" title="変更したところ（赤・青）と注記（黄）に色を付けます。外すとモノクロ（太字＋二重下線）"><input type="checkbox" id="col" style="width:auto"> 色</label>
   <span class="st" id="st"></span>
   <button type="button" id="pcname" onclick="端末名を変える()" title="この PC の名前（製造指示書の出力記録に残ります）。押すと変えられます" style="border-color:#64748b;color:#e5e7eb;background:#1f2937"></button>
@@ -231,6 +234,7 @@ function 描く(f) {
   h += '<div class="foot">ご不明な点は下記担当者までご連絡下さい。<br>トキワ印刷株式会社<br>〒432-8053<br>静岡県浜松市中央区法枝町115<br>TEL:  053-441-2784<br>FAX:  053-442-1265<br>mail:<br>担当: ' + esc(社員名(f['担当者コード'])) + '</div>';
   h = h.replace('<!--HERO-->', 見出し帯(f, 'gaichu', snap));
   $('paper').innerHTML = h;
+  種別で整える(f, snap);
   QRを描く(); 確認を出す(f);
 }
 
@@ -250,6 +254,44 @@ var 前回伝票 = null;       // SAGYO-COLOR-1: 前回伝票番号（リピー�
 var 前回伝票の番号 = '';
 var 比べない = /伝票番号|起票|受注日|納期|納品日|出荷|校了|日付|^日$|修正日|作成日|売価|原価|金額|単価|代$|合計|担当者|記録/;
 function 前回から変更(key, val) { if (!前回伝票 || 比べない.test(key) || !Object.prototype.hasOwnProperty.call(前回伝票, key)) return false; var a = 前回伝票[key]; return String(a == null ? '' : a) !== String(val == null ? '' : val); }
+// SAGYO-SHU-1（11/28 本多さん「ものによってはいらない項目もある。種別によって必要項目と不要項目を区別」）:
+//   種別 = 品名と中身から自動で決める（帯で変えられ、伝票ごとに覚える）。その種別で使わない項目は、中身が空なら紙から省く（中身があれば必ず出す）。
+//   その種別で必要な項目が空なら、上に赤で「必要な項目が空です」と出す
+var 種別表 = {
+  denpyo:   { 名: '伝票・フォーム', 省く: [], 必要: ['紙質1', '色数1', 'サイズ横', 'サイズ縦', 'ロット契約単位', '納期'] },
+  chirashi: { 名: 'チラシ・パンフ・ポスター', 省く: ['加工', 'ナンバー', 'カートン'], 必要: ['紙質1', '色数1', 'サイズ横', 'サイズ縦', 'ロット契約単位', '納期'] },
+  sasshi:   { 名: '冊子', 省く: ['加工', 'ナンバー', 'カートン'], 必要: ['紙質1', '色数1', '製本加工', 'サイズ横', 'サイズ縦', 'ロット契約単位', '納期'] },
+  card:     { 名: '名刺・ハガキ・カード', 省く: ['加工', 'ナンバー', 'カートン', '製本'], 必要: ['紙質1', '色数1', 'ロット契約単位', '納期'] },
+  futo:     { 名: '封筒', 省く: ['加工', 'ナンバー', 'カートン', '製本'], 必要: ['紙質1', '色数1', 'ロット契約単位', '納期'] },
+  all:      { 名: 'すべての項目を出す', 省く: [], 必要: [] }
+};
+function 種別を推す(f) { var n = String(f['製品名'] || ''), has = function (re) { return Object.keys(f).some(function (k) { return re.test(k) && f[k] != null && String(f[k]).trim() !== ''; }); };
+  if (has(/^マージナルパンチ|^ナンバー自|^横ミシン|^縦ミシン|^中間/)) return 'denpyo';
+  if (/名刺|ハガキ|はがき|葉書|年賀|喪中|カード|診察券/.test(n)) return 'card';
+  if (/封筒/.test(n)) return 'futo';
+  if (/冊子|記念誌|報告書|名簿|文集|中綴|無線綴|会議資料|議案書/.test(n)) return 'sasshi';
+  if (/チラシ|パンフ|リーフ|ポスター|広報|会報|お知らせ|案内|ちらし|フライヤー/.test(n)) return 'chirashi';
+  if (/伝票|複写|納品書|請求書|領収|帳票|フォーム|連続|申込書|願書/.test(n)) return 'denpyo';
+  return 'all'; }
+function 種別を決める(f) { var no = String(f['伝票番号'] || ''), auto = 種別を推す(f), saved = ''; try { saved = localStorage.getItem('sagyo_shu_' + no) || ''; } catch (e) {}
+  var cur = (saved && 種別表[saved]) ? saved : auto, sel = $('shu');
+  if (sel) { sel.innerHTML = '<option value="">種別: 自動（' + esc(種別表[auto].名) + '）</option>' + Object.keys(種別表).map(function (k) { return '<option value="' + k + '"' + (saved === k ? ' selected' : '') + '>' + esc(種別表[k].名) + '</option>'; }).join('');
+    sel.onchange = function () { try { if (sel.value) localStorage.setItem('sagyo_shu_' + no, sel.value); else localStorage.removeItem('sagyo_shu_' + no); } catch (e) {} if (直近) 描く(直近); }; }
+  return cur; }
+// 描いたあとの紙から、種別で使わない・中身が空の項目を省く。必要な項目が空なら赤で知らせる
+function 種別で整える(f, snap) { try {
+  var key = 種別を決める(f), T = 種別表[key] || 種別表.all, paper = $('paper'), 省いた = [];
+  var 空 = function (el) { var sp = el.querySelectorAll('span.chg, span.chg2, span.note, td span'); for (var i = 0; i < sp.length; i++) { if (String(sp[i].textContent || '').trim() && !sp[i].classList.contains('chk')) return false; } return true; };
+  Array.prototype.forEach.call(paper.querySelectorAll('table.box'), function (tb) { var th = Array.prototype.map.call(tb.querySelectorAll('th'), function (x) { return x.textContent; }).join(' ');
+    if (T.省く.indexOf('加工') >= 0 && /マージナル|ﾏｰｼﾞﾅﾙ|横ミシン|横ﾐｼﾝ/.test(th) && !/紙質|紙情報/.test(th) && 空(tb)) { tb.style.display = 'none'; 省いた.push('加工（パンチ・ミシン）'); return; }
+    if (tb.classList.contains('kotei')) return;
+    Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) { if (tr.querySelector('[rowspan]') || tr.querySelectorAll('td.lbl').length !== 1) return; var lb = String(tr.querySelector('td.lbl').textContent || '');
+      var sec = /^ナンバー/.test(lb) ? 'ナンバー' : /^カートン/.test(lb) ? 'カートン' : /^製本/.test(lb) ? '製本' : ''; if (!sec || T.省く.indexOf(sec) < 0 || !空(tr)) return; tr.style.display = 'none'; if (省いた.indexOf(sec) < 0) 省いた.push(sec); }); });
+  var need = T.必要.filter(function (k) { var v = (snap && snap[k] != null) ? snap[k] : f[k]; return v == null || String(v).trim() === ''; }).map(function (k) { var m = /^(.*?)(\d+)$/.exec(k); return ((typeof 項目名 !== 'undefined' && 項目名[k]) || (m ? m[1] : k)).replace(/^サイズ横$/, 'サイズ（横）').replace(/^サイズ縦$/, 'サイズ（縦）'); });
+  var hero = paper.querySelector('.hero'); if (!hero) return;
+  if (need.length) { var d = document.createElement('div'); d.className = 'needbox'; d.textContent = '⚠ 必要な項目が空です（' + T.名 + '）：' + need.join('・') + '　— 受注入力で入れてから出し直してください'; hero.parentNode.insertBefore(d, hero.nextSibling); }
+  if (key !== 'all') { var nt = document.createElement('div'); nt.className = 'shunote'; nt.textContent = '種別：' + T.名 + (省いた.length ? '　（この種別で使わない空の項目を省いています：' + 省いた.join('・') + '）' : ''); var lg = paper.querySelector('.legend'); (lg || hero).parentNode.insertBefore(nt, (lg || hero).nextSibling); }
+} catch (e) { try { console.warn('[SAGYO-SHU-1]', e); } catch (x) {} } }
 // SAGYO-LOOK-1: 上の帯と「今回の変更」。snap（いま描いた中身）ができてから作る
 function 納期の表示(v) { var d = FM日付をDate(v) || (function () { var m = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/.exec(String(v || '')); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null; })(); if (!d) return { t: String(v || '—'), w: '' }; return { t: (d.getMonth() + 1) + '/' + d.getDate(), w: '（' + '日月火水木金土'[d.getDay()] + '）' }; }
 function 見出し帯(f, kind, snap) {
@@ -476,6 +518,7 @@ function 製造を描く(f) {
   var main = 製造HTML(f); var 写し = 今の写し;
   var 裏 = (記録一覧.length ? '<div class="sheet back">' + 履歴HTML(f, 記録一覧, 写し) + '</div>' : '');
   $('paper').className = 'seizo'; $('paper').innerHTML = '<div class="sheet">' + テスト帯() + main + '</div>' + 裏;
+  種別で整える(f, 写し);
   QRを描く(); 確認を出す(f);
 }
 // SEIZO-4: QR から開いたとき（?check=）の作業前確認。画面だけに大きく出す（紙には出ない）
