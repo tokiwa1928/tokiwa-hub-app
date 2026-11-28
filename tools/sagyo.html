@@ -257,22 +257,27 @@ function 前回から変更(key, val) { if (!前回伝票 || 比べない.test(k
 // SAGYO-SHU-1（11/28 本多さん「ものによってはいらない項目もある。種別によって必要項目と不要項目を区別」）:
 //   種別 = 品名と中身から自動で決める（帯で変えられ、伝票ごとに覚える）。その種別で使わない項目は、中身が空なら紙から省く（中身があれば必ず出す）。
 //   その種別で必要な項目が空なら、上に赤で「必要な項目が空です」と出す
+// SAGYO-SHU-2（11/28 本多さん「これまでのファイルメーカーのデータで判断できない？」）: FileMaker の写し 3 年分（2024〜2026・16,466 件）を種別ごとに数えて決めた。
+//   省く＝その種別で 5% 以下しか入っていない項目のまとまり／必要＝その種別で 90% 以上入っている項目。件＝数えた伝票の数。『*』は 1〜9・表紙 のどれかに入っていればよい
 var 種別表 = {
-  denpyo:   { 名: '伝票・フォーム', 省く: [], 必要: ['紙質1', '色数1', 'サイズ横', 'サイズ縦', 'ロット契約単位', '納期'] },
-  chirashi: { 名: 'チラシ・パンフ・ポスター', 省く: ['加工', 'ナンバー', 'カートン'], 必要: ['紙質1', '色数1', 'サイズ横', 'サイズ縦', 'ロット契約単位', '納期'] },
-  sasshi:   { 名: '冊子', 省く: ['加工', 'ナンバー', 'カートン'], 必要: ['紙質1', '色数1', '製本加工', 'サイズ横', 'サイズ縦', 'ロット契約単位', '納期'] },
-  card:     { 名: '名刺・ハガキ・カード', 省く: ['加工', 'ナンバー', 'カートン', '製本'], 必要: ['紙質1', '色数1', 'ロット契約単位', '納期'] },
-  futo:     { 名: '封筒', 省く: ['加工', 'ナンバー', 'カートン', '製本'], 必要: ['紙質1', '色数1', 'ロット契約単位', '納期'] },
-  all:      { 名: 'すべての項目を出す', 省く: [], 必要: [] }
+  denpyo: { 名: "伝票・フォーム", 件: 3206, 省く: [], 必要: ["紙質*", "色数*", "サイズ横", "サイズ縦", "製本加工"] },
+  card: { 名: "名刺・ハガキ・カード", 件: 5775, 省く: ["加工", "ナンバー", "製本"], 必要: ["紙質*", "色数*", "サイズ横", "サイズ縦", "面付*"] },
+  futo: { 名: "封筒", 件: 1957, 省く: ["加工", "ナンバー"], 必要: ["カートン"] },
+  calendar: { 名: "カレンダー", 件: 904, 省く: ["加工", "ナンバー", "製本"], 必要: ["カートン型式"] },
+  seal: { 名: "シール・ラベル・タグ", 件: 283, 省く: ["ナンバー"], 必要: ["紙質*", "サイズ横", "サイズ縦"] },
+  sasshi: { 名: "冊子・説明書・会報", 件: 684, 省く: ["ナンバー"], 必要: ["紙質*", "色数*", "サイズ横", "サイズ縦", "製本加工", "切数*"] },
+  chirashi: { 名: "チラシ・パンフ・ポスター", 件: 912, 省く: ["加工", "ナンバー"], 必要: ["紙質*", "色数*"] },
+  hiyo: { 名: "費用のみ（送料・データ作成・版代）", 件: 642, 省く: ["ナンバー"], 必要: [] },
+  other: { 名: "その他", 件: 2103, 省く: ["ナンバー"], 必要: [] },
+  all: { 名: 'すべての項目を出す', 件: 0, 省く: [], 必要: [] }
 };
-function 種別を推す(f) { var n = String(f['製品名'] || ''), has = function (re) { return Object.keys(f).some(function (k) { return re.test(k) && f[k] != null && String(f[k]).trim() !== ''; }); };
-  if (has(/^マージナルパンチ|^ナンバー自|^横ミシン|^縦ミシン|^中間/)) return 'denpyo';
-  if (/名刺|ハガキ|はがき|葉書|年賀|喪中|カード|診察券/.test(n)) return 'card';
-  if (/封筒/.test(n)) return 'futo';
-  if (/冊子|記念誌|報告書|名簿|文集|中綴|無線綴|会議資料|議案書/.test(n)) return 'sasshi';
-  if (/チラシ|パンフ|リーフ|ポスター|広報|会報|お知らせ|案内|ちらし|フライヤー/.test(n)) return 'chirashi';
-  if (/伝票|複写|納品書|請求書|領収|帳票|フォーム|連続|申込書|願書/.test(n)) return 'denpyo';
-  return 'all'; }
+var 種別の言葉 = [['hiyo', /送料|配送費|データ作成|作成費|修正費|版代|改版|切手代|発送費|印刷代$|用紙代|封入|封緘/], ['card', /名刺|ハガキ|はがき|葉書|年賀|喪中|カード|診察券/], ['futo', /封筒|長３|長3|角２|角2|洋長|窓明|窓付/], ['calendar', /カレンダー|日表|月表/],
+  ['seal', /シール|ラベル|タグ|エフ|ステッカー/], ['chirashi', /チラシ|パンフ|リーフ|ポスター|ちらし|フライヤー/], ['sasshi', /冊子|記念誌|報告書|名簿|文集|中綴|無線綴|会議資料|議案書|要覧|説明書|マニュアル|会報|広報|ニュース/], ['chirashi', /チラシ|パンフ|リーフ|ポスター|お知らせ|案内|ちらし|フライヤー|のし紙|証書|賞状/]];
+function 種別を推す(f) { var n = String(f['製品名'] || ''), has = function (re) { return Object.keys(f).some(function (k) { return re.test(k) && f[k] != null && String(f[k]).trim() !== '' && String(f[k]).trim() !== '0'; }); };
+  for (var i = 0; i < 種別の言葉.length; i++) { if (種別の言葉[i][1].test(n)) return 種別の言葉[i][0]; }
+  if (has(/^マージナルパンチ|^ナンバー自|^横ミシン|^縦ミシン/)) return 'denpyo';
+  if (/伝票|複写|納品書|請求書|領収|帳票|フォーム|連続|申込書|願書|通知書|日報|依頼書|チェックシート|現品票|受註票|用紙|シート|票$|票[（(0-9０-９ 　]|\dP$|[2-5２-５]P/.test(n)) return 'denpyo';
+  return 'other'; }
 function 種別を決める(f) { var no = String(f['伝票番号'] || ''), auto = 種別を推す(f), saved = ''; try { saved = localStorage.getItem('sagyo_shu_' + no) || ''; } catch (e) {}
   var cur = (saved && 種別表[saved]) ? saved : auto, sel = $('shu');
   if (sel) { sel.innerHTML = '<option value="">種別: 自動（' + esc(種別表[auto].名) + '）</option>' + Object.keys(種別表).map(function (k) { return '<option value="' + k + '"' + (saved === k ? ' selected' : '') + '>' + esc(種別表[k].名) + '</option>'; }).join('');
@@ -287,9 +292,10 @@ function 種別で整える(f, snap) { try {
     if (tb.classList.contains('kotei')) return;
     Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) { if (tr.querySelector('[rowspan]') || tr.querySelectorAll('td.lbl').length !== 1) return; var lb = String(tr.querySelector('td.lbl').textContent || '');
       var sec = /^ナンバー/.test(lb) ? 'ナンバー' : /^カートン/.test(lb) ? 'カートン' : /^製本/.test(lb) ? '製本' : ''; if (!sec || T.省く.indexOf(sec) < 0 || !空(tr)) return; tr.style.display = 'none'; if (省いた.indexOf(sec) < 0) 省いた.push(sec); }); });
-  var need = T.必要.filter(function (k) { var v = (snap && snap[k] != null) ? snap[k] : f[k]; return v == null || String(v).trim() === ''; }).map(function (k) { var m = /^(.*?)(\d+)$/.exec(k); return ((typeof 項目名 !== 'undefined' && 項目名[k]) || (m ? m[1] : k)).replace(/^サイズ横$/, 'サイズ（横）').replace(/^サイズ縦$/, 'サイズ（縦）'); });
+  var 入 = function (k) { var v = (snap && snap[k] != null) ? snap[k] : f[k]; return !(v == null || String(v).trim() === ''); };
+  var need = T.必要.filter(function (k) { if (/\*$/.test(k)) { var b = k.slice(0, -1); for (var i = 0; i <= 9; i++) { if (入(b + i)) return false; } return true; } return !入(k); }).map(function (k) { return k.replace(/\*$/, ''); }).map(function (k) { var m = /^(.*?)(\d+)$/.exec(k); return ((typeof 項目名 !== 'undefined' && 項目名[k]) || (m ? m[1] : k)).replace(/^サイズ横$/, 'サイズ（横）').replace(/^サイズ縦$/, 'サイズ（縦）'); });
   var hero = paper.querySelector('.hero'); if (!hero) return;
-  if (need.length) { var d = document.createElement('div'); d.className = 'needbox'; d.textContent = '⚠ 必要な項目が空です（' + T.名 + '）：' + need.join('・') + '　— 受注入力で入れてから出し直してください'; hero.parentNode.insertBefore(d, hero.nextSibling); }
+  if (need.length) { var d = document.createElement('div'); d.className = 'needbox'; d.textContent = '⚠ ふつうは入っている項目が空です（' + T.名 + '。過去の同じ種別では 9 割以上で入っています）：' + need.join('・') + '　— 確かめてください'; hero.parentNode.insertBefore(d, hero.nextSibling); }
   if (key !== 'all') { var nt = document.createElement('div'); nt.className = 'shunote'; nt.textContent = '種別：' + T.名 + (省いた.length ? '　（この種別で使わない空の項目を省いています：' + 省いた.join('・') + '）' : ''); var lg = paper.querySelector('.legend'); (lg || hero).parentNode.insertBefore(nt, (lg || hero).nextSibling); }
 } catch (e) { try { console.warn('[SAGYO-SHU-1]', e); } catch (x) {} } }
 // SAGYO-LOOK-1: 上の帯と「今回の変更」。snap（いま描いた中身）ができてから作る
