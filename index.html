@@ -57116,6 +57116,7 @@ function renderTodoPage(){
     +'<label style="font-size:12px"><input type="checkbox" style="width:auto" '+(mine?'checked':'')+' onchange="window._todoMine_=this.checked;renderTodoPage()"> 自分の担当だけ</label>'
     +'<label style="font-size:12px"><input type="checkbox" style="width:auto" '+(allP?'checked':'')+' onchange="window._todoAllPeriod_=this.checked;renderTodoPage()"> 45 日より前も</label>'
     +'<button class="btn" style="margin-left:auto;font-weight:900;background:#1d4ed8;color:#fff;border-color:#1d4ed8" onclick="_todoPhoneNew_()">📞 電話・口頭を登録</button></div>';
+  h+=_todoStuck_();
   if(S==='__todo') list=base.filter(function(q){ return (!T||_inqBin_(q)===T) && _todoStep_(q)===''; }).sort(function(a,b){ return tm(b)-tm(a); });
   var MAX=200, shown=list.slice(0, MAX);
   // THREAD-1（11/28 本多さん「LINE は『○○案件 納期を教えて』『あと見積書も』『2 ページ増えます』と続けて来て話が流れる」）:
@@ -57183,6 +57184,24 @@ function _todoThreadReply_(id){ _todoReply_(id); if(typeof _toastMsg==='function
 function _todoThreadDone_(ids){ var a=String(ids||'').split(',').filter(Boolean); if(!a.length||!confirm('このまとまりの '+a.length+' 通を、まとめて完了にしますか？')) return;
   var now=new Date().toISOString(), who=(currentAuth&&currentAuth.userName)||''; a.forEach(function(id){ var q=(DB.inquiries||[]).find(function(x){ return x&&x.id===id; }); if(!q) return; var fl=Object.assign({}, q.flow||{}, { step:'done', doneAt:now }); fl.hist=(fl.hist||[]).concat([{ step:'done', at:now, by:who, bulk:true }]).slice(-20); _inqPatch_(q, { flow:fl, status:'done' }); });
   try{ renderInquiryList(); }catch(e){} _todoRefresh_(); if(typeof _toastMsg==='function') _toastMsg('🎉 '+a.length+' 通をまとめて完了にしました'); }
+// STUCK-1（11/28 本多さん「人の仕事は、流れが詰まるところを見つけること。校正中で結構な日にち止まっている、など」）:
+//   止まっているもの = 校正BOX で動きがない校正 ／ ToDo で工程が進んでいない用件。日数の多い順に出す
+function _todoLastMove_(q){ var h=q.flow&&q.flow.hist; var t=(h&&h.length&&h[h.length-1].at)||q.bin_at||q.received_at||q.createdAt; var d=new Date(t||0).getTime(); return isNaN(d)?0:d; }
+function _todoStuck_(){ var esc=_inqEsc_, now=Date.now(), th=3; try{ th=(_alertDays_().proof)||3; }catch(e){}
+  var proofs=[]; try{ proofs=_staleProofings_(); }catch(e){}
+  var stuck=_todoItems_().filter(function(q){ if(_todoIsDone_(q)) return false; var t=_todoLastMove_(q); return t && (now-t)/86400000>=th && (now-t)/86400000<=120; }).map(function(q){ return { q:q, days:Math.floor((now-_todoLastMove_(q))/86400000) }; }).sort(function(a,b){ return b.days-a.days; });
+  if(!proofs.length && !stuck.length) return '<div style="margin-bottom:8px;padding:6px 10px;border:1px solid #bbf7d0;background:#f0fdf4;font-size:12.5px;font-weight:800;color:#166534">✅ 止まっているものはありません（'+th+' 日以上動いていない校正・用件なし）</div>';
+  var byStep={}; stuck.forEach(function(o){ var st=_todoStep_(o.q); byStep[st]=(byStep[st]||0)+1; });
+  var chip=function(n){ return '<b style="color:#b91c1c;white-space:nowrap">'+n+' 日</b>'; };
+  var pr=proofs.slice(0,8).map(function(o){ var info={}; try{ info=_proofInfo_(o.p)||{}; }catch(e){} var m={}; try{ m=_proofStatusMeta_(_normProofStatus_(o.p.status)); }catch(e){}
+    return '<div style="display:flex;gap:8px;align-items:center;padding:3px 0;border-top:1px dotted #fecaca;cursor:pointer" onclick="_todoOpenProof_(\''+esc(o.p.id)+'\')">'+chip(o.days)+'<span style="font-size:11px;font-weight:800;padding:1px 6px;background:'+(m.color||'#f1f5f9')+'">'+esc(m.label||'')+'</span><span style="font-family:monospace;font-size:11px;color:#64748b">'+esc(info.seiban||'')+'</span><b>'+esc(info.cust||'')+'</b><span>'+esc(info.prod||'')+'</span>'+(info.due?'<span style="color:#b45309;font-size:11.5px">納期 '+esc(info.due)+'</span>':'')+'<span style="margin-left:auto;font-size:11.5px;color:#0f766e;font-weight:800">校正BOX で開く →</span></div>'; }).join('');
+  var td=stuck.slice(0,6).map(function(o){ var q=o.q, m=_inqBinMeta_(_inqBin_(q)), st=_todoStep_(q), lb=(INQ_FLOW_STEPS.find(function(x){ return x.k===st; })||INQ_FLOW_STEPS[0]).label;
+    return '<div style="display:flex;gap:8px;align-items:center;padding:3px 0;border-top:1px dotted #fecaca;cursor:pointer" onclick="window._todoFocus_=\''+esc(q.id)+'\';window._todoType_=\'\';window._todoStepF_=\'\';window._todoAllPeriod_=true;renderTodoPage()">'+chip(o.days)+'<span style="font-size:11px;font-weight:800;color:'+m.color+'">'+m.icon+' '+esc(m.label)+'</span><span style="font-size:11px;font-weight:800;padding:1px 6px;background:#fee2e2">'+esc(lb)+' で止まっている</span><b>'+esc(q.from_company||q.from_name||'')+'</b><span>'+esc(_todoCase_(q)||String(q.subject||'').slice(0,40))+'</span><span style="margin-left:auto;font-size:11.5px;color:#0f766e;font-weight:800">この行へ →</span></div>'; }).join('');
+  return '<details open style="margin-bottom:8px;border:1.5px solid #fca5a5;background:#fef2f2;padding:6px 10px;font-size:12.5px"><summary style="cursor:pointer;font-weight:900;font-size:13.5px;color:#991b1b">⚠ 止まっているもの（'+th+' 日以上動きなし）　校正 '+proofs.length+' 件・用件 '+stuck.length+' 件'
+    +(stuck.length?'　<span style="font-weight:700;font-size:12px;color:#7f1d1d">'+INQ_FLOW_STEPS.filter(function(x){ return byStep[x.k]; }).map(function(x){ return esc(x.label)+' '+byStep[x.k]; }).join('・')+'</span>':'')+'</summary>'
+    +(proofs.length?'<div style="margin-top:4px;font-weight:900;color:#7f1d1d">🖍 校正で止まっている'+(proofs.length>8?'（多い順に 8 件。全部は校正BOX で）':'')+'</div>'+pr:'')
+    +(stuck.length?'<div style="margin-top:6px;font-weight:900;color:#7f1d1d">📋 ToDo で止まっている'+(stuck.length>6?'（多い順に 6 件）':'')+'</div>'+td:'')+'</details>'; }
+function _todoOpenProof_(id){ try{ swPage('proofing', document.querySelector('.tb-btn[data-page="proofing"]')); setTimeout(function(){ try{ showProofingDetail(id); }catch(e){} }, 300); }catch(e){} }
 // 電話・口頭は ToDo にそのまま登録
 function _todoPhoneNew_(){ var old=document.getElementById('todo-tel'); if(old) old.remove(); var esc=_inqEsc_;
   var myCo=''; try{ myCo=_coShortName_(currentAuth&&(currentAuth.companyId||currentAuth.companyCode))||''; }catch(e){}
