@@ -56940,8 +56940,11 @@ function _inqMorningOpen_(){
   var by={ auto:[], junk:[], review:[], human:[] }; it.forEach(function(q){ by[(q.isSpam&&!q.bin)?'junk':_inqLane_(q)].push(q); });
   var row=function(q){ var b=q.isSpam&&!q.bin?'ジャンク':_inqBin_(q), m=_inqBinMeta_(b);
     return '<tr style="border-top:1px solid #f1f5f9"><td style="padding:4px 6px;white-space:nowrap;color:#64748b">'+esc(String(q.received_at||'').slice(5,16).replace('T',' '))+'</td><td style="padding:4px 6px">'+esc(q.from_company||q.from_name||q.from_email||'')+'</td><td style="padding:4px 6px">'+esc(String(q.subject||'').slice(0,60))+(q.ai_triage&&q.ai_triage.scan?'<div style="font-size:11px;color:#0369a1">📄 '+esc(q.ai_triage.scan)+'</div>':'')+'</td>'
-      +'<td style="padding:4px 6px;white-space:nowrap;color:'+m.color+';font-weight:700">'+m.icon+' '+esc(m.label)+'</td><td style="padding:4px 6px;color:#64748b;font-size:11px">'+esc(q.bin?('✋ '+(q.bin_by||'')):String(q.bin_reason||'').slice(0,30))+'</td>'
-      +'<td style="padding:4px 6px;white-space:nowrap"><button class="btn" style="font-size:11px;padding:2px 8px" onclick="document.getElementById(\'inq-morning\').remove();_inqOpenById_(\''+esc(q.id)+'\')">開く・直す</button></td></tr>'; };
+      +'<td style="padding:4px 6px;white-space:nowrap"><select class="inq-mfix" data-id="'+esc(q.id)+'" onchange="_inqMorningFix_(this)" title="ここで選ぶと、その場で振り分けを直します（開かなくてよい）" style="font:inherit;font-size:12px;font-weight:700;padding:3px 4px;border:1.5px solid '+m.color+';color:'+m.color+';background:#fff;max-width:170px">'
+        +INQ_BINS.map(function(x){ return '<option value="'+esc(x.k)+'"'+(x.k===b?' selected':'')+'>'+x.icon+' '+esc(x.label)+'</option>'; }).join('')+'</select>'
+        +'<label style="display:block;font-size:10.5px;color:#64748b;cursor:pointer;margin-top:2px"><input type="checkbox" class="inq-mfix-keep" style="width:auto;vertical-align:-2px"> この差出人は今後も</label></td>'
+      +'<td class="inq-mfix-why" style="padding:4px 6px;color:#64748b;font-size:11px">'+esc(q.bin?('✋ '+(q.bin_by||'')):String(q.bin_reason||'').slice(0,30))+'</td>'
+      +'<td style="padding:4px 6px;white-space:nowrap"><button class="btn" style="font-size:11px;padding:2px 8px" title="中身を見るときだけ" onclick="document.getElementById(\'inq-morning\').remove();_inqOpenById_(\''+esc(q.id)+'\')">開く</button></td></tr>'; };
   var h='<div style="background:#fff;width:min(980px,96vw);max-height:90vh;overflow:auto;padding:16px 18px;font-size:12.5px;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
     +'<div style="font-size:16px;font-weight:900;margin-bottom:4px">🌅 振り分けの確認（'+esc(days[0])+(days.length>1?' 〜 '+esc(days[days.length-1]):'')+'・'+it.length+' 通）</div>'
     +'<div style="color:#64748b;margin-bottom:8px">自動で確定したもの・迷惑に入ったものに、注文や大事な連絡が混ざっていないかだけ見てください。違っていたら「開く・直す」。</div>'
@@ -56987,6 +56990,18 @@ async function _inqBoxNow_(){ var b=document.getElementById('inq-boxnow'); if(b)
     else { window._cloudDataVersion_=''; try{ await loadFromCloud(); }catch(e){} try{ renderInquiryList(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg(n?('📥 Box のスキャンを '+n+' 件取り込みました'+(r.ai&&r.ai.done?'（AI の振り分けも '+r.ai.done+' 件）':'')):'📥 新しいスキャンはありませんでした'); }
   }catch(e){ if(typeof _toastMsg==='function') _toastMsg('取り込めませんでした: '+e); }
   if(b){ b.disabled=false; b.textContent='📥 Box のスキャンを今すぐ取り込む'; } }
+// MFIX-1（11/28 本多さん「開いて直すではなく、その場で直していけるように。開かずに」）: 確認の一覧の振り分けを、その場の選択で直す
+function _inqMorningFix_(sel){
+  var id=sel.getAttribute('data-id'), bin=sel.value, tr=sel.closest('tr'); var keep=!!(tr&&tr.querySelector('.inq-mfix-keep')&&tr.querySelector('.inq-mfix-keep').checked);
+  var how=keep?'sender':'one';
+  try{
+    if(bin==='ジャンク'){ if(typeof _markInqSpam2_==='function') _markInqSpam2_(id, how); }
+    else if(bin==='控え'){ if(typeof _inqRefDo_==='function') _inqRefDo_(id, how); var q=(DB.inquiries||[]).find(function(x){ return x&&x.id===id; }); if(q){ q.bin='控え'; q.bin_by=(currentAuth&&currentAuth.userName)||''; q.bin_at=new Date().toISOString(); } }
+    else { var q2=(DB.inquiries||[]).find(function(x){ return x&&x.id===id; }); if(q2&&q2.isSpam){ q2.isSpam=false; } _inqSetBin_(id, bin, how); }
+  }catch(e){ alert('直せませんでした: '+(e&&e.message||e)); return; }
+  var m=_inqBinMeta_(bin); sel.style.borderColor=m.color; sel.style.color=m.color;
+  if(tr){ tr.style.background='#f0fdf4'; var w=tr.querySelector('.inq-mfix-why'); if(w) w.innerHTML='<b style="color:#15803d">✓ 直しました</b>'+(keep?'（今後も）':''); }
+}
 function _inqMorningDone_(days){ DB.inqMorning=DB.inqMorning||{}; var who=(currentAuth&&currentAuth.userName)||'', at=new Date().toISOString(); days.forEach(function(d){ DB.inqMorning[d]={ by:who, at:at }; });
   if(typeof saveDB==='function') try{ saveDB(); }catch(e){} var el=document.getElementById('inq-morning'); if(el) el.remove(); try{ _renderInqBinTabs_(); }catch(e){} if(typeof _toastMsg==='function') _toastMsg('🌅 振り分けの確認を記録しました'); }
 function _inqOpenById_(id){ try{ if(typeof openInquiry==='function') return openInquiry(id); if(typeof openInquiryDetail==='function') return openInquiryDetail(id); }catch(e){} }   // SORT-STAGE-2: 自動で決まったものは振り分け後。決められなかった「その他」だけ振り分け前
