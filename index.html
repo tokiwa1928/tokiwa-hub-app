@@ -57612,11 +57612,42 @@ async function _inqAttachSummarize_(id){
   }catch(e){ if(box) box.textContent='⚠ '+((e&&e.message)||e); }
 }
 function _inqLastReply_(q){ var tl=(q.timeline||[]); for(var i=tl.length-1;i>=0;i--){ var t=tl[i]; if(t&&t.type==='reply'&&(!t.meta||t.meta.channel!=='internal')) return t; } return null; }
-function _inqDraftText_(q){
-  var drafts=(q.timeline||[]).filter(function(t){ return t&&t.type==='ai_draft_reply'; }); var t=drafts.length?(drafts[drafts.length-1].text||''):'';
-  try{ if(typeof _appendSignature_==='function') t=_appendSignature_(t, q); }catch(e){}
-  return t;
-}
+// REPLYTPL-1（11/28 本多さん「返信は、相手の社名・名前・『いつもお世話になっております。ご連絡ありがとうございます。』・以上・署名 のテンプレートは勝手に入っている状態に。
+//   それ以外（本文）を AI で作るか作らないかを選ぶ」）: 返信の欄は必ずこの型で始まる。本文は空。AI に書かせるときは型の真ん中に入れる
+var REPLY_HEAD='いつもお世話になっております。\nご連絡ありがとうございます。', REPLY_TAIL='以上、よろしくお願いいたします。';
+function _replyAddr_(q){ var co=String(q.from_company||'').trim(), pf={}; try{ pf=_inqPref_(q)||{}; }catch(e){}
+  var own=false; try{ own=_inqOwnAddr_(q.from_email||q.email); }catch(e){}
+  var nm=String(pf.person||'').trim(); if(!nm){ var fn=String(q.from_name||q.custName||'').replace(/["<>]/g,'').trim(); if(fn && !/@/.test(fn) && !own) nm=fn; }
+  if(nm && !/様\s*$|御中\s*$/.test(nm)) nm+=' 様';
+  if(co && !nm) co+=' 御中';
+  return [co, nm].filter(Boolean).join('\n'); }
+function _replyTpl_(q, middle){ var a=_replyAddr_(q), body=(a?a+'\n\n':'')+REPLY_HEAD+'\n\n'+(middle?String(middle).trim()+'\n':'\n')+'\n'+REPLY_TAIL;
+  try{ if(typeof _appendSignature_==='function') body=_appendSignature_(body, q, 'email'); }catch(e){} return body; }
+// AI の下書きから、宛名・あいさつ・結び・署名を取り除いて本文だけにする（型と二重にならないように）
+function _replyAiBody_(q, text){ var t=String(text||'').replace(/\r/g,''); try{ var p=_pickSignatureProfile_(q,'email'), sig=p&&p.signature&&String(p.signature).trim(); if(sig){ var i=t.indexOf(sig.split('\n')[0]); if(i>0) t=t.slice(0,i); } }catch(e){}
+  var L=t.split('\n'); var head=/様\s*$|御中\s*$|お世話になっ|ご連絡(を)?(いただき)?.{0,6}ありがとう|^\s*$|^(株式会社|有限会社)|(株式会社|有限会社|会議所|市役所|組合)\s*$/; var n=0; while(L.length && n<8 && head.test(L[0])){ L.shift(); n++; }
+  var tail=/^\s*$|よろしくお願い(いた|申し上げ|致)|^以上|今後とも|何卒|^[-─━=＝_*]{3,}/; n=0; while(L.length && n<8 && tail.test(L[L.length-1])){ L.pop(); n++; }
+  return L.join('\n').trim(); }
+// いまの返信欄（textarea）の、あいさつと「以上」の間を入れ替える。型が崩れていたら末尾（署名の前）に足す
+function _replySetMiddle_(ta, q, middle){ var v=String(ta.value||''), hi=v.indexOf(REPLY_HEAD), ti=v.lastIndexOf(REPLY_TAIL);
+  if(hi>=0 && ti>hi) ta.value=v.slice(0, hi+REPLY_HEAD.length)+'\n\n'+String(middle).trim()+'\n\n'+v.slice(ti);
+  else ta.value=_replyTpl_(q, middle);
+  try{ ta.dispatchEvent(new Event('input', { bubbles:true })); }catch(e){} }
+async function _replyAi_(id, taId, btn){ var q=(DB.inquiries||[]).find(function(x){ return x&&x.id===id; }), ta=document.getElementById(taId); if(!q||!ta) return;
+  var v=String(ta.value||''), hi=v.indexOf(REPLY_HEAD), ti=v.lastIndexOf(REPLY_TAIL), cur=(hi>=0&&ti>hi)?v.slice(hi+REPLY_HEAD.length, ti).trim():'';
+  var ins=prompt('AI に本文を書かせます。伝えたいことがあれば書いてください（空でもよい）\n例: 12/18 納品で承りました／見積書を添付します／金額は 33,000 円（税込）', cur||''); if(ins===null) return;
+  var old=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='⏳ AI が書いています…'; }
+  try{ var r=await callCloudAPI('generateAiDraftReply',{},{ inquiryId:id, tone:'polite', instruction:(ins?ins+'\n':'')+'本文だけを書く。宛名・冒頭のあいさつ（お世話になっております 等）・結びのあいさつ・署名は書かない。' });
+    if(!r||!r.success||!r.draft) throw new Error((r&&r.error)||'AI が書けませんでした');
+    var body=_replyAiBody_(q, r.draft); if(!body) throw new Error('AI の本文が空でした'); _replySetMiddle_(ta, q, body);
+  }catch(e){ alert('AI で書けませんでした: '+(e&&e.message||e)+'\n（型はそのままです。手で書けます）'); }
+  if(btn){ btn.disabled=false; btn.textContent=old; } }
+function _replyUseDraft_(id, taId){ var q=(DB.inquiries||[]).find(function(x){ return x&&x.id===id; }), ta=document.getElementById(taId); if(!q||!ta) return; var d=(q.timeline||[]).filter(function(t){ return t&&t.type==='ai_draft_reply'; }); if(!d.length) return; var body=_replyAiBody_(q, d[d.length-1].text||''); if(body) _replySetMiddle_(ta, q, body); }
+function _replyAiBtns_(id, taId, q){ var has=(q.timeline||[]).some(function(t){ return t&&t.type==='ai_draft_reply'; });
+  return '<button class="btn" type="button" style="font-size:12px;font-weight:800;padding:4px 10px;border:1.5px solid #7c3aed;color:#7c3aed;background:#fff" title="あいさつ・以上・署名はそのままで、本文だけ AI が書きます（AI の費用がかかります）" onclick="event.stopPropagation();_replyAi_(\''+_inqEsc_(id)+'\',\''+taId+'\',this)">🤖 本文を AI に書かせる</button>'
+    +(has?'<button class="btn" type="button" style="font-size:12px;padding:4px 10px" title="前に AI が作った下書きの本文を入れます（費用はかかりません）" onclick="event.stopPropagation();_replyUseDraft_(\''+_inqEsc_(id)+'\',\''+taId+'\')">📄 前の AI の下書きを入れる</button>':'')
+    +'<span style="font-size:10.5px;color:#64748b">押さなければ AI は使いません</span>'; }
+function _inqDraftText_(q){ return _replyTpl_(q, ''); }
 // その場の返信欄。書きかけは window._inqDraftEdit_ に持つ（一覧が描き直されても消えない）
 function _inqReplyBox_(q){
   var id=_inqEsc_(q.id); var to=q.from_email||q.email||'';
@@ -57638,8 +57669,9 @@ function _inqReplyBox_(q){
     +'<label style="display:flex;align-items:center;gap:4px;flex:1 1 220px;min-width:0"><span style="color:#64748b">宛先</span><input id="inq-rt-'+id+'" value="'+_inqEsc_((ed&&ed.to!=null)?ed.to:to)+'" oninput="_inqDraftKeep_(\''+id+'\')" style="flex:1;min-width:0;font:inherit;font-size:12px;padding:3px 6px;border:1px solid #cbd5e1;min-height:0"></label>'
     +'<label style="display:flex;align-items:center;gap:4px;flex:2 1 260px;min-width:0"><span style="color:#64748b">件名</span><input id="inq-rs-'+id+'" value="'+_inqEsc_((ed&&ed.subject!=null)?ed.subject:subj)+'" oninput="_inqDraftKeep_(\''+id+'\')" style="flex:1;min-width:0;font:inherit;font-size:12px;padding:3px 6px;border:1px solid #cbd5e1;min-height:0"></label></div>'
     +'<textarea id="inq-rb-t-'+id+'" rows="6" oninput="_inqDraftKeep_(\''+id+'\')" onfocus="_inqRowTap_(\''+id+'\');this.rows=Math.min(18,Math.max(8,(this.value.match(/\\n/g)||[]).length+2))" style="width:100%;box-sizing:border-box;font:inherit;font-size:13px;line-height:1.6;padding:8px;border:1px solid #cbd5e1;background:#fff;resize:vertical">'+_inqEsc_(text)+'</textarea>'
+    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+_replyAiBtns_(q.id, 'inq-rb-t-'+id, q)+'</div>'
     +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><button class="btn btn-p" style="font-size:12.5px;font-weight:700;padding:6px 16px;background:#0f766e;border-color:#0f766e;color:#fff" onclick="_inqInlineSend_(\''+id+'\')">📤 この内容で送信</button>'
-    +(ed?'<button class="btn" style="font-size:11px;padding:4px 8px" title="書きかけを捨てて AI の下書きに戻す" onclick="if(window._inqDraftEdit_) delete window._inqDraftEdit_[\''+id+'\'];renderInquiryList()">下書きに戻す</button>':'')
+    +(ed?'<button class="btn" style="font-size:11px;padding:4px 8px" title="書きかけを捨てて、はじめの型（あいさつ・以上・署名）に戻す" onclick="if(window._inqDraftEdit_) delete window._inqDraftEdit_[\''+id+'\'];renderInquiryList()">型に戻す</button>':'')
     +'<button class="btn" style="font-size:11px;padding:4px 8px" title="欄をしまいます（書きかけは残ります）" onclick="_inqReplyCloseBox_(\''+id+'\')">閉じる</button>'
     +'<span style="font-size:10.5px;color:#64748b">トキワ印刷グループの Gmail から相手へ届きます。送る前に確認が出ます</span></div></div>';
 }
@@ -60255,18 +60287,9 @@ function showEmailReplyModal(inqId, prefilledText){
   var to = inq.from_email || inq.email || '';
   if(!to){ alert('送信元メールアドレスがありません'); return; }
   var subject = (inq.subject || '').indexOf('Re: ') === 0 ? inq.subject : ('Re: ' + (inq.subject || ''));
-  // 署名を本文末尾に追加 (prefilledText が無い時は署名のみ、ある時は本文+署名)
-  if(typeof _appendSignature_ === 'function'){
-    prefilledText = _appendSignature_(prefilledText || '');
-  }
-  // 既存 AI 下書きがあれば優先採用
-  if(!prefilledText || prefilledText.replace(/\s/g,'').length < 5){
-    var drafts = (inq.timeline || []).filter(function(t){ return t.type === 'ai_draft_reply'; });
-    if(drafts.length > 0){
-      var latest = drafts[drafts.length - 1];
-      prefilledText = (typeof _appendSignature_ === 'function') ? _appendSignature_(latest.text || '') : (latest.text || '');
-    }
-  }
+  // REPLYTPL-1: 必ず型（相手の社名・名前／あいさつ／以上／署名）で始める。渡された文があれば、型の真ん中（本文）に入れる。AI の下書きは勝手には入れない
+  if(prefilledText && prefilledText.indexOf(REPLY_HEAD) >= 0 && prefilledText.indexOf(REPLY_TAIL) >= 0){ if(typeof _appendSignature_ === 'function') prefilledText = _appendSignature_(prefilledText, inq, 'email'); }
+  else prefilledText = _replyTpl_(inq, prefilledText ? _replyAiBody_(inq, prefilledText) : '');
   var modal = document.createElement('div');
   modal.className = 'proof-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem';
@@ -60280,6 +60303,7 @@ function showEmailReplyModal(inqId, prefilledText){
         '<input id="email-subject" value="' + _escDiff(subject) + '" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:13px;margin:6px 0 10px">' +
         '<label style="font-size:12px;font-weight:700;color:#555">本文</label>' +
         '<textarea id="email-body" rows="12" style="width:100%;font-size:13px;padding:10px;border:1px solid #ccc;border-radius:6px;font-family:inherit;line-height:1.6;resize:vertical;margin-top:6px">' + _escDiff(prefilledText || '') + '</textarea>' +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">' + _replyAiBtns_(inqId, 'email-body', inq) + '</div>' +
         '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:11px;color:#7f1d1d;line-height:1.5">⚠ 送信ボタンを押すと、トキワ印刷グループの Gmail アカウントから直接送信されます。よく確認してください。</div>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">' +
           '<button class="btn" onclick="this.closest(\'.proof-modal\').remove()">キャンセル</button>' +
